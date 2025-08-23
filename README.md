@@ -29,6 +29,7 @@ NYM is a web-based chat application that uses Nostr's ephemeral events (kind 200
 
 ## Available Commands
 
+```
 /help     - Show available commands
 /join     - Join a channel (e.g., /join random or /join #geohash)
 /j        - Shortcut for /join
@@ -43,6 +44,7 @@ NYM is a web-based chat application that uses Nostr's ephemeral events (kind 200
 /me       - Action message (e.g., /me is coding)
 /shrug    - Send a shrug ¯\_(ツ)_/¯
 /quit     - Disconnect from NYM
+```
 
 ## Contributing
 
