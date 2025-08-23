@@ -9,7 +9,7 @@
 
 # Nostr Ynstant Messenger
 
-A lightweight ephemeral chat client built on Nostr protocol, bridging with [https://bitchat.free](Bitchat) for anonymous, temporary messaging.
+A lightweight ephemeral chat client built on Nostr protocol, bridging with [Bitchat](https://bitchat.free) for anonymous, temporary messaging.
 
 ## Overview
 
@@ -17,14 +17,14 @@ NYM is a web-based chat application that uses Nostr's ephemeral events (kind 200
 
 ## Features
 
-- **Ephemeral Identity** - Generate temporary keypairs per session or use Nostr extension
+- **Ephemeral Identity** - Generate temporary keypairs and pseudonym per session or use Nostr extension
 - **Multiple Channels** - Standard channels and geohash-based location channels
 - **Private Messaging** - Encrypted DMs using NIP-04
 - **Bitchat Bridge** - Compatible with Jack Dorsey's Bitchat
 
 ## Protocol Implementation
 
-- Event kind 20000 (ephemeral) and channel creation kind 23333
+- Ephemeral event `kind 20000` and channel creation `kind 23333`
 - Tags: `['n', nym]` for nickname, `['t', channel]` for standard channel, `['g', geohash]` for geohash channel
 
 ## Available Commands
