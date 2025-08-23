@@ -4095,9 +4095,9 @@
 
             if (savedMode === 'extension' && savedRelay && window.nostr) {
                 try {
-                    // Show connecting message
+                    // Hide setup modal properly by removing active class
                     const setupModal = document.getElementById('setupModal');
-                    setupModal.style.display = 'none';
+                    setupModal.classList.remove('active');
 
                     nym.displaySystemMessage('Reconnecting with Nostr extension...');
 
@@ -4124,15 +4124,13 @@
 
                 } catch (error) {
                     console.error('Failed to restore connection:', error);
-                    // Show setup modal if auto-connect fails
+                    // Show setup modal if auto-connect fails - ensure it has active class
                     localStorage.removeItem('nym_connection_mode');
                     localStorage.removeItem('nym_relay_url');
-                    document.getElementById('setupModal').style.display = 'flex';
+                    document.getElementById('setupModal').classList.add('active');
                 }
-            } else {
-                // Show setup modal for first time or ephemeral users
-                document.getElementById('setupModal').style.display = 'flex';
             }
+            // If no saved connection, modal already has 'active' class from HTML
         }
 
         async function initializeNym() {
@@ -4231,13 +4229,8 @@
 
         // Sign-out button
         function signOut() {
-            if (confirm('Sign out and clear saved connection?')) {
-                localStorage.removeItem('nym_connection_mode');
-                localStorage.removeItem('nym_relay_url');
-                if (nym && nym.ws) {
-                    nym.disconnect();
-                }
-                window.location.reload();
+            if (confirm('Sign out and disconnect from NYM?')) {
+                nym.cmdQuit();
             }
         }
 
@@ -4248,7 +4241,7 @@
             // Auto-focus nickname input
             document.getElementById('nymInput').focus();
 
-            // Connection mode change listener - ADD THIS
+            // Connection mode change listener
             document.getElementById('connectionMode').addEventListener('change', (e) => {
                 const hint = document.getElementById('nymHint');
                 if (e.target.value === 'extension') {
@@ -4260,14 +4253,16 @@
                 }
             });
 
-            // Relay selection listener - ALREADY EXISTS
+            // Relay selection listener
             document.getElementById('relaySelect').addEventListener('change', (e) => {
                 document.getElementById('customRelayGroup').style.display =
                     e.target.value === 'custom' ? 'block' : 'none';
             });
 
-            // Check for saved connection preference - ADD THIS
-            checkSavedConnection();
+            // Check for saved connection AFTER initialization is complete
+            setTimeout(() => {
+                checkSavedConnection();
+            }, 100);
 
             // Periodically update user list
             setInterval(() => {
