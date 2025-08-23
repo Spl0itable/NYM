@@ -8,9 +8,21 @@
     <meta name="description" content="Ephemeral anonymous messaging over Nostr">
     <link rel="manifest"
         href="data:application/json;base64,eyJuYW1lIjoiTllNIC0gTm9zdHIgWW5zdGFudCBNZXNzZW5nZXIiLCJzaG9ydF9uYW1lIjoiTllNIiwic3RhcnRfdXJsIjoiLiIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwidGhlbWVfY29sb3IiOiIjMDAwMDAwIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDAwMDAiLCJpY29ucyI6W3sic3JjIjoiZGF0YTppbWFnZS9zdmcreG1sLCUzQ3N2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMDAgMTAwJyUzRSUzQ3JlY3Qgd2lkdGg9JzEwMCcgaGVpZ2h0PScxMDAnIGZpbGw9JyUyMzAwMCclMkYlM0UlM0N0ZXh0IHg9JzUwJyB5PSc1NScgZm9udC1zaXplPSc0MCcgZmlsbD0nJTIzMGZmJyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nbW9ub3NwYWNlJyUzRU5ZTSUzQyUyRnRleHQlM0UlM0MlMkZzdmclM0UiLCJzaXplcyI6ImFueSIsInR5cGUiOiJpbWFnZS9zdmcreG1sIn1dfQ==">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Anonymously Chat with NYM">
+    <meta property="og:description" content="Ephemeral anonymous messaging over Nostr">
+    <meta property="og:image" content="https://nym.bar/images/NYM-icon.png">
+    <meta property="og:url" content="https://nym.bar">
+    <meta property="og:type" content="website">
+    <link rel="icon" href="./images/NYM-icon.png" type="image/png">
+    <link rel="canonical" href="https://nym.bar/">
     <meta name="theme-color" content="#000000">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="NYM">
+    <link rel="apple-touch-icon" href="./images/NYM-icon.png">
 
     <!-- Import nostr-tools -->
     <script src="https://unpkg.com/nostr-tools/lib/nostr.bundle.js"></script>
@@ -1404,7 +1416,7 @@
                         <option value="extension">Use Nostr Extension (Persistent identity)</option>
                     </select>
                 </div>
-                
+
                 <div class="form-group">
                     <label class="form-label">Choose Your Nym (optional)</label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nym"
