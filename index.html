@@ -1316,6 +1316,7 @@
                 <div class="header-actions">
                     <button class="icon-btn" onclick="showChannelModal()">+ Channel</button>
                     <button class="icon-btn" onclick="showSettings()">Settings</button>
+                    <button class="icon-btn" onclick="signOut()" title="Sign Out">Sign Out</button>
                     <button class="icon-btn" onclick="showAbout()">About</button>
                 </div>
             </header>
@@ -1400,7 +1401,7 @@
                     <label class="form-label">Choose Your Nym (optional)</label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nym"
                         maxlength="20">
-                    <div class="form-hint">Your ephemeral pseudonym for this session</div>
+                    <div class="form-hint" id="nymHint">Your ephemeral pseudonym for this session</div>
                 </div>
 
                 <div class="form-group">
@@ -2469,10 +2470,93 @@
                 try {
                     const pk = await window.nostr.getPublicKey();
                     this.pubkey = pk;
+
+                    // Fetch profile from kind 0 event
+                    await this.fetchProfileFromRelay(pk);
+
                     return { pubkey: pk };
                 } catch (error) {
                     throw new Error('Failed to connect to Nostr extension');
                 }
+            }
+
+            async fetchProfileFromRelay(pubkey) {
+                return new Promise((resolve) => {
+                    // Set a timeout in case profile doesn't exist
+                    const timeout = setTimeout(() => {
+                        console.log('No profile found, using default nym');
+                        resolve();
+                    }, 3000);
+
+                    // Create a temporary subscription for profile
+                    const subId = "profile-" + Math.random().toString(36).substring(7);
+
+                    // Store original message handler
+                    const originalHandler = this.handleRelayMessage.bind(this);
+
+                    // Override handleRelayMessage temporarily
+                    this.handleRelayMessage = (msg) => {
+                        if (!Array.isArray(msg)) return;
+
+                        const [type, ...data] = msg;
+
+                        if (type === 'EVENT' && data[0] === subId) {
+                            const event = data[1];
+                            if (event && event.kind === 0 && event.pubkey === pubkey) {
+                                try {
+                                    const profile = JSON.parse(event.content);
+                                    if (profile.name || profile.username || profile.display_name) {
+                                        // Use the first available name field
+                                        const profileName = profile.name || profile.username || profile.display_name;
+                                        this.nym = profileName.substring(0, 20); // Limit to 20 chars
+                                        document.getElementById('currentNym').textContent = this.nym;
+                                        console.log('Profile loaded:', this.nym);
+                                    }
+                                } catch (e) {
+                                    console.error('Failed to parse profile:', e);
+                                }
+
+                                clearTimeout(timeout);
+                                // Restore original handler
+                                this.handleRelayMessage = originalHandler;
+                                resolve();
+                            }
+                        } else if (type === 'EOSE' && data[0] === subId) {
+                            // End of stored events, no profile found
+                            clearTimeout(timeout);
+                            // Restore original handler
+                            this.handleRelayMessage = originalHandler;
+                            resolve();
+                        }
+
+                        // Also call original handler
+                        originalHandler(msg);
+                    };
+
+                    // Request profile event
+                    const subscription = [
+                        "REQ",
+                        subId,
+                        {
+                            kinds: [0],
+                            authors: [pubkey],
+                            limit: 1
+                        }
+                    ];
+
+                    // If connected, send immediately, otherwise queue
+                    if (this.connected) {
+                        this.sendToRelay(subscription);
+
+                        // Unsubscribe after getting the data
+                        setTimeout(() => {
+                            this.sendToRelay(["CLOSE", subId]);
+                        }, 3500);
+                    } else {
+                        // Queue for when connected
+                        this.messageQueue.push(JSON.stringify(subscription));
+                    }
+                });
             }
 
             async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash) {
@@ -3468,6 +3552,9 @@
 
             cmdQuit() {
                 this.displaySystemMessage('Disconnecting from NYM...');
+                // Clear saved connection preferences
+                localStorage.removeItem('nym_connection_mode');
+                localStorage.removeItem('nym_relay_url');
                 if (this.ws) {
                     this.ws.close();
                 }
@@ -3960,7 +4047,7 @@
 
         function showAbout() {
             nym.displaySystemMessage(`
-            ═══ NYM - Nostr Ynstant Messenger v1.0.0 ═══<br>
+            ═══ NYM - Nostr Ynstant Messenger v1.0.1 ═══<br>
             Protocol: Nostr (kind 20000 ephemeral events)<br>
             Private Messages: NIP-04 encrypted messaging<br>
             Relay: ${nym.relayUrl || 'Not connected'}<br>
@@ -4001,20 +4088,86 @@
             document.getElementById('geohashInput').value = '';
         }
 
+        // Function to check for saved connection on page load
+        async function checkSavedConnection() {
+            const savedMode = localStorage.getItem('nym_connection_mode');
+            const savedRelay = localStorage.getItem('nym_relay_url');
+
+            if (savedMode === 'extension' && savedRelay && window.nostr) {
+                try {
+                    // Show connecting message
+                    const setupModal = document.getElementById('setupModal');
+                    setupModal.style.display = 'none';
+
+                    nym.displaySystemMessage('Reconnecting with Nostr extension...');
+
+                    // Use extension
+                    await nym.useExtension();
+
+                    // Connect to saved relay
+                    await nym.connectToRelay(savedRelay);
+
+                    // Fetch profile after connection
+                    if (nym.connected) {
+                        await nym.fetchProfileFromRelay(nym.pubkey);
+                    }
+
+                    // Request notification permission
+                    if (Notification.permission === 'default') {
+                        Notification.requestPermission();
+                    }
+
+                    // Show welcome back message
+                    nym.displaySystemMessage(`Welcome back to NYM, ${nym.nym}!`);
+                    nym.displaySystemMessage(`Your Nostr identity has been restored.`);
+                    nym.displaySystemMessage(`Type /help for available commands.`);
+
+                } catch (error) {
+                    console.error('Failed to restore connection:', error);
+                    // Show setup modal if auto-connect fails
+                    localStorage.removeItem('nym_connection_mode');
+                    localStorage.removeItem('nym_relay_url');
+                    document.getElementById('setupModal').style.display = 'flex';
+                }
+            } else {
+                // Show setup modal for first time or ephemeral users
+                document.getElementById('setupModal').style.display = 'flex';
+            }
+        }
+
         async function initializeNym() {
             try {
-                // Get or generate nym
-                const nymInput = document.getElementById('nymInput').value.trim();
-                nym.nym = nymInput || nym.generateRandomNym();
-                document.getElementById('currentNym').textContent = nym.nym;
-
                 const mode = document.getElementById('connectionMode').value;
+
+                // Get or generate nym first
+                const nymInput = document.getElementById('nymInput').value.trim();
 
                 // Generate or use extension
                 if (mode === 'ephemeral') {
+                    // For ephemeral mode, use input or generate random
+                    nym.nym = nymInput || nym.generateRandomNym();
+                    document.getElementById('currentNym').textContent = nym.nym;
                     await nym.generateKeypair();
+
+                    // Clear any saved connection for ephemeral mode
+                    localStorage.removeItem('nym_connection_mode');
+                    localStorage.removeItem('nym_relay_url');
+
                 } else if (mode === 'extension') {
+                    // For extension mode, set temporary nym first
+                    nym.nym = nymInput || 'Loading profile...';
+                    document.getElementById('currentNym').textContent = nym.nym;
                     await nym.useExtension();
+
+                    // If no profile was found and no input, generate random
+                    if (nym.nym === 'Loading profile...' && !nymInput) {
+                        nym.nym = nym.generateRandomNym();
+                        document.getElementById('currentNym').textContent = nym.nym;
+                    } else if (nymInput && nym.nym === 'Loading profile...') {
+                        // Use input if profile wasn't found
+                        nym.nym = nymInput;
+                        document.getElementById('currentNym').textContent = nym.nym;
+                    }
                 }
 
                 // Get relay URL
@@ -4028,8 +4181,19 @@
                     return;
                 }
 
+                // Save connection preferences if using extension
+                if (mode === 'extension') {
+                    localStorage.setItem('nym_connection_mode', mode);
+                    localStorage.setItem('nym_relay_url', relayUrl);
+                }
+
                 // Connect to relay
                 await nym.connectToRelay(relayUrl);
+
+                // For extension mode, try fetching profile again after connection
+                if (mode === 'extension' && nym.connected) {
+                    await nym.fetchProfileFromRelay(nym.pubkey);
+                }
 
                 // Request notification permission
                 if (Notification.permission === 'default') {
@@ -4041,12 +4205,39 @@
 
                 // Show welcome message
                 nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Type /help for available commands.`);
-                nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
+                nym.displaySystemMessage(`Your ${mode === 'extension' ? 'Nostr' : 'ephemeral'} identity is active for this session${mode === 'extension' ? '' : ' only'}.`);
                 nym.displaySystemMessage(`Click on any user to send them a private message.`);
 
             } catch (error) {
                 console.error('Initialization failed:', error);
                 alert('Failed to initialize: ' + error.message);
+            }
+        }
+
+        // Disconnect/logout function
+        function disconnectNym() {
+            // Clear saved connection
+            localStorage.removeItem('nym_connection_mode');
+            localStorage.removeItem('nym_relay_url');
+
+            // Disconnect from relay
+            if (nym && nym.ws) {
+                nym.disconnect();
+            }
+
+            // Reload page to start fresh
+            window.location.reload();
+        }
+
+        // Sign-out button
+        function signOut() {
+            if (confirm('Sign out and clear saved connection?')) {
+                localStorage.removeItem('nym_connection_mode');
+                localStorage.removeItem('nym_relay_url');
+                if (nym && nym.ws) {
+                    nym.disconnect();
+                }
+                window.location.reload();
             }
         }
 
@@ -4056,6 +4247,27 @@
 
             // Auto-focus nickname input
             document.getElementById('nymInput').focus();
+
+            // Connection mode change listener - ADD THIS
+            document.getElementById('connectionMode').addEventListener('change', (e) => {
+                const hint = document.getElementById('nymHint');
+                if (e.target.value === 'extension') {
+                    hint.textContent = 'Will use your Nostr profile name if available';
+                    document.getElementById('nymInput').placeholder = 'Override profile name (optional)';
+                } else {
+                    hint.textContent = 'Your ephemeral pseudonym for this session';
+                    document.getElementById('nymInput').placeholder = 'Leave empty for random nym';
+                }
+            });
+
+            // Relay selection listener - ALREADY EXISTS
+            document.getElementById('relaySelect').addEventListener('change', (e) => {
+                document.getElementById('customRelayGroup').style.display =
+                    e.target.value === 'custom' ? 'block' : 'none';
+            });
+
+            // Check for saved connection preference - ADD THIS
+            checkSavedConnection();
 
             // Periodically update user list
             setInterval(() => {
