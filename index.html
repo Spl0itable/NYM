@@ -4896,7 +4896,8 @@
                 });
 
                 // Clear unread count
-                this.clearUnreadCount(displayName);
+                const unreadKey = geohash ? `#${geohash}` : channel;
+                this.clearUnreadCount(unreadKey);
 
                 // Load channel messages
                 this.loadChannelMessages(displayName);
@@ -5010,12 +5011,16 @@
             }
 
             clearUnreadCount(channel) {
-                this.unreadCounts.set(channel, 0);
+                const storageKey = channel.startsWith('#') && !this.isValidGeohash(channel.substring(1))
+                    ? channel.substring(1)
+                    : channel;
+
+                this.unreadCounts.set(storageKey, 0);
 
                 // Handle PM unread counts using conversation key
-                if (channel.startsWith('pm-')) {
+                if (storageKey.startsWith('pm-')) {
                     // Extract the other user's pubkey from conversation key
-                    const keys = channel.substring(3).split('-');
+                    const keys = storageKey.substring(3).split('-');
                     const otherPubkey = keys.find(k => k !== this.pubkey);
                     if (otherPubkey) {
                         const badge = document.querySelector(`[data-pubkey="${otherPubkey}"] .unread-badge`);
@@ -5025,10 +5030,20 @@
                     }
                 } else {
                     // Regular channel unread counts
-                    const isGeohash = channel.startsWith('#') && channel.length <= 13;
-                    const selector = isGeohash ?
-                        `[data-geohash="${channel.substring(1)}"]` :
-                        `[data-channel="${channel.replace('#', '')}"][data-geohash=""]`;
+                    let selector;
+                    if (channel.startsWith('#')) {
+                        const channelName = channel.substring(1);
+                        if (this.isValidGeohash(channelName)) {
+                            // It's a geohash
+                            selector = `[data-geohash="${channelName}"]`;
+                        } else {
+                            // It's a standard channel with # prefix in display
+                            selector = `[data-channel="${channelName}"][data-geohash=""]`;
+                        }
+                    } else {
+                        // Standard channel without # prefix
+                        selector = `[data-channel="${channel}"][data-geohash=""]`;
+                    }
 
                     const badge = document.querySelector(`${selector} .unread-badge`);
                     if (badge) {
