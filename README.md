@@ -21,13 +21,15 @@ NYM is a web-based chat application that uses Nostr's ephemeral events (kind 200
 
 - **Ephemeral Identity** - Generate temporary keypairs and pseudonym per session or use Nostr extension
 - **Multiple Channels** - Standard channels and geohash-based location channels
-- **Private Messaging** - Encrypted DMs using NIP-04
+- **Reactions** - React to messages
+- **Themes** - Pick a desired theme from settings
+- **Private Messaging** - Encrypted DMs using NIP-04 and NIP-44
 - **Bitchat Bridge** - Compatible with Jack Dorsey's Bitchat
 
 ## Protocol Implementation
 
-- Ephemeral event `kind 20000` and channel creation `kind 23333`
-- Tags: `['n', nym]` for nickname, `['t', channel]` for standard channel, `['g', geohash]` for geohash channel
+- Ephemeral geohash event `kind 20000` and standard channel event `kind 23333`
+- Tags: `['n', nym]` for nickname, `['d', channel]` for standard channel, `['g', geohash]` for geohash channel
 
 ## Available Commands
 
@@ -45,6 +47,16 @@ NYM is a web-based chat application that uses Nostr's ephemeral events (kind 200
 /slap     - Slap someone with a trout (e.g., /slap nym)
 /me       - Action message (e.g., /me is coding)
 /shrug    - Send a shrug ¯\_(ツ)_/¯
+/bold     - Send bold text (e.g., /bold text)
+/b        - Shortcut for /bold
+/italic   - Send italic text (e.g., /italic text)
+/i        - Shortcut for /italic
+/strike   - Send strikethrough text (e.g., /strike text)
+/s        - Shortcut for /strike
+/code     - Send code block (e.g., /code text)
+/c        - Shortcut for /code
+/quote    - Send quoted text (e.g., /quote text)
+/q        - Shortcut for /quote
 /quit     - Disconnect from NYM
 ```
 
