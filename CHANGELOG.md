@@ -1,3 +1,8 @@
+## v1.1.2 - 2025-08-25
+
+Hotfix: corrected standard channel new messages count
+New: all sent event messages blasted from Nosflare "send it" relay
+
 ## v1.1.1 - 2025-08-25
 
 New: Interoperable with Amethyst and coolr.chat

@@ -869,14 +869,6 @@
             color: var(--text-dim);
         }
 
-        .char-counter.warning {
-            color: var(--warning);
-        }
-
-        .char-counter.danger {
-            color: var(--danger);
-        }
-
         .input-buttons {
             display: flex;
             gap: 5px;
@@ -1686,7 +1678,7 @@
                     </div>
                     <textarea class="message-input" id="messageInput" placeholder="Type a message or / for commands..."
                         rows="1" disabled></textarea>
-                    <div class="char-counter" id="charCounter">0/280</div>
+                    <div class="char-counter" id="charCounter">0</div>
                 </div>
                 <div class="input-buttons">
                     <input type="file" class="file-input" id="fileInput" accept="image/*">
@@ -1907,6 +1899,7 @@
         class NYM {
             constructor() {
                 this.ws = null;
+                this.nosflareWs = null;
                 this.pubkey = null;
                 this.privkey = null;
                 this.nym = null;
@@ -2390,10 +2383,42 @@
 
             sendToRelay(message) {
                 const msg = JSON.stringify(message);
+
+                // Send to primary relay
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                     this.ws.send(msg);
                 } else {
                     this.messageQueue.push(msg);
+                }
+
+                // Also send EVENT messages to Nosflare blaster relay 
+                if (Array.isArray(message) && message[0] === 'EVENT') {
+                    this.sendToNosflare(message);
+                }
+            }
+
+            sendToNosflare(message) {
+                // Create a separate connection to Nosflare
+                if (!this.nosflareWs || this.nosflareWs.readyState !== WebSocket.OPEN) {
+                    this.nosflareWs = new WebSocket('wss://sendit.nosflare.com');
+
+                    this.nosflareWs.onopen = () => {
+                        // Send the queued message once connected
+                        this.nosflareWs.send(JSON.stringify(message));
+                    };
+
+                    this.nosflareWs.onerror = (error) => {
+                        console.error('Nosflare relay error:', error);
+                    };
+
+                    this.nosflareWs.onmessage = () => { };
+
+                    this.nosflareWs.onclose = () => {
+                        this.nosflareWs = null;
+                    };
+                } else {
+                    // Connection already open, send immediately
+                    this.nosflareWs.send(JSON.stringify(message));
                 }
             }
 
@@ -3789,23 +3814,25 @@
                         return;
                     }
 
-                    const displayChannel = message.geohash ? `#${message.geohash}` : message.channel;
+                    // Store messages with consistent key format (no # for standard channels)
+                    const storageKey = message.geohash ? `#${message.geohash}` : message.channel;
 
                     // Store message
-                    if (!this.messages.has(displayChannel)) {
-                        this.messages.set(displayChannel, []);
+                    if (!this.messages.has(storageKey)) {
+                        this.messages.set(storageKey, []);
                     }
 
                     // Check if message already exists
-                    const exists = this.messages.get(displayChannel).some(m => m.id === message.id);
+                    const exists = this.messages.get(storageKey).some(m => m.id === message.id);
                     if (!exists) {
-                        this.messages.get(displayChannel).push(message);
+                        this.messages.get(storageKey).push(message);
                     }
 
-                    // Only display if it's for current channel
-                    if (displayChannel !== this.currentDisplayChannel()) {
+                    // Check if this is for current channel
+                    const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                    if (storageKey !== currentKey) {
                         if (!message.isOwn && !exists) {
-                            this.updateUnreadCount(displayChannel);
+                            this.updateUnreadCount(storageKey);
                         }
                         return;
                     }
@@ -3927,6 +3954,7 @@
             }
 
             currentDisplayChannel() {
+                // Return consistent key format for message storage
                 return this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
             }
 
@@ -4882,11 +4910,13 @@
                 }
             }
 
-            loadChannelMessages(channel) {
+            loadChannelMessages(displayName) {
                 const container = document.getElementById('messagesContainer');
                 container.innerHTML = '';
 
-                const channelMessages = this.messages.get(channel) || [];
+                // Use the storage key format (no # for standard channels)
+                const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                const channelMessages = this.messages.get(storageKey) || [];
 
                 // Sort messages by timestamp
                 channelMessages.sort((a, b) => a.timestamp - b.timestamp);
@@ -4895,7 +4925,7 @@
                 channelMessages.forEach(msg => this.displayMessage(msg));
 
                 if (channelMessages.length === 0) {
-                    this.displaySystemMessage(`Joined ${channel}`);
+                    this.displaySystemMessage(`Joined ${displayName}`);
                 }
             }
 
@@ -4962,10 +4992,14 @@
                     }
                 } else {
                     // Regular channel unread counts
-                    const isGeohash = channel.startsWith('#') && channel.length <= 13;
-                    const selector = isGeohash ?
-                        `[data-geohash="${channel.substring(1)}"]` :
-                        `[data-channel="${channel}"][data-geohash=""]`;
+                    let selector;
+                    if (channel.startsWith('#')) {
+                        // Geohash channel
+                        selector = `[data-geohash="${channel.substring(1)}"]`;
+                    } else {
+                        // Standard channel (no # prefix in data attribute)
+                        selector = `[data-channel="${channel}"][data-geohash=""]`;
+                    }
 
                     const badge = document.querySelector(`${selector} .unread-badge`);
                     if (badge) {
@@ -5024,20 +5058,10 @@
                 const counter = document.getElementById('charCounter');
                 const sendBtn = document.getElementById('sendBtn');
 
-                counter.textContent = `${length}/280`;
+                counter.textContent = `${length}`;
+                counter.classList.remove('warning', 'danger');
 
-                if (length > 280) {
-                    counter.classList.add('danger');
-                    counter.classList.remove('warning');
-                    sendBtn.disabled = true;
-                } else if (length > 250) {
-                    counter.classList.add('warning');
-                    counter.classList.remove('danger');
-                    sendBtn.disabled = this.connected ? false : true;
-                } else {
-                    counter.classList.remove('warning', 'danger');
-                    sendBtn.disabled = this.connected ? false : true;
-                }
+                sendBtn.disabled = !this.connected;
             }
 
             autoResizeTextarea(textarea) {
@@ -5361,7 +5385,7 @@
 
         function showAbout() {
             nym.displaySystemMessage(`
-                ═══ NYM - Nostr Ynstant Messenger v1.1.1 ═══<br>
+                ═══ NYM - Nostr Ynstant Messenger v1.1.2 ═══<br>
                 Protocol: Nostr (kind 20000/23333 channels)<br>
                 Relay: ${nym.relayUrl || 'Not connected'}<br>
                 Your nym: ${nym.nym || 'Not set'}<br>
