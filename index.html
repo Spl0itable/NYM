@@ -258,6 +258,8 @@
         .pm-list {
             max-height: 200px;
             overflow-y: auto;
+            display: flex;
+            flex-direction: column;
         }
 
         .channel-item,
@@ -271,6 +273,12 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+        }
+
+        .channel-item.pinned {
+            order: -1;
+            background: rgba(255, 215, 0, 0.05);
+            border-color: rgba(255, 215, 0, 0.3);
         }
 
         .channel-item:hover,
@@ -317,6 +325,32 @@
             display: flex;
             gap: 5px;
             align-items: center;
+        }
+
+        .pin-btn {
+            font-size: 12px;
+            color: var(--text-dim);
+            padding: 2px;
+            cursor: pointer;
+            opacity: 0.5;
+            transition: opacity 0.2s;
+            display: flex;
+            align-items: center;
+        }
+
+        .pin-btn:hover {
+            opacity: 1;
+        }
+
+        .pin-btn.pinned {
+            opacity: 1;
+            color: var(--warning);
+        }
+
+        .pin-btn svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
         }
 
         .std-badge {
@@ -496,10 +530,17 @@
             border-left: 2px solid transparent;
             transition: all 0.2s;
             animation: messageIn 0.3s;
+            position: relative;
+            flex-wrap: wrap;
         }
 
         .message.blocked {
             display: none;
+        }
+
+        .message.flooded {
+            opacity: 0.3;
+            filter: blur(2px);
         }
 
         .message.pm {
@@ -527,6 +568,95 @@
         .message:hover {
             background: rgba(0, 255, 0, 0.05);
             border-left-color: var(--primary);
+        }
+
+        .message:hover .reaction-btn {
+            opacity: 1;
+        }
+
+        .reaction-btn {
+            position: absolute;
+            right: 10px;
+            top: 8px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 16px;
+            opacity: 0;
+            transition: opacity 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .reaction-btn:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--primary);
+        }
+
+        .reaction-btn svg {
+            width: 16px;
+            height: 16px;
+            stroke: var(--text);
+            fill: none;
+        }
+
+        .reactions-row {
+            width: 100%;
+            display: flex;
+            gap: 5px;
+            margin-top: 5px;
+            margin-left: auto;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .reaction-badge {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            cursor: pointer;
+            position: relative;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .reaction-badge:hover {
+            border-color: var(--primary);
+            background: rgba(0, 255, 0, 0.1);
+            transform: scale(1.05);
+        }
+
+        .reaction-badge:active {
+            transform: scale(0.95);
+        }
+
+        .reaction-badge.user-reacted {
+            background: rgba(0, 255, 0, 0.2);
+            border-color: var(--primary);
+            box-shadow: 0 0 5px rgba(0, 255, 0, 0.3);
+        }
+
+        .reaction-badge[title]:hover::after {
+            content: attr(title);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-tertiary);
+            border: 1px solid var(--primary);
+            padding: 4px 8px;
+            font-size: 10px;
+            white-space: nowrap;
+            margin-bottom: 4px;
+            z-index: 1000;
+            pointer-events: none;
         }
 
         .message-time {
@@ -588,6 +718,88 @@
         .message-content img:hover {
             transform: scale(1.05);
             box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+        }
+
+        .reaction-badge {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            cursor: default;
+            position: relative;
+        }
+
+        .reaction-badge:hover {
+            border-color: var(--primary);
+        }
+
+        .reaction-badge[title]:hover::after {
+            content: attr(title);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-tertiary);
+            border: 1px solid var(--primary);
+            padding: 4px 8px;
+            font-size: 10px;
+            white-space: nowrap;
+            margin-bottom: 4px;
+            z-index: 1000;
+        }
+
+        .message-content strong {
+            color: var(--text-bright);
+            font-weight: bold;
+        }
+
+        .message-content em {
+            font-style: italic;
+            color: var(--text);
+        }
+
+        .message-content code {
+            background: var(--bg-tertiary);
+            padding: 2px 4px;
+            font-family: var(--font-mono);
+            color: var(--secondary);
+        }
+
+        .message-content pre {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            padding: 10px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+
+        .message-content blockquote {
+            border-left: 3px solid var(--primary);
+            padding-left: 10px;
+            margin: 10px 0;
+            color: var(--text-dim);
+        }
+
+        .message-content h1,
+        .message-content h2,
+        .message-content h3 {
+            color: var(--primary);
+            margin: 10px 0;
+        }
+
+        .message-content ul,
+        .message-content ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+
+        .message-content del {
+            text-decoration: line-through;
+            color: var(--text-dim);
         }
 
         .system-message {
@@ -787,7 +999,8 @@
         }
 
         .form-input,
-        .form-select {
+        .form-select,
+        .form-textarea {
             width: 100%;
             background: var(--bg);
             border: 1px solid var(--border);
@@ -798,8 +1011,14 @@
             outline: none;
         }
 
+        .form-textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
         .form-input:focus,
-        .form-select:focus {
+        .form-select:focus,
+        .form-textarea:focus {
             border-color: var(--primary);
             box-shadow: 0 0 5px rgba(0, 255, 0, 0.3);
         }
@@ -816,7 +1035,8 @@
             justify-content: flex-end;
         }
 
-        .blocked-list {
+        .blocked-list,
+        .keyword-list {
             max-height: 200px;
             overflow-y: auto;
             border: 1px solid var(--border);
@@ -824,7 +1044,8 @@
             background: var(--bg);
         }
 
-        .blocked-item {
+        .blocked-item,
+        .keyword-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -832,11 +1053,13 @@
             margin: 2px 0;
         }
 
-        .blocked-item:hover {
+        .blocked-item:hover,
+        .keyword-item:hover {
             background: rgba(0, 255, 0, 0.1);
         }
 
-        .unblock-btn {
+        .unblock-btn,
+        .remove-keyword-btn {
             padding: 2px 8px;
             font-size: 10px;
             background: var(--bg);
@@ -845,9 +1068,25 @@
             cursor: pointer;
         }
 
-        .unblock-btn:hover {
+        .unblock-btn:hover,
+        .remove-keyword-btn:hover {
             background: var(--danger);
             color: var(--bg);
+        }
+
+        .search-create-prompt {
+            padding: 10px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            margin-top: 5px;
+            font-size: 12px;
+            color: var(--text-bright);
+            cursor: pointer;
+        }
+
+        .search-create-prompt:hover {
+            background: rgba(0, 255, 0, 0.1);
+            border-color: var(--primary);
         }
 
         .image-modal {
@@ -930,7 +1169,8 @@
             display: flex;
         }
 
-        .autocomplete-dropdown {
+        .autocomplete-dropdown,
+        .emoji-autocomplete {
             position: absolute;
             bottom: 100%;
             left: 0;
@@ -944,11 +1184,13 @@
             margin-bottom: 5px;
         }
 
-        .autocomplete-dropdown.active {
+        .autocomplete-dropdown.active,
+        .emoji-autocomplete.active {
             display: block;
         }
 
-        .autocomplete-item {
+        .autocomplete-item,
+        .emoji-item {
             padding: 8px 10px;
             cursor: pointer;
             color: var(--text-dim);
@@ -956,13 +1198,29 @@
         }
 
         .autocomplete-item:hover,
-        .autocomplete-item.selected {
+        .autocomplete-item.selected,
+        .emoji-item:hover,
+        .emoji-item.selected {
             background: rgba(0, 255, 0, 0.1);
             color: var(--text);
         }
 
         .autocomplete-item strong {
             color: var(--primary);
+        }
+
+        .emoji-item {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .emoji-item-emoji {
+            font-size: 18px;
+        }
+
+        .emoji-item-name {
+            font-size: 12px;
         }
 
         .command-palette {
@@ -1092,6 +1350,39 @@
             transition: width 0.3s;
         }
 
+        .reaction-picker {
+            position: absolute;
+            bottom: calc(100% + 5px);
+            right: 0;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--primary);
+            padding: 10px;
+            display: none;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 5px;
+            box-shadow: 0 -5px 20px rgba(0, 255, 0, 0.2);
+            z-index: 600;
+        }
+
+        .reaction-picker.active {
+            display: grid;
+        }
+
+        .reaction-emoji {
+            background: var(--bg);
+            border: 1px solid transparent;
+            padding: 8px;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.2s;
+        }
+
+        .reaction-emoji:hover {
+            border-color: var(--primary);
+            background: rgba(0, 255, 0, 0.1);
+            transform: scale(1.2);
+        }
+
         @media (max-width: 768px) {
             .sidebar {
                 position: fixed;
@@ -1164,6 +1455,12 @@
                 padding: 10px;
                 font-size: 11px;
             }
+
+            .reaction-btn {
+                opacity: 1;
+                font-size: 14px;
+                padding: 2px 4px;
+            }
         }
 
         .emoji-picker {
@@ -1177,6 +1474,9 @@
             grid-template-columns: repeat(8, 1fr);
             gap: 5px;
             max-width: 320px;
+            max-height: 200px;
+            overflow-y: auto;
+            overflow-x: hidden;
             box-shadow: 0 -5px 20px rgba(0, 255, 0, 0.2);
             margin-bottom: 5px;
             z-index: 500;
@@ -1241,6 +1541,31 @@
         ::-webkit-scrollbar-thumb:hover {
             background: var(--primary);
         }
+
+        /* Ghost theme specific styles */
+        body.theme-ghost {
+            --primary: #ffffff;
+            --secondary: #cccccc;
+            --warning: #888888;
+            --danger: #666666;
+            --purple: #999999;
+            --blue: #bbbbbb;
+            --bg: #000000;
+            --bg-secondary: #0a0a0a;
+            --bg-tertiary: #111111;
+            --text: #ffffff;
+            --text-dim: #666666;
+            --text-bright: #ffffff;
+            --border: #333333;
+        }
+
+        body.theme-ghost::before {
+            background: repeating-linear-gradient(0deg,
+                    transparent,
+                    transparent 2px,
+                    rgba(255, 255, 255, 0.02) 2px,
+                    rgba(255, 255, 255, 0.02) 4px);
+        }
     </style>
 </head>
 
@@ -1274,11 +1599,17 @@
                     </span>
                 </div>
                 <input type="text" class="search-input" id="channelSearch" placeholder="Search channels..."
-                    onkeyup="nym.filterChannels(this.value)">
+                    onkeyup="nym.handleChannelSearch(this.value)">
+                <div id="channelSearchResults"></div>
                 <div class="channel-list" id="channelList">
                     <div class="channel-item active" data-channel="bar" data-geohash="">
                         <span class="channel-name">#bar</span>
                         <div class="channel-badges">
+                            <span class="pin-btn" onclick="event.stopPropagation(); nym.togglePin('bar', '')">
+                                <svg viewBox="0 0 24 24">
+                                    <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" />
+                                </svg>
+                            </span>
                             <span class="std-badge">STD</span>
                             <span class="unread-badge" style="display:none">0</span>
                         </div>
@@ -1328,7 +1659,7 @@
                 <div class="header-actions">
                     <button class="icon-btn" onclick="showChannelModal()">+ Channel</button>
                     <button class="icon-btn" onclick="showSettings()">Settings</button>
-                    <button class="icon-btn" onclick="signOut()" title="Sign Out">Sign Out</button>
+                    <button class="icon-btn" onclick="signOut()" title="Signout">Signout</button>
                     <button class="icon-btn" onclick="showAbout()">About</button>
                 </div>
             </header>
@@ -1345,6 +1676,7 @@
             <div class="input-container">
                 <div class="input-wrapper">
                     <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
+                    <div class="emoji-autocomplete" id="emojiAutocomplete"></div>
                     <div class="command-palette" id="commandPalette"></div>
                     <div class="upload-progress" id="uploadProgress">
                         <div>Uploading image...</div>
@@ -1369,8 +1701,8 @@
                         <svg viewBox="0 0 24 24">
                             <circle cx="12" cy="12" r="10"></circle>
                             <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-                            <line x1="9" y1="9" x2="9.01" y2="9"></line>
-                            <line x1="15" y1="9" x2="15.01" y2="9"></line>
+                            <circle cx="9" cy="9" r="1"></circle>
+                            <circle cx="15" cy="9" r="1"></circle>
                         </svg>
                     </button>
                     <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>SEND</button>
@@ -1483,6 +1815,7 @@
                         <option value="amber">Amber Terminal</option>
                         <option value="cyber">Cyberpunk</option>
                         <option value="hacker">Hacker Blue</option>
+                        <option value="ghost">Ghost (B&W)</option>
                     </select>
                 </div>
 
@@ -1510,6 +1843,17 @@
                         <option value="true">Show</option>
                         <option value="false">Hide</option>
                     </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Blocked Keywords/Phrases</label>
+                    <input type="text" class="form-input" id="newKeywordInput"
+                        placeholder="Add keyword or phrase to block">
+                    <button class="icon-btn" onclick="nym.addBlockedKeyword()"
+                        style="margin-top: 10px; width: 100%;">Add Keyword</button>
+                    <div class="keyword-list" id="keywordList" style="margin-top: 10px;">
+                        <div style="color: var(--text-dim); font-size: 12px;">No blocked keywords</div>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -1577,6 +1921,7 @@
                 this.pmConversations = new Map();
                 this.unreadCounts = new Map();
                 this.blockedUsers = new Set();
+                this.blockedKeywords = new Set();
                 this.settings = this.loadSettings();
                 this.commandHistory = [];
                 this.historyIndex = -1;
@@ -1585,24 +1930,76 @@
                 this.messageQueue = [];
                 this.autocompleteIndex = -1;
                 this.commandPaletteIndex = -1;
+                this.emojiAutocompleteIndex = -1;
                 this.commonChannels = ['bar', 'random', 'nostr', 'bitcoin', 'tech', 'music', 'gaming'];
                 this.commonGeohashes = ['w1', 'w2', 'dr5r', '9q8y', 'u4pr'];
                 this.inPMMode = false;
                 this.userSearchTerm = '';
                 this.geohashRegex = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
+                this.pinnedChannels = new Set();
+                this.reactions = new Map(); // messageId -> Map(emoji -> Set(pubkeys))
+                this.floodTracking = new Map(); // pubkey -> { count, firstMessageTime, blocked }
+                this.activeReactionPicker = null;
+                this.activeReactionPickerButton = null;  // Add this line
+                this.usingExtension = false;
+                this.emojiMap = {
+                    'smile': '😊', 'laugh': '😂', 'heart': '❤️', 'thumbsup': '👍', 'fire': '🔥',
+                    'party': '🎉', 'eyes': '👀', 'thinking': '🤔', 'cry': '😢', 'cool': '😎',
+                    'rocket': '🚀', 'beer': '🍺', 'coffee': '☕', 'pizza': '🍕', 'wave': '👋',
+                    'rofl': '🤣', 'thumbsdown': '👎', 'clap': '👏', '100': '💯', 'star': '🌟',
+                    'lightning': '⚡', 'target': '🎯', 'bulb': '💡', 'robot': '🤖', 'ghost': '👻',
+                    'mask': '🎭', 'rainbow': '🌈', 'gaming': '🎮', 'sparkles': '✨', 'computer': '💻',
+                    'shocked': '😮', 'wink': '😉', 'kiss': '😘', 'angry': '😠', 'sad': '😢',
+                    'happy': '😊', 'neutral': '😐', 'confused': '😕', 'sleeping': '😴', 'sick': '🤢'
+                };
             }
 
             isValidGeohash(str) {
-                // Geohashes only contain specific characters
                 return this.geohashRegex.test(str.toLowerCase());
             }
 
             getChannelType(channel) {
-                // Determine if a channel is a geohash or standard
                 if (this.isValidGeohash(channel)) {
                     return 'geo';
                 }
                 return 'standard';
+            }
+
+            handleChannelSearch(searchTerm) {
+                const term = searchTerm.toLowerCase();
+                const resultsDiv = document.getElementById('channelSearchResults');
+
+                // Filter existing channels
+                this.filterChannels(term);
+
+                // Show create/join prompt if search term exists
+                if (term.length > 0) {
+                    const isGeohash = this.isValidGeohash(term);
+                    const type = isGeohash ? 'geohash' : 'channel';
+                    const exists = Array.from(this.channels.keys()).some(k => k.toLowerCase() === term);
+
+                    if (!exists) {
+                        const prompt = document.createElement('div');
+                        prompt.className = 'search-create-prompt';
+                        prompt.innerHTML = `Create or Join ${type} "${term}"`;
+                        prompt.onclick = () => {
+                            if (isGeohash) {
+                                this.cmdJoin('#' + term);
+                            } else {
+                                this.cmdJoin(term);
+                            }
+                            document.getElementById('channelSearch').value = '';
+                            resultsDiv.innerHTML = '';
+                            this.filterChannels('');
+                        };
+                        resultsDiv.innerHTML = '';
+                        resultsDiv.appendChild(prompt);
+                    } else {
+                        resultsDiv.innerHTML = '';
+                    }
+                } else {
+                    resultsDiv.innerHTML = '';
+                }
             }
 
             async initialize() {
@@ -1620,12 +2017,91 @@
                     // Load saved preferences
                     this.applyTheme(this.settings.theme);
                     this.loadBlockedUsers();
+                    this.loadBlockedKeywords();
+                    this.loadPinnedChannels();
 
                     console.log('NYM initialized successfully');
                 } catch (error) {
                     console.error('Failed to initialize NYM:', error);
                     this.showNotification('Error', 'Failed to initialize: ' + error.message);
                 }
+            }
+
+            loadBlockedKeywords() {
+                const saved = localStorage.getItem('nym_blocked_keywords');
+                if (saved) {
+                    this.blockedKeywords = new Set(JSON.parse(saved));
+                }
+                this.updateKeywordList();
+            }
+
+            saveBlockedKeywords() {
+                localStorage.setItem('nym_blocked_keywords', JSON.stringify(Array.from(this.blockedKeywords)));
+            }
+
+            addBlockedKeyword() {
+                const input = document.getElementById('newKeywordInput');
+                const keyword = input.value.trim().toLowerCase();
+
+                if (keyword) {
+                    this.blockedKeywords.add(keyword);
+                    this.saveBlockedKeywords();
+                    this.updateKeywordList();
+                    input.value = '';
+
+                    // Hide messages containing this keyword
+                    document.querySelectorAll('.message').forEach(msg => {
+                        const content = msg.querySelector('.message-content');
+                        if (content && content.textContent.toLowerCase().includes(keyword)) {
+                            msg.classList.add('blocked');
+                        }
+                    });
+
+                    this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
+                }
+            }
+
+            removeBlockedKeyword(keyword) {
+                this.blockedKeywords.delete(keyword);
+                this.saveBlockedKeywords();
+                this.updateKeywordList();
+
+                // Re-check all messages
+                document.querySelectorAll('.message').forEach(msg => {
+                    const author = msg.dataset.author;
+                    const content = msg.querySelector('.message-content');
+
+                    if (content && !this.blockedUsers.has(author)) {
+                        const hasBlockedKeyword = Array.from(this.blockedKeywords).some(kw =>
+                            content.textContent.toLowerCase().includes(kw)
+                        );
+
+                        if (!hasBlockedKeyword) {
+                            msg.classList.remove('blocked');
+                        }
+                    }
+                });
+
+                this.displaySystemMessage(`Unblocked keyword: "${keyword}"`);
+            }
+
+            updateKeywordList() {
+                const list = document.getElementById('keywordList');
+                if (this.blockedKeywords.size === 0) {
+                    list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked keywords</div>';
+                } else {
+                    list.innerHTML = Array.from(this.blockedKeywords).map(keyword => `
+                        <div class="keyword-item">
+                            <span>${this.escapeHtml(keyword)}</span>
+                            <button class="remove-keyword-btn" onclick="nym.removeBlockedKeyword('${this.escapeHtml(keyword).replace(/'/g, "\\'")}')">Remove</button>
+                        </div>
+                    `).join('');
+                }
+            }
+
+            hasBlockedKeyword(text) {
+                const lowerText = text.toLowerCase();
+                return Array.from(this.blockedKeywords).some(keyword => lowerText.includes(keyword));
             }
 
             generateRandomNym() {
@@ -1657,7 +2133,13 @@
                             this.subscribeToMessages();
                             this.loadHistoricalMessages();
                             this.subscribeToPMs();
+                            this.subscribeToReactions();
                             this.discoverChannels();
+
+                            // Load synced settings if using extension
+                            if (this.usingExtension) {
+                                this.loadSyncedSettings();
+                            }
 
                             // Enable input
                             document.getElementById('messageInput').disabled = false;
@@ -1711,12 +2193,12 @@
             }
 
             subscribeToMessages() {
-                // Subscribe to both ephemeral and channel creation messages
+                // Subscribe to both ephemeral and channel messages
                 const subscription = [
                     "REQ",
                     "nym-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [20000, 23333],
+                        kinds: [20000, 23333], // Geohash and standard channels
                         limit: 200
                     }
                 ];
@@ -1724,16 +2206,46 @@
                 this.sendToRelay(subscription);
             }
 
+            subscribeToReactions() {
+                // Subscribe to reactions (NIP-25) with broader filter
+                const subscription = [
+                    "REQ",
+                    "reactions-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [7], // Reaction events
+                        limit: 1000, // Increase limit for more reactions
+                        since: Math.floor(Date.now() / 1000) - 7200 // Last 2 hours
+                    }
+                ];
+
+                this.sendToRelay(subscription);
+
+                // Also subscribe to reactions tagged to our pubkey
+                if (this.pubkey) {
+                    const userReactionsSubscription = [
+                        "REQ",
+                        "user-reactions-" + Math.random().toString(36).substring(7),
+                        {
+                            kinds: [7],
+                            "#p": [this.pubkey], // Reactions to our messages
+                            limit: 500
+                        }
+                    ];
+
+                    this.sendToRelay(userReactionsSubscription);
+                }
+            }
+
             subscribeToPMs() {
                 if (!this.pubkey) return;
 
-                // Subscribe to NIP-04 encrypted DMs only
+                // Subscribe to NIP-17 private messages
                 const subscription = [
                     "REQ",
                     "pms-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [4], // NIP-04 encrypted direct messages ONLY
-                        "#p": [this.pubkey], // Messages TO us
+                        kinds: [1059], // NIP-17 gift wrap
+                        "#p": [this.pubkey],
                         limit: 100
                     }
                 ];
@@ -1745,13 +2257,26 @@
                     "REQ",
                     "pms-sent-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [4], // NIP-04 encrypted direct messages ONLY
-                        authors: [this.pubkey], // Messages FROM us
+                        kinds: [1059], // NIP-17 gift wrap
+                        authors: [this.pubkey],
                         limit: 100
                     }
                 ];
 
                 this.sendToRelay(sentSubscription);
+
+                // Legacy NIP-04 support for compatibility
+                const legacySubscription = [
+                    "REQ",
+                    "pms-legacy-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [4], // NIP-04 encrypted direct messages
+                        "#p": [this.pubkey],
+                        limit: 50
+                    }
+                ];
+
+                this.sendToRelay(legacySubscription);
             }
 
             loadHistoricalMessages() {
@@ -1763,7 +2288,7 @@
                     "REQ",
                     "history-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [20000, 23333],
+                        kinds: [20000, 23333, 7], // Include reactions
                         since: since,
                         until: now,
                         limit: 500
@@ -1771,6 +2296,64 @@
                 ];
 
                 this.sendToRelay(subscription);
+            }
+
+            async loadSyncedSettings() {
+                if (!this.pubkey || !this.usingExtension) return;
+
+                // Request NIP-78 settings (kind 30078)
+                const subscription = [
+                    "REQ",
+                    "settings-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [30078],
+                        authors: [this.pubkey],
+                        limit: 1
+                    }
+                ];
+
+                this.sendToRelay(subscription);
+            }
+
+            async saveSyncedSettings() {
+                if (!this.pubkey || !this.usingExtension) return;
+
+                try {
+                    const settingsData = {
+                        theme: this.settings.theme,
+                        sound: this.settings.sound,
+                        autoscroll: this.settings.autoscroll,
+                        showTimestamps: this.settings.showTimestamps,
+                        pinnedChannels: Array.from(this.pinnedChannels),
+                        blockedUsers: Array.from(this.blockedUsers),
+                        blockedKeywords: Array.from(this.blockedKeywords)
+                    };
+
+                    const event = {
+                        kind: 30078,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [
+                            ["d", "nym-settings"],
+                            ["title", "NYM Settings"]
+                        ],
+                        content: JSON.stringify(settingsData),
+                        pubkey: this.pubkey
+                    };
+
+                    // Sign event
+                    let signedEvent;
+                    if (window.nostr) {
+                        signedEvent = await window.nostr.signEvent(event);
+                    } else if (this.privkey) {
+                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                    }
+
+                    if (signedEvent) {
+                        this.sendToRelay(["EVENT", signedEvent]);
+                    }
+                } catch (error) {
+                    console.error('Failed to save synced settings:', error);
+                }
             }
 
             discoverChannels() {
@@ -1838,25 +2421,36 @@
             }
 
             async handleEvent(event) {
+                // Determine if this is a historical message
+                const now = Math.floor(Date.now() / 1000);
+                const messageAge = now - event.created_at;
+                const isHistorical = messageAge > 60; // Messages older than 1 minute are considered historical
+
                 if (event.kind === 20000) {
-                    // Handle ephemeral messages
+                    // Handle geohash channel messages
                     const nymTag = event.tags.find(t => t[0] === 'n');
-                    const channelTag = event.tags.find(t => t[0] === 't');
                     const geohashTag = event.tags.find(t => t[0] === 'g');
 
                     const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
-                    const channel = channelTag ? channelTag[1] : (geohashTag ? `#${geohashTag[1]}` : 'bar');
                     const geohash = geohashTag ? geohashTag[1] : '';
 
-                    // Check if user is blocked
-                    if (this.blockedUsers.has(nym)) {
+                    // Check if user is blocked or message contains blocked keywords
+                    if (this.blockedUsers.has(nym) || this.hasBlockedKeyword(event.content)) {
                         return;
                     }
 
+                    // Check flooding only for non-historical messages
+                    if (!isHistorical && this.isFlooding(event.pubkey)) {
+                        return;
+                    }
+
+                    // Only track flood for new messages, not historical
+                    if (!isHistorical) {
+                        this.trackMessage(event.pubkey, false);
+                    }
+
                     // Add channel if it's new
-                    if (!this.channels.has(channel) && !geohash) {
-                        this.addChannelToList(channel, geohash);
-                    } else if (geohash && !this.channels.has(geohash)) {
+                    if (geohash && !this.channels.has(geohash)) {
                         this.addChannelToList(geohash, geohash);
                     }
 
@@ -1866,7 +2460,7 @@
                         pubkey: event.pubkey,
                         content: event.content,
                         timestamp: new Date(event.created_at * 1000),
-                        channel: channel,
+                        channel: geohash ? geohash : 'unknown',
                         geohash: geohash,
                         isOwn: event.pubkey === this.pubkey
                     };
@@ -1874,7 +2468,7 @@
                     // Don't display duplicate of own messages
                     if (!this.isDuplicateMessage(message)) {
                         this.displayMessage(message);
-                        this.updateUserPresence(nym, event.pubkey, channel, geohash);
+                        this.updateUserPresence(nym, event.pubkey, message.channel, geohash);
 
                         // Show notification only if mentioned and not blocked
                         if (!message.isOwn && document.hidden && this.isMentioned(message.content) && !this.blockedUsers.has(nym)) {
@@ -1882,17 +2476,406 @@
                         }
                     }
                 } else if (event.kind === 23333) {
-                    // Handle channel creation events
-                    const channelTag = event.tags.find(t => t[0] === 'name');
-                    if (channelTag) {
-                        const channelName = channelTag[1];
-                        if (!this.channels.has(channelName)) {
-                            this.addChannelToList(channelName, '');
+                    // Handle standard channel messages
+                    const nymTag = event.tags.find(t => t[0] === 'n');
+                    const channelTag = event.tags.find(t => t[0] === 'd');
+
+                    const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
+                    const channel = channelTag ? channelTag[1] : 'bar';
+
+                    // Check if user is blocked or message contains blocked keywords
+                    if (this.blockedUsers.has(nym) || this.hasBlockedKeyword(event.content)) {
+                        return;
+                    }
+
+                    // Check flooding only for non-historical messages
+                    if (!isHistorical && this.isFlooding(event.pubkey)) {
+                        return;
+                    }
+
+                    // Only track flood for new messages, not historical
+                    if (!isHistorical) {
+                        this.trackMessage(event.pubkey, false);
+                    }
+
+                    // Add channel if it's new
+                    if (!this.channels.has(channel)) {
+                        this.addChannelToList(channel, '');
+                    }
+
+                    const message = {
+                        id: event.id,
+                        author: nym,
+                        pubkey: event.pubkey,
+                        content: event.content,
+                        timestamp: new Date(event.created_at * 1000),
+                        channel: channel,
+                        geohash: '',
+                        isOwn: event.pubkey === this.pubkey
+                    };
+
+                    // Don't display duplicate of own messages
+                    if (!this.isDuplicateMessage(message)) {
+                        this.displayMessage(message);
+                        this.updateUserPresence(nym, event.pubkey, channel, '');
+
+                        // Show notification only if mentioned and not blocked
+                        if (!message.isOwn && document.hidden && this.isMentioned(message.content) && !this.blockedUsers.has(nym)) {
+                            this.showNotification(nym, message.content);
                         }
                     }
+                } else if (event.kind === 7) {
+                    // Handle reactions (NIP-25) - no flood protection for reactions
+                    this.handleReaction(event);
+                } else if (event.kind === 1059) {
+                    // Handle NIP-17 gift wrap - no flood protection for PMs
+                    await this.handleNIP17GiftWrap(event);
                 } else if (event.kind === 4) {
-                    // Handle NIP-04 encrypted DMs
+                    // Handle legacy NIP-04 encrypted DMs - no flood protection for PMs
                     await this.handleEncryptedDM(event);
+                } else if (event.kind === 30078) {
+                    // Handle synced settings - no flood protection
+                    this.handleSyncedSettings(event);
+                }
+            }
+
+            handleSyncedSettings(event) {
+                if (event.pubkey !== this.pubkey) return;
+
+                try {
+                    const settings = JSON.parse(event.content);
+
+                    // Apply synced settings
+                    if (settings.theme) {
+                        this.settings.theme = settings.theme;
+                        this.applyTheme(settings.theme);
+                    }
+                    if (settings.sound !== undefined) {
+                        this.settings.sound = settings.sound;
+                    }
+                    if (settings.autoscroll !== undefined) {
+                        this.settings.autoscroll = settings.autoscroll;
+                    }
+                    if (settings.showTimestamps !== undefined) {
+                        this.settings.showTimestamps = settings.showTimestamps;
+                    }
+                    if (settings.pinnedChannels) {
+                        this.pinnedChannels = new Set(settings.pinnedChannels);
+                        this.updateChannelPins();
+                    }
+                    if (settings.blockedUsers) {
+                        this.blockedUsers = new Set(settings.blockedUsers);
+                        this.updateBlockedList();
+                    }
+                    if (settings.blockedKeywords) {
+                        this.blockedKeywords = new Set(settings.blockedKeywords);
+                        this.updateKeywordList();
+                    }
+
+                    this.saveSettings();
+                    this.displaySystemMessage('Settings synced from Nostr');
+                } catch (error) {
+                    console.error('Failed to parse synced settings:', error);
+                }
+            }
+
+            handleReaction(event) {
+                const reactionContent = event.content;
+                const eTag = event.tags.find(t => t[0] === 'e');
+
+                if (!eTag) return;
+
+                const messageId = eTag[1];
+                const reactorNym = this.getNymFromPubkey(event.pubkey);
+
+                // Store reaction with pubkey and nym
+                if (!this.reactions.has(messageId)) {
+                    this.reactions.set(messageId, new Map());
+                }
+
+                const messageReactions = this.reactions.get(messageId);
+                if (!messageReactions.has(reactionContent)) {
+                    messageReactions.set(reactionContent, new Map()); // Map of pubkey -> nym
+                }
+
+                // Store pubkey with nym
+                messageReactions.get(reactionContent).set(event.pubkey, reactorNym);
+
+                // Update UI if message is visible
+                this.updateMessageReactions(messageId);
+            }
+
+            updateMessageReactions(messageId) {
+                const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+                if (!messageEl) return;
+
+                const reactions = this.reactions.get(messageId);
+                if (!reactions || reactions.size === 0) return;
+
+                // Remove existing reactions display
+                let reactionsRow = messageEl.querySelector('.reactions-row');
+                if (!reactionsRow) {
+                    reactionsRow = document.createElement('div');
+                    reactionsRow.className = 'reactions-row';
+                    messageEl.appendChild(reactionsRow);
+                }
+
+                // Clear and rebuild reactions
+                reactionsRow.innerHTML = '';
+                reactions.forEach((reactors, emoji) => {
+                    const badge = document.createElement('span');
+
+                    // Check if current user has already reacted with this emoji
+                    const hasReacted = reactors.has(this.pubkey);
+
+                    // Set class based on reaction state
+                    badge.className = hasReacted ? 'reaction-badge user-reacted' : 'reaction-badge';
+                    badge.dataset.emoji = emoji;
+                    badge.dataset.messageId = messageId;
+
+                    badge.innerHTML = `${emoji} ${reactors.size}`;
+
+                    // Create tooltip with user names
+                    if (hasReacted) {
+                        const otherUsers = Array.from(reactors.entries())
+                            .filter(([pk, nym]) => pk !== this.pubkey)
+                            .map(([pk, nym]) => nym);
+                        badge.title = otherUsers.length > 0 ?
+                            `You and ${otherUsers.join(', ')}` :
+                            'You reacted with this';
+                    } else {
+                        const users = Array.from(reactors.values()).join(', ');
+                        badge.title = `Click to also react with ${emoji} | ${users}`;
+                    }
+
+                    // Add click handler that updates badge immediately
+                    badge.onclick = async (e) => {
+                        e.stopPropagation();
+                        if (!hasReacted) {
+                            // Immediately update the badge visual state
+                            badge.className = 'reaction-badge user-reacted';
+                            badge.style.background = 'rgba(0, 255, 0, 0.2)';
+                            badge.style.borderColor = 'var(--primary)';
+                            badge.style.boxShadow = '0 0 5px rgba(0, 255, 0, 0.3)';
+
+                            // Update count
+                            const newCount = reactors.size + 1;
+                            badge.innerHTML = `${emoji} ${newCount}`;
+
+                            // Send the reaction
+                            await this.sendReaction(messageId, emoji);
+                        } else {
+                            this.displaySystemMessage(`You already reacted with ${emoji}`);
+                        }
+                    };
+
+                    reactionsRow.appendChild(badge);
+                });
+            }
+
+            async sendReaction(messageId, emoji) {
+                try {
+                    // Find the original message element to get the pubkey
+                    const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+                    if (!messageEl) {
+                        console.error('Message element not found');
+                        return;
+                    }
+
+                    const targetPubkey = messageEl.dataset.pubkey;
+                    if (!targetPubkey) {
+                        console.error('Could not find target pubkey');
+                        return;
+                    }
+
+                    // Update local reactions state
+                    if (!this.reactions.has(messageId)) {
+                        this.reactions.set(messageId, new Map());
+                    }
+                    const messageReactions = this.reactions.get(messageId);
+                    if (!messageReactions.has(emoji)) {
+                        messageReactions.set(emoji, new Map());
+                    }
+
+                    // Check if already reacted
+                    if (messageReactions.get(emoji).has(this.pubkey)) {
+                        return; // Already reacted, badge was updated in onclick
+                    }
+
+                    // Add current user's reaction to state
+                    messageReactions.get(emoji).set(this.pubkey, this.nym);
+
+                    // Send to relay
+                    const event = {
+                        kind: 7,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [
+                            ['e', messageId],
+                            ['p', targetPubkey],
+                            ['k', '23333']
+                        ],
+                        content: emoji,
+                        pubkey: this.pubkey
+                    };
+
+                    // Sign event
+                    let signedEvent;
+                    if (window.nostr && !this.privkey) {
+                        signedEvent = await window.nostr.signEvent(event);
+                    } else if (this.privkey) {
+                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                    }
+
+                    if (signedEvent) {
+                        this.sendToRelay(["EVENT", signedEvent]);
+                    } else {
+                        // If signing failed, revert the visual update
+                        messageReactions.get(emoji).delete(this.pubkey);
+                        this.updateMessageReactions(messageId);
+                        this.displaySystemMessage('Failed to sign reaction');
+                    }
+                } catch (error) {
+                    console.error('Failed to send reaction:', error);
+                    // Revert on error
+                    const messageReactions = this.reactions.get(messageId);
+                    if (messageReactions && messageReactions.has(emoji)) {
+                        messageReactions.get(emoji).delete(this.pubkey);
+                        this.updateMessageReactions(messageId);
+                    }
+                }
+            }
+
+            trackMessage(pubkey, isHistorical = false) {
+                // Don't track historical messages or reactions
+                if (isHistorical) return;
+
+                const now = Date.now();
+
+                if (!this.floodTracking.has(pubkey)) {
+                    this.floodTracking.set(pubkey, {
+                        count: 1,
+                        firstMessageTime: now,
+                        blocked: false
+                    });
+                    return;
+                }
+
+                const tracking = this.floodTracking.get(pubkey);
+
+                // Reset if more than 2 seconds have passed
+                if (now - tracking.firstMessageTime > 2000) {
+                    tracking.count = 1;
+                    tracking.firstMessageTime = now;
+                    tracking.blocked = false;
+                } else {
+                    tracking.count++;
+
+                    // Block if more than 10 messages in 2 seconds
+                    if (tracking.count > 10 && !tracking.blocked) {
+                        tracking.blocked = true;
+                        tracking.blockedUntil = now + 900000; // 15 minutes
+
+                        const nym = this.getNymFromPubkey(pubkey);
+                        this.displaySystemMessage(`${nym} has been temporarily muted for flooding (15 minutes)`);
+                    }
+                }
+            }
+
+            isFlooding(pubkey) {
+                const tracking = this.floodTracking.get(pubkey);
+                if (!tracking) return false;
+
+                if (tracking.blocked) {
+                    const now = Date.now();
+                    if (now < tracking.blockedUntil) {
+                        return true;
+                    } else {
+                        // Unblock after timeout
+                        tracking.blocked = false;
+                        tracking.blockedUntil = null;
+                    }
+                }
+
+                return false;
+            }
+
+            async handleNIP17GiftWrap(event) {
+                try {
+                    // Decrypt the gift wrap
+                    let unwrapped;
+                    if (window.nostr && !this.privkey) {
+                        unwrapped = await window.nostr.nip44.decrypt(event.pubkey, event.content);
+                    } else if (this.privkey) {
+                        // Use NIP-44 decryption
+                        unwrapped = await this.decryptNIP44(event.content, event.pubkey, this.privkey);
+                    }
+
+                    if (!unwrapped) return;
+
+                    const innerEvent = JSON.parse(unwrapped);
+
+                    // Process the inner event as a PM
+                    const conversationPubkey = innerEvent.pubkey === this.pubkey ?
+                        innerEvent.tags.find(t => t[0] === 'p')?.[1] :
+                        innerEvent.pubkey;
+
+                    if (!conversationPubkey) return;
+
+                    const conversationKey = this.getPMConversationKey(conversationPubkey);
+                    const senderNym = this.getNymFromPubkey(innerEvent.pubkey);
+
+                    // Check if sender is blocked
+                    if (this.blockedUsers.has(senderNym)) {
+                        return;
+                    }
+
+                    if (!this.pmMessages.has(conversationKey)) {
+                        this.pmMessages.set(conversationKey, []);
+                    }
+
+                    // Add PM conversation if not exists
+                    if (!this.pmConversations.has(conversationPubkey)) {
+                        this.addPMConversation(senderNym, conversationPubkey);
+                    }
+
+                    const pmMessage = {
+                        id: innerEvent.id || event.id,
+                        author: senderNym,
+                        pubkey: innerEvent.pubkey,
+                        content: innerEvent.content,
+                        timestamp: new Date(innerEvent.created_at * 1000),
+                        isOwn: innerEvent.pubkey === this.pubkey,
+                        isPM: true,
+                        conversationKey: conversationKey,
+                        conversationPubkey: conversationPubkey
+                    };
+
+                    this.pmMessages.get(conversationKey).push(pmMessage);
+                    this.pmMessages.get(conversationKey).sort((a, b) => a.timestamp - b.timestamp);
+
+                    // Display if in PM mode with this user
+                    if (this.inPMMode && this.currentPM === conversationPubkey) {
+                        this.displayMessage(pmMessage);
+                    } else if (!pmMessage.isOwn) {
+                        // Update unread count for incoming messages
+                        this.updateUnreadCount(conversationKey);
+                        // Show notification
+                        if (document.hidden || !this.inPMMode || this.currentPM !== conversationPubkey) {
+                            this.showNotification(`PM from ${senderNym}`, innerEvent.content);
+                        }
+                    }
+
+                } catch (error) {
+                    console.error('Failed to handle NIP-17 gift wrap:', error);
+                }
+            }
+
+            async decryptNIP44(content, pubkey, privkey) {
+                try {
+                    return null;
+                } catch (error) {
+                    console.error('NIP-44 decryption failed:', error);
+                    return null;
                 }
             }
 
@@ -2230,34 +3213,31 @@
                 return `pm-${keys.join('-')}`;
             }
 
-            getSharedSecret(privkey, pubkey) {
-                return `${privkey}-${pubkey}`;
-            }
-
-            decryptMessage(encryptedContent, sharedSecret) {
-                try {
-                    return encryptedContent;
-                } catch (error) {
-                    console.error('Decryption failed:', error);
-                    return null;
-                }
-            }
-
-            encryptMessage(content, sharedSecret) {
-                try {
-                    return content;
-                } catch (error) {
-                    console.error('Encryption failed:', error);
-                    return null;
-                }
-            }
-
             async sendPM(content, recipientPubkey) {
                 try {
                     if (!this.connected) {
                         throw new Error('Not connected to relay');
                     }
 
+                    // Try NIP-17 first, fallback to NIP-04
+                    const useNIP17 = true; // Can be made configurable
+
+                    if (useNIP17) {
+                        // NIP-17 implementation would go here
+                        // For now, fallback to NIP-04
+                        return await this.sendNIP04PM(content, recipientPubkey);
+                    } else {
+                        return await this.sendNIP04PM(content, recipientPubkey);
+                    }
+                } catch (error) {
+                    console.error('Failed to send PM:', error);
+                    this.displaySystemMessage('Failed to send PM: ' + error.message);
+                    return false;
+                }
+            }
+
+            async sendNIP04PM(content, recipientPubkey) {
+                try {
                     // Create message payload with nym
                     const messagePayload = JSON.stringify({
                         nym: this.nym,
@@ -2301,9 +3281,8 @@
 
                     return true;
                 } catch (error) {
-                    console.error('Failed to send PM:', error);
-                    this.displaySystemMessage('Failed to send PM: ' + error.message);
-                    return false;
+                    console.error('Failed to send NIP-04 PM:', error);
+                    throw error;
                 }
             }
 
@@ -2421,7 +3400,20 @@
                             ${time ? `<span class="message-time">${time}</span>` : ''}
                             <span class="message-author ${authorClass}">${this.escapeHtml(msg.author)}:</span>
                             <span class="message-content">${this.formatMessage(msg.content)}</span>
+                            <button class="reaction-btn" onclick="nym.showReactionPicker('${msg.id}', this)">
+                                <svg viewBox="0 0 24 24">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                                    <circle cx="9" cy="9" r="1.5"></circle>
+                                    <circle cx="15" cy="9" r="1.5"></circle>
+                                </svg>
+                            </button>
                         `;
+
+                        // Add existing reactions if any
+                        if (this.reactions.has(msg.id)) {
+                            this.updateMessageReactions(msg.id);
+                        }
 
                         container.appendChild(messageEl);
                     }
@@ -2482,6 +3474,7 @@
                 try {
                     const pk = await window.nostr.getPublicKey();
                     this.pubkey = pk;
+                    this.usingExtension = true;
 
                     // Fetch profile from kind 0 event
                     await this.fetchProfileFromRelay(pk);
@@ -2582,15 +3575,20 @@
                         ['client', 'NYM']
                     ];
 
-                    // Add appropriate tags based on channel type
+                    let kind;
+
+                    // Use appropriate kind and tags based on channel type
                     if (geohash) {
+                        kind = 20000; // Geohash channels use kind 20000
                         tags.push(['g', geohash]);
                     } else {
-                        tags.push(['t', channel]);
+                        kind = 23333; // Standard channels use kind 23333
+                        tags.push(['d', channel]);
+                        tags.push(['relay', this.relayUrl]); // Add relay tag for standard channels
                     }
 
                     const event = {
-                        kind: 20000, // Ephemeral event
+                        kind: kind,
                         created_at: Math.floor(Date.now() / 1000),
                         tags: tags,
                         content: content,
@@ -2627,10 +3625,11 @@
                     }
 
                     const event = {
-                        kind: 23333, // Channel creation
+                        kind: 23333, // Channel creation/joining
                         created_at: Math.floor(Date.now() / 1000),
                         tags: [
-                            ['name', channelName],
+                            ['d', channelName],
+                            ['relay', this.relayUrl], // Add relay tag
                             ['about', `Channel #${channelName} created via NYM`],
                             ['client', 'NYM']
                         ],
@@ -2829,10 +3828,15 @@
 
                 const messageEl = document.createElement('div');
 
-                // Check if author is blocked
-                if (this.blockedUsers.has(message.author)) {
+                // Check if author is blocked or message contains blocked keywords
+                if (this.blockedUsers.has(message.author) || this.hasBlockedKeyword(message.content)) {
                     messageEl.className = 'message blocked';
                     return;
+                }
+
+                // Check if author is flooding
+                if (this.isFlooding(message.pubkey)) {
+                    messageEl.className = 'message flooded';
                 }
 
                 // Check for action messages
@@ -2843,14 +3847,34 @@
                     messageEl.className = message.isPM ? 'message pm' : 'message';
                     messageEl.dataset.messageId = message.id;
                     messageEl.dataset.author = message.author;
+                    messageEl.dataset.pubkey = message.pubkey;
 
                     const authorClass = message.isOwn ? 'self' : '';
 
+                    // Only show reaction button if we have a valid 32-byte hex event ID
+                    const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
+                    const reactionButton = message.isPM || !isValidEventId ? '' : `
+            <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
+                <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                    <circle cx="9" cy="9" r="1"></circle>
+                    <circle cx="15" cy="9" r="1"></circle>
+                </svg>
+            </button>
+        `;
+
                     messageEl.innerHTML = `
-                        ${time ? `<span class="message-time">${time}</span>` : ''}
-                        <span class="message-author ${authorClass}" onclick="${!message.isPM ? `nym.insertMention('${this.escapeHtml(message.author)}')` : ''}">${this.escapeHtml(message.author)}:</span>
-                        <span class="message-content">${this.formatMessage(message.content)}</span>
-                    `;
+            ${time ? `<span class="message-time">${time}</span>` : ''}
+            <span class="message-author ${authorClass}" onclick="${!message.isPM ? `nym.insertMention('${this.escapeHtml(message.author)}')` : ''}">${this.escapeHtml(message.author)}:</span>
+            <span class="message-content">${this.formatMessage(message.content)}</span>
+            ${reactionButton}
+        `;
+
+                    // Add existing reactions if any
+                    if (this.reactions.has(message.id)) {
+                        this.updateMessageReactions(message.id);
+                    }
                 }
 
                 container.appendChild(messageEl);
@@ -2860,22 +3884,90 @@
                 }
             }
 
+            showReactionPicker(messageId, button) {
+                // Toggle if clicking same button
+                if (this.activeReactionPicker && this.activeReactionPickerButton === button) {
+                    this.closeReactionPicker();
+                    return;
+                }
+
+                // Close any existing picker
+                if (this.activeReactionPicker) {
+                    this.activeReactionPicker.remove();
+                }
+
+                const picker = document.createElement('div');
+                picker.className = 'reaction-picker active';
+                picker.innerHTML = ['👍', '❤️', '😂', '🔥', '👎', '😮', '🤔', '💯', '🎉', '👏'].map(emoji =>
+                    `<button class="reaction-emoji" onclick="nym.sendReaction('${messageId}', '${emoji}'); nym.closeReactionPicker();">${emoji}</button>`
+                ).join('');
+
+                button.parentElement.appendChild(picker);
+                this.activeReactionPicker = picker;
+                this.activeReactionPickerButton = button;
+
+                // Close on click outside
+                setTimeout(() => {
+                    document.addEventListener('click', this.closeReactionPickerHandler.bind(this), { once: true });
+                }, 100);
+            }
+
+            closeReactionPickerHandler(e) {
+                if (this.activeReactionPicker && !this.activeReactionPicker.contains(e.target)) {
+                    this.closeReactionPicker();
+                }
+            }
+
+            closeReactionPicker() {
+                if (this.activeReactionPicker) {
+                    this.activeReactionPicker.remove();
+                    this.activeReactionPicker = null;
+                    this.activeReactionPickerButton = null;
+                }
+            }
+
             currentDisplayChannel() {
                 return this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
             }
 
             formatMessage(content) {
-                // Don't escape HTML - we'll handle it carefully
                 let formatted = content;
 
-                // First, escape HTML entities but preserve actual characters
+                // First, escape HTML entities
                 formatted = formatted.replace(/&/g, '&amp;')
                     .replace(/</g, '&lt;')
                     .replace(/>/g, '&gt;')
                     .replace(/"/g, '&quot;');
-                // Don't escape single quotes - leave them as is
 
-                // Convert image URLs to images with onclick
+                // Code blocks with proper line break handling
+                formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => {
+                    // Preserve line breaks in code blocks
+                    const formattedCode = code.trim().replace(/\n/g, '<br>');
+                    return `<pre><code>${formattedCode}</code></pre>`;
+                });
+
+                // Inline code
+                formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+                // Bold **text** or __text__
+                formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+                formatted = formatted.replace(/__(.+?)__/g, '<strong>$1</strong>');
+
+                // Italic *text* or _text_ (avoid URLs)
+                formatted = formatted.replace(/(?<![:/])(\*|_)([^*_\s][^*_]*)\1/g, '<em>$2</em>');
+
+                // Strikethrough ~~text~~
+                formatted = formatted.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+                // Blockquotes > text
+                formatted = formatted.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+                // Headers
+                formatted = formatted.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+                formatted = formatted.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+                formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+                // Convert image URLs to images
                 formatted = formatted.replace(
                     /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
                     '<img src="$1" alt="Image" onclick="nym.expandImage(\'$1\')" />'
@@ -2893,7 +3985,7 @@
                     '<span style="color: var(--secondary)">@$1</span>'
                 );
 
-                // Convert #channel references to clickable links with type indicator
+                // Channel references
                 formatted = formatted.replace(
                     /#(\w+)/g,
                     (match, channel) => {
@@ -3021,11 +4113,11 @@
 
                 // Display deduplicated users in sidebar with click to open PM
                 userListContent.innerHTML = displayUsers.map(user => `
-                                <div class="user-item" onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" data-nym="${this.escapeHtml(user.nym)}">
-                                    <span class="user-status ${user.status}"></span>
-                                    <span>${this.escapeHtml(user.nym)}</span>
-                                </div>
-                            `).join('');
+                    <div class="user-item" onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" data-nym="${this.escapeHtml(user.nym)}">
+                        <span class="user-status ${user.status}"></span>
+                        <span>${this.escapeHtml(user.nym)}</span>
+                    </div>
+                `).join('');
 
                 // Update active nyms count in title
                 const userListTitle = document.querySelector('#userList .nav-title-text');
@@ -3035,7 +4127,7 @@
 
                 // Update channel meta with channel-specific count
                 if (!this.inPMMode) {
-                    document.getElementById('channelMeta').textContent = `${channelUserCount} online nyms in channel`;
+                    document.getElementById('channelMeta').textContent = `${channelUserCount} online nyms`;
                 }
             }
 
@@ -3072,11 +4164,59 @@
                 this.updateUserList();
             }
 
+            togglePin(channel, geohash) {
+                const key = geohash || channel;
+
+                if (this.pinnedChannels.has(key)) {
+                    this.pinnedChannels.delete(key);
+                } else {
+                    this.pinnedChannels.add(key);
+                }
+
+                this.savePinnedChannels();
+                this.updateChannelPins();
+
+                // Save to synced settings if using extension
+                if (this.usingExtension) {
+                    this.saveSyncedSettings();
+                }
+            }
+
+            updateChannelPins() {
+                document.querySelectorAll('.channel-item').forEach(item => {
+                    const channel = item.dataset.channel;
+                    const geohash = item.dataset.geohash;
+                    const key = geohash || channel;
+                    const pinBtn = item.querySelector('.pin-btn');
+
+                    if (this.pinnedChannels.has(key)) {
+                        item.classList.add('pinned');
+                        if (pinBtn) pinBtn.classList.add('pinned');
+                    } else {
+                        item.classList.remove('pinned');
+                        if (pinBtn) pinBtn.classList.remove('pinned');
+                    }
+                });
+            }
+
+            savePinnedChannels() {
+                localStorage.setItem('nym_pinned_channels', JSON.stringify(Array.from(this.pinnedChannels)));
+            }
+
+            loadPinnedChannels() {
+                const saved = localStorage.getItem('nym_pinned_channels');
+                if (saved) {
+                    this.pinnedChannels = new Set(JSON.parse(saved));
+                    this.updateChannelPins();
+                }
+            }
+
             setupEventListeners() {
                 const input = document.getElementById('messageInput');
 
                 input.addEventListener('keydown', (e) => {
                     const autocomplete = document.getElementById('autocompleteDropdown');
+                    const emojiAutocomplete = document.getElementById('emojiAutocomplete');
                     const commandPalette = document.getElementById('commandPalette');
 
                     if (autocomplete.classList.contains('active')) {
@@ -3092,6 +4232,20 @@
                         } else if (e.key === 'Escape') {
                             e.preventDefault();
                             this.hideAutocomplete();
+                        }
+                    } else if (emojiAutocomplete.classList.contains('active')) {
+                        if (e.key === 'ArrowDown') {
+                            e.preventDefault();
+                            this.navigateEmojiAutocomplete(1);
+                        } else if (e.key === 'ArrowUp') {
+                            e.preventDefault();
+                            this.navigateEmojiAutocomplete(-1);
+                        } else if (e.key === 'Enter' || e.key === 'Tab') {
+                            e.preventDefault();
+                            this.selectEmojiAutocomplete();
+                        } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            this.hideEmojiAutocomplete();
                         }
                     } else if (commandPalette.classList.contains('active')) {
                         if (e.key === 'ArrowDown') {
@@ -3189,11 +4343,31 @@
                     '/slap': { desc: 'Slap someone with a trout', fn: (args) => this.cmdSlap(args) },
                     '/me': { desc: 'Action message', fn: (args) => this.cmdMe(args) },
                     '/shrug': { desc: 'Send a shrug', fn: () => this.cmdShrug() },
+                    '/bold': { desc: 'Send bold text (**text**)', fn: (args) => this.cmdBold(args) },
+                    '/b': { desc: 'Shortcut for /bold', fn: (args) => this.cmdBold(args) },
+                    '/italic': { desc: 'Send italic text (*text*)', fn: (args) => this.cmdItalic(args) },
+                    '/i': { desc: 'Shortcut for /italic', fn: (args) => this.cmdItalic(args) },
+                    '/strike': { desc: 'Send strikethrough text (~~text~~)', fn: (args) => this.cmdStrike(args) },
+                    '/s': { desc: 'Shortcut for /strike', fn: (args) => this.cmdStrike(args) },
+                    '/code': { desc: 'Send code block', fn: (args) => this.cmdCode(args) },
+                    '/c': { desc: 'Shortcut for /code', fn: (args) => this.cmdCode(args) },
+                    '/quote': { desc: 'Send quoted text', fn: (args) => this.cmdQuote(args) },
+                    '/q': { desc: 'Shortcut for /quote', fn: (args) => this.cmdQuote(args) },
                     '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() }
                 };
             }
 
             handleInputChange(value) {
+                // Check for emoji autocomplete with :
+                const colonIndex = value.lastIndexOf(':');
+                if (colonIndex !== -1 && colonIndex === value.length - 1 ||
+                    (colonIndex !== -1 && value.substring(colonIndex).match(/^:[a-z]*$/))) {
+                    const search = value.substring(colonIndex + 1);
+                    this.showEmojiAutocomplete(search);
+                } else {
+                    this.hideEmojiAutocomplete();
+                }
+
                 // Check for @ mentions
                 const lastAtIndex = value.lastIndexOf('@');
                 if (lastAtIndex !== -1 && lastAtIndex === value.length - 1 ||
@@ -3209,6 +4383,61 @@
                     this.showCommandPalette(value);
                 } else {
                     this.hideCommandPalette();
+                }
+            }
+
+            showEmojiAutocomplete(search) {
+                const dropdown = document.getElementById('emojiAutocomplete');
+
+                const matches = Object.entries(this.emojiMap).filter(([name]) =>
+                    name.toLowerCase().includes(search.toLowerCase())
+                ).slice(0, 5);
+
+                if (matches.length > 0) {
+                    dropdown.innerHTML = matches.map(([name, emoji], index) => `
+                        <div class="emoji-item ${index === 0 ? 'selected' : ''}" data-name="${name}" data-emoji="${emoji}">
+                            <span class="emoji-item-emoji">${emoji}</span>
+                            <span class="emoji-item-name">:${name}:</span>
+                        </div>
+                    `).join('');
+                    dropdown.classList.add('active');
+                    this.emojiAutocompleteIndex = 0;
+                } else {
+                    this.hideEmojiAutocomplete();
+                }
+            }
+
+            hideEmojiAutocomplete() {
+                document.getElementById('emojiAutocomplete').classList.remove('active');
+                this.emojiAutocompleteIndex = -1;
+            }
+
+            navigateEmojiAutocomplete(direction) {
+                const items = document.querySelectorAll('.emoji-item');
+                if (items.length === 0) return;
+
+                items[this.emojiAutocompleteIndex]?.classList.remove('selected');
+
+                this.emojiAutocompleteIndex += direction;
+                if (this.emojiAutocompleteIndex < 0) this.emojiAutocompleteIndex = items.length - 1;
+                if (this.emojiAutocompleteIndex >= items.length) this.emojiAutocompleteIndex = 0;
+
+                items[this.emojiAutocompleteIndex].classList.add('selected');
+                items[this.emojiAutocompleteIndex].scrollIntoView({ block: 'nearest' });
+            }
+
+            selectEmojiAutocomplete() {
+                const selected = document.querySelector('.emoji-item.selected');
+                if (selected) {
+                    const emoji = selected.dataset.emoji;
+                    const input = document.getElementById('messageInput');
+                    const value = input.value;
+                    const colonIndex = value.lastIndexOf(':');
+
+                    input.value = value.substring(0, colonIndex) + emoji + ' ';
+                    input.focus();
+                    this.updateCharCounter(input.value.length);
+                    this.hideEmojiAutocomplete();
                 }
             }
 
@@ -3230,10 +4459,10 @@
 
                 if (users.length > 0) {
                     dropdown.innerHTML = users.map((user, index) => `
-                                    <div class="autocomplete-item ${index === 0 ? 'selected' : ''}" data-nym="${user.nym}">
-                                        <strong>@${this.escapeHtml(user.nym)}</strong>
-                                    </div>
-                                `).join('');
+                        <div class="autocomplete-item ${index === 0 ? 'selected' : ''}" data-nym="${user.nym}">
+                            <strong>@${this.escapeHtml(user.nym)}</strong>
+                        </div>
+                    `).join('');
                     dropdown.classList.add('active');
                     this.autocompleteIndex = 0;
                 } else {
@@ -3282,11 +4511,11 @@
 
                 if (matchingCommands.length > 0) {
                     palette.innerHTML = matchingCommands.map(([cmd, info], index) => `
-                                    <div class="command-item ${index === 0 ? 'selected' : ''}" data-command="${cmd}">
-                                        <span class="command-name">${cmd}</span>
-                                        <span class="command-desc">${info.desc}</span>
-                                    </div>
-                                `).join('');
+                        <div class="command-item ${index === 0 ? 'selected' : ''}" data-command="${cmd}">
+                            <span class="command-name">${cmd}</span>
+                            <span class="command-desc">${info.desc}</span>
+                        </div>
+                    `).join('');
                     palette.classList.add('active');
                     this.commandPaletteIndex = 0;
                 } else {
@@ -3355,7 +4584,7 @@
                             }
 
                             const pmMessage = {
-                                id: Date.now().toString(),
+                                id: 'temp-' + Date.now().toString(), // Temporary ID for PMs
                                 author: this.nym,
                                 pubkey: this.pubkey,
                                 content: content,
@@ -3370,22 +4599,10 @@
                             this.displayMessage(pmMessage);
                         }
                     } else {
-                        // Send regular message
+                        // Send regular message - this will get proper event ID from relay
                         const success = await this.publishMessage(content, this.currentChannel, this.currentGeohash);
 
-                        if (success) {
-                            // Display own message immediately
-                            this.displayMessage({
-                                id: Date.now().toString(),
-                                author: this.nym,
-                                pubkey: this.pubkey,
-                                content: content,
-                                timestamp: new Date(),
-                                channel: this.currentChannel,
-                                geohash: this.currentGeohash,
-                                isOwn: true
-                            });
-                        }
+                        // Don't display own message immediately since it will come back from relay with proper ID
                     }
                 }
 
@@ -3394,6 +4611,7 @@
                 this.autoResizeTextarea(input);
                 this.hideCommandPalette();
                 this.hideAutocomplete();
+                this.hideEmojiAutocomplete();
             }
 
             handleCommand(command) {
@@ -3414,7 +4632,7 @@
                 const helpText = Object.entries(this.commands)
                     .map(([cmd, info]) => `${cmd} - ${info.desc}`)
                     .join('\n');
-                this.displaySystemMessage(`Available commands:\n${helpText}`);
+                this.displaySystemMessage(`Available commands:\n${helpText}\n\nMarkdown supported: **bold**, *italic*, ~~strikethrough~~, \`code\`, > quote\n\nType : to quickly pick an emoji`);
             }
 
             async cmdJoin(args) {
@@ -3518,6 +4736,11 @@
                 this.displaySystemMessage(`Blocked ${nym}`);
                 this.updateUserList();
                 this.updateBlockedList();
+
+                // Save to synced settings if using extension
+                if (this.usingExtension) {
+                    this.saveSyncedSettings();
+                }
             }
 
             cmdUnblock(args) {
@@ -3530,16 +4753,24 @@
                 this.blockedUsers.delete(nym);
                 this.saveBlockedUsers();
 
-                // Show messages from this user
+                // Show messages from this user (if not blocked by keywords)
                 document.querySelectorAll('.message').forEach(msg => {
                     if (msg.dataset.author === nym) {
-                        msg.classList.remove('blocked');
+                        const content = msg.querySelector('.message-content');
+                        if (!content || !this.hasBlockedKeyword(content.textContent)) {
+                            msg.classList.remove('blocked');
+                        }
                     }
                 });
 
                 this.displaySystemMessage(`Unblocked ${nym}`);
                 this.updateUserList();
                 this.updateBlockedList();
+
+                // Save to synced settings if using extension
+                if (this.usingExtension) {
+                    this.saveSyncedSettings();
+                }
             }
 
             async cmdSlap(args) {
@@ -3560,6 +4791,46 @@
 
             async cmdShrug() {
                 await this.publishMessage('¯\\_(ツ)_/¯');
+            }
+
+            async cmdBold(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /bold text');
+                    return;
+                }
+                await this.publishMessage(`**${args}**`);
+            }
+
+            async cmdItalic(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /italic text');
+                    return;
+                }
+                await this.publishMessage(`*${args}*`);
+            }
+
+            async cmdCode(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /code text');
+                    return;
+                }
+                await this.publishMessage(`\`\`\`\n${args}\n\`\`\``);
+            }
+
+            async cmdStrike(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /strike text');
+                    return;
+                }
+                await this.publishMessage(`~~${args}~~`);
+            }
+
+            async cmdQuote(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /quote text');
+                    return;
+                }
+                await this.publishMessage(`> ${args}`);
             }
 
             cmdQuit() {
@@ -3641,16 +4912,27 @@
                     const displayName = geohash ? `#${geohash}` : `#${channel}`;
                     const badge = geohash ? '<span class="geohash-badge">GEO</span>' : '<span class="std-badge">STD</span>';
 
+                    const isPinned = this.pinnedChannels.has(key);
+                    if (isPinned) {
+                        item.classList.add('pinned');
+                    }
+
                     item.innerHTML = `
-                                    <span class="channel-name">${displayName}</span>
-                                    <div class="channel-badges">
-                                        ${badge}
-                                        <span class="unread-badge" style="display:none">0</span>
-                                    </div>
-                                `;
+                        <span class="channel-name">${displayName}</span>
+                        <div class="channel-badges">
+                            <span class="pin-btn ${isPinned ? 'pinned' : ''}" onclick="event.stopPropagation(); nym.togglePin('${channel}', '${geohash}')">
+                                <svg viewBox="0 0 24 24">
+                                    <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/>
+                                </svg>
+                            </span>
+                            ${badge}
+                            <span class="unread-badge" style="display:none">0</span>
+                        </div>
+                    `;
                     list.appendChild(item);
 
                     this.channels.set(key, { channel, geohash });
+                    this.updateChannelPins();
                 }
             }
 
@@ -3829,10 +5111,10 @@
                 const notifEl = document.createElement('div');
                 notifEl.className = 'notification';
                 notifEl.innerHTML = `
-        <div class="notification-title">${this.escapeHtml(title)}</div>
-        <div class="notification-body">${this.escapeHtml(body)}</div>
-        <div class="notification-time">${new Date().toLocaleTimeString()}</div>
-    `;
+                    <div class="notification-title">${this.escapeHtml(title)}</div>
+                    <div class="notification-body">${this.escapeHtml(body)}</div>
+                    <div class="notification-time">${new Date().toLocaleTimeString()}</div>
+                `;
                 document.body.appendChild(notifEl);
 
                 setTimeout(() => {
@@ -3870,6 +5152,7 @@
 
             applyTheme(theme) {
                 const root = document.documentElement;
+                document.body.classList.remove('theme-ghost');
 
                 const themes = {
                     matrix: {
@@ -3899,8 +5182,19 @@
                         text: '#00ffff',
                         textDim: '#008888',
                         textBright: '#66ffff'
+                    },
+                    ghost: {
+                        primary: '#ffffff',
+                        secondary: '#cccccc',
+                        text: '#ffffff',
+                        textDim: '#666666',
+                        textBright: '#ffffff'
                     }
                 };
+
+                if (theme === 'ghost') {
+                    document.body.classList.add('theme-ghost');
+                }
 
                 const selectedTheme = themes[theme];
                 if (selectedTheme) {
@@ -3945,11 +5239,11 @@
                     list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked users</div>';
                 } else {
                     list.innerHTML = Array.from(this.blockedUsers).map(nym => `
-                                    <div class="blocked-item">
-                                        <span>${this.escapeHtml(nym)}</span>
-                                        <button class="unblock-btn" onclick="nym.cmdUnblock('${this.escapeHtml(nym)}')">Unblock</button>
-                                    </div>
-                                `).join('');
+                        <div class="blocked-item">
+                            <span>${this.escapeHtml(nym)}</span>
+                            <button class="unblock-btn" onclick="nym.cmdUnblock('${this.escapeHtml(nym)}')">Unblock</button>
+                        </div>
+                    `).join('');
                 }
             }
 
@@ -4044,6 +5338,7 @@
             document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
             document.getElementById('timestampSelect').value = nym.settings.showTimestamps;
             nym.updateBlockedList();
+            nym.updateKeywordList();
             document.getElementById('settingsModal').classList.add('active');
         }
 
@@ -4055,26 +5350,31 @@
 
             nym.applyTheme(nym.settings.theme);
             nym.saveSettings();
+
+            // Save to synced settings if using extension
+            if (nym.usingExtension) {
+                nym.saveSyncedSettings();
+            }
+
             closeModal('settingsModal');
         }
 
         function showAbout() {
             nym.displaySystemMessage(`
-            ═══ NYM - Nostr Ynstant Messenger v1.0.1 ═══<br>
-            Protocol: Nostr (kind 20000 ephemeral events)<br>
-            Private Messages: NIP-04 encrypted messaging<br>
-            Relay: ${nym.relayUrl || 'Not connected'}<br>
-            Your nym: ${nym.nym || 'Not set'}<br>
-            <br>
-            Created for ephemeral, anonymous communication.<br>
-            Your identity exists only for this session.<br>
-            No accounts. No persistence. Just nyms.<br>
-            <br>
-            Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br>
-            <br>
-            NYM is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br>
-            Made with ♥ by <a href="https://nostr.band/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas</a>
-    `);
+                ═══ NYM - Nostr Ynstant Messenger v1.1.1 ═══<br>
+                Protocol: Nostr (kind 20000/23333 channels)<br>
+                Relay: ${nym.relayUrl || 'Not connected'}<br>
+                Your nym: ${nym.nym || 'Not set'}<br>
+                <br>
+                Created for ephemeral, anonymous communication.<br>
+                Your identity exists only for this session.<br>
+                No accounts. No persistence. Just nyms.<br>
+                <br>
+                Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br>
+                <br>
+                NYM is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br>
+                Made with ♥ by <a href="https://nostr.band/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas</a>
+            `);
         }
 
         function showChannelModal() {
