@@ -1,3 +1,9 @@
+## v1.2.3 - 2025-08-26
+
+Hotfix: revamped emoji selection and added recently used
+Hotfix: added all emoji and mapped to names
+New: BRB command to set away message and auto reply when mentioned
+
 ## v1.1.3 - 2025-08-26
 
 Hotfix: improved mobile responsiveness

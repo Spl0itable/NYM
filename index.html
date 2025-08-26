@@ -74,7 +74,7 @@
                     rgba(0, 255, 0, 0.03) 2px,
                     rgba(0, 255, 0, 0.03) 4px);
             pointer-events: none;
-            z-index: 1;
+            z-index: 0;
         }
 
         body::after {
@@ -86,14 +86,29 @@
             height: 100%;
             background: radial-gradient(ellipse at center, transparent 0%, rgba(0, 0, 0, 0.4) 100%);
             pointer-events: none;
-            z-index: 1;
+            z-index: 0;
+        }
+
+        .mobile-overlay {
+            display: none;
+            position: unset;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 9998;
+        }
+
+        .mobile-overlay.active {
+            display: block;
         }
 
         .container {
             display: flex;
             height: 100vh;
             position: relative;
-            z-index: 2;
+            z-index: 1;
         }
 
         .sidebar {
@@ -103,6 +118,8 @@
             display: flex;
             flex-direction: column;
             transition: transform 0.3s;
+            position: relative;
+            z-index: 2;
         }
 
         .sidebar-header {
@@ -602,6 +619,11 @@
             filter: blur(2px);
         }
 
+        .message.mentioned {
+            background: rgba(0, 255, 255, 0.08);
+            border-left-color: var(--secondary);
+        }
+
         .message.pm {
             border-left-color: transparent;
             background: transparent;
@@ -718,6 +740,34 @@
             pointer-events: none;
         }
 
+        .add-reaction-btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            opacity: 0.6;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .add-reaction-btn:hover {
+            opacity: 1;
+            border-color: var(--primary);
+            background: rgba(0, 255, 0, 0.1);
+        }
+
+        .add-reaction-btn svg {
+            width: 16px;
+            height: 16px;
+            stroke: var(--text);
+            stroke-width: 2;
+            fill: none;
+        }
+
         .message-time {
             color: var(--text-dim);
             font-size: 12px;
@@ -747,6 +797,16 @@
             word-break: break-word;
             color: var(--text);
             overflow-wrap: anywhere;
+        }
+
+        .message-quote {
+            background: var(--bg-tertiary);
+            border-left: 3px solid var(--primary);
+            padding: 5px 10px;
+            margin: 5px 0;
+            font-size: 12px;
+            color: var(--text-dim);
+            font-style: italic;
         }
 
         .message-content a {
@@ -1159,7 +1219,7 @@
             position: fixed;
             top: 15px;
             right: 15px;
-            z-index: 100;
+            z-index: 2;
             background: var(--bg-secondary);
             border: 1px solid var(--primary);
             color: var(--primary);
@@ -1357,7 +1417,8 @@
             transition: width 0.3s;
         }
 
-        .reaction-picker {
+        .reaction-picker,
+        .enhanced-emoji-modal {
             position: absolute;
             bottom: calc(100% + 5px);
             right: 0;
@@ -1365,27 +1426,68 @@
             border: 1px solid var(--primary);
             padding: 10px;
             display: none;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 5px;
             box-shadow: 0 -5px 20px rgba(0, 255, 0, 0.2);
             z-index: 600;
-            overflow-x: scroll;
+            max-width: 350px;
+            max-height: 400px;
+            overflow-y: auto;
         }
 
-        .reaction-picker.active {
+        .reaction-picker.active,
+        .enhanced-emoji-modal.active {
+            display: block;
+        }
+
+        .emoji-modal-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 10px;
+        }
+
+        .emoji-search-input {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 5px;
+            font-size: 12px;
+            outline: none;
+        }
+
+        .emoji-section {
+            margin-bottom: 15px;
+        }
+
+        .emoji-section-title {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            margin-bottom: 5px;
+            letter-spacing: 1px;
+        }
+
+        .emoji-grid {
             display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 5px;
         }
 
-        .reaction-emoji {
+        .reaction-emoji,
+        .emoji-option {
             background: var(--bg);
             border: 1px solid transparent;
             padding: 8px;
             cursor: pointer;
             font-size: 18px;
             transition: all 0.2s;
+            text-align: center;
         }
 
-        .reaction-emoji:hover {
+        .reaction-emoji:hover,
+        .emoji-option:hover {
             border-color: var(--primary);
             background: rgba(0, 255, 0, 0.1);
             transform: scale(1.2);
@@ -1397,7 +1499,7 @@
                 left: 0;
                 top: 0;
                 height: 100%;
-                z-index: 99;
+                z-index: 9999;
                 transform: translateX(-100%);
                 width: 280px;
             }
@@ -1487,7 +1589,8 @@
                 max-width: 100%;
             }
 
-            .emoji-picker {
+            .emoji-picker,
+            .enhanced-emoji-modal {
                 position: fixed;
                 bottom: auto;
                 top: auto;
@@ -1499,6 +1602,10 @@
                 margin-top: 0;
                 max-width: 90%;
                 z-index: 1000;
+            }
+
+            .emoji-grid {
+                grid-template-columns: repeat(6, 1fr);
             }
         }
 
@@ -1541,7 +1648,9 @@
         }
 
         @media (max-width: 480px) {
-            .emoji-picker {
+
+            .emoji-picker,
+            .enhanced-emoji-modal {
                 grid-template-columns: repeat(6, 1fr);
             }
         }
@@ -1607,6 +1716,7 @@
 </head>
 
 <body>
+    <div class="mobile-overlay" id="mobileOverlay" onclick="nym.closeSidebar()"></div>
     <button class="mobile-menu-toggle" onclick="toggleSidebar()">☰</button>
 
     <!-- Context Menu -->
@@ -1693,10 +1803,10 @@
             </div>
 
             <div class="sidebar-actions">
-                <button class="icon-btn" onclick="showChannelModal(); nym.toggleSidebar();">+ Channel</button>
-                <button class="icon-btn" onclick="showSettings(); nym.toggleSidebar();">Settings</button>
-                <button class="icon-btn" onclick="signOut(); nym.toggleSidebar();" title="Signout">Signout</button>
-                <button class="icon-btn" onclick="showAbout(); nym.toggleSidebar();">About</button>
+                <button class="icon-btn" onclick="showChannelModal(); nym.closeSidebar();">+ Channel</button>
+                <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();">Settings</button>
+                <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Signout">Signout</button>
+                <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();">About</button>
             </div>
         </aside>
 
@@ -1737,7 +1847,6 @@
                     </div>
                     <textarea class="message-input" id="messageInput" placeholder="Type a message or / for commands..."
                         rows="1" disabled></textarea>
-                    <div class="char-counter" id="charCounter">0</div>
                 </div>
                 <div class="input-buttons">
                     <input type="file" class="file-input" id="fileInput" accept="image/*">
@@ -1996,17 +2105,119 @@
                 this.usingExtension = false;
                 this.contextMenuTarget = null;
                 this.contextMenuData = null;
+                this.awayMessages = new Map(); // Store BRB messages
+                this.recentEmojis = [];
+                this.allEmojis = {
+                    'smileys': ['😊', '😂', '🤣', '😍', '🥰', '😘', '😎', '🤔', '😢', '😭', '😡', '🤬', '😱', '😨', '😰', '😥', '😓', '🤗', '🤭', '🤫', '🤥', '😶', '😐', '😑', '😬', '🙄', '😯', '😦', '😧', '😮', '😲', '🥱', '😴', '🤤', '😪', '😵', '🤐', '🥴', '🤢', '🤮', '🤧', '😷', '🤒', '🤕', '🤑', '🤠', '😈', '👿', '👹', '👺', '🤡', '💩', '👻', '💀', '☠️', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'],
+                    'gestures': ['👍', '👎', '👌', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '👇', '☝️', '✋', '🤚', '🖐️', '🖖', '👋', '🤏', '✍️', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '🧠', '🦷', '🦴', '👀', '👁️', '👅', '👄', '💋'],
+                    'hearts': ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '☮️', '✝️', '☪️', '🕉️', '☸️', '✡️', '🔯', '🕎', '☯️', '☦️', '🛐', '⛎', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓'],
+                    'symbols': ['💯', '💢', '💥', '💫', '💦', '💨', '🕳️', '💣', '💬', '👁️‍🗨️', '🗨️', '🗯️', '💭', '💤', '✨', '🌟', '💫', '⭐', '🌠', '🔥', '💥', '☄️', '🎆', '🎇', '🎈', '🎉', '🎊', '🎋', '🎍', '🎎', '🎏', '🎐', '🎑', '🧧', '🎀', '🎁', '🎗️', '🎟️', '🎫'],
+                    'objects': ['⌚', '📱', '📲', '💻', '⌨️', '🖥️', '🖨️', '🖱️', '🖲️', '🕹️', '🗜️', '💽', '💾', '💿', '📀', '📼', '📷', '📸', '📹', '🎥', '📽️', '🎞️', '📞', '☎️', '📟', '📠', '📺', '📻', '🎙️', '🎚️', '🎛️', '⏱️', '⏲️', '⏰', '🕰️', '⌛', '⏳', '📡', '🔋', '🔌', '💡', '🔦', '🕯️', '🗑️', '🛢️', '💸', '💵', '💴', '💶', '💷', '💰', '💳', '🧾', '💎', '⚖️', '🔧', '🔨', '⚒️', '🛠️', '⛏️', '🔩', '⚙️', '⛓️', '🔫', '💣', '🔪', '🗡️', '⚔️', '🛡️', '🚬', '⚰️', '⚱️', '🏺', '🔮', '📿', '💈', '⚗️', '🔭', '🔬', '🕳️', '💊', '💉', '🩸', '🩹', '🩺', '🌡️', '🏷️', '🔖', '🚿', '🛁', '🛀', '🚰', '🚽', '🧻', '🧼', '🧽', '🧴', '🪒', '🧹', '🧺', '🔑', '🗝️', '🛏️', '🛋️', '🚪', '🪑', '🚿', '🛁', '🛀', '🧴', '🧷', '🧹', '🧺', '🧻', '🧼', '🧽', '🧯', '🛒', '🚬', '⚰️', '⚱️', '🗿'],
+                    'food': ['🍏', '🍎', '🍐', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥', '🥝', '🍅', '🍆', '🥑', '🥦', '🥬', '🥒', '🌶️', '🌽', '🥕', '🧄', '🧅', '🥔', '🍠', '🥐', '🥯', '🍞', '🥖', '🥨', '🧀', '🥚', '🍳', '🧈', '🥞', '🧇', '🥓', '🥩', '🍗', '🍖', '🦴', '🌭', '🍔', '🍟', '🍕', '🥪', '🥙', '🧆', '🌮', '🌯', '🥗', '🥘', '🥫', '🍝', '🍜', '🍲', '🍛', '🍣', '🍱', '🥟', '🦪', '🍤', '🍙', '🍚', '🍘', '🍥', '🥠', '🥮', '🍢', '🍡', '🍧', '🍨', '🍦', '🥧', '🧁', '🍰', '🎂', '🍮', '🍭', '🍬', '🍫', '🍿', '🍩', '🍪', '🌰', '🥜', '🍯', '🥛', '🍼', '☕', '🍵', '🧃', '🥤', '🍶', '🍺', '🍻', '🥂', '🍷', '🥃', '🍸', '🍹', '🧉', '🍾', '🧊'],
+                    'activities': ['⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '🥅', '⛳', '🪁', '🏹', '🎣', '🤿', '🥊', '🥋', '🎽', '🛹', '🛷', '⛸️', '🥌', '🎿', '⛷️', '🏂', '🪂', '🏋️', '🤼', '🤸', '🤺', '🤾', '🏌️', '🏇', '🧘', '🏄', '🏊', '🤽', '🚣', '🧗', '🚴', '🚵', '🎪', '🎭', '🎨', '🎬', '🎤', '🎧', '🎼', '🎹', '🥁', '🎷', '🎺', '🎸', '🪕', '🎻', '🎲', '♟️', '🎯', '🎳', '🎮', '🎰', '🧩'],
+                    'nature': ['🐵', '🐒', '🦍', '🦧', '🐶', '🐕', '🦮', '🐕‍🦺', '🐩', '🐺', '🦊', '🦝', '🐱', '🐈', '🐈‍⬛', '🦁', '🐯', '🐅', '🐆', '🐴', '🐎', '🦄', '🦓', '🦌', '🦬', '🐮', '🐂', '🐃', '🐄', '🐷', '🐖', '🐗', '🐽', '🐏', '🐑', '🐐', '🐪', '🐫', '🦙', '🦒', '🐘', '🦣', '🦏', '🦛', '🐭', '🐁', '🐀', '🐹', '🐰', '🐇', '🐿️', '🦫', '🦔', '🦇', '🐻', '🐻‍❄️', '🐨', '🐼', '🦥', '🦦', '🦨', '🦘', '🦡', '🐾', '🦃', '🐔', '🐓', '🐣', '🐤', '🐥', '🐦', '🐧', '🕊️', '🦅', '🦆', '🦢', '🦉', '🦤', '🪶', '🦩', '🦚', '🦜', '🐸', '🐊', '🐢', '🦎', '🐍', '🐲', '🐉', '🦕', '🦖', '🐳', '🐋', '🐬', '🦭', '🐟', '🐠', '🐡', '🦈', '🐙', '🐚', '🐌', '🦋', '🐛', '🐜', '🐝', '🪲', '🐞', '🦗', '🪳', '🕷️', '🕸️', '🦂', '🦟', '🪰', '🪱', '🦠', '💐', '🌸', '💮', '🏵️', '🌹', '🥀', '🌺', '🌻', '🌼', '🌷', '🌱', '🪴', '🌲', '🌳', '🌴', '🌵', '🌾', '🌿', '☘️', '🍀', '🍁', '🍂', '🍃']
+                };
                 this.emojiMap = {
-                    'smile': '😊', 'laugh': '😂', 'heart': '❤️', 'thumbsup': '👍', 'fire': '🔥',
-                    'party': '🎉', 'eyes': '👀', 'thinking': '🤔', 'cry': '😢', 'cool': '😎',
-                    'rocket': '🚀', 'beer': '🍺', 'coffee': '☕', 'pizza': '🍕', 'wave': '👋',
-                    'rofl': '🤣', 'thumbsdown': '👎', 'clap': '👏', '100': '💯', 'star': '🌟',
-                    'lightning': '⚡', 'target': '🎯', 'bulb': '💡', 'robot': '🤖', 'ghost': '👻',
-                    'mask': '🎭', 'rainbow': '🌈', 'gaming': '🎮', 'sparkles': '✨', 'computer': '💻',
-                    'shocked': '😮', 'wink': '😉', 'kiss': '😘', 'angry': '😠', 'sad': '😢',
-                    'happy': '😊', 'neutral': '😐', 'confused': '😕', 'sleeping': '😴', 'sick': '🤢'
+                    // Smileys & Emotion
+                    'smile': '😊', 'laugh': '😂', 'rofl': '🤣', 'love': '😍', 'heart_eyes': '🥰',
+                    'kiss': '😘', 'cool': '😎', 'thinking': '🤔', 'cry': '😢', 'sob': '😭',
+                    'angry': '😡', 'rage': '🤬', 'scream': '😱', 'fearful': '😨', 'anxious': '😰',
+                    'sad': '😥', 'disappointed': '😓', 'hug': '🤗', 'shush': '🤭', 'quiet': '🤫',
+                    'lying': '🤥', 'neutral': '😐', 'expressionless': '😑', 'grimace': '😬', 'eye_roll': '🙄',
+                    'surprised': '😯', 'frowning': '😦', 'anguished': '😧', 'shocked': '😮', 'astonished': '😲',
+                    'yawn': '🥱', 'sleeping': '😴', 'drool': '🤤', 'sleepy': '😪', 'dizzy': '😵',
+                    'zipper': '🤐', 'woozy': '🥴', 'sick': '🤢', 'vomit': '🤮', 'sneeze': '🤧',
+                    'mask': '😷', 'thermometer': '🤒', 'bandage': '🤕', 'money': '🤑', 'cowboy': '🤠',
+                    'devil': '😈', 'imp': '👿', 'ogre': '👹', 'goblin': '👺', 'clown': '🤡',
+                    'poop': '💩', 'ghost': '👻', 'skull': '💀', 'alien': '👽', 'robot': '🤖',
+                    'jack': '🎃', 'cat_smile': '😺', 'cat_grin': '😸', 'cat_joy': '😹', 'cat_love': '😻',
+                    'cat_smirk': '😼', 'cat_kiss': '😽', 'cat_scream': '🙀', 'cat_cry': '😿', 'cat_angry': '😾',
+
+                    // Gestures & Body
+                    'thumbsup': '👍', 'thumbsdown': '👎', 'ok': '👌', 'peace': '✌️', 'crossed': '🤞',
+                    'rock': '🤟', 'metal': '🤘', 'call': '🤙', 'left': '👈', 'right': '👉',
+                    'up': '👆', 'down': '👇', 'point': '☝️', 'hand': '✋', 'backhand': '🤚',
+                    'vulcan': '🖖', 'wave': '👋', 'pinch': '🤏', 'writing': '✍️', 'clap': '👏',
+                    'raised': '🙌', 'open': '👐', 'palms': '🤲', 'handshake': '🤝', 'pray': '🙏',
+                    'muscle': '💪', 'ear': '👂', 'nose': '👃', 'brain': '🧠', 'eyes': '👀',
+
+                    // Hearts & Symbols
+                    'heart': '❤️', 'orange_heart': '🧡', 'yellow_heart': '💛', 'green_heart': '💚',
+                    'blue_heart': '💙', 'purple_heart': '💜', 'black_heart': '🖤', 'white_heart': '🤍',
+                    'brown_heart': '🤎', 'broken': '💔', 'exclamation_heart': '❣️', 'hearts': '💕',
+                    'revolving': '💞', 'heartbeat': '💓', 'growing': '💗', 'sparkling': '💖',
+                    'cupid': '💘', 'gift_heart': '💝', 'heart_decoration': '💟',
+
+                    // Common symbols
+                    '100': '💯', 'boom': '💥', 'fire': '🔥', 'star': '⭐', 'sparkles': '✨',
+                    'lightning': '⚡', 'warning': '⚠️', 'check': '✅', 'x': '❌', 'question': '❓',
+                    'exclamation': '❗', 'bangbang': '‼️', 'interrobang': '⁉️', 'zzz': '💤',
+
+                    // Activities & Objects
+                    'party': '🎉', 'tada': '🎊', 'gift': '🎁', 'trophy': '🏆', 'medal': '🥇',
+                    'soccer': '⚽', 'baseball': '⚾', 'basketball': '🏀', 'football': '🏈', 'tennis': '🎾',
+                    'volleyball': '🏐', 'rugby': '🏉', 'pool': '🎱', 'ping_pong': '🏓', 'badminton': '🏸',
+                    'hockey': '🏒', 'golf': '⛳', 'fishing': '🎣', 'boxing': '🥊', 'martial_arts': '🥋',
+                    'running': '🏃', 'walking': '🚶', 'cyclist': '🚴', 'mountain': '⛰️', 'camping': '🏕️',
+                    'beach': '🏖️', 'sunrise': '🌅', 'sunset': '🌆', 'night': '🌃', 'stars': '🌟',
+                    'rainbow': '🌈', 'sun': '☀️', 'moon': '🌙', 'cloud': '☁️', 'rain': '🌧️',
+                    'snow': '❄️', 'snowman': '⛄', 'thunder': '⛈️', 'tornado': '🌪️', 'fog': '🌫️',
+
+                    // Food & Drink
+                    'apple': '🍎', 'banana': '🍌', 'strawberry': '🍓', 'cherry': '🍒', 'peach': '🍑',
+                    'watermelon': '🍉', 'grapes': '🍇', 'lemon': '🍋', 'orange': '🍊', 'pineapple': '🍍',
+                    'mango': '🥭', 'avocado': '🥑', 'broccoli': '🥦', 'corn': '🌽', 'carrot': '🥕',
+                    'hot_pepper': '🌶️', 'potato': '🥔', 'bread': '🍞', 'cheese': '🧀', 'egg': '🥚',
+                    'bacon': '🥓', 'hamburger': '🍔', 'fries': '🍟', 'pizza': '🍕', 'hotdog': '🌭',
+                    'sandwich': '🥪', 'taco': '🌮', 'burrito': '🌯', 'sushi': '🍣', 'ramen': '🍜',
+                    'spaghetti': '🍝', 'cake': '🎂', 'birthday': '🎂', 'pie': '🥧', 'donut': '🍩',
+                    'cookie': '🍪', 'chocolate': '🍫', 'candy': '🍬', 'lollipop': '🍭', 'honey': '🍯',
+                    'coffee': '☕', 'tea': '🍵', 'beer': '🍺', 'beers': '🍻', 'wine': '🍷',
+                    'cocktail': '🍸', 'tropical': '🍹', 'champagne': '🍾', 'sake': '🍶', 'milk': '🥛',
+
+                    // Tech & Gaming
+                    'computer': '💻', 'desktop': '🖥️', 'printer': '🖨️', 'keyboard': '⌨️', 'mouse': '🖱️',
+                    'trackball': '🖲️', 'joystick': '🕹️', 'cd': '💿', 'dvd': '📀', 'vhs': '📼',
+                    'camera': '📷', 'video': '📹', 'movie': '🎥', 'phone': '📱', 'telephone': '☎️',
+                    'tv': '📺', 'radio': '📻', 'speaker': '🔊', 'mute': '🔇', 'bell': '🔔',
+                    'alarm': '⏰', 'stopwatch': '⏱️', 'timer': '⏲️', 'clock': '🕐', 'hourglass': '⌛',
+                    'mag': '🔍', 'bulb': '💡', 'flashlight': '🔦', 'candle': '🕯️', 'book': '📖',
+                    'books': '📚', 'newspaper': '📰', 'scroll': '📜', 'memo': '📝', 'pencil': '✏️',
+                    'pen': '🖊️', 'paintbrush': '🖌️', 'crayon': '🖍️', 'scissors': '✂️', 'pushpin': '📌',
+                    'paperclip': '📎', 'link': '🔗', 'chains': '⛓️', 'lock': '🔒', 'unlock': '🔓',
+                    'key': '🔑', 'hammer': '🔨', 'axe': '🪓', 'pick': '⛏️', 'wrench': '🔧',
+                    'screwdriver': '🪛', 'gear': '⚙️', 'clamp': '🗜️', 'balance': '⚖️', 'magnet': '🧲',
+                    'ladder': '🪜', 'test_tube': '🧪', 'petri': '🧫', 'dna': '🧬', 'microscope': '🔬',
+                    'telescope': '🔭', 'satellite': '📡', 'syringe': '💉', 'pill': '💊', 'adhesive': '🩹',
+                    'stethoscope': '🩺', 'thermometer_face': '🌡️', 'broom': '🧹', 'basket': '🧺', 'roll': '🧻',
+                    'soap': '🧼', 'sponge': '🧽', 'bucket': '🪣', 'toothbrush': '🪥',
+
+                    // Gaming specific
+                    'gaming': '🎮', 'dice': '🎲', 'dart': '🎯', 'bowling': '🎳', 'slot': '🎰',
+                    'puzzle': '🧩', 'teddy': '🧸', 'spades': '♠️', 'hearts_suit': '♥️', 'diamonds': '♦️',
+                    'clubs': '♣️', 'chess': '♟️', 'mahjong': '🀄',
+
+                    // Transportation
+                    'car': '🚗', 'taxi': '🚕', 'bus': '🚌', 'truck': '🚚', 'racing': '🏎️',
+                    'ambulance': '🚑', 'firetruck': '🚒', 'police': '🚓', 'motorcycle': '🏍️', 'bike': '🚲',
+                    'scooter': '🛴', 'skateboard': '🛹', 'train': '🚆', 'metro': '🚇', 'tram': '🚊',
+                    'monorail': '🚝', 'railway': '🚞', 'helicopter': '🚁', 'airplane': '✈️', 'rocket': '🚀',
+                    'ufo': '🛸', 'ship': '🚢', 'boat': '⛵', 'speedboat': '🚤', 'anchor': '⚓',
+
+                    // Misc popular
+                    'shrug': '🤷', 'facepalm': '🤦', 'celebrate': '🙌', 'mind_blown': '🤯',
+                    'money_face': '🤑', 'nerd': '🤓', 'sunglasses': '😎', 'upside_down': '🙃',
+                    'wink': '😉', 'stuck_out': '😛', 'zany': '🤪', 'raised_eyebrow': '🤨',
+                    'smirk': '😏', 'unamused': '😒', 'sweat': '😅', 'cold_sweat': '😰',
+                    'scream_cat': '🙀', 'pouting': '😡', 'triumph': '😤', 'relieved': '😌',
+                    'pensive': '😔', 'confused': '😕', 'worried': '😟', 'flushed': '😳',
+                    'hot': '🥵', 'cold': '🥶', 'exploding': '🤯', 'monocle': '🧐', 'nauseous': '🤢'
                 };
                 this.discoveredChannelsIndex = 0;
+                this.swipeStartX = null;
+                this.swipeThreshold = 50;
+                this.enhancedEmojiModal = null;
+                this.loadRecentEmojis();
             }
 
             isValidGeohash(str) {
@@ -2057,6 +2268,27 @@
                 }
             }
 
+            loadRecentEmojis() {
+                const saved = localStorage.getItem('nym_recent_emojis');
+                if (saved) {
+                    this.recentEmojis = JSON.parse(saved);
+                }
+            }
+
+            saveRecentEmojis() {
+                localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, 20)));
+            }
+
+            addToRecentEmojis(emoji) {
+                // Remove if already exists
+                this.recentEmojis = this.recentEmojis.filter(e => e !== emoji);
+                // Add to beginning
+                this.recentEmojis.unshift(emoji);
+                // Keep only 20 recent
+                this.recentEmojis = this.recentEmojis.slice(0, 20);
+                this.saveRecentEmojis();
+            }
+
             async initialize() {
                 try {
                     // Check if nostr-tools is loaded
@@ -2069,6 +2301,7 @@
                     this.setupCommands();
                     this.setupEmojiPicker();
                     this.setupContextMenu();
+                    this.setupMobileGestures();
 
                     // Load saved preferences
                     this.applyTheme(this.settings.theme);
@@ -2083,10 +2316,45 @@
                 }
             }
 
+            setupMobileGestures() {
+                if (window.innerWidth <= 768) {
+                    // Touch events for swipe to open menu
+                    document.addEventListener('touchstart', (e) => {
+                        const touch = e.touches[0];
+                        // Only track swipes starting from left edge
+                        if (touch.clientX < 50) {
+                            this.swipeStartX = touch.clientX;
+                        }
+                    });
+
+                    document.addEventListener('touchmove', (e) => {
+                        if (this.swipeStartX !== null) {
+                            const touch = e.touches[0];
+                            const swipeDistance = touch.clientX - this.swipeStartX;
+
+                            if (swipeDistance > this.swipeThreshold) {
+                                this.toggleSidebar();
+                                this.swipeStartX = null;
+                            }
+                        }
+                    });
+
+                    document.addEventListener('touchend', () => {
+                        this.swipeStartX = null;
+                    });
+                }
+            }
+
+            closeSidebar() {
+                const sidebar = document.getElementById('sidebar');
+                sidebar.classList.remove('open');
+                document.getElementById('mobileOverlay').classList.remove('active');
+            }
+
             setupContextMenu() {
                 // Close context menu on click outside
                 document.addEventListener('click', (e) => {
-                    if (!e.target.closest('.context-menu')) {
+                    if (!e.target.closest('.context-menu') && !e.target.closest('.enhanced-emoji-modal')) {
                         document.getElementById('contextMenu').classList.remove('active');
                     }
                 });
@@ -2108,9 +2376,25 @@
 
                 document.getElementById('ctxReact').addEventListener('click', () => {
                     if (this.contextMenuData && this.contextMenuData.messageId) {
-                        this.showMobileReactionPicker(this.contextMenuData.messageId);
+                        document.getElementById('contextMenu').classList.remove('active');
+
+                        // Use a delay to ensure context menu closes first
+                        setTimeout(() => {
+                            // Create a temporary button element for positioning (centered for mobile)
+                            const tempButton = document.createElement('button');
+                            tempButton.style.position = 'fixed';
+                            tempButton.style.left = '50%';
+                            tempButton.style.bottom = '50%';
+                            tempButton.style.opacity = '0';
+                            tempButton.style.pointerEvents = 'none';
+                            document.body.appendChild(tempButton);
+
+                            this.showEnhancedReactionPicker(this.contextMenuData.messageId, tempButton);
+
+                            // Remove temp button after modal is created
+                            setTimeout(() => tempButton.remove(), 100);
+                        }, 100);
                     }
-                    document.getElementById('contextMenu').classList.remove('active');
                 });
 
                 document.getElementById('ctxQuote').addEventListener('click', () => {
@@ -2172,6 +2456,8 @@
                 picker.style.left = '50%';
                 picker.style.transform = 'translate(-50%, 50%)';
                 picker.style.zIndex = '1001';
+                picker.style.display = 'grid';
+                picker.style.gridTemplateColumns = 'repeat(5, 1fr)';
 
                 picker.innerHTML = ['👍', '❤️', '😂', '🔥', '👎', '😮', '🤔', '💯', '🎉', '👏'].map(emoji =>
                     `<button class="reaction-emoji" onclick="nym.sendReaction('${messageId}', '${emoji}'); this.parentElement.remove();">${emoji}</button>`
@@ -2613,6 +2899,11 @@
                     // Only track flood for new messages
                     this.trackMessage(event.pubkey);
 
+                    // Check for BRB auto-response
+                    if (this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
+                        this.sendBRBResponse(nym, this.awayMessages.get(this.pubkey));
+                    }
+
                     // Add channel if it's new
                     if (geohash && !this.channels.has(geohash)) {
                         this.addChannelToList(geohash, geohash);
@@ -2660,6 +2951,11 @@
                     // Only track flood for new messages
                     this.trackMessage(event.pubkey);
 
+                    // Check for BRB auto-response
+                    if (this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
+                        this.sendBRBResponse(nym, this.awayMessages.get(this.pubkey));
+                    }
+
                     // Add channel if it's new
                     if (!this.channels.has(channel)) {
                         this.addChannelToList(channel, '');
@@ -2696,6 +2992,18 @@
                     // Handle synced settings - no flood protection
                     this.handleSyncedSettings(event);
                 }
+            }
+
+            async sendBRBResponse(mentioner, awayMessage) {
+                // Send auto-response only once per mentioner
+                const responseKey = `brb_${this.pubkey}_${mentioner}`;
+                if (sessionStorage.getItem(responseKey)) {
+                    return; // Already sent response to this user
+                }
+
+                sessionStorage.setItem(responseKey, '1');
+                const response = `@${mentioner} [Auto-Reply] ${awayMessage}`;
+                await this.publishMessage(response, this.currentChannel, this.currentGeohash);
             }
 
             handleSyncedSettings(event) {
@@ -2771,6 +3079,12 @@
                 const reactions = this.reactions.get(messageId);
                 if (!reactions || reactions.size === 0) return;
 
+                // Hide the hover reaction button since we have reactions
+                const hoverReactionBtn = messageEl.querySelector('.reaction-btn');
+                if (hoverReactionBtn) {
+                    hoverReactionBtn.style.display = 'none';
+                }
+
                 // Remove existing reactions display
                 let reactionsRow = messageEl.querySelector('.reactions-row');
                 if (!reactionsRow) {
@@ -2830,6 +3144,292 @@
 
                     reactionsRow.appendChild(badge);
                 });
+
+                // Adds "add reaction" badge
+                const addBtn = document.createElement('span');
+                addBtn.className = 'add-reaction-btn';
+                addBtn.innerHTML = `
+                <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <circle cx="9" cy="9" r="1"></circle>
+                    <circle cx="15" cy="9" r="1"></circle>
+                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                    <circle cx="18" cy="6" r="5" fill="var(--text)" stroke="none"></circle>
+                    <line x1="18" y1="4" x2="18" y2="8" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
+                    <line x1="16" y1="6" x2="20" y2="6" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
+                </svg>
+    `;
+                addBtn.title = 'Add reaction';
+                addBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    this.showEnhancedReactionPicker(messageId, addBtn);
+                };
+                reactionsRow.appendChild(addBtn);
+            }
+
+            showReactionPicker(messageId, button) {
+                // Toggle if clicking same button
+                if (this.enhancedEmojiModal && this.activeReactionPickerButton === button) {
+                    this.closeEnhancedEmojiModal();
+                    this.activeReactionPickerButton = null;
+                    return;
+                }
+
+                // Remember which button opened this
+                this.activeReactionPickerButton = button;
+
+                // Use enhanced picker
+                this.showEnhancedReactionPicker(messageId, button);
+            }
+
+            showEnhancedReactionPicker(messageId, button) {
+                // Check if clicking the same button that opened the current modal
+                if (this.enhancedEmojiModal && this.activeReactionPickerButton === button) {
+                    this.closeEnhancedEmojiModal();
+                    return;
+                }
+
+                // Close any existing picker
+                this.closeEnhancedEmojiModal();
+
+                // Remember which button opened this
+                this.activeReactionPickerButton = button;
+
+                const modal = document.createElement('div');
+                modal.className = 'enhanced-emoji-modal active';
+
+                // Create reverse lookup for emoji names
+                const emojiToNames = {};
+                Object.entries(this.emojiMap).forEach(([name, emoji]) => {
+                    if (!emojiToNames[emoji]) {
+                        emojiToNames[emoji] = [];
+                    }
+                    emojiToNames[emoji].push(name);
+                });
+
+                modal.innerHTML = `
+        <div class="emoji-modal-header">
+            <input type="text" class="emoji-search-input" placeholder="Search emoji by name..." id="emojiSearchInput">
+        </div>
+        ${this.recentEmojis.length > 0 ? `
+            <div class="emoji-section">
+                <div class="emoji-section-title">Recently Used</div>
+                <div class="emoji-grid">
+                    ${this.recentEmojis.map(emoji =>
+                    `<button class="emoji-option" data-emoji="${emoji}" title="${emojiToNames[emoji] ? emojiToNames[emoji].join(', ') : ''}">${emoji}</button>`
+                ).join('')}
+                </div>
+            </div>
+        ` : ''}
+        ${Object.entries(this.allEmojis).map(([category, emojis]) => `
+            <div class="emoji-section" data-category="${category}">
+                <div class="emoji-section-title">${category.charAt(0).toUpperCase() + category.slice(1)}</div>
+                <div class="emoji-grid">
+                    ${emojis.map(emoji => {
+                    const names = emojiToNames[emoji] || [];
+                    return `<button class="emoji-option" data-emoji="${emoji}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
+                }).join('')}
+                </div>
+            </div>
+        `).join('')}
+    `;
+
+                // Position modal
+                const rect = button.getBoundingClientRect();
+                modal.style.position = 'fixed';
+
+                // Check if on mobile
+                if (window.innerWidth <= 768) {
+                    // Center on mobile
+                    modal.style.top = '50%';
+                    modal.style.left = '50%';
+                    modal.style.transform = 'translate(-50%, -50%)';
+                    modal.style.maxWidth = '90%';
+                    modal.style.maxHeight = '80vh';
+                    modal.style.zIndex = '10000';
+                } else {
+                    // Desktop positioning - check if near top of screen
+                    const spaceBelow = window.innerHeight - rect.bottom;
+                    const spaceAbove = rect.top;
+
+                    if (spaceBelow > 450 || spaceBelow > spaceAbove) {
+                        // Show below button
+                        modal.style.top = (rect.bottom + 10) + 'px';
+                        modal.style.bottom = 'auto';
+                    } else {
+                        // Show above button
+                        modal.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
+                        modal.style.top = 'auto';
+                    }
+
+                    // Horizontal positioning
+                    if (rect.left > window.innerWidth * 0.5) {
+                        modal.style.right = Math.min(window.innerWidth - rect.right, 10) + 'px';
+                        modal.style.left = 'auto';
+                    } else {
+                        modal.style.left = Math.max(rect.left, 10) + 'px';
+                        modal.style.right = 'auto';
+                    }
+
+                    modal.style.maxHeight = '400px';
+                }
+
+                document.body.appendChild(modal);
+                this.enhancedEmojiModal = modal;
+
+                // Add search functionality
+                const searchInput = modal.querySelector('#emojiSearchInput');
+                searchInput.addEventListener('input', (e) => {
+                    const search = e.target.value.toLowerCase();
+                    modal.querySelectorAll('.emoji-option').forEach(btn => {
+                        const emoji = btn.textContent;
+                        const names = btn.dataset.names || '';
+                        const shouldShow = !search ||
+                            emoji.includes(search) ||
+                            names.toLowerCase().includes(search);
+                        btn.style.display = shouldShow ? '' : 'none';
+                    });
+                    // Hide empty sections
+                    modal.querySelectorAll('.emoji-section').forEach(section => {
+                        const hasVisible = Array.from(section.querySelectorAll('.emoji-option'))
+                            .some(btn => btn.style.display !== 'none');
+                        section.style.display = hasVisible ? '' : 'none';
+                    });
+                });
+
+                // Add click handlers
+                modal.querySelectorAll('.emoji-option').forEach(btn => {
+                    btn.onclick = async (e) => {
+                        e.stopPropagation();
+                        const emoji = btn.dataset.emoji;
+                        this.addToRecentEmojis(emoji);
+                        await this.sendReaction(messageId, emoji);
+                        this.closeEnhancedEmojiModal();
+                    };
+                });
+
+                // Focus search
+                searchInput.focus();
+            }
+
+            toggleEmojiPicker() {
+                // Check if modal already exists
+                if (this.enhancedEmojiModal) {
+                    // Close existing modal
+                    this.closeEnhancedEmojiModal();
+                    return;
+                }
+
+                // Create modal for emoji picker
+                const button = document.querySelector('.icon-btn.input-btn[title="Emoji"]');
+                if (button) {
+                    this.showEnhancedEmojiPickerForInput(button);
+                }
+            }
+
+            showEnhancedEmojiPickerForInput(button) {
+                // Close any existing picker
+                this.closeEnhancedEmojiModal();
+
+                const modal = document.createElement('div');
+                modal.className = 'enhanced-emoji-modal active';
+
+                // Create reverse lookup for emoji names
+                const emojiToNames = {};
+                Object.entries(this.emojiMap).forEach(([name, emoji]) => {
+                    if (!emojiToNames[emoji]) {
+                        emojiToNames[emoji] = [];
+                    }
+                    emojiToNames[emoji].push(name);
+                });
+
+                modal.innerHTML = `
+        <div class="emoji-modal-header">
+            <input type="text" class="emoji-search-input" placeholder="Search emoji by name..." id="emojiSearchInput">
+        </div>
+        ${this.recentEmojis.length > 0 ? `
+            <div class="emoji-section">
+                <div class="emoji-section-title">Recently Used</div>
+                <div class="emoji-grid">
+                    ${this.recentEmojis.map(emoji =>
+                    `<button class="emoji-option" data-emoji="${emoji}" title="${emojiToNames[emoji] ? emojiToNames[emoji].join(', ') : ''}">${emoji}</button>`
+                ).join('')}
+                </div>
+            </div>
+        ` : ''}
+        ${Object.entries(this.allEmojis).map(([category, emojis]) => `
+            <div class="emoji-section" data-category="${category}">
+                <div class="emoji-section-title">${category.charAt(0).toUpperCase() + category.slice(1)}</div>
+                <div class="emoji-grid">
+                    ${emojis.map(emoji => {
+                    const names = emojiToNames[emoji] || [];
+                    return `<button class="emoji-option" data-emoji="${emoji}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
+                }).join('')}
+                </div>
+            </div>
+        `).join('')}
+    `;
+
+                // Position near button
+                const rect = button.getBoundingClientRect();
+                modal.style.position = 'fixed';
+
+                // Check if on mobile
+                if (window.innerWidth <= 768) {
+                    modal.style.bottom = '60px';
+                    modal.style.left = '50%';
+                    modal.style.transform = 'translateX(-50%)';
+                    modal.style.right = 'auto';
+                    modal.style.maxWidth = '90%';
+                } else {
+                    modal.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
+                    modal.style.right = Math.min(window.innerWidth - rect.right + 50, 10) + 'px';
+                }
+
+                document.body.appendChild(modal);
+                this.enhancedEmojiModal = modal;
+
+                // Add search functionality
+                const searchInput = modal.querySelector('#emojiSearchInput');
+                searchInput.addEventListener('input', (e) => {
+                    const search = e.target.value.toLowerCase();
+                    modal.querySelectorAll('.emoji-option').forEach(btn => {
+                        const emoji = btn.textContent;
+                        const names = btn.dataset.names || '';
+                        const shouldShow = !search ||
+                            emoji.includes(search) ||
+                            names.toLowerCase().includes(search);
+                        btn.style.display = shouldShow ? '' : 'none';
+                    });
+                    // Hide empty sections
+                    modal.querySelectorAll('.emoji-section').forEach(section => {
+                        const hasVisible = Array.from(section.querySelectorAll('.emoji-option'))
+                            .some(btn => btn.style.display !== 'none');
+                        section.style.display = hasVisible ? '' : 'none';
+                    });
+                });
+
+                // Add click handlers for inserting emoji into input
+                modal.querySelectorAll('.emoji-option').forEach(btn => {
+                    btn.onclick = (e) => {
+                        e.stopPropagation();
+                        const emoji = btn.dataset.emoji;
+                        this.insertEmoji(emoji);
+                        this.closeEnhancedEmojiModal();
+                    };
+                });
+
+                // Focus search
+                searchInput.focus();
+            }
+
+            closeEnhancedEmojiModal() {
+                if (this.enhancedEmojiModal) {
+                    this.enhancedEmojiModal.remove();
+                    this.enhancedEmojiModal = null;
+                }
+                // Clear the button reference
+                this.activeReactionPickerButton = null;
             }
 
             async sendReaction(messageId, emoji) {
@@ -2887,6 +3487,7 @@
 
                     if (signedEvent) {
                         this.sendToRelay(["EVENT", signedEvent]);
+                        this.addToRecentEmojis(emoji);
                     } else {
                         // If signing failed, revert the visual update
                         messageReactions.get(emoji).delete(this.pubkey);
@@ -3404,10 +4005,7 @@
 
                 // Close mobile sidebar on mobile
                 if (window.innerWidth <= 768) {
-                    const sidebar = document.getElementById('sidebar');
-                    if (sidebar) {
-                        sidebar.classList.remove('open');
-                    }
+                    this.closeSidebar();
                 }
             }
 
@@ -3745,7 +4343,6 @@
                             const input = document.getElementById('messageInput');
                             input.value += imageUrl + ' ';
                             input.focus();
-                            this.updateCharCounter(input.value.length);
                         } else {
                             throw new Error('No URL in response');
                         }
@@ -3855,12 +4452,15 @@
                     messageEl.className = 'message flooded';
                 }
 
+                // Check if message mentions the user
+                const isMentioned = !message.isOwn && this.isMentioned(message.content);
+
                 // Check for action messages
                 if (message.content.startsWith('/me ')) {
                     messageEl.className = 'action-message';
                     messageEl.innerHTML = `* ${this.escapeHtml(message.author)} ${this.formatMessage(message.content.substring(4))}`;
                 } else {
-                    messageEl.className = message.isPM ? 'message pm' : 'message';
+                    messageEl.className = message.isPM ? 'message pm' : (isMentioned ? 'message mentioned' : 'message');
                     messageEl.dataset.messageId = message.id;
                     messageEl.dataset.author = message.author;
                     messageEl.dataset.pubkey = message.pubkey;
@@ -3881,11 +4481,13 @@
             </button>
         ` : '';
 
-                    // Build the initial HTML
+                    // Build the initial HTML with quote detection
+                    const formattedContent = this.formatMessageWithQuotes(message.content);
+
                     messageEl.innerHTML = `
             ${time ? `<span class="message-time">${time}</span>` : ''}
             <span class="message-author ${authorClass}">${this.escapeHtml(message.author)}:</span>
-            <span class="message-content">${this.formatMessage(message.content)}</span>
+            <span class="message-content">${formattedContent}</span>
             ${reactionButton}
         `;
 
@@ -3914,32 +4516,23 @@
                 }
             }
 
-            showReactionPicker(messageId, button) {
-                // Toggle if clicking same button
-                if (this.activeReactionPicker && this.activeReactionPickerButton === button) {
-                    this.closeReactionPicker();
-                    return;
+            formatMessageWithQuotes(content) {
+                // Check if message starts with a quote (> @username: text)
+                const quoteMatch = content.match(/^>\s*@(\w+):\s*(.+?)(?:\n|$)/);
+
+                if (quoteMatch) {
+                    const quotedUser = quoteMatch[1];
+                    const quotedText = quoteMatch[2];
+                    const remainingContent = content.substring(quoteMatch[0].length).trim();
+
+                    let html = `<div class="message-quote">@${this.escapeHtml(quotedUser)}: ${this.escapeHtml(quotedText)}</div>`;
+                    if (remainingContent) {
+                        html += this.formatMessage(remainingContent);
+                    }
+                    return html;
                 }
 
-                // Close any existing picker
-                if (this.activeReactionPicker) {
-                    this.activeReactionPicker.remove();
-                }
-
-                const picker = document.createElement('div');
-                picker.className = 'reaction-picker active';
-                picker.innerHTML = ['👍', '❤️', '😂', '🔥', '👎', '😮', '🤔', '💯', '🎉', '👏'].map(emoji =>
-                    `<button class="reaction-emoji" onclick="nym.sendReaction('${messageId}', '${emoji}'); nym.closeReactionPicker();">${emoji}</button>`
-                ).join('');
-
-                button.parentElement.appendChild(picker);
-                this.activeReactionPicker = picker;
-                this.activeReactionPickerButton = button;
-
-                // Close on click outside
-                setTimeout(() => {
-                    document.addEventListener('click', this.closeReactionPickerHandler.bind(this), { once: true });
-                }, 100);
+                return this.formatMessage(content);
             }
 
             closeReactionPickerHandler(e) {
@@ -4065,7 +4658,6 @@
                 }
 
                 input.focus();
-                this.updateCharCounter(input.value.length);
             }
 
             displaySystemMessage(content, type = 'system') {
@@ -4089,7 +4681,7 @@
                         nym: nym,
                         pubkey: pubkey,
                         lastSeen: Date.now(),
-                        status: 'online',
+                        status: this.awayMessages.has(pubkey) ? 'away' : 'online',
                         channels: new Set([channelKey])
                     });
                 } else {
@@ -4097,6 +4689,7 @@
                     user.lastSeen = Date.now();
                     user.nym = nym; // Update nym in case it changed
                     user.channels.add(channelKey);
+                    user.status = this.awayMessages.has(pubkey) ? 'away' : 'online';
                 }
 
                 // Track users per channel
@@ -4315,8 +4908,33 @@
                     this.autoResizeTextarea(e.target);
                 });
 
-                // Channel switching
+                // Global click handler for closing dropdowns and modals
                 document.addEventListener('click', (e) => {
+                    // Close command palette if clicking outside
+                    if (!e.target.closest('#commandPalette') && !e.target.closest('#messageInput')) {
+                        this.hideCommandPalette();
+                    }
+
+                    // Close emoji autocomplete if clicking outside
+                    if (!e.target.closest('#emojiAutocomplete') && !e.target.closest('#messageInput')) {
+                        this.hideEmojiAutocomplete();
+                    }
+
+                    // Close @ mention autocomplete if clicking outside
+                    if (!e.target.closest('#autocompleteDropdown') && !e.target.closest('#messageInput')) {
+                        this.hideAutocomplete();
+                    }
+
+                    // Close enhanced emoji modal if clicking outside
+                    if (!e.target.closest('.enhanced-emoji-modal') &&
+                        !e.target.closest('.reaction-btn') &&
+                        !e.target.closest('.add-reaction-btn') &&
+                        !e.target.closest('.icon-btn.input-btn[title="Emoji"]') &&
+                        !e.target.closest('#ctxReact')) {
+                        this.closeEnhancedEmojiModal();
+                    }
+
+                    // Handle channel switching
                     if (e.target.closest('.channel-item')) {
                         const item = e.target.closest('.channel-item');
                         const channel = item.dataset.channel;
@@ -4330,7 +4948,7 @@
                         this.switchChannel(channel, geohash);
                     }
 
-                    // Command palette click
+                    // Handle command palette item click
                     if (e.target.closest('.command-item')) {
                         this.selectCommand(e.target.closest('.command-item'));
                     }
@@ -4387,6 +5005,8 @@
                     '/c': { desc: 'Shortcut for /code', fn: (args) => this.cmdCode(args) },
                     '/quote': { desc: 'Send quoted text', fn: (args) => this.cmdQuote(args) },
                     '/q': { desc: 'Shortcut for /quote', fn: (args) => this.cmdQuote(args) },
+                    '/brb': { desc: 'Set away message', fn: (args) => this.cmdBRB(args) },
+                    '/back': { desc: 'Clear away message', fn: () => this.cmdBack() },
                     '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() }
                 };
             }
@@ -4423,12 +5043,54 @@
             showEmojiAutocomplete(search) {
                 const dropdown = document.getElementById('emojiAutocomplete');
 
-                const matches = Object.entries(this.emojiMap).filter(([name]) =>
-                    name.toLowerCase().includes(search.toLowerCase())
-                ).slice(0, 5);
+                // Build complete emoji list from all categories
+                const allEmojiEntries = [];
+
+                // Add emoji shortcodes
+                Object.entries(this.emojiMap).forEach(([name, emoji]) => {
+                    allEmojiEntries.push({ name, emoji, priority: 1 });
+                });
+
+                // Add all categorized emojis with searchable names
+                Object.entries(this.allEmojis).forEach(([category, emojis]) => {
+                    emojis.forEach(emoji => {
+                        // Try to find a name for this emoji in emojiMap
+                        const existingEntry = allEmojiEntries.find(e => e.emoji === emoji);
+                        if (!existingEntry) {
+                            // Generate a searchable name from the emoji itself
+                            allEmojiEntries.push({
+                                name: emoji,
+                                emoji,
+                                priority: 2
+                            });
+                        }
+                    });
+                });
+
+                // Filter based on search
+                let matches = [];
+                if (search === '') {
+                    // Show recent emojis first, then common ones
+                    const recentSet = new Set(this.recentEmojis);
+                    matches = [
+                        ...this.recentEmojis.map(emoji => ({
+                            name: Object.entries(this.emojiMap).find(([n, e]) => e === emoji)?.[0] || emoji,
+                            emoji
+                        })),
+                        ...allEmojiEntries.filter(e => !recentSet.has(e.emoji)).slice(0, 10)
+                    ].slice(0, 8);
+                } else {
+                    matches = allEmojiEntries
+                        .filter(entry =>
+                            entry.name.toLowerCase().includes(search.toLowerCase()) ||
+                            entry.emoji.includes(search)
+                        )
+                        .sort((a, b) => a.priority - b.priority)
+                        .slice(0, 8);
+                }
 
                 if (matches.length > 0) {
-                    dropdown.innerHTML = matches.map(([name, emoji], index) => `
+                    dropdown.innerHTML = matches.map(({ name, emoji }, index) => `
                         <div class="emoji-item ${index === 0 ? 'selected' : ''}" data-name="${name}" data-emoji="${emoji}">
                             <span class="emoji-item-emoji">${emoji}</span>
                             <span class="emoji-item-name">:${name}:</span>
@@ -4436,6 +5098,19 @@
                     `).join('');
                     dropdown.classList.add('active');
                     this.emojiAutocompleteIndex = 0;
+
+                    // Add click handlers for each emoji item
+                    dropdown.querySelectorAll('.emoji-item').forEach((item, index) => {
+                        item.onclick = (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            this.emojiAutocompleteIndex = index;
+                            // Remove selected from all, add to clicked
+                            dropdown.querySelectorAll('.emoji-item').forEach(i => i.classList.remove('selected'));
+                            item.classList.add('selected');
+                            this.selectEmojiAutocomplete();
+                        };
+                    });
                 } else {
                     this.hideEmojiAutocomplete();
                 }
@@ -4470,8 +5145,8 @@
 
                     input.value = value.substring(0, colonIndex) + emoji + ' ';
                     input.focus();
-                    this.updateCharCounter(input.value.length);
                     this.hideEmojiAutocomplete();
+                    this.addToRecentEmojis(emoji);
                 }
             }
 
@@ -4533,7 +5208,6 @@
 
                     input.value = value.substring(0, lastAtIndex) + '@' + nym + ' ';
                     input.focus();
-                    this.updateCharCounter(input.value.length);
                     this.hideAutocomplete();
                 }
             }
@@ -4583,7 +5257,6 @@
                     const input = document.getElementById('messageInput');
                     input.value = cmd + ' ';
                     input.focus();
-                    this.updateCharCounter(input.value.length);
                     this.hideCommandPalette();
                 }
             }
@@ -4641,7 +5314,6 @@
                 }
 
                 input.value = '';
-                this.updateCharCounter(0);
                 this.autoResizeTextarea(input);
                 this.hideCommandPalette();
                 this.hideAutocomplete();
@@ -4878,6 +5550,52 @@
                 await this.publishMessage(quotedText);
             }
 
+            cmdBRB(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /brb message (e.g., /brb lunch, back in 30)');
+                    return;
+                }
+
+                const message = args.trim();
+                this.awayMessages.set(this.pubkey, message);
+
+                // Update user status
+                if (this.users.has(this.pubkey)) {
+                    this.users.get(this.pubkey).status = 'away';
+                }
+
+                this.displaySystemMessage(`Away message set: "${message}"`);
+                this.displaySystemMessage('You will auto-reply to mentions while away');
+
+                // Clear session storage for BRB responses to allow fresh responses
+                const keysToRemove = [];
+                for (let i = 0; i < sessionStorage.length; i++) {
+                    const key = sessionStorage.key(i);
+                    if (key && key.startsWith(`brb_${this.pubkey}_`)) {
+                        keysToRemove.push(key);
+                    }
+                }
+                keysToRemove.forEach(key => sessionStorage.removeItem(key));
+
+                this.updateUserList();
+            }
+
+            cmdBack() {
+                if (this.awayMessages.has(this.pubkey)) {
+                    this.awayMessages.delete(this.pubkey);
+
+                    // Update user status
+                    if (this.users.has(this.pubkey)) {
+                        this.users.get(this.pubkey).status = 'online';
+                    }
+
+                    this.displaySystemMessage('Away message cleared - you are back!');
+                    this.updateUserList();
+                } else {
+                    this.displaySystemMessage('You were not away');
+                }
+            }
+
             cmdQuit() {
                 this.displaySystemMessage('Disconnecting from NYM...');
                 // Clear saved connection preferences
@@ -4923,10 +5641,7 @@
 
                 // Close mobile sidebar on mobile
                 if (window.innerWidth <= 768) {
-                    const sidebar = document.getElementById('sidebar');
-                    if (sidebar) {
-                        sidebar.classList.remove('open');
-                    }
+                    this.closeSidebar();
                 }
             }
 
@@ -5088,16 +5803,6 @@
                 this.autoResizeTextarea(input);
             }
 
-            updateCharCounter(length) {
-                const counter = document.getElementById('charCounter');
-                const sendBtn = document.getElementById('sendBtn');
-
-                counter.textContent = `${length}`;
-                counter.classList.remove('warning', 'danger');
-
-                sendBtn.disabled = !this.connected;
-            }
-
             autoResizeTextarea(textarea) {
                 textarea.style.height = 'auto';
                 textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
@@ -5117,10 +5822,12 @@
             }
 
             setupEmojiPicker() {
-                const emojis = ['😊', '😂', '🤣', '❤️', '👍', '🔥', '✨', '🎉', '💯', '🤔', '😎', '🚀',
-                    '💻', '🌟', '⚡', '🎯', '💡', '🤖', '👻', '🎭', '🌈', '🍕', '☕', '🎮'];
+                const emojis = this.recentEmojis.length > 0 ? this.recentEmojis :
+                    ['😊', '😂', '🤣', '❤️', '👍', '🔥', '✨', '🎉', '💯', '🤔', '😎', '🚀',
+                        '💻', '🌟', '⚡', '🎯', '💡', '🤖', '👻', '🎭', '🌈', '🍕', '☕', '🎮'];
                 const picker = document.getElementById('emojiPicker');
 
+                picker.innerHTML = '';
                 emojis.forEach(emoji => {
                     const btn = document.createElement('button');
                     btn.className = 'emoji-btn';
@@ -5140,41 +5847,20 @@
                 input.selectionStart = input.selectionEnd = start + emoji.length;
                 input.focus();
 
-                this.updateCharCounter(input.value.length);
-                this.toggleEmojiPicker();
-            }
-
-            toggleEmojiPicker() {
-                const picker = document.getElementById('emojiPicker');
-                const isActive = picker.classList.contains('active');
-
-                if (isActive) {
-                    picker.classList.remove('active');
-                } else {
-                    picker.classList.add('active');
-
-                    // On mobile, close picker when clicking outside
-                    if (window.innerWidth <= 768) {
-                        setTimeout(() => {
-                            document.addEventListener('click', (e) => {
-                                if (!picker.contains(e.target) &&
-                                    !e.target.closest('.icon-btn.input-btn')) {
-                                    picker.classList.remove('active');
-                                }
-                            }, { once: true });
-                        }, 100);
-                    }
-                }
+                this.addToRecentEmojis(emoji);
             }
 
             toggleSidebar() {
                 const sidebar = document.getElementById('sidebar');
+                const overlay = document.getElementById('mobileOverlay');
                 const isOpen = sidebar.classList.contains('open');
 
                 if (isOpen) {
                     sidebar.classList.remove('open');
+                    overlay.classList.remove('active');
                 } else {
                     sidebar.classList.add('open');
+                    overlay.classList.add('active');
                 }
             }
 
@@ -5445,7 +6131,7 @@
 
         function showAbout() {
             nym.displaySystemMessage(`
-                ═══ NYM - Nostr Ynstant Messenger v1.1.3 ═══<br>
+                ═══ NYM - Nostr Ynstant Messenger v1.2.3 ═══<br>
                 Protocol: Nostr (kind 20000/23333 channels)<br>
                 Relay: ${nym.relayUrl || 'Not connected'}<br>
                 Your nym: ${nym.nym || 'Not set'}<br>
