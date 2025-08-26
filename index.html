@@ -7,7 +7,7 @@
     <title>NYM - Nostr Ynstant Messenger</title>
     <meta name="description" content="Ephemeral anonymous messaging over Nostr">
     <link rel="manifest"
-        href="data:application/json;base64,eyJuYW1lIjoiTllNIC0gTm9zdHIgWW5zdGFudCBNZXNzZW5nZXIiLCJzaG9ydF9uYW1lIjoiTllNIiwic3RhcnRfdXJsIjoiLiIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwidGhlbWVfY29sb3IiOiIjMDAwMDAwIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDAwMDAiLCJpY29ucyI6W3sic3JjIjoiZGF0YTppbWFnZS9zdmcreG1sLCUzQ3N2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMDAgMTAwJyUzRSUzQ3JlY3Qgd2lkdGg9JzEwMCcgaGVpZ2h0PScxMDAnIGZpbGw9JyUyMzAwMCclMkYlM0UlM0N0ZXh0IHg9JzUwJyB5PSc1NScgZm9udC1zaXplPSc0MCcgZmlsbD0nJTIzMGZmJyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nbW9ub3NwYWNlJyUzRU5ZTSUzQyUyRnRleHQlM0UlM0MlMkZzdmclM0UiLCJzaXplcyI6ImFueSIsInR5cGUiOiJpbWFnZS9zdmcreG1sIn1dfQ==">
+        href="data:application/json;base64,eyJuYW1lIjoiTllNIC0gTm9zdHIgWW5zdGFudCBNZXNzZW5nZXIiLCJzaG9ydF9uYW1lIjoiTllNIiwic3RhcnRfdXJsIjoiLiIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwidGhlbWVfY29sb3IiOiIjMDAwMDAwIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDAwMDAiLCJpY29ucyI6W3sic3JjIjoiZGF0YTppbWFnZS9zdmcreG1sO2Jhc2U2NCxQSE4yWnlCNGJXeHVjejBpYUhSMGNEb3ZMM2QzZHk1M015NXZjbWN2TWpBd01DOXpkbWNpSUhacFpYZENiM2c5SWpBZ01DQXhNREFnTVRBd0lqNDhjbVZqZENCM2FXUjBhRDBpTVRBd0lpQm9aV2xuYUhROUlqRXdNQ0lnWm1sc2JEMGlJekF3TURBY01EQWlMejQ4ZEdWNGRDQjRQU0kxTUNJZ2VUMGlOVFVpSUdadmJuUXRjMmw2WlQwaU5EQWlJR1pwYkd3OUlpTXdNR1ptWmpBd0lpQjBaWGgwTFdGdVkyaHZjajBpYldsa1pHeGxJaUJtYjI1MExXWmhiV2xzZVQwaWJXOXViM053WVdObElqNU9XVTA4TDNSbGVIUStQQzl6ZG1jKyIsInNpemVzIjoiYW55IiwidHlwZSI6ImltYWdlL3N2Zyt4bWwifV19">
 
     <!-- Open Graph Meta Tags -->
     <meta property="og:title" content="Anonymously Chat with NYM">
@@ -211,7 +211,8 @@
             flex: 1;
         }
 
-        .search-icon {
+        .search-icon,
+        .discover-icon {
             cursor: pointer;
             padding: 2px 5px;
             transition: all 0.2s;
@@ -219,11 +220,13 @@
             height: 20px;
         }
 
-        .search-icon:hover svg {
+        .search-icon:hover svg,
+        .discover-icon:hover svg {
             stroke: var(--primary);
         }
 
-        .search-icon svg {
+        .search-icon svg,
+        .discover-icon svg {
             width: 14px;
             height: 14px;
             stroke: var(--text-dim);
@@ -413,6 +416,20 @@
             }
         }
 
+        .sidebar-actions {
+            display: none;
+            padding: 15px 10px;
+            border-top: 1px solid var(--border);
+            gap: 5px;
+            flex-direction: column;
+        }
+
+        .sidebar-actions .icon-btn {
+            width: 100%;
+            padding: 10px;
+            text-align: center;
+        }
+
         .user-list {
             flex: 1;
             overflow-y: auto;
@@ -452,6 +469,48 @@
 
         .user-status.offline {
             background: var(--text-dim);
+        }
+
+        .context-menu {
+            position: fixed;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--primary);
+            box-shadow: 0 4px 20px rgba(0, 255, 0, 0.3);
+            z-index: 1000;
+            display: none;
+            min-width: 150px;
+        }
+
+        .context-menu.active {
+            display: block;
+        }
+
+        .context-menu-item {
+            padding: 10px 15px;
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--text);
+            transition: all 0.2s;
+            border-bottom: 1px solid rgba(0, 255, 0, 0.1);
+        }
+
+        .context-menu-item:last-child {
+            border-bottom: none;
+        }
+
+        .context-menu-item:hover {
+            background: rgba(0, 255, 0, 0.1);
+            color: var(--primary);
+            padding-left: 20px;
+        }
+
+        .context-menu-item.danger {
+            color: var(--danger);
+        }
+
+        .context-menu-item.danger:hover {
+            background: rgba(255, 0, 0, 0.1);
+            color: var(--danger);
         }
 
         .main-content {
@@ -720,38 +779,6 @@
             box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
         }
 
-        .reaction-badge {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border);
-            padding: 2px 6px;
-            border-radius: 10px;
-            font-size: 12px;
-            display: flex;
-            align-items: center;
-            gap: 3px;
-            cursor: default;
-            position: relative;
-        }
-
-        .reaction-badge:hover {
-            border-color: var(--primary);
-        }
-
-        .reaction-badge[title]:hover::after {
-            content: attr(title);
-            position: absolute;
-            bottom: 100%;
-            left: 50%;
-            transform: translateX(-50%);
-            background: var(--bg-tertiary);
-            border: 1px solid var(--primary);
-            padding: 4px 8px;
-            font-size: 10px;
-            white-space: nowrap;
-            margin-bottom: 4px;
-            z-index: 1000;
-        }
-
         .message-content strong {
             color: var(--text-bright);
             font-weight: bold;
@@ -849,7 +876,7 @@
             color: var(--text);
             padding: 10px;
             font-family: var(--font-mono);
-            font-size: 14px;
+            font-size: 16px;
             outline: none;
             resize: vertical;
             min-height: 40px;
@@ -999,7 +1026,7 @@
             color: var(--text);
             padding: 10px;
             font-family: var(--font-mono);
-            font-size: 14px;
+            font-size: 16px;
             outline: none;
         }
 
@@ -1131,7 +1158,7 @@
             display: none;
             position: fixed;
             top: 15px;
-            left: 15px;
+            right: 15px;
             z-index: 100;
             background: var(--bg-secondary);
             border: 1px solid var(--primary);
@@ -1139,18 +1166,6 @@
             padding: 10px;
             cursor: pointer;
             font-size: 20px;
-        }
-
-        .mobile-title {
-            display: none;
-            position: fixed;
-            top: 15px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 100;
-            color: var(--primary);
-            font-size: 14px;
-            text-shadow: 0 0 5px var(--primary);
         }
 
         .nick-edit-modal {
@@ -1391,11 +1406,11 @@
                 box-shadow: 5px 0 20px rgba(0, 0, 0, 0.8);
             }
 
-            .mobile-menu-toggle {
-                display: block;
+            .sidebar-actions {
+                display: flex;
             }
 
-            .mobile-title {
+            .mobile-menu-toggle {
                 display: block;
             }
 
@@ -1412,46 +1427,77 @@
             }
 
             .header-actions {
-                position: fixed;
-                top: 10px;
-                right: 10px;
-                z-index: 100;
-                flex-direction: row;
-                gap: 3px;
-            }
-
-            .header-actions .icon-btn {
-                padding: 8px;
-                font-size: 11px;
+                display: none;
             }
 
             .chat-header {
-                padding-top: 50px;
+                padding: 15px 10px;
+                padding-top: 30px;
             }
 
             .input-container {
                 padding: 10px;
-                gap: 5px;
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .input-wrapper {
+                width: 100%;
             }
 
             .input-buttons {
-                flex-direction: column;
-                gap: 5px;
+                width: 100%;
+                display: flex;
+                justify-content: space-between;
+                gap: 10px;
             }
 
             .icon-btn.input-btn {
-                width: 40px;
+                flex: 1;
             }
 
             .send-btn {
+                flex: 2;
                 padding: 10px;
                 font-size: 11px;
             }
 
             .reaction-btn {
-                opacity: 1;
-                font-size: 14px;
-                padding: 2px 4px;
+                display: none;
+            }
+
+            .message {
+                flex-direction: column;
+                gap: 5px;
+            }
+
+            .message-time,
+            .message-author {
+                display: inline;
+                margin-right: 10px;
+            }
+
+            .message-content {
+                width: 100%;
+                margin-top: 5px;
+            }
+
+            .message-content img {
+                max-width: 100%;
+            }
+
+            .emoji-picker {
+                position: fixed;
+                bottom: auto;
+                top: auto;
+                left: 50%;
+                transform: translateX(-50%);
+                bottom: 60px;
+                right: auto;
+                margin-bottom: 0;
+                margin-top: 0;
+                max-width: 90%;
+                z-index: 1000;
             }
         }
 
@@ -1468,7 +1514,7 @@
             max-width: 320px;
             max-height: 200px;
             overflow-y: auto;
-            overflow-x: hidden;
+            overflow-x: scroll;
             box-shadow: 0 -5px 20px rgba(0, 255, 0, 0.2);
             margin-bottom: 5px;
             z-index: 500;
@@ -1496,7 +1542,6 @@
         @media (max-width: 480px) {
             .emoji-picker {
                 grid-template-columns: repeat(6, 1fr);
-                right: 10px;
             }
         }
 
@@ -1534,7 +1579,6 @@
             background: var(--primary);
         }
 
-        /* Ghost theme specific styles */
         body.theme-ghost {
             --primary: #ffffff;
             --secondary: #cccccc;
@@ -1563,7 +1607,15 @@
 
 <body>
     <button class="mobile-menu-toggle" onclick="toggleSidebar()">☰</button>
-    <div class="mobile-title" id="mobileTitle">#bar</div>
+
+    <!-- Context Menu -->
+    <div class="context-menu" id="contextMenu">
+        <div class="context-menu-item" id="ctxMention">Mention</div>
+        <div class="context-menu-item" id="ctxPM">Private Message</div>
+        <div class="context-menu-item" id="ctxReact">React</div>
+        <div class="context-menu-item" id="ctxQuote">Quote Message</div>
+        <div class="context-menu-item danger" id="ctxBlock">Block User</div>
+    </div>
 
     <div class="container">
         <aside class="sidebar" id="sidebar">
@@ -1638,6 +1690,13 @@
                     onkeyup="nym.filterUsers(this.value)">
                 <div id="userListContent"></div>
             </div>
+
+            <div class="sidebar-actions">
+                <button class="icon-btn" onclick="showChannelModal(); nym.toggleSidebar();">+ Channel</button>
+                <button class="icon-btn" onclick="showSettings(); nym.toggleSidebar();">Settings</button>
+                <button class="icon-btn" onclick="signOut(); nym.toggleSidebar();" title="Signout">Signout</button>
+                <button class="icon-btn" onclick="showAbout(); nym.toggleSidebar();">About</button>
+            </div>
         </aside>
 
         <main class="main-content">
@@ -1658,8 +1717,7 @@
 
             <div class="messages-container" id="messagesContainer">
                 <div class="system-message">
-                    ═══ Welcome to NYM - Ephemeral Nostr Chat ═══<br>
-                    Type /help for available commands • Choose your nym to begin
+                    ═══ Booting up NYM ═══
                 </div>
             </div>
 
@@ -1924,17 +1982,19 @@
                 this.autocompleteIndex = -1;
                 this.commandPaletteIndex = -1;
                 this.emojiAutocompleteIndex = -1;
-                this.commonChannels = ['bar', 'random', 'nostr', 'bitcoin', 'tech', 'music', 'gaming'];
-                this.commonGeohashes = ['w1', 'w2', 'dr5r', '9q8y', 'u4pr'];
+                this.commonChannels = ['bar', 'random', 'nostr', 'bitcoin', 'tech', 'music', 'gaming', 'anime', 'memes', 'news', 'politics', 'science', 'art', 'food', 'sports'];
+                this.commonGeohashes = ['w1', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
                 this.inPMMode = false;
                 this.userSearchTerm = '';
                 this.geohashRegex = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
                 this.pinnedChannels = new Set();
-                this.reactions = new Map(); // messageId -> Map(emoji -> Set(pubkeys))
-                this.floodTracking = new Map(); // pubkey -> { count, firstMessageTime, blocked }
+                this.reactions = new Map();
+                this.floodTracking = new Map();
                 this.activeReactionPicker = null;
-                this.activeReactionPickerButton = null;  // Add this line
+                this.activeReactionPickerButton = null;
                 this.usingExtension = false;
+                this.contextMenuTarget = null;
+                this.contextMenuData = null;
                 this.emojiMap = {
                     'smile': '😊', 'laugh': '😂', 'heart': '❤️', 'thumbsup': '👍', 'fire': '🔥',
                     'party': '🎉', 'eyes': '👀', 'thinking': '🤔', 'cry': '😢', 'cool': '😎',
@@ -1945,6 +2005,7 @@
                     'shocked': '😮', 'wink': '😉', 'kiss': '😘', 'angry': '😠', 'sad': '😢',
                     'happy': '😊', 'neutral': '😐', 'confused': '😕', 'sleeping': '😴', 'sick': '🤢'
                 };
+                this.discoveredChannelsIndex = 0;
             }
 
             isValidGeohash(str) {
@@ -2006,6 +2067,7 @@
                     this.setupEventListeners();
                     this.setupCommands();
                     this.setupEmojiPicker();
+                    this.setupContextMenu();
 
                     // Load saved preferences
                     this.applyTheme(this.settings.theme);
@@ -2018,6 +2080,112 @@
                     console.error('Failed to initialize NYM:', error);
                     this.showNotification('Error', 'Failed to initialize: ' + error.message);
                 }
+            }
+
+            setupContextMenu() {
+                // Close context menu on click outside
+                document.addEventListener('click', (e) => {
+                    if (!e.target.closest('.context-menu')) {
+                        document.getElementById('contextMenu').classList.remove('active');
+                    }
+                });
+
+                // Context menu actions
+                document.getElementById('ctxMention').addEventListener('click', () => {
+                    if (this.contextMenuData) {
+                        this.insertMention(this.contextMenuData.nym);
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+
+                document.getElementById('ctxPM').addEventListener('click', () => {
+                    if (this.contextMenuData) {
+                        this.openUserPM(this.contextMenuData.nym, this.contextMenuData.pubkey);
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+
+                document.getElementById('ctxReact').addEventListener('click', () => {
+                    if (this.contextMenuData && this.contextMenuData.messageId) {
+                        this.showMobileReactionPicker(this.contextMenuData.messageId);
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+
+                document.getElementById('ctxQuote').addEventListener('click', () => {
+                    if (this.contextMenuData && this.contextMenuData.content) {
+                        const input = document.getElementById('messageInput');
+                        input.value = `> @${this.contextMenuData.nym}: ${this.contextMenuData.content}\n\n`;
+                        input.focus();
+                        this.updateCharCounter(input.value.length);
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+
+                document.getElementById('ctxBlock').addEventListener('click', () => {
+                    if (this.contextMenuData) {
+                        this.cmdBlock(this.contextMenuData.nym);
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+            }
+
+            showContextMenu(e, nym, pubkey, content = null, messageId = null) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const menu = document.getElementById('contextMenu');
+                this.contextMenuData = { nym, pubkey, content, messageId };
+
+                // Hide block option if it's your own message
+                const blockOption = document.getElementById('ctxBlock');
+                if (pubkey === this.pubkey) {
+                    blockOption.style.display = 'none';
+                } else {
+                    blockOption.style.display = 'block';
+                    blockOption.textContent = this.blockedUsers.has(nym) ? 'Unblock User' : 'Block User';
+                }
+
+                // Hide PM option if it's yourself
+                document.getElementById('ctxPM').style.display = pubkey === this.pubkey ? 'none' : 'block';
+
+                // Show/hide quote option
+                document.getElementById('ctxQuote').style.display = content ? 'block' : 'none';
+
+                // Show/hide React option based on mobile view and messageId
+                const reactOption = document.getElementById('ctxReact');
+                const isMobile = window.innerWidth <= 768;
+                reactOption.style.display = isMobile && messageId ? 'block' : 'none';
+
+                // Position menu
+                menu.style.left = e.pageX + 'px';
+                menu.style.top = e.pageY + 'px';
+                menu.classList.add('active');
+            }
+
+            showMobileReactionPicker(messageId) {
+                const picker = document.createElement('div');
+                picker.className = 'reaction-picker active';
+                picker.style.position = 'fixed';
+                picker.style.bottom = '50%';
+                picker.style.left = '50%';
+                picker.style.transform = 'translate(-50%, 50%)';
+                picker.style.zIndex = '1001';
+
+                picker.innerHTML = ['👍', '❤️', '😂', '🔥', '👎', '😮', '🤔', '💯', '🎉', '👏'].map(emoji =>
+                    `<button class="reaction-emoji" onclick="nym.sendReaction('${messageId}', '${emoji}'); this.parentElement.remove();">${emoji}</button>`
+                ).join('');
+
+                document.body.appendChild(picker);
+
+                // Close on click outside
+                setTimeout(() => {
+                    document.addEventListener('click', (e) => {
+                        if (!picker.contains(e.target)) {
+                            picker.remove();
+                        }
+                    }, { once: true });
+                }, 100);
             }
 
             loadBlockedKeywords() {
@@ -2124,10 +2292,10 @@
                             this.updateConnectionStatus('Connected');
                             this.displaySystemMessage(`Connected to ${relayUrl}`);
                             this.subscribeToMessages();
-                            this.loadHistoricalMessages();
                             this.subscribeToPMs();
                             this.subscribeToReactions();
                             this.discoverChannels();
+                            this.discoverExistingChannels();
 
                             // Load synced settings if using extension
                             if (this.usingExtension) {
@@ -2232,33 +2400,7 @@
             subscribeToPMs() {
                 if (!this.pubkey) return;
 
-                // Subscribe to NIP-17 private messages
-                const subscription = [
-                    "REQ",
-                    "pms-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [1059], // NIP-17 gift wrap
-                        "#p": [this.pubkey],
-                        limit: 100
-                    }
-                ];
-
-                this.sendToRelay(subscription);
-
-                // Also subscribe to messages FROM us
-                const sentSubscription = [
-                    "REQ",
-                    "pms-sent-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [1059], // NIP-17 gift wrap
-                        authors: [this.pubkey],
-                        limit: 100
-                    }
-                ];
-
-                this.sendToRelay(sentSubscription);
-
-                // Legacy NIP-04 support for compatibility
+                // Only subscribe to legacy NIP-04 support for compatibility
                 const legacySubscription = [
                     "REQ",
                     "pms-legacy-" + Math.random().toString(36).substring(7),
@@ -2270,25 +2412,6 @@
                 ];
 
                 this.sendToRelay(legacySubscription);
-            }
-
-            loadHistoricalMessages() {
-                // Request recent messages with both since and until
-                const now = Math.floor(Date.now() / 1000);
-                const since = now - 7200; // 2 hours ago
-
-                const subscription = [
-                    "REQ",
-                    "history-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [20000, 23333, 7], // Include reactions
-                        since: since,
-                        until: now,
-                        limit: 500
-                    }
-                ];
-
-                this.sendToRelay(subscription);
             }
 
             async loadSyncedSettings() {
@@ -2350,36 +2473,57 @@
             }
 
             discoverChannels() {
-                // Mix standard channels and geohashes randomly
+                // Create a mixed array of all channels
                 const allChannels = [];
 
-                // Add standard channels
+                // Add all standard channels
                 this.commonChannels.forEach(channel => {
-                    allChannels.push({ name: channel, geohash: '', type: 'standard' });
-                });
-
-                // Add geohash channels
-                this.commonGeohashes.forEach(geohash => {
-                    allChannels.push({ name: geohash, geohash: geohash, type: 'geo' });
-                });
-
-                // Shuffle all channels except bar
-                const bar = allChannels.shift(); // Remove bar
-                for (let i = allChannels.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [allChannels[i], allChannels[j]] = [allChannels[j], allChannels[i]];
-                }
-
-                // Add bar back at the beginning
-                allChannels.unshift(bar);
-
-                // Add channels to UI
-                allChannels.forEach(channel => {
-                    if (!this.channels.has(channel.name)) {
-                        this.addChannel(channel.name, channel.geohash);
+                    if (!this.channels.has(channel)) {
+                        allChannels.push({
+                            name: channel,
+                            geohash: '',
+                            type: 'standard',
+                            sortKey: Math.random() // Random key for mixing
+                        });
                     }
                 });
+
+                // Add all geohash channels
+                this.commonGeohashes.forEach(geohash => {
+                    if (!this.channels.has(geohash)) {
+                        allChannels.push({
+                            name: geohash,
+                            geohash: geohash,
+                            type: 'geo',
+                            sortKey: Math.random() // Random key for mixing
+                        });
+                    }
+                });
+
+                // Sort randomly to mix standard and geo channels
+                allChannels.sort((a, b) => a.sortKey - b.sortKey);
+
+                // Add channels to UI in mixed order
+                allChannels.forEach(channel => {
+                    this.addChannel(channel.name, channel.geohash);
+                });
             }
+
+            async discoverExistingChannels() {
+                // Subscribe to recent channel creation/message events to discover channels
+                const discoverySubscription = [
+                    "REQ",
+                    "channel-discovery-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [23333, 20000], // Both standard and geohash channels
+                        limit: 500, // Get more events to discover more channels
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                    }
+                ];
+
+                this.sendToRelay(discoverySubscription);
+            }
+
 
             sendToRelay(message) {
                 const msg = JSON.stringify(message);
@@ -2446,10 +2590,6 @@
             }
 
             async handleEvent(event) {
-                // Determine if this is a historical message
-                const now = Math.floor(Date.now() / 1000);
-                const messageAge = now - event.created_at;
-                const isHistorical = messageAge > 60; // Messages older than 1 minute are considered historical
 
                 if (event.kind === 20000) {
                     // Handle geohash channel messages
@@ -2464,15 +2604,13 @@
                         return;
                     }
 
-                    // Check flooding only for non-historical messages
-                    if (!isHistorical && this.isFlooding(event.pubkey)) {
+                    // Check flooding
+                    if (this.isFlooding(event.pubkey)) {
                         return;
                     }
 
-                    // Only track flood for new messages, not historical
-                    if (!isHistorical) {
-                        this.trackMessage(event.pubkey, false);
-                    }
+                    // Only track flood for new messages
+                    this.trackMessage(event.pubkey);
 
                     // Add channel if it's new
                     if (geohash && !this.channels.has(geohash)) {
@@ -2513,15 +2651,13 @@
                         return;
                     }
 
-                    // Check flooding only for non-historical messages
-                    if (!isHistorical && this.isFlooding(event.pubkey)) {
+                    // Check flooding
+                    if (this.isFlooding(event.pubkey)) {
                         return;
                     }
 
-                    // Only track flood for new messages, not historical
-                    if (!isHistorical) {
-                        this.trackMessage(event.pubkey, false);
-                    }
+                    // Only track flood for new messages
+                    this.trackMessage(event.pubkey);
 
                     // Add channel if it's new
                     if (!this.channels.has(channel)) {
@@ -2552,9 +2688,6 @@
                 } else if (event.kind === 7) {
                     // Handle reactions (NIP-25) - no flood protection for reactions
                     this.handleReaction(event);
-                } else if (event.kind === 1059) {
-                    // Handle NIP-17 gift wrap - no flood protection for PMs
-                    await this.handleNIP17GiftWrap(event);
                 } else if (event.kind === 4) {
                     // Handle legacy NIP-04 encrypted DMs - no flood protection for PMs
                     await this.handleEncryptedDM(event);
@@ -2598,7 +2731,7 @@
                     }
 
                     this.saveSettings();
-                    this.displaySystemMessage('Settings synced from Nostr');
+                    this.displaySystemMessage('Settings synced with Nostr');
                 } catch (error) {
                     console.error('Failed to parse synced settings:', error);
                 }
@@ -2770,9 +2903,7 @@
                 }
             }
 
-            trackMessage(pubkey, isHistorical = false) {
-                // Don't track historical messages or reactions
-                if (isHistorical) return;
+            trackMessage(pubkey) {
 
                 const now = Date.now();
 
@@ -2824,86 +2955,6 @@
                 return false;
             }
 
-            async handleNIP17GiftWrap(event) {
-                try {
-                    // Decrypt the gift wrap
-                    let unwrapped;
-                    if (window.nostr && !this.privkey) {
-                        unwrapped = await window.nostr.nip44.decrypt(event.pubkey, event.content);
-                    } else if (this.privkey) {
-                        // Use NIP-44 decryption
-                        unwrapped = await this.decryptNIP44(event.content, event.pubkey, this.privkey);
-                    }
-
-                    if (!unwrapped) return;
-
-                    const innerEvent = JSON.parse(unwrapped);
-
-                    // Process the inner event as a PM
-                    const conversationPubkey = innerEvent.pubkey === this.pubkey ?
-                        innerEvent.tags.find(t => t[0] === 'p')?.[1] :
-                        innerEvent.pubkey;
-
-                    if (!conversationPubkey) return;
-
-                    const conversationKey = this.getPMConversationKey(conversationPubkey);
-                    const senderNym = this.getNymFromPubkey(innerEvent.pubkey);
-
-                    // Check if sender is blocked
-                    if (this.blockedUsers.has(senderNym)) {
-                        return;
-                    }
-
-                    if (!this.pmMessages.has(conversationKey)) {
-                        this.pmMessages.set(conversationKey, []);
-                    }
-
-                    // Add PM conversation if not exists
-                    if (!this.pmConversations.has(conversationPubkey)) {
-                        this.addPMConversation(senderNym, conversationPubkey);
-                    }
-
-                    const pmMessage = {
-                        id: innerEvent.id || event.id,
-                        author: senderNym,
-                        pubkey: innerEvent.pubkey,
-                        content: innerEvent.content,
-                        timestamp: new Date(innerEvent.created_at * 1000),
-                        isOwn: innerEvent.pubkey === this.pubkey,
-                        isPM: true,
-                        conversationKey: conversationKey,
-                        conversationPubkey: conversationPubkey
-                    };
-
-                    this.pmMessages.get(conversationKey).push(pmMessage);
-                    this.pmMessages.get(conversationKey).sort((a, b) => a.timestamp - b.timestamp);
-
-                    // Display if in PM mode with this user
-                    if (this.inPMMode && this.currentPM === conversationPubkey) {
-                        this.displayMessage(pmMessage);
-                    } else if (!pmMessage.isOwn) {
-                        // Update unread count for incoming messages
-                        this.updateUnreadCount(conversationKey);
-                        // Show notification
-                        if (document.hidden || !this.inPMMode || this.currentPM !== conversationPubkey) {
-                            this.showNotification(`PM from ${senderNym}`, innerEvent.content);
-                        }
-                    }
-
-                } catch (error) {
-                    console.error('Failed to handle NIP-17 gift wrap:', error);
-                }
-            }
-
-            async decryptNIP44(content, pubkey, privkey) {
-                try {
-                    return null;
-                } catch (error) {
-                    console.error('NIP-44 decryption failed:', error);
-                    return null;
-                }
-            }
-
             async handleEncryptedDM(event) {
                 try {
                     // Only process kind 4 events
@@ -2939,16 +2990,6 @@
                     const existingMessages = this.pmMessages.get(conversationKey) || [];
                     const exists = existingMessages.some(m => m.id === event.id);
                     if (exists) return; // Skip if already processed
-
-                    // For outgoing messages, check if we just sent this (within last 5 seconds)
-                    if (!isIncoming) {
-                        const recentlySent = existingMessages.some(m =>
-                            m.isOwn &&
-                            m.content === event.content &&
-                            Math.abs(new Date(event.created_at * 1000) - m.timestamp) < 5000
-                        );
-                        if (recentlySent) return; // Skip our own recently sent message
-                    }
 
                     // Decrypt the message
                     let decryptedContent;
@@ -2993,15 +3034,6 @@
                         senderNym = this.getNymFromPubkey(event.pubkey);
                     }
 
-                    // For our own messages from relay, skip if we already have it locally
-                    if (!isIncoming) {
-                        const duplicateOwn = existingMessages.some(m =>
-                            m.isOwn &&
-                            m.content === actualContent
-                        );
-                        if (duplicateOwn) return; // Skip duplicate of our own message
-                    }
-
                     // Update user tracking with the nym
                     if (!this.users.has(event.pubkey) || this.users.get(event.pubkey).nym.startsWith('anon-')) {
                         this.users.set(event.pubkey, {
@@ -3028,35 +3060,33 @@
                         this.addPMConversation(otherNym, conversationPubkey);
                     }
 
-                    // Only add the message from relay if it's incoming OR if we don't have it yet
-                    if (isIncoming) {
-                        const pmMessage = {
-                            id: event.id,
-                            author: senderNym,
-                            pubkey: event.pubkey,
-                            content: actualContent,
-                            timestamp: new Date(event.created_at * 1000),
-                            isOwn: false,
-                            isPM: true,
-                            conversationKey: conversationKey,
-                            conversationPubkey: conversationPubkey
-                        };
+                    // Store the PM message with the actual event ID from the relay
+                    const pmMessage = {
+                        id: event.id,  // This is the real event ID from the relay - keep it!
+                        author: isIncoming ? senderNym : this.nym,
+                        pubkey: event.pubkey,
+                        content: actualContent,
+                        timestamp: new Date(event.created_at * 1000),
+                        isOwn: !isIncoming,
+                        isPM: true,
+                        conversationKey: conversationKey,
+                        conversationPubkey: conversationPubkey
+                    };
 
-                        this.pmMessages.get(conversationKey).push(pmMessage);
+                    this.pmMessages.get(conversationKey).push(pmMessage);
 
-                        // Sort messages by timestamp
-                        this.pmMessages.get(conversationKey).sort((a, b) => a.timestamp - b.timestamp);
+                    // Sort messages by timestamp
+                    this.pmMessages.get(conversationKey).sort((a, b) => a.timestamp - b.timestamp);
 
-                        // Display if in PM mode with this user
-                        if (this.inPMMode && this.currentPM === conversationPubkey) {
-                            this.displayMessage(pmMessage);
-                        } else {
-                            // Update unread count for incoming messages
-                            this.updateUnreadCount(conversationKey);
-                            // Show notification
-                            if (document.hidden || !this.inPMMode || this.currentPM !== conversationPubkey) {
-                                this.showNotification(`PM from ${senderNym}`, actualContent);
-                            }
+                    // Display if in PM mode with this user
+                    if (this.inPMMode && this.currentPM === conversationPubkey) {
+                        this.displayMessage(pmMessage);
+                    } else if (isIncoming) {
+                        // Update unread count for incoming messages
+                        this.updateUnreadCount(conversationKey);
+                        // Show notification
+                        if (document.hidden || !this.inPMMode || this.currentPM !== conversationPubkey) {
+                            this.showNotification(`PM from ${senderNym}`, actualContent);
                         }
                     }
 
@@ -3244,16 +3274,8 @@
                         throw new Error('Not connected to relay');
                     }
 
-                    // Try NIP-17 first, fallback to NIP-04
-                    const useNIP17 = true; // Can be made configurable
-
-                    if (useNIP17) {
-                        // NIP-17 implementation would go here
-                        // For now, fallback to NIP-04
-                        return await this.sendNIP04PM(content, recipientPubkey);
-                    } else {
-                        return await this.sendNIP04PM(content, recipientPubkey);
-                    }
+                    // Use NIP-04 for private messages
+                    return await this.sendNIP04PM(content, recipientPubkey);
                 } catch (error) {
                     console.error('Failed to send PM:', error);
                     this.displaySystemMessage('Failed to send PM: ' + error.message);
@@ -3363,7 +3385,6 @@
                 // Update UI
                 document.getElementById('currentChannel').textContent = `@${nym} (PM)`;
                 document.getElementById('channelMeta').textContent = 'Private message';
-                document.getElementById('mobileTitle').textContent = `@${nym}`;
 
                 // Update active states
                 document.querySelectorAll('.channel-item').forEach(item => {
@@ -3380,9 +3401,12 @@
                 // Load PM messages
                 this.loadPMMessages(conversationKey);
 
-                // Close mobile sidebar
+                // Close mobile sidebar on mobile
                 if (window.innerWidth <= 768) {
-                    this.toggleSidebar();
+                    const sidebar = document.getElementById('sidebar');
+                    if (sidebar) {
+                        sidebar.classList.remove('open');
+                    }
                 }
             }
 
@@ -3406,41 +3430,8 @@
                 filteredMessages.forEach(msg => {
                     // Double-check this is a PM before displaying
                     if (msg.isPM && msg.conversationKey === conversationKey) {
-                        // Create the message element directly to ensure it's displayed
-                        const messageEl = document.createElement('div');
-                        const time = this.settings.showTimestamps ?
-                            msg.timestamp.toLocaleTimeString('en-US', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                hour12: false
-                            }) : '';
-
-                        messageEl.className = 'message pm';
-                        messageEl.dataset.messageId = msg.id;
-                        messageEl.dataset.author = msg.author;
-
-                        const authorClass = msg.isOwn ? 'self' : '';
-
-                        messageEl.innerHTML = `
-                            ${time ? `<span class="message-time">${time}</span>` : ''}
-                            <span class="message-author ${authorClass}">${this.escapeHtml(msg.author)}:</span>
-                            <span class="message-content">${this.formatMessage(msg.content)}</span>
-                            <button class="reaction-btn" onclick="nym.showReactionPicker('${msg.id}', this)">
-                                <svg viewBox="0 0 24 24">
-                                    <circle cx="12" cy="12" r="10"></circle>
-                                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-                                    <circle cx="9" cy="9" r="1.5"></circle>
-                                    <circle cx="15" cy="9" r="1.5"></circle>
-                                </svg>
-                            </button>
-                        `;
-
-                        // Add existing reactions if any
-                        if (this.reactions.has(msg.id)) {
-                            this.updateMessageReactions(msg.id);
-                        }
-
-                        container.appendChild(messageEl);
+                        // Use displayMessage to properly handle reactions
+                        this.displayMessage(msg);
                     }
                 });
 
@@ -3797,7 +3788,6 @@
             displayMessage(message) {
                 // Handle PM messages differently
                 if (message.isPM) {
-                    // Only display if we're in PM mode with the correct user
                     if (!this.inPMMode || this.currentPM !== message.conversationPubkey) {
                         return;
                     }
@@ -3808,13 +3798,11 @@
                         return;
                     }
                 } else {
-                    // Regular channel message handling
-                    // Don't display channel messages in PM mode
+
                     if (this.inPMMode) {
                         return;
                     }
 
-                    // Store messages with consistent key format (no # for standard channels)
                     const storageKey = message.geohash ? `#${message.geohash}` : message.channel;
 
                     // Store message
@@ -3855,14 +3843,14 @@
 
                 const messageEl = document.createElement('div');
 
-                // Check if author is blocked or message contains blocked keywords
+                // Check if nym is blocked or message contains blocked keywords
                 if (this.blockedUsers.has(message.author) || this.hasBlockedKeyword(message.content)) {
                     messageEl.className = 'message blocked';
                     return;
                 }
 
-                // Check if author is flooding
-                if (this.isFlooding(message.pubkey)) {
+                // Check if nym is flooding
+                if (!message.isPM && this.isFlooding(message.pubkey)) {
                     messageEl.className = 'message flooded';
                 }
 
@@ -3878,9 +3866,10 @@
 
                     const authorClass = message.isOwn ? 'self' : '';
 
-                    // Only show reaction button if we have a valid 32-byte hex event ID
                     const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
-                    const reactionButton = message.isPM || !isValidEventId ? '' : `
+                    const isMobile = window.innerWidth <= 768;
+
+                    const reactionButton = isValidEventId && !isMobile ? `
             <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
                 <svg viewBox="0 0 24 24">
                     <circle cx="12" cy="12" r="10"></circle>
@@ -3889,14 +3878,27 @@
                     <circle cx="15" cy="9" r="1"></circle>
                 </svg>
             </button>
-        `;
+        ` : '';
 
+                    // Build the initial HTML
                     messageEl.innerHTML = `
             ${time ? `<span class="message-time">${time}</span>` : ''}
-            <span class="message-author ${authorClass}" onclick="${!message.isPM ? `nym.insertMention('${this.escapeHtml(message.author)}')` : ''}">${this.escapeHtml(message.author)}:</span>
+            <span class="message-author ${authorClass}">${this.escapeHtml(message.author)}:</span>
             <span class="message-content">${this.formatMessage(message.content)}</span>
             ${reactionButton}
         `;
+
+                    const authorSpan = messageEl.querySelector('.message-author');
+                    if (authorSpan) {
+                        authorSpan.style.cursor = 'pointer';
+                        authorSpan.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            // Pass messageId for mobile reaction option
+                            this.showContextMenu(e, message.author, message.pubkey, message.content, message.id);
+                            return false;
+                        });
+                    }
 
                     // Add existing reactions if any
                     if (this.reactions.has(message.id)) {
@@ -4139,9 +4141,12 @@
                         return user && Date.now() - user.lastSeen < 300000 && !this.blockedUsers.has(user.nym);
                     }).length;
 
-                // Display deduplicated users in sidebar with click to open PM
+                // Display deduplicated users in sidebar with click to open PM and right-click for context menu
                 userListContent.innerHTML = displayUsers.map(user => `
-                    <div class="user-item" onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" data-nym="${this.escapeHtml(user.nym)}">
+                    <div class="user-item" 
+                         onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
+                         oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
+                         data-nym="${this.escapeHtml(user.nym)}">
                         <span class="user-status ${user.status}"></span>
                         <span>${this.escapeHtml(user.nym)}</span>
                     </div>
@@ -4660,7 +4665,7 @@
                 const helpText = Object.entries(this.commands)
                     .map(([cmd, info]) => `${cmd} - ${info.desc}`)
                     .join('\n');
-                this.displaySystemMessage(`Available commands:\n${helpText}\n\nMarkdown supported: **bold**, *italic*, ~~strikethrough~~, \`code\`, > quote\n\nType : to quickly pick an emoji`);
+                this.displaySystemMessage(`Available commands:\n${helpText}\n\nMarkdown supported: **bold**, *italic*, ~~strikethrough~~, \`code\`, > quote\n\nType : to quickly pick an emoji\n\nClick on users for more options`);
             }
 
             async cmdJoin(args) {
@@ -4751,6 +4756,13 @@
                 }
 
                 const nym = args.trim();
+
+                // Check if already blocked to toggle
+                if (this.blockedUsers.has(nym)) {
+                    this.cmdUnblock(nym);
+                    return;
+                }
+
                 this.blockedUsers.add(nym);
                 this.saveBlockedUsers();
 
@@ -4858,7 +4870,11 @@
                     this.displaySystemMessage('Usage: /quote text');
                     return;
                 }
-                await this.publishMessage(`> ${args}`);
+
+                // Handle both single line and multi-line quotes
+                const lines = args.split('\n');
+                const quotedText = lines.map(line => `> ${line}`).join('\n');
+                await this.publishMessage(quotedText);
             }
 
             cmdQuit() {
@@ -4882,7 +4898,6 @@
 
                 const displayName = geohash ? `#${geohash}` : `#${channel}`;
                 document.getElementById('currentChannel').textContent = displayName;
-                document.getElementById('mobileTitle').textContent = displayName;
 
                 // Update active state
                 document.querySelectorAll('.channel-item').forEach(item => {
@@ -4905,9 +4920,12 @@
                 // Update user list for this channel
                 this.updateUserList();
 
-                // Close mobile sidebar
+                // Close mobile sidebar on mobile
                 if (window.innerWidth <= 768) {
-                    this.toggleSidebar();
+                    const sidebar = document.getElementById('sidebar');
+                    if (sidebar) {
+                        sidebar.classList.remove('open');
+                    }
                 }
             }
 
@@ -5126,11 +5144,37 @@
             }
 
             toggleEmojiPicker() {
-                document.getElementById('emojiPicker').classList.toggle('active');
+                const picker = document.getElementById('emojiPicker');
+                const isActive = picker.classList.contains('active');
+
+                if (isActive) {
+                    picker.classList.remove('active');
+                } else {
+                    picker.classList.add('active');
+
+                    // On mobile, close picker when clicking outside
+                    if (window.innerWidth <= 768) {
+                        setTimeout(() => {
+                            document.addEventListener('click', (e) => {
+                                if (!picker.contains(e.target) &&
+                                    !e.target.closest('.icon-btn.input-btn')) {
+                                    picker.classList.remove('active');
+                                }
+                            }, { once: true });
+                        }, 100);
+                    }
+                }
             }
 
             toggleSidebar() {
-                document.getElementById('sidebar').classList.toggle('open');
+                const sidebar = document.getElementById('sidebar');
+                const isOpen = sidebar.classList.contains('open');
+
+                if (isOpen) {
+                    sidebar.classList.remove('open');
+                } else {
+                    sidebar.classList.add('open');
+                }
             }
 
             showNotification(title, body) {
@@ -5400,7 +5444,7 @@
 
         function showAbout() {
             nym.displaySystemMessage(`
-                ═══ NYM - Nostr Ynstant Messenger v1.1.2 ═══<br>
+                ═══ NYM - Nostr Ynstant Messenger v1.1.3 ═══<br>
                 Protocol: Nostr (kind 20000/23333 channels)<br>
                 Relay: ${nym.relayUrl || 'Not connected'}<br>
                 Your nym: ${nym.nym || 'Not set'}<br>
@@ -5556,7 +5600,7 @@
                 // Show welcome message
                 nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Type /help for available commands.`);
                 nym.displaySystemMessage(`Your ${mode === 'extension' ? 'Nostr' : 'ephemeral'} identity is active for this session${mode === 'extension' ? '' : ' only'}.`);
-                nym.displaySystemMessage(`Click on any user to send them a private message.`);
+                nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
             } catch (error) {
                 console.error('Initialization failed:', error);

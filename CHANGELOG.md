@@ -1,3 +1,9 @@
+## v1.1.3 - 2025-08-26
+
+Hotfix: improved mobile responsiveness
+Hotfix: improved channel discovery
+New: added context menu when clicking nym's nickname
+
 ## v1.1.2 - 2025-08-25
 
 Hotfix: corrected standard channel new messages count
