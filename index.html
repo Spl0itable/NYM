@@ -5521,21 +5521,13 @@
                 document.getElementById('currentNym').textContent = this.nym;
 
                 // Create the change message
-                const changeMessage = `${oldNym} is now known as ${this.nym}`;
+                const changeMessage = `Your new nick is now ${this.nym}`;
 
                 // Send as a system-style message to the current channel
                 if (this.inPMMode) {
-                    // Don't send nick changes to PM conversations, just show locally
                     this.displaySystemMessage(changeMessage);
                 } else {
-                    // Send to channel so everyone sees it
-                    try {
-                        // Send as an action message so it appears styled differently
-                        await this.publishMessage(`/me changed their nym from ${oldNym} to ${this.nym}`);
-                    } catch (error) {
-                        // If sending fails, at least show it locally
-                        this.displaySystemMessage(changeMessage);
-                    }
+                    this.displaySystemMessage(changeMessage);
                 }
             }
 

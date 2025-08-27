@@ -2,7 +2,6 @@
 
 Hotfix: saves custom joined/created channels to localstorage
 Hotfix: bug that erased reactions on channel switch
-Hotfix: shows when nym is changed to everyone
 Hotfix: made the /brb away message across all channels where mentioned
 Hotfix: dynamically adds channels with most activity at top of list
 New: added slap capability from context menu
