@@ -1881,12 +1881,12 @@
     <!-- Nick Edit Modal -->
     <div class="modal nick-edit-modal" id="nickEditModal">
         <div class="modal-content">
-            <div class="modal-header">Change Your Nym</div>
+            <div class="modal-header">Change Your Nym's nickname</div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label class="form-label">New Nym</label>
+                    <label class="form-label">New Nym nick</label>
                     <input type="text" class="form-input" id="newNickInput" placeholder="Enter new nym" maxlength="20">
-                    <div class="form-hint">Your ephemeral pseudonym for this session</div>
+                    <div class="form-hint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
             </div>
             <div class="modal-actions">
@@ -1910,10 +1910,10 @@
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label">Choose Your Nym (optional)</label>
-                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nym"
+                    <label class="form-label">Choose Your Nym's nickname (optional)</label>
+                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nym nick"
                         maxlength="20">
-                    <div class="form-hint" id="nymHint">Your ephemeral pseudonym for this session</div>
+                    <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
 
                 <div class="form-group">
@@ -5521,7 +5521,7 @@
                 document.getElementById('currentNym').textContent = this.nym;
 
                 // Create the change message
-                const changeMessage = `Your new nick is now ${this.nym}`;
+                const changeMessage = `Your nym's new nick is now ${this.nym}`;
 
                 // Send as a system-style message to the current channel
                 if (this.inPMMode) {
