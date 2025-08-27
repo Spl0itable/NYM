@@ -1,3 +1,12 @@
+## v1.2.4 - 2025-08-26
+
+Hotfix: saves custom joined/created channels to localstorage
+Hotfix: bug that erased reactions on channel switch
+Hotfix: shows when nym is changed to everyone
+Hotfix: made the /brb away message across all channels where mentioned
+Hotfix: dynamically adds channels with most activity at top of list
+New: added slap capability from context menu
+
 ## v1.2.3 - 2025-08-26
 
 Hotfix: revamped emoji selection and added recently used

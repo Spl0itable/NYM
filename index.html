@@ -2094,6 +2094,7 @@
                 this.emojiAutocompleteIndex = -1;
                 this.commonChannels = ['bar', 'random', 'nostr', 'bitcoin', 'tech', 'music', 'gaming', 'anime', 'memes', 'news', 'politics', 'science', 'art', 'food', 'sports'];
                 this.commonGeohashes = ['w1', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
+                this.userJoinedChannels = new Set(this.loadUserJoinedChannels());
                 this.inPMMode = false;
                 this.userSearchTerm = '';
                 this.geohashRegex = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
@@ -2248,15 +2249,26 @@
                         const prompt = document.createElement('div');
                         prompt.className = 'search-create-prompt';
                         prompt.innerHTML = `Create or Join ${type} "${term}"`;
-                        prompt.onclick = () => {
+                        prompt.onclick = async () => {
+                            // Add the channel
                             if (isGeohash) {
-                                this.cmdJoin('#' + term);
+                                this.addChannel(term, term);
+                                this.switchChannel(term, term);
+                                this.userJoinedChannels.add(term);
                             } else {
-                                this.cmdJoin(term);
+                                this.addChannel(term, '');
+                                this.switchChannel(term, '');
+                                await this.createChannel(term);
+                                this.userJoinedChannels.add(term);
                             }
+
+                            // Clear search
                             document.getElementById('channelSearch').value = '';
                             resultsDiv.innerHTML = '';
                             this.filterChannels('');
+
+                            // Save after joining from search
+                            this.saveUserChannels();
                         };
                         resultsDiv.innerHTML = '';
                         resultsDiv.appendChild(prompt);
@@ -2374,6 +2386,32 @@
                     document.getElementById('contextMenu').classList.remove('active');
                 });
 
+                // Add slap handler
+                let slapOption = document.getElementById('ctxSlap');
+                if (!slapOption) {
+                    // Create slap option if it doesn't exist
+                    slapOption = document.createElement('div');
+                    slapOption.className = 'context-menu-item';
+                    slapOption.id = 'ctxSlap';
+                    slapOption.textContent = 'Slap with Trout';
+
+                    // Insert after PM option
+                    const pmOption = document.getElementById('ctxPM');
+                    if (pmOption && pmOption.nextSibling) {
+                        pmOption.parentNode.insertBefore(slapOption, pmOption.nextSibling);
+                    } else if (pmOption) {
+                        pmOption.parentNode.appendChild(slapOption);
+                    }
+                }
+
+                // Add the click handler for slap
+                slapOption.addEventListener('click', () => {
+                    if (this.contextMenuData) {
+                        this.cmdSlap(this.contextMenuData.nym);
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+
                 document.getElementById('ctxReact').addEventListener('click', () => {
                     if (this.contextMenuData && this.contextMenuData.messageId) {
                         document.getElementById('contextMenu').classList.remove('active');
@@ -2402,7 +2440,6 @@
                         const input = document.getElementById('messageInput');
                         input.value = `> @${this.contextMenuData.nym}: ${this.contextMenuData.content}\n\n`;
                         input.focus();
-                        this.updateCharCounter(input.value.length);
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
@@ -2421,6 +2458,27 @@
 
                 const menu = document.getElementById('contextMenu');
                 this.contextMenuData = { nym, pubkey, content, messageId };
+
+                // Add slap option if it doesn't exist
+                let slapOption = document.getElementById('ctxSlap');
+                if (!slapOption) {
+                    // Create slap option
+                    slapOption = document.createElement('div');
+                    slapOption.className = 'context-menu-item';
+                    slapOption.id = 'ctxSlap';
+                    slapOption.textContent = 'Slap with Trout';
+
+                    // Insert after PM option
+                    const pmOption = document.getElementById('ctxPM');
+                    if (pmOption && pmOption.nextSibling) {
+                        pmOption.parentNode.insertBefore(slapOption, pmOption.nextSibling);
+                    } else if (pmOption) {
+                        pmOption.parentNode.appendChild(slapOption);
+                    }
+                }
+
+                // Show slap option only if not yourself
+                slapOption.style.display = pubkey === this.pubkey ? 'none' : 'block';
 
                 // Hide block option if it's your own message
                 const blockOption = document.getElementById('ctxBlock');
@@ -2583,6 +2641,9 @@
                             this.subscribeToReactions();
                             this.discoverChannels();
                             this.discoverExistingChannels();
+
+                            // Load user's saved channels
+                            this.loadUserChannels();
 
                             // Load synced settings if using extension
                             if (this.usingExtension) {
@@ -2765,24 +2826,26 @@
 
                 // Add all standard channels
                 this.commonChannels.forEach(channel => {
-                    if (!this.channels.has(channel)) {
+                    // Don't re-add if already exists or if user-joined
+                    if (!this.channels.has(channel) && !this.userJoinedChannels.has(channel)) {
                         allChannels.push({
                             name: channel,
                             geohash: '',
                             type: 'standard',
-                            sortKey: Math.random() // Random key for mixing
+                            sortKey: Math.random()
                         });
                     }
                 });
 
                 // Add all geohash channels
                 this.commonGeohashes.forEach(geohash => {
-                    if (!this.channels.has(geohash)) {
+                    // Don't re-add if already exists or if user-joined
+                    if (!this.channels.has(geohash) && !this.userJoinedChannels.has(geohash)) {
                         allChannels.push({
                             name: geohash,
                             geohash: geohash,
                             type: 'geo',
-                            sortKey: Math.random() // Random key for mixing
+                            sortKey: Math.random()
                         });
                     }
                 });
@@ -2877,7 +2940,6 @@
             }
 
             async handleEvent(event) {
-
                 if (event.kind === 20000) {
                     // Handle geohash channel messages
                     const nymTag = event.tags.find(t => t[0] === 'n');
@@ -2899,9 +2961,17 @@
                     // Only track flood for new messages
                     this.trackMessage(event.pubkey);
 
-                    // Check for BRB auto-response
+                    // Check for BRB auto-response (UNIVERSAL)
                     if (this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
-                        this.sendBRBResponse(nym, this.awayMessages.get(this.pubkey));
+                        // Check if we haven't already responded to this user in this session
+                        const responseKey = `brb_universal_${this.pubkey}_${nym}`;
+                        if (!sessionStorage.getItem(responseKey)) {
+                            sessionStorage.setItem(responseKey, '1');
+
+                            // Send auto-response to the same channel where mentioned
+                            const response = `@${nym} [Auto-Reply] ${this.awayMessages.get(this.pubkey)}`;
+                            await this.publishMessage(response, geohash, geohash);
+                        }
                     }
 
                     // Add channel if it's new
@@ -2951,9 +3021,17 @@
                     // Only track flood for new messages
                     this.trackMessage(event.pubkey);
 
-                    // Check for BRB auto-response
+                    // Check for BRB auto-response (UNIVERSAL)
                     if (this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
-                        this.sendBRBResponse(nym, this.awayMessages.get(this.pubkey));
+                        // Check if we haven't already responded to this user in this session
+                        const responseKey = `brb_universal_${this.pubkey}_${nym}`;
+                        if (!sessionStorage.getItem(responseKey)) {
+                            sessionStorage.setItem(responseKey, '1');
+
+                            // Send auto-response to the same channel where mentioned
+                            const response = `@${nym} [Auto-Reply] ${this.awayMessages.get(this.pubkey)}`;
+                            await this.publishMessage(response, channel, '');
+                        }
                     }
 
                     // Add channel if it's new
@@ -4502,14 +4580,14 @@
                             return false;
                         });
                     }
-
-                    // Add existing reactions if any
-                    if (this.reactions.has(message.id)) {
-                        this.updateMessageReactions(message.id);
-                    }
                 }
 
                 container.appendChild(messageEl);
+
+                // Add existing reactions if any (this ensures reactions persist when switching channels)
+                if (message.id && this.reactions.has(message.id)) {
+                    this.updateMessageReactions(message.id);
+                }
 
                 if (shouldScroll && this.settings.autoscroll) {
                     container.scrollTop = container.scrollHeight;
@@ -4603,19 +4681,20 @@
                     '<a href="$1" target="_blank" rel="noopener">$1</a>'
                 );
 
-                // Highlight mentions
+                // Highlight mentions - but don't touch # in usernames
                 formatted = formatted.replace(
                     /@(\w+)/g,
                     '<span style="color: var(--secondary)">@$1</span>'
                 );
 
-                // Channel references
+                // Channel references - only match # at word boundaries, not within usernames
                 formatted = formatted.replace(
-                    /#(\w+)/g,
-                    (match, channel) => {
+                    /(?:^|\s)#(\w+)(?=\s|$)/g,
+                    (match, channel, offset) => {
                         const type = this.getChannelType(channel);
                         const badge = type === 'geo' ? ' [GEO]' : ' [STD]';
-                        return `<span class="channel-link" onclick="nym.quickJoinChannel('${channel}')">#${channel}${badge}</span>`;
+                        const space = match.startsWith(' ') ? ' ' : '';
+                        return `${space}<span class="channel-link" onclick="nym.quickJoinChannel('${channel}')">#${channel}${badge}</span>`;
                     }
                 );
 
@@ -4633,12 +4712,17 @@
                 if (type === 'geo') {
                     this.addChannel(channel, channel);
                     this.switchChannel(channel, channel);
+                    this.userJoinedChannels.add(channel); // Mark as user-joined
                 } else {
                     this.addChannel(channel, '');
                     this.switchChannel(channel, '');
                     // Also create the channel with kind 23333
                     this.createChannel(channel);
+                    this.userJoinedChannels.add(channel); // Mark as user-joined
                 }
+
+                // Save after quick join
+                this.saveUserChannels();
             }
 
             insertMention(nym) {
@@ -4792,6 +4876,12 @@
             }
 
             togglePin(channel, geohash) {
+                // Don't allow pinning/unpinning #bar since it's always at top
+                if (channel === 'bar' && !geohash) {
+                    this.displaySystemMessage('#bar is always at the top');
+                    return;
+                }
+
                 const key = geohash || channel;
 
                 if (this.pinnedChannels.has(key)) {
@@ -4904,7 +4994,6 @@
 
                 input.addEventListener('input', (e) => {
                     this.handleInputChange(e.target.value);
-                    this.updateCharCounter(e.target.value.length);
                     this.autoResizeTextarea(e.target);
                 });
 
@@ -5007,6 +5096,8 @@
                     '/q': { desc: 'Shortcut for /quote', fn: (args) => this.cmdQuote(args) },
                     '/brb': { desc: 'Set away message', fn: (args) => this.cmdBRB(args) },
                     '/back': { desc: 'Clear away message', fn: () => this.cmdBack() },
+                    '/leave': { desc: 'Leave current channel', fn: () => this.cmdLeave() },
+                    '/part': { desc: 'Alias for /leave', fn: () => this.cmdLeave() },
                     '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() }
                 };
             }
@@ -5354,13 +5445,33 @@
                     const geohash = channel.substring(1);
                     this.addChannel(geohash, geohash);
                     this.switchChannel(geohash, geohash);
+                    this.userJoinedChannels.add(geohash); // Mark as user-joined
                 } else {
                     this.addChannel(channel, '');
                     this.switchChannel(channel, '');
                     // Create channel with kind 23333
                     await this.createChannel(channel);
+                    this.userJoinedChannels.add(channel); // Mark as user-joined
                 }
+
+                // Save after joining
+                this.saveUserChannels();
             }
+
+            cmdLeave() {
+                if (this.inPMMode) {
+                    this.displaySystemMessage('Use /pm to switch channels or close PMs from the sidebar');
+                    return;
+                }
+
+                if (this.currentChannel === 'bar' && !this.currentGeohash) {
+                    this.displaySystemMessage('Cannot leave the default #bar channel');
+                    return;
+                }
+
+                this.removeChannel(this.currentChannel, this.currentGeohash);
+            }
+
 
             cmdPM(args) {
                 if (!args) {
@@ -5391,16 +5502,41 @@
                 this.openUserPM(targetNym, targetPubkey);
             }
 
-            cmdNick(args) {
+            async cmdNick(args) {
                 if (!args) {
                     this.displaySystemMessage('Usage: /nick newnym');
                     return;
                 }
 
                 const oldNym = this.nym;
-                this.nym = args.trim().substring(0, 20);
+                const newNym = args.trim().substring(0, 20);
+
+                // Don't do anything if the nick is the same
+                if (oldNym === newNym) {
+                    this.displaySystemMessage('That is already your current nym');
+                    return;
+                }
+
+                this.nym = newNym;
                 document.getElementById('currentNym').textContent = this.nym;
-                this.displaySystemMessage(`${oldNym} is now known as ${this.nym}`);
+
+                // Create the change message
+                const changeMessage = `${oldNym} is now known as ${this.nym}`;
+
+                // Send as a system-style message to the current channel
+                if (this.inPMMode) {
+                    // Don't send nick changes to PM conversations, just show locally
+                    this.displaySystemMessage(changeMessage);
+                } else {
+                    // Send to channel so everyone sees it
+                    try {
+                        // Send as an action message so it appears styled differently
+                        await this.publishMessage(`/me changed their nym from ${oldNym} to ${this.nym}`);
+                    } catch (error) {
+                        // If sending fails, at least show it locally
+                        this.displaySystemMessage(changeMessage);
+                    }
+                }
             }
 
             cmdWho() {
@@ -5565,13 +5701,13 @@
                 }
 
                 this.displaySystemMessage(`Away message set: "${message}"`);
-                this.displaySystemMessage('You will auto-reply to mentions while away');
+                this.displaySystemMessage('You will auto-reply to mentions in ALL channels while away');
 
                 // Clear session storage for BRB responses to allow fresh responses
                 const keysToRemove = [];
                 for (let i = 0; i < sessionStorage.length; i++) {
                     const key = sessionStorage.key(i);
-                    if (key && key.startsWith(`brb_${this.pubkey}_`)) {
+                    if (key && key.startsWith(`brb_universal_${this.pubkey}_`)) {
                         keysToRemove.push(key);
                     }
                 }
@@ -5590,6 +5726,17 @@
                     }
 
                     this.displaySystemMessage('Away message cleared - you are back!');
+
+                    // Clear all universal BRB response keys
+                    const keysToRemove = [];
+                    for (let i = 0; i < sessionStorage.length; i++) {
+                        const key = sessionStorage.key(i);
+                        if (key && key.startsWith(`brb_universal_${this.pubkey}_`)) {
+                            keysToRemove.push(key);
+                        }
+                    }
+                    keysToRemove.forEach(key => sessionStorage.removeItem(key));
+
                     this.updateUserList();
                 } else {
                     this.displaySystemMessage('You were not away');
@@ -5598,9 +5745,11 @@
 
             cmdQuit() {
                 this.displaySystemMessage('Disconnecting from NYM...');
+
                 // Clear saved connection preferences
                 localStorage.removeItem('nym_connection_mode');
                 localStorage.removeItem('nym_relay_url');
+
                 if (this.ws) {
                     this.ws.close();
                 }
@@ -5682,18 +5831,24 @@
                         item.classList.add('pinned');
                     }
 
+                    // Don't show pin button for #bar
+                    const isBar = channel === 'bar' && !geohash;
+                    const pinButton = isBar ? '' : `
+            <span class="pin-btn ${isPinned ? 'pinned' : ''}" onclick="event.stopPropagation(); nym.togglePin('${channel}', '${geohash}')">
+                <svg viewBox="0 0 24 24">
+                    <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/>
+                </svg>
+            </span>
+        `;
+
                     item.innerHTML = `
-                        <span class="channel-name">${displayName}</span>
-                        <div class="channel-badges">
-                            <span class="pin-btn ${isPinned ? 'pinned' : ''}" onclick="event.stopPropagation(); nym.togglePin('${channel}', '${geohash}')">
-                                <svg viewBox="0 0 24 24">
-                                    <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/>
-                                </svg>
-                            </span>
-                            ${badge}
-                            <span class="unread-badge" style="display:none">0</span>
-                        </div>
-                    `;
+            <span class="channel-name">${displayName}</span>
+            <div class="channel-badges">
+                ${pinButton}
+                ${badge}
+                <span class="unread-badge" style="display:none">0</span>
+            </div>
+        `;
                     list.appendChild(item);
 
                     this.channels.set(key, { channel, geohash });
@@ -5701,11 +5856,181 @@
                 }
             }
 
+            removeChannel(channel, geohash = '') {
+                const key = geohash || channel;
+
+                // Don't allow removing #bar (default channel)
+                if (channel === 'bar' && !geohash) {
+                    this.displaySystemMessage('Cannot remove the default #bar channel');
+                    return;
+                }
+
+                // Remove from channels map
+                this.channels.delete(key);
+
+                // Remove from user-joined set
+                this.userJoinedChannels.delete(key);
+
+                // Remove from DOM
+                const selector = geohash ?
+                    `[data-geohash="${geohash}"]` :
+                    `[data-channel="${channel}"][data-geohash=""]`;
+                const element = document.querySelector(selector);
+                if (element) {
+                    element.remove();
+                }
+
+                // If we're currently in this channel, switch to #bar
+                if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
+                    (geohash && this.currentGeohash === geohash)) {
+                    this.switchChannel('bar', '');
+                }
+
+                // Save the updated channel list
+                this.saveUserChannels();
+
+                this.displaySystemMessage(`Left channel ${geohash ? '#' + geohash : '#' + channel}`);
+            }
+
+            // Add right-click context menu for channel items
+            setupChannelContextMenu() {
+                document.addEventListener('contextmenu', (e) => {
+                    const channelItem = e.target.closest('.channel-item');
+                    if (channelItem) {
+                        e.preventDefault();
+                        const channel = channelItem.dataset.channel;
+                        const geohash = channelItem.dataset.geohash;
+
+                        // Don't allow removing #bar
+                        if (channel === 'bar' && !geohash) {
+                            return;
+                        }
+
+                        // Create a simple context menu for leaving channel
+                        const menu = document.createElement('div');
+                        menu.className = 'context-menu active';
+                        menu.style.left = e.pageX + 'px';
+                        menu.style.top = e.pageY + 'px';
+                        menu.innerHTML = `
+                <div class="context-menu-item" onclick="nym.removeChannel('${channel}', '${geohash}'); this.parentElement.remove();">
+                    Leave Channel
+                </div>
+            `;
+
+                        // Remove any existing channel context menu
+                        document.querySelectorAll('.channel-context-menu').forEach(m => m.remove());
+                        menu.classList.add('channel-context-menu');
+                        document.body.appendChild(menu);
+
+                        // Close on click outside
+                        setTimeout(() => {
+                            document.addEventListener('click', () => menu.remove(), { once: true });
+                        }, 100);
+                    }
+                });
+            }
+
+            saveUserJoinedChannels() {
+                const existing = this.loadUserJoinedChannels();
+                const combined = new Set([...existing, ...this.userJoinedChannels]);
+                localStorage.setItem('nym_user_joined_channels', JSON.stringify(Array.from(combined)));
+            }
+
+            loadUserJoinedChannels() {
+                const saved = localStorage.getItem('nym_user_joined_channels');
+                if (saved) {
+                    try {
+                        return JSON.parse(saved);
+                    } catch (error) {
+                        console.error('Failed to load user-joined channels:', error);
+                        return [];
+                    }
+                }
+                return [];
+            }
+
+            saveUserChannels() {
+                const userChannels = [];
+                this.channels.forEach((value, key) => {
+                    // Only save channels that were explicitly joined by the user
+                    if (this.userJoinedChannels.has(key)) {
+                        userChannels.push({
+                            key: key,
+                            channel: value.channel,
+                            geohash: value.geohash
+                        });
+                    }
+                });
+
+                // Save the channels
+                localStorage.setItem('nym_user_channels', JSON.stringify(userChannels));
+
+                // Also save the joined channels set
+                this.saveUserJoinedChannels();
+            }
+
+            loadUserChannels() {
+                const saved = localStorage.getItem('nym_user_channels');
+                const savedJoined = localStorage.getItem('nym_user_joined_channels');
+
+                // First, load the joined channels set
+                if (savedJoined) {
+                    try {
+                        const joinedChannels = JSON.parse(savedJoined);
+                        joinedChannels.forEach(key => this.userJoinedChannels.add(key));
+                    } catch (error) {
+                        console.error('Failed to load joined channels set:', error);
+                    }
+                }
+
+                // Then load the channel details
+                if (saved) {
+                    try {
+                        const userChannels = JSON.parse(saved);
+
+                        userChannels.forEach(({ key, channel, geohash }) => {
+                            // Add the channel to the list if not already present
+                            if (!this.channels.has(key)) {
+                                this.addChannel(channel, geohash);
+                            }
+                            // Make sure it's marked as user-joined
+                            this.userJoinedChannels.add(key);
+                        });
+
+                        // Sort channels after loading
+                        this.sortChannelsByActivity();
+
+                        if (userChannels.length > 0) {
+                            this.displaySystemMessage(`Restored ${userChannels.length} previously joined channels`);
+                        }
+                    } catch (error) {
+                        console.error('Failed to load user channels:', error);
+                    }
+                }
+            }
+
+            clearUserChannels() {
+                localStorage.removeItem('nym_user_channels');
+            }
+
             addChannelToList(channel, geohash) {
+                const key = geohash || channel;
+
+                // Check if this channel was previously user-joined
+                const wasUserJoined = this.userJoinedChannels.has(key);
+
                 if (geohash && !this.channels.has(geohash)) {
                     this.addChannel(geohash, geohash);
+                    // If it was user-joined, re-add it to the set
+                    if (wasUserJoined) {
+                        this.userJoinedChannels.add(geohash);
+                    }
                 } else if (!geohash && !this.channels.has(channel)) {
                     this.addChannel(channel, '');
+                    // If it was user-joined, re-add it to the set
+                    if (wasUserJoined) {
+                        this.userJoinedChannels.add(channel);
+                    }
                 }
             }
 
@@ -5732,7 +6057,6 @@
                         // Geohash channel
                         selector = `[data-geohash="${channel.substring(1)}"]`;
                     } else {
-                        // Standard channel (no # prefix in data attribute)
                         selector = `[data-channel="${channel}"][data-geohash=""]`;
                     }
 
@@ -5742,6 +6066,47 @@
                         badge.style.display = count > 0 ? 'block' : 'none';
                     }
                 }
+
+                // Re-sort channels by activity
+                this.sortChannelsByActivity();
+            }
+
+            sortChannelsByActivity() {
+                const channelList = document.getElementById('channelList');
+                const channels = Array.from(channelList.querySelectorAll('.channel-item'));
+
+                channels.sort((a, b) => {
+                    // Always keep #bar at the very top
+                    const aIsBar = a.dataset.channel === 'bar' && !a.dataset.geohash;
+                    const bIsBar = b.dataset.channel === 'bar' && !b.dataset.geohash;
+
+                    if (aIsBar) return -1;
+                    if (bIsBar) return 1;
+
+                    // Then sort by pinned status
+                    const aPinned = a.classList.contains('pinned');
+                    const bPinned = b.classList.contains('pinned');
+
+                    if (aPinned && !bPinned) return -1;
+                    if (!aPinned && bPinned) return 1;
+
+                    // Within same pin status, sort by unread count
+                    const aChannel = a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel;
+                    const bChannel = b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel;
+
+                    const aUnread = this.unreadCounts.get(aChannel) || 0;
+                    const bUnread = this.unreadCounts.get(bChannel) || 0;
+
+                    // If unread counts are the same, maintain original order
+                    if (aUnread === bUnread) {
+                        return 0;
+                    }
+
+                    return bUnread - aUnread;
+                });
+
+                // Re-append in sorted order
+                channels.forEach(channel => channelList.appendChild(channel));
             }
 
             clearUnreadCount(channel) {
@@ -6131,7 +6496,7 @@
 
         function showAbout() {
             nym.displaySystemMessage(`
-                ═══ NYM - Nostr Ynstant Messenger v1.2.3 ═══<br>
+                ═══ NYM - Nostr Ynstant Messenger v1.2.4 ═══<br>
                 Protocol: Nostr (kind 20000/23333 channels)<br>
                 Relay: ${nym.relayUrl || 'Not connected'}<br>
                 Your nym: ${nym.nym || 'Not set'}<br>
