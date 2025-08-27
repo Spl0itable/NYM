@@ -13,7 +13,7 @@ A lightweight ephemeral chat client built on Nostr protocol, bridging with [Bitc
 
 ## Overview
 
-NYM is a web-based chat application that uses Nostr's ephemeral events (kind 20000) for public channels and NIP-04 encrypted events (kind 4) for private messages. No registration, no accounts, no persistence - just pick a nym and start chatting. Or, connect using Nostr Extension for persistent identity.
+NYM is a Progressive Web App (PWA) chat application that uses Nostr's ephemeral events (kinds 20000/23333) for public channels and NIP-04 encrypted events (kind 4) for private messages. No registration, no accounts, no persistence - just pick a nym and start chatting. Or, connect using Nostr Extension for persistent identity.
 
 ![NYM Screenshot](https://nym.bar/images/NYM.png)
 
