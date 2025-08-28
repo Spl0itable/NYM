@@ -2047,20 +2047,21 @@
         // NYM - Ephemeral Nostr Chat
         class NYM {
             constructor() {
-                this.relayPool = new Map(); // Map of relay URL -> WebSocket connection
-                this.blacklistedRelays = new Set(); // Relays that don't support our kinds
-                this.relayKinds = new Map(); // Track which kinds each relay has sent
-                this.relayVerificationTimeout = 10000; // 10 seconds to receive required kinds
+                this.relayPool = new Map();
+                this.blacklistedRelays = new Set();
+                this.relayKinds = new Map();
+                this.relayVerificationTimeout = 10000;
                 this.monitorRelays = ['wss://relay.nostr.watch', 'wss://monitorlizard.nostr1.com'];
                 this.broadcastRelays = ['wss://relay.damus.io', 'wss://relay.nostr.band', 'wss://relay.primal.net', 'wss://nos.lol'];
                 this.nosflareRelay = 'wss://sendit.nosflare.com';
-                this.discoveredRelays = new Set(); // Set of discovered relay URLs
-                this.relayList = []; // Array of relay info from NIP-66
+                this.discoveredRelays = new Set();
+                this.relayList = [];
                 this.lastRelayDiscovery = 0;
-                this.relayDiscoveryInterval = 3600000; // 1 hour
-                this.maxRelaysForReq = 1000; // Maximum number of relays to use for REQ
-                this.relayTimeout = 2000; // 2 second timeout for relay connections
-                this.eventDeduplication = new Map(); // Map for deduplicating events by ID
+                this.relayDiscoveryInterval = 3600000;
+                this.maxRelaysForReq = 1000;
+                this.relayTimeout = 2000;
+                this.eventDeduplication = new Map();
+                this.reconnectingRelays = new Set();
                 this.pubkey = null;
                 this.privkey = null;
                 this.nym = null;
@@ -2098,7 +2099,7 @@
                 this.usingExtension = false;
                 this.contextMenuTarget = null;
                 this.contextMenuData = null;
-                this.awayMessages = new Map(); // Store BRB messages
+                this.awayMessages = new Map();
                 this.recentEmojis = [];
                 this.allEmojis = {
                     'smileys': ['😊', '😂', '🤣', '😍', '🥰', '😘', '😎', '🤔', '😢', '😭', '😡', '🤬', '😱', '😨', '😰', '😥', '😓', '🤗', '🤭', '🤫', '🤥', '😶', '😐', '😑', '😬', '🙄', '😯', '😦', '😧', '😮', '😲', '🥱', '😴', '🤤', '😪', '😵', '🤐', '🥴', '🤢', '🤮', '🤧', '😷', '🤒', '🤕', '🤑', '🤠', '😈', '👿', '👹', '👺', '🤡', '💩', '👻', '💀', '☠️', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'],
@@ -2936,10 +2937,17 @@
 
                             // Only reconnect broadcast/nosflare relays, not failed read relays
                             if ((type === 'broadcast' || type === 'nosflare') && this.connected && !this.blacklistedRelays.has(relayUrl)) {
-                                // Only show disconnection message for important relays
-                                if (type === 'broadcast') {
-                                    this.displaySystemMessage(`Lost connection to relay, reconnecting...`);
+                                // Track disconnections
+                                if (!this.reconnectingRelays) {
+                                    this.reconnectingRelays = new Set();
                                 }
+
+                                // Show message only once for the first disconnection
+                                if (this.reconnectingRelays.size === 0) {
+                                    this.displaySystemMessage(`Lost connection to relays, reconnecting...`);
+                                }
+
+                                this.reconnectingRelays.add(relayUrl);
 
                                 setTimeout(() => {
                                     this.connectToRelay(relayUrl, type)
@@ -2947,20 +2955,21 @@
                                             // Re-subscribe after reconnection
                                             if (type === 'broadcast') {
                                                 this.subscribeToSingleRelay(relayUrl);
-                                                this.displaySystemMessage(`Reconnected to relay`);
                                             }
                                             console.log(`Reconnected to ${relayUrl}`);
                                             this.updateConnectionStatus();
 
-                                            // After reconnection, check for any missed messages
-                                            // But don't reload - let the normal message flow handle it
-                                            // Messages will come through handleEvent naturally
+                                            // Remove from reconnecting set
+                                            this.reconnectingRelays.delete(relayUrl);
+
+                                            // Show reconnected message only when all relays are back
+                                            if (this.reconnectingRelays.size === 0) {
+                                                this.displaySystemMessage(`Reconnected to relays`);
+                                            }
                                         })
                                         .catch(err => {
                                             console.error(`Failed to reconnect to ${relayUrl}:`, err);
-                                            if (type === 'broadcast') {
-                                                this.displaySystemMessage(`Failed to reconnect, retrying...`);
-                                            }
+                                            // Keep trying, but don't spam messages
                                         });
                                 }, 5000);
                             }
