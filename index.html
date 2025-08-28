@@ -5066,7 +5066,9 @@
                     // Check if message already exists
                     const exists = this.messages.get(storageKey).some(m => m.id === message.id);
                     if (!exists) {
+                        // Add message and sort by timestamp
                         this.messages.get(storageKey).push(message);
+                        this.messages.get(storageKey).sort((a, b) => a.timestamp - b.timestamp);
                     }
 
                     // Check if this is for current channel
@@ -5121,6 +5123,7 @@
                     messageEl.dataset.messageId = message.id;
                     messageEl.dataset.author = message.author;
                     messageEl.dataset.pubkey = message.pubkey;
+                    messageEl.dataset.timestamp = message.timestamp.getTime(); // Add timestamp for sorting
 
                     const authorClass = message.isOwn ? 'self' : '';
 
@@ -5163,7 +5166,29 @@
                     }
                 }
 
-                container.appendChild(messageEl);
+                // Find the correct position to insert the message based on timestamp
+                const existingMessages = Array.from(container.querySelectorAll('.message[data-timestamp]'));
+                const messageTimestamp = message.timestamp.getTime();
+
+                let insertBefore = null;
+                for (const existing of existingMessages) {
+                    const existingTimestamp = parseInt(existing.dataset.timestamp);
+                    if (messageTimestamp < existingTimestamp) {
+                        insertBefore = existing;
+                        break;
+                    }
+                }
+
+                if (insertBefore) {
+                    container.insertBefore(messageEl, insertBefore);
+                } else {
+                    const typingIndicator = container.querySelector('.typing-indicator');
+                    if (typingIndicator) {
+                        container.insertBefore(messageEl, typingIndicator);
+                    } else {
+                        container.appendChild(messageEl);
+                    }
+                }
 
                 // Add existing reactions if any (for both channel messages and PMs)
                 if (message.id && this.reactions.has(message.id)) {
