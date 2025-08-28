@@ -2057,11 +2057,14 @@
                 this.discoveredRelays = new Set();
                 this.relayList = [];
                 this.lastRelayDiscovery = 0;
-                this.relayDiscoveryInterval = 3600000;
+                this.relayDiscoveryInterval = 300000;
                 this.maxRelaysForReq = 1000;
                 this.relayTimeout = 2000;
                 this.eventDeduplication = new Map();
                 this.reconnectingRelays = new Set();
+                this.blacklistedRelays = new Set();
+                this.blacklistTimestamps = new Map();
+                this.blacklistDuration = 300000;
                 this.pubkey = null;
                 this.privkey = null;
                 this.nym = null;
@@ -2862,8 +2865,18 @@
             async connectToRelay(relayUrl, type = 'read') {
                 return new Promise((resolve, reject) => {
                     try {
-                        // Skip if already connected or blacklisted
-                        if (this.relayPool.has(relayUrl) || this.blacklistedRelays.has(relayUrl)) {
+                        // Check if blacklisted but also check if expired
+                        if (this.blacklistedRelays.has(relayUrl)) {
+                            if (!this.isBlacklistExpired(relayUrl)) {
+                                // Still blacklisted
+                                resolve();
+                                return;
+                            }
+                            // Was expired and removed, continue connecting
+                        }
+
+                        // Skip if already connected
+                        if (this.relayPool.has(relayUrl)) {
                             resolve();
                             return;
                         }
@@ -2906,6 +2919,7 @@
                                         this.relayPool.delete(relayUrl);
                                         this.relayKinds.delete(relayUrl);
                                         this.blacklistedRelays.add(relayUrl);
+                                        this.blacklistTimestamps.set(relayUrl, Date.now()); // Track when blacklisted
                                         this.updateConnectionStatus();
                                     }
                                 }, this.relayVerificationTimeout);
@@ -2965,6 +2979,13 @@
                                             // Show reconnected message only when all relays are back
                                             if (this.reconnectingRelays.size === 0) {
                                                 this.displaySystemMessage(`Reconnected to relays`);
+
+                                                // After broadcast relays reconnect, also retry discovered relays
+                                                if (type === 'broadcast') {
+                                                    setTimeout(() => {
+                                                        this.retryDiscoveredRelays();
+                                                    }, 2000); // Wait 2 seconds before retrying discovered relays
+                                                }
                                             }
                                         })
                                         .catch(err => {
@@ -2980,6 +3001,82 @@
                         reject(error);
                     }
                 });
+            }
+
+            isBlacklistExpired(relayUrl) {
+                if (!this.blacklistTimestamps.has(relayUrl)) {
+                    return true; // Not in timestamp map, shouldn't be blacklisted
+                }
+
+                const blacklistedAt = this.blacklistTimestamps.get(relayUrl);
+                const now = Date.now();
+
+                if (now - blacklistedAt > this.blacklistDuration) {
+                    // Expired, remove from blacklist
+                    this.blacklistedRelays.delete(relayUrl);
+                    this.blacklistTimestamps.delete(relayUrl);
+                    return true;
+                }
+
+                return false;
+            }
+
+            async retryDiscoveredRelays() {
+                console.log('Retrying discovered relays after reconnection...');
+
+                // Clean expired blacklist entries first
+                for (const relayUrl of this.blacklistedRelays) {
+                    this.isBlacklistExpired(relayUrl);
+                }
+
+                // Try to connect to any discovered relays we're not connected to
+                const relaysToTry = [];
+
+                // From user metadata
+                for (const [pubkey, metadata] of this.userMetadata) {
+                    if (metadata.relays) {
+                        for (const relay of metadata.relays) {
+                            if (!this.relayPool.has(relay) &&
+                                !this.blacklistedRelays.has(relay) &&
+                                !this.broadcastRelays.includes(relay) &&
+                                relay !== this.nosflareRelay) {
+                                relaysToTry.push(relay);
+                            }
+                        }
+                    }
+                }
+
+                // From previously discovered relays
+                for (const relay of this.discoveredRelays) {
+                    if (!this.relayPool.has(relay) &&
+                        !this.blacklistedRelays.has(relay) &&
+                        !this.broadcastRelays.includes(relay) &&
+                        relay !== this.nosflareRelay &&
+                        !relaysToTry.includes(relay)) {
+                        relaysToTry.push(relay);
+                    }
+                }
+
+                if (relaysToTry.length > 0) {
+                    console.log(`Found ${relaysToTry.length} discovered relays to retry`);
+
+                    // Try connecting to them with staggered timing
+                    const promises = [];
+                    for (let i = 0; i < Math.min(relaysToTry.length, 10); i++) {
+                        const relayUrl = relaysToTry[i];
+                        setTimeout(() => {
+                            this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout)
+                                .then(() => {
+                                    this.subscribeToSingleRelay(relayUrl);
+                                    console.log(`Reconnected to discovered relay: ${relayUrl}`);
+                                    this.updateConnectionStatus();
+                                })
+                                .catch(err => {
+                                    console.log(`Failed to reconnect to ${relayUrl}:`, err);
+                                });
+                        }, i * 200); // Stagger by 200ms
+                    }
+                }
             }
 
             syncMissingMessages() {
@@ -3480,6 +3577,11 @@
             }
 
             async handleEvent(event) {
+                // Determine if this is a historical message (from initial load)
+                // Messages are considered historical if they're older than 10 seconds
+                const messageAge = Date.now() - (event.created_at * 1000);
+                const isHistorical = messageAge > 10000; // Older than 10 seconds
+
                 if (event.kind === 20000) {
                     // Handle geohash channel messages
                     const nymTag = event.tags.find(t => t[0] === 'n');
@@ -3493,13 +3595,15 @@
                         return;
                     }
 
-                    // Check flooding
-                    if (this.isFlooding(event.pubkey)) {
+                    // Check flooding FOR THIS CHANNEL (only for non-historical messages)
+                    if (!isHistorical && this.isFlooding(event.pubkey, geohash)) {
                         return;
                     }
 
-                    // Only track flood for new messages
-                    this.trackMessage(event.pubkey);
+                    // Only track flood for new messages in this channel
+                    if (!isHistorical) {
+                        this.trackMessage(event.pubkey, geohash, isHistorical);
+                    }
 
                     // Check for BRB auto-response (UNIVERSAL)
                     if (this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
@@ -3527,7 +3631,8 @@
                         timestamp: new Date(event.created_at * 1000),
                         channel: geohash ? geohash : 'unknown',
                         geohash: geohash,
-                        isOwn: event.pubkey === this.pubkey
+                        isOwn: event.pubkey === this.pubkey,
+                        isHistorical: isHistorical
                     };
 
                     // Don't display duplicate of own messages
@@ -3553,13 +3658,15 @@
                         return;
                     }
 
-                    // Check flooding
-                    if (this.isFlooding(event.pubkey)) {
+                    // Check flooding FOR THIS CHANNEL (only for non-historical messages)
+                    if (!isHistorical && this.isFlooding(event.pubkey, channel)) {
                         return;
                     }
 
-                    // Only track flood for new messages
-                    this.trackMessage(event.pubkey);
+                    // Only track flood for new messages in this channel
+                    if (!isHistorical) {
+                        this.trackMessage(event.pubkey, channel, isHistorical);
+                    }
 
                     // Check for BRB auto-response (UNIVERSAL)
                     if (this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
@@ -3587,7 +3694,8 @@
                         timestamp: new Date(event.created_at * 1000),
                         channel: channel,
                         geohash: '',
-                        isOwn: event.pubkey === this.pubkey
+                        isOwn: event.pubkey === this.pubkey,
+                        isHistorical: isHistorical
                     };
 
                     // Don't display duplicate of own messages
@@ -4137,12 +4245,24 @@
                 }
             }
 
-            trackMessage(pubkey) {
+            trackMessage(pubkey, channel, isHistorical = false) {
+                // Don't track historical messages from initial load
+                if (isHistorical) {
+                    return;
+                }
 
                 const now = Date.now();
+                const channelKey = channel; // Use channel as key for per-channel tracking
 
-                if (!this.floodTracking.has(pubkey)) {
-                    this.floodTracking.set(pubkey, {
+                // Create channel-specific tracking
+                if (!this.floodTracking.has(channelKey)) {
+                    this.floodTracking.set(channelKey, new Map());
+                }
+
+                const channelTracking = this.floodTracking.get(channelKey);
+
+                if (!channelTracking.has(pubkey)) {
+                    channelTracking.set(pubkey, {
                         count: 1,
                         firstMessageTime: now,
                         blocked: false
@@ -4150,7 +4270,7 @@
                     return;
                 }
 
-                const tracking = this.floodTracking.get(pubkey);
+                const tracking = channelTracking.get(pubkey);
 
                 // Reset if more than 2 seconds have passed
                 if (now - tracking.firstMessageTime > 2000) {
@@ -4160,19 +4280,22 @@
                 } else {
                     tracking.count++;
 
-                    // Block if more than 10 messages in 2 seconds
+                    // Block if more than 10 messages in 2 seconds IN THIS CHANNEL
                     if (tracking.count > 10 && !tracking.blocked) {
                         tracking.blocked = true;
                         tracking.blockedUntil = now + 900000; // 15 minutes
 
                         const nym = this.getNymFromPubkey(pubkey);
-                        this.displaySystemMessage(`${nym} has been temporarily muted for flooding (15 minutes)`);
+                        this.displaySystemMessage(`${nym} has been temporarily muted for flooding in #${channel} (15 minutes)`);
                     }
                 }
             }
 
-            isFlooding(pubkey) {
-                const tracking = this.floodTracking.get(pubkey);
+            isFlooding(pubkey, channel) {
+                const channelTracking = this.floodTracking.get(channel);
+                if (!channelTracking) return false;
+
+                const tracking = channelTracking.get(pubkey);
                 if (!tracking) return false;
 
                 if (tracking.blocked) {
@@ -5084,7 +5207,7 @@
                     const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                     if (storageKey !== currentKey) {
                         // Message is for different channel, update unread count but don't display
-                        if (!message.isOwn && !exists) {
+                        if (!message.isOwn && !exists && !message.isHistorical) {
                             this.updateUnreadCount(storageKey);
                         }
                         return;
@@ -5115,8 +5238,9 @@
                     return;
                 }
 
-                // Check if nym is flooding (but not for PMs)
-                if (!message.isPM && this.isFlooding(message.pubkey)) {
+                // Check if nym is flooding in THIS CHANNEL (but not for PMs and not for historical messages)
+                const channelToCheck = message.geohash || message.channel;
+                if (!message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
                     messageEl.className = 'message flooded';
                 }
 
