@@ -3032,21 +3032,7 @@
                 // Try to connect to any discovered relays we're not connected to
                 const relaysToTry = [];
 
-                // From user metadata
-                for (const [pubkey, metadata] of this.userMetadata) {
-                    if (metadata.relays) {
-                        for (const relay of metadata.relays) {
-                            if (!this.relayPool.has(relay) &&
-                                !this.blacklistedRelays.has(relay) &&
-                                !this.broadcastRelays.includes(relay) &&
-                                relay !== this.nosflareRelay) {
-                                relaysToTry.push(relay);
-                            }
-                        }
-                    }
-                }
-
-                // From previously discovered relays
+                // From previously discovered relays (this is the main source)
                 for (const relay of this.discoveredRelays) {
                     if (!this.relayPool.has(relay) &&
                         !this.blacklistedRelays.has(relay) &&
@@ -3061,8 +3047,7 @@
                     console.log(`Found ${relaysToTry.length} discovered relays to retry`);
 
                     // Try connecting to them with staggered timing
-                    const promises = [];
-                    for (let i = 0; i < Math.min(relaysToTry.length, 10); i++) {
+                    for (let i = 0; i < Math.min(relaysToTry.length, 20); i++) { // Try up to 20 relays
                         const relayUrl = relaysToTry[i];
                         setTimeout(() => {
                             this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout)
@@ -3076,6 +3061,36 @@
                                 });
                         }, i * 200); // Stagger by 200ms
                     }
+                } else {
+                    console.log('No discovered relays to retry');
+
+                    // If we have no discovered relays, try to discover them again
+                    this.discoverRelays().then(() => {
+                        // After discovery, try connecting to newly discovered relays
+                        const newRelaysToTry = Array.from(this.discoveredRelays)
+                            .filter(url => !this.relayPool.has(url) &&
+                                !this.blacklistedRelays.has(url) &&
+                                !this.broadcastRelays.includes(url) &&
+                                url !== this.nosflareRelay)
+                            .slice(0, 10);
+
+                        if (newRelaysToTry.length > 0) {
+                            console.log(`Found ${newRelaysToTry.length} newly discovered relays to connect`);
+                            newRelaysToTry.forEach((relayUrl, index) => {
+                                setTimeout(() => {
+                                    this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout)
+                                        .then(() => {
+                                            this.subscribeToSingleRelay(relayUrl);
+                                            console.log(`Connected to newly discovered relay: ${relayUrl}`);
+                                            this.updateConnectionStatus();
+                                        })
+                                        .catch(err => {
+                                            console.log(`Failed to connect to ${relayUrl}:`, err);
+                                        });
+                                }, index * 200);
+                            });
+                        }
+                    });
                 }
             }
 
