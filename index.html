@@ -2879,20 +2879,6 @@
                             });
                             console.log(`Connected to ${type} relay: ${relayUrl}`);
 
-                            // If this is a reconnection and we already have messages, refresh the display
-                            if (this.connected) {
-                                // Small delay to ensure subscriptions are set up
-                                setTimeout(() => {
-                                    if (this.inPMMode && this.currentPM) {
-                                        const conversationKey = this.getPMConversationKey(this.currentPM);
-                                        this.loadPMMessages(conversationKey);
-                                    } else {
-                                        const displayName = this.currentGeohash ? `#${this.currentGeohash}` : `#${this.currentChannel}`;
-                                        this.loadChannelMessages(displayName);
-                                    }
-                                }, 100);
-                            }
-
                             // For broadcast/nosflare relays, just resolve
                             if (type === 'broadcast' || type === 'nosflare') {
                                 resolve();
@@ -2950,29 +2936,31 @@
 
                             // Only reconnect broadcast/nosflare relays, not failed read relays
                             if ((type === 'broadcast' || type === 'nosflare') && this.connected && !this.blacklistedRelays.has(relayUrl)) {
+                                // Only show disconnection message for important relays
+                                if (type === 'broadcast') {
+                                    this.displaySystemMessage(`Lost connection to relay, reconnecting...`);
+                                }
+
                                 setTimeout(() => {
                                     this.connectToRelay(relayUrl, type)
                                         .then(() => {
                                             // Re-subscribe after reconnection
                                             if (type === 'broadcast') {
                                                 this.subscribeToSingleRelay(relayUrl);
+                                                this.displaySystemMessage(`Reconnected to relay`);
                                             }
                                             console.log(`Reconnected to ${relayUrl}`);
                                             this.updateConnectionStatus();
 
-                                            // Refresh display after reconnection
-                                            setTimeout(() => {
-                                                if (this.inPMMode && this.currentPM) {
-                                                    const conversationKey = this.getPMConversationKey(this.currentPM);
-                                                    this.loadPMMessages(conversationKey);
-                                                } else {
-                                                    const displayName = this.currentGeohash ? `#${this.currentGeohash}` : `#${this.currentChannel}`;
-                                                    this.loadChannelMessages(displayName);
-                                                }
-                                            }, 500);
+                                            // After reconnection, check for any missed messages
+                                            // But don't reload - let the normal message flow handle it
+                                            // Messages will come through handleEvent naturally
                                         })
                                         .catch(err => {
                                             console.error(`Failed to reconnect to ${relayUrl}:`, err);
+                                            if (type === 'broadcast') {
+                                                this.displaySystemMessage(`Failed to reconnect, retrying...`);
+                                            }
                                         });
                                 }, 5000);
                             }
@@ -2983,6 +2971,32 @@
                         reject(error);
                     }
                 });
+            }
+
+            syncMissingMessages() {
+                // For current channel, check if stored messages are displayed
+                const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                const storedMessages = this.messages.get(currentKey) || [];
+
+                storedMessages.forEach(message => {
+                    // Check if message is already in DOM
+                    if (!document.querySelector(`[data-message-id="${message.id}"]`)) {
+                        // Message is stored but not displayed, display it now
+                        this.displayMessage(message);
+                    }
+                });
+
+                // For PMs if in PM mode
+                if (this.inPMMode && this.currentPM) {
+                    const conversationKey = this.getPMConversationKey(this.currentPM);
+                    const pmMessages = this.pmMessages.get(conversationKey) || [];
+
+                    pmMessages.forEach(message => {
+                        if (!document.querySelector(`[data-message-id="${message.id}"]`)) {
+                            this.displayMessage(message);
+                        }
+                    });
+                }
             }
 
             // Discovering relays via NIP-66
