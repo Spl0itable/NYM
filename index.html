@@ -2879,6 +2879,20 @@
                             });
                             console.log(`Connected to ${type} relay: ${relayUrl}`);
 
+                            // If this is a reconnection and we already have messages, refresh the display
+                            if (this.connected) {
+                                // Small delay to ensure subscriptions are set up
+                                setTimeout(() => {
+                                    if (this.inPMMode && this.currentPM) {
+                                        const conversationKey = this.getPMConversationKey(this.currentPM);
+                                        this.loadPMMessages(conversationKey);
+                                    } else {
+                                        const displayName = this.currentGeohash ? `#${this.currentGeohash}` : `#${this.currentChannel}`;
+                                        this.loadChannelMessages(displayName);
+                                    }
+                                }, 100);
+                            }
+
                             // For broadcast/nosflare relays, just resolve
                             if (type === 'broadcast' || type === 'nosflare') {
                                 resolve();
@@ -2937,7 +2951,29 @@
                             // Only reconnect broadcast/nosflare relays, not failed read relays
                             if ((type === 'broadcast' || type === 'nosflare') && this.connected && !this.blacklistedRelays.has(relayUrl)) {
                                 setTimeout(() => {
-                                    this.connectToRelay(relayUrl, type);
+                                    this.connectToRelay(relayUrl, type)
+                                        .then(() => {
+                                            // Re-subscribe after reconnection
+                                            if (type === 'broadcast') {
+                                                this.subscribeToSingleRelay(relayUrl);
+                                            }
+                                            console.log(`Reconnected to ${relayUrl}`);
+                                            this.updateConnectionStatus();
+
+                                            // Refresh display after reconnection
+                                            setTimeout(() => {
+                                                if (this.inPMMode && this.currentPM) {
+                                                    const conversationKey = this.getPMConversationKey(this.currentPM);
+                                                    this.loadPMMessages(conversationKey);
+                                                } else {
+                                                    const displayName = this.currentGeohash ? `#${this.currentGeohash}` : `#${this.currentChannel}`;
+                                                    this.loadChannelMessages(displayName);
+                                                }
+                                            }, 500);
+                                        })
+                                        .catch(err => {
+                                            console.error(`Failed to reconnect to ${relayUrl}:`, err);
+                                        });
                                 }, 5000);
                             }
                         };
@@ -4988,7 +5024,9 @@
             displayMessage(message) {
                 // Handle PM messages differently
                 if (message.isPM) {
+                    // Check if we should display this PM now
                     if (!this.inPMMode || this.currentPM !== message.conversationPubkey) {
+                        // Not viewing this PM conversation right now, but message is already stored
                         return;
                     }
 
@@ -4998,13 +5036,15 @@
                         return;
                     }
                 } else {
+                    // Regular channel message
                     if (this.inPMMode) {
+                        // In PM mode, don't display channel messages
                         return;
                     }
 
                     const storageKey = message.geohash ? `#${message.geohash}` : message.channel;
 
-                    // Store message
+                    // Store message if not already exists
                     if (!this.messages.has(storageKey)) {
                         this.messages.set(storageKey, []);
                     }
@@ -5018,6 +5058,7 @@
                     // Check if this is for current channel
                     const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                     if (storageKey !== currentKey) {
+                        // Message is for different channel, update unread count but don't display
                         if (!message.isOwn && !exists) {
                             this.updateUnreadCount(storageKey);
                         }
@@ -5025,11 +5066,12 @@
                     }
                 }
 
-                // Don't re-add if already displayed
+                // Don't re-add if already displayed in DOM
                 if (document.querySelector(`[data-message-id="${message.id}"]`)) {
                     return;
                 }
 
+                // Now actually display the message in the DOM
                 const container = document.getElementById('messagesContainer');
                 const shouldScroll = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
 
