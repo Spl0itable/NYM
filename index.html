@@ -11,7 +11,8 @@
 
     <!-- Open Graph Meta Tags -->
     <meta property="og:title" content="Anonymously Chat with NYM">
-    <meta property="og:description" content="Ephemeral anonymous messaging over Nostr. Bridged with Bitchat geohash channels.">
+    <meta property="og:description"
+        content="Ephemeral anonymous messaging over Nostr. Bridged with Bitchat geohash channels.">
     <meta property="og:image" content="https://nym.bar/images/NYM-icon.png">
     <meta property="og:url" content="https://nym.bar">
     <meta property="og:type" content="website">
@@ -1916,19 +1917,6 @@
                     <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
 
-                <div class="form-group">
-                    <label class="form-label">Relay Selection</label>
-                    <select class="form-select" id="relaySelect">
-                        <option value="wss://relay.damus.io">Damus Relay</option>
-                        <option value="wss://relay.nostr.band">Nostr.band</option>
-                        <option value="wss://nos.lol">Nos.lol</option>
-                        <option value="wss://relay.snort.social">Snort Social</option>
-                        <option value="wss://nostr.bitcoiner.social">Bitcoiner Social</option>
-                        <option value="wss://relay.primal.net">Primal</option>
-                        <option value="custom">Custom Relay...</option>
-                    </select>
-                </div>
-
                 <div class="form-group" id="customRelayGroup" style="display:none">
                     <label class="form-label">Custom Relay URL</label>
                     <input type="text" class="form-input" id="customRelayInput" placeholder="wss://relay.example.com">
@@ -1952,20 +1940,13 @@
             <div class="modal-header">Settings</div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label class="form-label">Connected Relay</label>
-                    <select class="form-select" id="connectedRelaySelect">
-                        <option value="wss://relay.damus.io">Damus Relay</option>
-                        <option value="wss://relay.nostr.band">Nostr.band</option>
-                        <option value="wss://nos.lol">Nos.lol</option>
-                        <option value="wss://relay.snort.social">Snort Social</option>
-                        <option value="wss://nostr.bitcoiner.social">Bitcoiner Social</option>
-                        <option value="wss://relay.primal.net">Primal</option>
-                        <option value="custom">Custom...</option>
-                    </select>
-                    <input type="text" class="form-input" id="customConnectedRelay" placeholder="Custom relay URL"
-                        style="display:none; margin-top: 10px;">
-                    <button class="icon-btn" onclick="changeRelay()" style="margin-top: 10px; width: 100%;">Change
-                        Relay</button>
+                    <label class="form-label">Connected Relays</label>
+                    <div id="connectedRelaysList"
+                        style="max-height: 200px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; background: var(--bg);">
+                        <div style="color: var(--text-dim); font-size: 12px;">Loading relay list...</div>
+                    </div>
+                    <button class="icon-btn" onclick="nym.refreshRelays()"
+                        style="margin-top: 10px; width: 100%;">Refresh Relay List</button>
                 </div>
 
                 <div class="form-group">
@@ -2066,8 +2047,20 @@
         // NYM - Ephemeral Nostr Chat
         class NYM {
             constructor() {
-                this.ws = null;
-                this.nosflareWs = null;
+                this.relayPool = new Map(); // Map of relay URL -> WebSocket connection
+                this.blacklistedRelays = new Set(); // Relays that don't support our kinds
+                this.relayKinds = new Map(); // Track which kinds each relay has sent
+                this.relayVerificationTimeout = 10000; // 10 seconds to receive required kinds
+                this.monitorRelays = ['wss://relay.nostr.watch', 'wss://monitorlizard.nostr1.com'];
+                this.broadcastRelays = ['wss://relay.damus.io', 'wss://relay.nostr.band', 'wss://relay.primal.net', 'wss://nos.lol'];
+                this.nosflareRelay = 'wss://sendit.nosflare.com';
+                this.discoveredRelays = new Set(); // Set of discovered relay URLs
+                this.relayList = []; // Array of relay info from NIP-66
+                this.lastRelayDiscovery = 0;
+                this.relayDiscoveryInterval = 3600000; // 1 hour
+                this.maxRelaysForReq = 1000; // Maximum number of relays to use for REQ
+                this.relayTimeout = 2000; // 2 second timeout for relay connections
+                this.eventDeduplication = new Map(); // Map for deduplicating events by ID
                 this.pubkey = null;
                 this.privkey = null;
                 this.nym = null;
@@ -2086,7 +2079,6 @@
                 this.settings = this.loadSettings();
                 this.commandHistory = [];
                 this.historyIndex = -1;
-                this.relayUrl = null;
                 this.connected = false;
                 this.messageQueue = [];
                 this.autocompleteIndex = -1;
@@ -2219,6 +2211,65 @@
                 this.swipeThreshold = 50;
                 this.enhancedEmojiModal = null;
                 this.loadRecentEmojis();
+            }
+
+            updateRelayStatus() {
+                const listEl = document.getElementById('connectedRelaysList');
+                if (!listEl) return;
+
+                // Group relays by type
+                const broadcastRelays = [];
+                const readRelays = [];
+                const nosflareRelays = [];
+
+                this.relayPool.forEach((relay, url) => {
+                    if (relay.type === 'broadcast') {
+                        broadcastRelays.push(url);
+                    } else if (relay.type === 'nosflare') {
+                        nosflareRelays.push(url);
+                    } else if (relay.type === 'read') {
+                        readRelays.push(url);
+                    }
+                });
+
+                // Calculate total readable relays (broadcast relays can also be read from)
+                const totalReadable = broadcastRelays.length + readRelays.length;
+
+                let html = '';
+
+                if (broadcastRelays.length > 0 || nosflareRelays.length > 0) {
+                    html += '<div style="margin-bottom: 10px;"><strong style="color: var(--primary);">Default Relays:</strong><br>';
+                    broadcastRelays.forEach(url => {
+                        html += `<div style="font-size: 11px; margin-left: 10px;">• ${url}</div>`;
+                    });
+                    nosflareRelays.forEach(url => {
+                        html += `<div style="font-size: 11px; margin-left: 10px;">• ${url} (write-only)</div>`;
+                    });
+                    html += '</div>';
+                }
+
+                if (readRelays.length > 0) {
+                    html += `<div><strong style="color: var(--secondary);">Additional Read Relays (${readRelays.length}):</strong><br>`;
+                    readRelays.slice(0, 10).forEach(url => {
+                        html += `<div style="font-size: 11px; margin-left: 10px;">• ${url}</div>`;
+                    });
+                    if (readRelays.length > 10) {
+                        html += `<div style="font-size: 11px; margin-left: 10px; color: var(--text-dim);">... and ${readRelays.length - 10} more</div>`;
+                    }
+                    html += '</div>';
+                }
+
+                html += `<div style="margin-top: 10px; font-size: 12px; color: var(--text-bright);">Total Connected: ${this.relayPool.size} relays (${totalReadable} readable)</div>`;
+
+                listEl.innerHTML = html || '<div style="color: var(--text-dim); font-size: 12px;">No relays connected</div>';
+            }
+
+            async refreshRelays() {
+                this.displaySystemMessage('Refreshing relay list...');
+                this.lastRelayDiscovery = 0; // Force refresh
+                await this.discoverRelays();
+                await this.connectToRelays();
+                this.updateRelayStatus();
             }
 
             isValidGeohash(str) {
@@ -2619,86 +2670,412 @@
                 return `${adj}_${noun}_${num}`;
             }
 
-            async connectToRelay(relayUrl) {
+            async connectToRelays() {
+                try {
+                    this.updateConnectionStatus('Connecting...');
+
+                    // Check if we're already connected to ANY broadcast relay from pre-connection
+                    let initialConnected = false;
+                    let connectedRelayUrl = null;
+
+                    for (const relayUrl of this.broadcastRelays) {
+                        if (this.relayPool.has(relayUrl)) {
+                            const relay = this.relayPool.get(relayUrl);
+                            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                                initialConnected = true;
+                                connectedRelayUrl = relayUrl;
+                                console.log(`Already connected to ${relayUrl} from pre-connection`);
+                                break;
+                            }
+                        }
+                    }
+
+                    // If not already connected, try to connect to broadcast relays one by one
+                    if (!initialConnected) {
+                        for (const relayUrl of this.broadcastRelays) {
+                            try {
+                                await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000);
+                                initialConnected = true;
+                                connectedRelayUrl = relayUrl;
+                                console.log(`Initially connected to ${relayUrl}`);
+                                break;
+                            } catch (err) {
+                                console.log(`Failed to connect to ${relayUrl}, trying next...`);
+                            }
+                        }
+                    }
+
+                    if (!initialConnected) {
+                        throw new Error('Could not connect to any broadcast relay');
+                    }
+
+                    // Enable input immediately after first relay connects
+                    document.getElementById('messageInput').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    this.connected = true;
+
+                    // Start subscriptions on all connected relays
+                    this.subscribeToAllRelays();
+
+                    // Update status to show we're connected
+                    this.updateConnectionStatus();
+                    this.displaySystemMessage(`Connected to the Nostr network via multiple relays...`);
+
+                    // Now connect to remaining broadcast relays in background
+                    this.broadcastRelays.forEach(relayUrl => {
+                        if (!this.relayPool.has(relayUrl)) {
+                            this.connectToRelay(relayUrl, 'broadcast')
+                                .then(() => {
+                                    this.subscribeToSingleRelay(relayUrl);
+                                    this.updateConnectionStatus();
+                                })
+                                .catch(err => console.log(`Failed to connect to ${relayUrl}:`, err));
+                        }
+                    });
+
+                    // Connect to nosflare for sending only (no subscriptions)
+                    this.connectToRelay(this.nosflareRelay, 'nosflare')
+                        .then(() => {
+                            console.log('Connected to nosflare for broadcasting');
+                            this.updateConnectionStatus();
+                        })
+                        .catch(err => console.log(`Failed to connect to nosflare:`, err));
+
+                    // Discover additional relays in the background
+                    setTimeout(() => {
+                        this.discoverRelays().then(() => {
+                            // Connect to discovered relays for additional reading sources
+                            const relaysToConnect = Array.from(this.discoveredRelays)
+                                .filter(url => !this.relayPool.has(url))
+                                .slice(0, this.maxRelaysForReq);
+
+                            if (relaysToConnect.length > 0) {
+                                // Stagger connections to avoid overwhelming the browser
+                                relaysToConnect.forEach((relayUrl, index) => {
+                                    setTimeout(() => {
+                                        this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout)
+                                            .then(() => {
+                                                this.subscribeToSingleRelay(relayUrl);
+                                                this.updateConnectionStatus();
+                                            })
+                                            .catch(err => console.log(`Failed to connect to ${relayUrl}:`, err));
+                                    }, index * 100);
+                                });
+                            }
+                        });
+                    }, 100);
+
+                } catch (error) {
+                    console.error('Failed to connect to relays:', error);
+                    this.updateConnectionStatus('Connection Failed');
+                    this.displaySystemMessage('Failed to connect to relays: ' + error.message);
+
+                    // Re-enable input anyway in case user wants to retry
+                    document.getElementById('messageInput').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                }
+            }
+
+            async quickConnect() {
+                // Try broadcast relays in order with very short timeout
+                for (const relayUrl of this.broadcastRelays) {
+                    try {
+                        await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 1500); // 1.5 second timeout
+
+                        // Enable input immediately
+                        document.getElementById('messageInput').disabled = false;
+                        document.getElementById('sendBtn').disabled = false;
+                        this.connected = true;
+
+                        // Start subscriptions
+                        this.subscribeToSingleRelay(relayUrl);
+
+                        this.updateConnectionStatus();
+                        console.log(`Quick connected to ${relayUrl}`);
+                        return true;
+                    } catch (err) {
+                        console.log(`Quick connect failed to ${relayUrl}, trying next...`);
+                    }
+                }
+
+                return false; // All broadcast relays failed
+            }
+
+            subscribeToSingleRelay(relayUrl) {
+                const relay = this.relayPool.get(relayUrl);
+                if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+
+                // Never send REQ to nosflare
+                if (relay.type === 'nosflare') return;
+
+                const ws = relay.ws;
+
+                // Subscribe to messages
+                const messagesSub = [
+                    "REQ",
+                    "nym-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [20000, 23333],
+                        limit: 200
+                    }
+                ];
+                ws.send(JSON.stringify(messagesSub));
+
+                // Subscribe to reactions with k tag filter
+                const reactionsSub = [
+                    "REQ",
+                    "reactions-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [7],
+                        "#k": ["20000", "23333", "4"], // Only reactions for our kinds
+                        limit: 1000,
+                        since: Math.floor(Date.now() / 1000) - 7200
+                    }
+                ];
+                ws.send(JSON.stringify(reactionsSub));
+
+                // Subscribe to PMs if we have a pubkey
+                if (this.pubkey) {
+                    const pmSub = [
+                        "REQ",
+                        "pms-" + Math.random().toString(36).substring(7),
+                        {
+                            kinds: [4],
+                            "#p": [this.pubkey],
+                            limit: 50
+                        }
+                    ];
+                    ws.send(JSON.stringify(pmSub));
+                }
+            }
+
+            async connectToRelayWithTimeout(relayUrl, type, timeout) {
+                return Promise.race([
+                    this.connectToRelay(relayUrl, type),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error(`Timeout connecting to ${relayUrl}`)), timeout)
+                    )
+                ]);
+            }
+
+            async connectToRelay(relayUrl, type = 'read') {
                 return new Promise((resolve, reject) => {
                     try {
-                        // Close existing connection if any
-                        if (this.ws) {
-                            this.ws.close();
+                        // Skip if already connected or blacklisted
+                        if (this.relayPool.has(relayUrl) || this.blacklistedRelays.has(relayUrl)) {
+                            resolve();
+                            return;
                         }
 
-                        this.updateConnectionStatus('Connecting...');
-                        this.relayUrl = relayUrl;
+                        const ws = new WebSocket(relayUrl);
+                        let verificationTimeout;
 
-                        this.ws = new WebSocket(relayUrl);
+                        ws.onopen = () => {
+                            this.relayPool.set(relayUrl, {
+                                ws,
+                                type,
+                                status: 'connected',
+                                connectedAt: Date.now() // Track when connected
+                            });
+                            console.log(`Connected to ${type} relay: ${relayUrl}`);
 
-                        this.ws.onopen = () => {
-                            this.connected = true;
-                            this.updateConnectionStatus('Connected');
-                            this.displaySystemMessage(`Connected to ${relayUrl}`);
-                            this.subscribeToMessages();
-                            this.subscribeToPMs();
-                            this.subscribeToReactions();
-                            this.discoverChannels();
-                            this.discoverExistingChannels();
-
-                            // Load user's saved channels
-                            this.loadUserChannels();
-
-                            // Load synced settings if using extension
-                            if (this.usingExtension) {
-                                this.loadSyncedSettings();
+                            // For broadcast/nosflare relays, just resolve
+                            if (type === 'broadcast' || type === 'nosflare') {
+                                resolve();
+                                return;
                             }
 
-                            // Enable input
-                            document.getElementById('messageInput').disabled = false;
-                            document.getElementById('sendBtn').disabled = false;
+                            // For read relays, set up verification timeout
+                            if (type === 'read') {
+                                // Initialize kinds tracking for this relay
+                                this.relayKinds.set(relayUrl, new Set());
 
-                            // Process queued messages
-                            while (this.messageQueue.length > 0) {
-                                const msg = this.messageQueue.shift();
-                                this.ws.send(msg);
+                                // Set timeout to check if relay sends our required kinds
+                                verificationTimeout = setTimeout(() => {
+                                    const receivedKinds = this.relayKinds.get(relayUrl);
+                                    const hasRequiredKinds =
+                                        receivedKinds.has(20000) || // geohash channels
+                                        receivedKinds.has(23333) || // standard channels  
+                                        receivedKinds.has(7) ||     // reactions (with proper k tags)
+                                        receivedKinds.has(4);       // PMs
+
+                                    if (!hasRequiredKinds) {
+                                        console.log(`Relay ${relayUrl} hasn't sent any required kinds, closing connection`);
+                                        ws.close();
+                                        this.relayPool.delete(relayUrl);
+                                        this.relayKinds.delete(relayUrl);
+                                        this.blacklistedRelays.add(relayUrl);
+                                        this.updateConnectionStatus();
+                                    }
+                                }, this.relayVerificationTimeout);
                             }
 
                             resolve();
                         };
 
-                        this.ws.onmessage = (event) => {
+                        ws.onmessage = (event) => {
                             try {
                                 const msg = JSON.parse(event.data);
-                                this.handleRelayMessage(msg);
+                                this.handleRelayMessage(msg, relayUrl);
                             } catch (e) {
-                                console.error('Failed to parse message:', e);
+                                console.error(`Failed to parse message from ${relayUrl}:`, e);
                             }
                         };
 
-                        this.ws.onerror = (error) => {
-                            console.error('WebSocket error:', error);
-                            this.updateConnectionStatus('Error');
+                        ws.onerror = (error) => {
+                            console.error(`WebSocket error for ${relayUrl}:`, error);
+                            clearTimeout(verificationTimeout);
                             reject(error);
                         };
 
-                        this.ws.onclose = () => {
-                            this.connected = false;
-                            this.updateConnectionStatus('Disconnected');
-                            this.displaySystemMessage('Disconnected from relay');
-                            document.getElementById('messageInput').disabled = true;
-                            document.getElementById('sendBtn').disabled = true;
+                        ws.onclose = () => {
+                            clearTimeout(verificationTimeout);
+                            this.relayPool.delete(relayUrl);
+                            this.relayKinds.delete(relayUrl);
+                            console.log(`Disconnected from ${relayUrl}`);
 
-                            // Try to reconnect after 5 seconds
-                            setTimeout(() => {
-                                if (!this.connected) {
-                                    this.connectToRelay(this.relayUrl);
-                                }
-                            }, 5000);
+                            // Only reconnect broadcast/nosflare relays, not failed read relays
+                            if ((type === 'broadcast' || type === 'nosflare') && this.connected && !this.blacklistedRelays.has(relayUrl)) {
+                                setTimeout(() => {
+                                    this.connectToRelay(relayUrl, type);
+                                }, 5000);
+                            }
                         };
 
                     } catch (error) {
-                        console.error('Connection failed:', error);
-                        this.updateConnectionStatus('Connection Failed');
+                        console.error(`Connection failed for ${relayUrl}:`, error);
                         reject(error);
                     }
                 });
+            }
+
+            // Discovering relays via NIP-66
+            async discoverRelays() {
+                try {
+                    // Check if we need to refresh the relay list
+                    const now = Date.now();
+                    if (now - this.lastRelayDiscovery < this.relayDiscoveryInterval && this.discoveredRelays.size > 0) {
+                        console.log('Using cached relay list');
+                        return;
+                    }
+
+                    // Try to load from cache first
+                    this.loadCachedRelays();
+
+                    // Connect to monitor relays to get relay list
+                    for (const monitorRelay of this.monitorRelays) {
+                        try {
+                            await this.fetchRelaysFromMonitor(monitorRelay);
+                        } catch (error) {
+                            console.error(`Failed to fetch from monitor ${monitorRelay}:`, error);
+                        }
+                    }
+
+                    // Save discovered relays to cache
+                    this.saveCachedRelays();
+
+                    this.lastRelayDiscovery = now;
+
+                } catch (error) {
+                    console.error('Failed to discover relays:', error);
+                    // Fall back to broadcast relays if discovery fails
+                    if (this.discoveredRelays.size === 0) {
+                        this.broadcastRelays.forEach(relay => this.discoveredRelays.add(relay));
+                    }
+                }
+            }
+
+            async fetchRelaysFromMonitor(monitorUrl) {
+                return new Promise((resolve, reject) => {
+                    const ws = new WebSocket(monitorUrl);
+                    const timeout = setTimeout(() => {
+                        ws.close();
+                        reject(new Error('Timeout fetching relay list'));
+                    }, 10000);
+
+                    ws.onopen = () => {
+                        // Request relay metadata events (NIP-66 kind 30066)
+                        const subscription = [
+                            "REQ",
+                            "relay-list-" + Math.random().toString(36).substring(7),
+                            {
+                                kinds: [30066], // NIP-66 relay metadata
+                                limit: 1000
+                            }
+                        ];
+                        ws.send(JSON.stringify(subscription));
+                    };
+
+                    ws.onmessage = (event) => {
+                        try {
+                            const msg = JSON.parse(event.data);
+                            if (Array.isArray(msg) && msg[0] === 'EVENT') {
+                                const relayEvent = msg[2];
+                                if (relayEvent && relayEvent.kind === 30066) {
+                                    this.parseRelayMetadata(relayEvent);
+                                }
+                            } else if (Array.isArray(msg) && msg[0] === 'EOSE') {
+                                clearTimeout(timeout);
+                                ws.close();
+                                resolve();
+                            }
+                        } catch (e) {
+                            console.error('Failed to parse monitor message:', e);
+                        }
+                    };
+
+                    ws.onerror = (error) => {
+                        clearTimeout(timeout);
+                        reject(error);
+                    };
+                });
+            }
+
+            parseRelayMetadata(event) {
+                try {
+                    // Extract relay URL from d tag
+                    const dTag = event.tags.find(t => t[0] === 'd');
+                    if (!dTag || !dTag[1]) return;
+
+                    const relayUrl = dTag[1];
+
+                    // Check if relay supports required NIPs
+                    const nTags = event.tags.filter(t => t[0] === 'n');
+                    const supportsRequired = nTags.some(t => t[1] === '1') || nTags.length === 0; // Basic protocol support
+
+                    if (supportsRequired && relayUrl.startsWith('wss://')) {
+                        this.discoveredRelays.add(relayUrl);
+                    }
+                } catch (error) {
+                    console.error('Failed to parse relay metadata:', error);
+                }
+            }
+
+            loadCachedRelays() {
+                try {
+                    const cached = localStorage.getItem('nym_discovered_relays');
+                    if (cached) {
+                        const data = JSON.parse(cached);
+                        if (data.timestamp && Date.now() - data.timestamp < this.relayDiscoveryInterval) {
+                            data.relays.forEach(relay => this.discoveredRelays.add(relay));
+                            console.log(`Loaded ${data.relays.length} cached relays`);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Failed to load cached relays:', error);
+                }
+            }
+
+            saveCachedRelays() {
+                try {
+                    const data = {
+                        timestamp: Date.now(),
+                        relays: Array.from(this.discoveredRelays)
+                    };
+                    localStorage.setItem('nym_discovered_relays', JSON.stringify(data));
+                } catch (error) {
+                    console.error('Failed to save cached relays:', error);
+                }
             }
 
             subscribeToMessages() {
@@ -2716,20 +3093,21 @@
             }
 
             subscribeToReactions() {
-                // Subscribe to reactions (NIP-25) with broader filter
+                // Subscribe to reactions (NIP-25) with filters for our specific kinds
                 const subscription = [
                     "REQ",
                     "reactions-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [7], // Reaction events
-                        limit: 1000, // Increase limit for more reactions
+                        "#k": ["20000", "23333", "4"], // Only reactions to our supported kinds
+                        limit: 1000,
                         since: Math.floor(Date.now() / 1000) - 7200 // Last 2 hours
                     }
                 ];
 
                 this.sendToRelay(subscription);
 
-                // Also subscribe to reactions tagged to our pubkey
+                // Also subscribe to reactions tagged to our pubkey for our supported kinds
                 if (this.pubkey) {
                     const userReactionsSubscription = [
                         "REQ",
@@ -2737,6 +3115,7 @@
                         {
                             kinds: [7],
                             "#p": [this.pubkey], // Reactions to our messages
+                            "#k": ["20000", "23333", "4"], // Only for our supported kinds
                             limit: 500
                         }
                     ];
@@ -2878,45 +3257,72 @@
             sendToRelay(message) {
                 const msg = JSON.stringify(message);
 
-                // Send to primary relay
-                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(msg);
-                } else {
-                    this.messageQueue.push(msg);
-                }
-
-                // Also send EVENT messages to Nosflare blaster relay 
                 if (Array.isArray(message) && message[0] === 'EVENT') {
-                    this.sendToNosflare(message);
-                }
-            }
-
-            sendToNosflare(message) {
-                // Create a separate connection to Nosflare
-                if (!this.nosflareWs || this.nosflareWs.readyState !== WebSocket.OPEN) {
-                    this.nosflareWs = new WebSocket('wss://sendit.nosflare.com');
-
-                    this.nosflareWs.onopen = () => {
-                        // Send the queued message once connected
-                        this.nosflareWs.send(JSON.stringify(message));
-                    };
-
-                    this.nosflareWs.onerror = (error) => {
-                        console.error('Nosflare relay error:', error);
-                    };
-
-                    this.nosflareWs.onmessage = () => { };
-
-                    this.nosflareWs.onclose = () => {
-                        this.nosflareWs = null;
-                    };
+                    // For EVENT messages, send to broadcast relays and nosflare
+                    this.broadcastEvent(message);
+                } else if (Array.isArray(message) && message[0] === 'REQ') {
+                    // For REQ messages, send to all connected read relays
+                    this.sendRequestToAllRelays(message);
                 } else {
-                    // Connection already open, send immediately
-                    this.nosflareWs.send(JSON.stringify(message));
+                    // For other messages (CLOSE, etc.), send to all relays
+                    this.relayPool.forEach((relay, url) => {
+                        if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                            relay.ws.send(msg);
+                        }
+                    });
                 }
             }
 
-            handleRelayMessage(msg) {
+            broadcastEvent(message) {
+                const msg = JSON.stringify(message);
+
+                // Send to broadcast relays
+                this.broadcastRelays.forEach(relayUrl => {
+                    const relay = this.relayPool.get(relayUrl);
+                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                        relay.ws.send(msg);
+                    }
+                });
+
+                // Also send to nosflare
+                const nosflare = this.relayPool.get(this.nosflareRelay);
+                if (nosflare && nosflare.ws && nosflare.ws.readyState === WebSocket.OPEN) {
+                    nosflare.ws.send(msg);
+                }
+            }
+
+            sendRequestToAllRelays(message) {
+                const msg = JSON.stringify(message);
+
+                // Send REQ to all connected relays EXCEPT nosflare
+                this.relayPool.forEach((relay, url) => {
+                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+                        relay.ws.send(msg);
+                    }
+                });
+            }
+
+            subscribeToAllRelays() {
+                // Get all relays except nosflare
+                const readableRelays = Array.from(this.relayPool.entries())
+                    .filter(([url, relay]) => relay.type !== 'nosflare' && relay.ws && relay.ws.readyState === WebSocket.OPEN);
+
+                if (readableRelays.length === 0) {
+                    console.log('No readable relays connected yet');
+                    return;
+                }
+
+                // Send subscriptions to each readable relay
+                readableRelays.forEach(([url, relay]) => {
+                    this.subscribeToSingleRelay(url);
+                });
+
+                // Also do channel discovery
+                this.discoverChannels();
+                this.discoverExistingChannels();
+            }
+
+            handleRelayMessage(msg, relayUrl) {
                 if (!Array.isArray(msg)) return;
 
                 const [type, ...data] = msg;
@@ -2924,6 +3330,45 @@
                 switch (type) {
                     case 'EVENT':
                         const [subscriptionId, event] = data;
+
+                        // Track what kinds this relay is sending us
+                        if (event && event.kind && this.relayKinds.has(relayUrl)) {
+                            const relayKindTracker = this.relayKinds.get(relayUrl);
+
+                            // For reactions (kind 7), only count them if they have the right k tags
+                            if (event.kind === 7) {
+                                const kTag = event.tags?.find(t => t[0] === 'k');
+                                if (kTag && ['20000', '23333', '4'].includes(kTag[1])) {
+                                    relayKindTracker.add(7); // Only add if it's a reaction for our kinds
+                                }
+                            } else {
+                                // For other kinds, add them directly
+                                relayKindTracker.add(event.kind);
+                            }
+                        }
+
+                        // Deduplicate events by ID
+                        if (event && event.id) {
+                            if (this.eventDeduplication.has(event.id)) {
+                                // We've already processed this event
+                                return;
+                            }
+
+                            // Mark event as seen
+                            this.eventDeduplication.set(event.id, true);
+
+                            // Clean up old events periodically (keep last 10000)
+                            if (this.eventDeduplication.size > 10000) {
+                                const entriesToDelete = this.eventDeduplication.size - 10000;
+                                let deleted = 0;
+                                for (const key of this.eventDeduplication.keys()) {
+                                    if (deleted >= entriesToDelete) break;
+                                    this.eventDeduplication.delete(key);
+                                    deleted++;
+                                }
+                            }
+                        }
+
                         this.handleEvent(event);
                         break;
                     case 'OK':
@@ -2934,9 +3379,45 @@
                         break;
                     case 'NOTICE':
                         const notice = data[0];
-                        this.displaySystemMessage(`Relay notice: ${notice}`);
+                        console.log(`Notice from ${relayUrl}: ${notice}`);
                         break;
                 }
+            }
+
+            cleanupNonResponsiveRelays() {
+                const now = Date.now();
+
+                this.relayPool.forEach((relay, url) => {
+                    if (relay.type === 'read') {
+                        const kinds = this.relayKinds.get(url);
+
+                        // Check if relay has sent any of our required kinds
+                        if (kinds && kinds.size > 0) {
+                            const hasRequiredKinds =
+                                kinds.has(20000) || // geohash channels
+                                kinds.has(23333) || // standard channels  
+                                kinds.has(7) ||     // reactions (already filtered for our k tags)
+                                kinds.has(4);       // PMs
+
+                            if (!hasRequiredKinds) {
+                                console.log(`Relay ${url} doesn't support our required kinds, disconnecting`);
+                                relay.ws.close();
+                                this.relayPool.delete(url);
+                                this.relayKinds.delete(url);
+                                this.blacklistedRelays.add(url);
+                                this.updateConnectionStatus();
+                            }
+                        } else if (now - relay.connectedAt > this.relayVerificationTimeout) {
+                            // No kinds received within timeout
+                            console.log(`Relay ${url} hasn't sent any events within timeout, disconnecting`);
+                            relay.ws.close();
+                            this.relayPool.delete(url);
+                            this.relayKinds.delete(url);
+                            this.blacklistedRelays.add(url);
+                            this.updateConnectionStatus();
+                        }
+                    }
+                });
             }
 
             async handleEvent(event) {
@@ -3127,8 +3608,14 @@
             handleReaction(event) {
                 const reactionContent = event.content;
                 const eTag = event.tags.find(t => t[0] === 'e');
+                const kTag = event.tags.find(t => t[0] === 'k');
 
                 if (!eTag) return;
+
+                // Only process reactions for our supported kinds
+                if (kTag && !['20000', '23333', '4'].includes(kTag[1])) {
+                    return;
+                }
 
                 const messageId = eTag[1];
                 const reactorNym = this.getNymFromPubkey(event.pubkey);
@@ -3536,20 +4023,28 @@
 
                     // Check if already reacted
                     if (messageReactions.get(emoji).has(this.pubkey)) {
-                        return; // Already reacted, badge was updated in onclick
+                        return; // Already reacted
                     }
 
                     // Add current user's reaction to state
                     messageReactions.get(emoji).set(this.pubkey, this.nym);
 
-                    // Send to relay
+                    // Determine the kind based on current context
+                    let originalKind = '23333'; // Default to standard channel
+                    if (this.inPMMode) {
+                        originalKind = '4'; // PM
+                    } else if (this.currentGeohash) {
+                        originalKind = '20000'; // Geohash channel
+                    }
+
+                    // Send to relay with proper k tag
                     const event = {
                         kind: 7,
                         created_at: Math.floor(Date.now() / 1000),
                         tags: [
                             ['e', messageId],
                             ['p', targetPubkey],
-                            ['k', '23333']
+                            ['k', originalKind] // Add the kind of the original message
                         ],
                         content: emoji,
                         pubkey: this.pubkey
@@ -3742,7 +4237,7 @@
 
                     // Store the PM message with the actual event ID from the relay
                     const pmMessage = {
-                        id: event.id,  // This is the real event ID from the relay - keep it!
+                        id: event.id,
                         author: isIncoming ? senderNym : this.nym,
                         pubkey: event.pubkey,
                         content: actualContent,
@@ -3955,7 +4450,37 @@
                     }
 
                     // Use NIP-04 for private messages
-                    return await this.sendNIP04PM(content, recipientPubkey);
+                    const signedEvent = await this.sendNIP04PM(content, recipientPubkey);
+
+                    if (signedEvent) {
+                        // Display own PM immediately with the actual event ID
+                        const conversationKey = this.getPMConversationKey(recipientPubkey);
+                        if (!this.pmMessages.has(conversationKey)) {
+                            this.pmMessages.set(conversationKey, []);
+                        }
+
+                        const pmMessage = {
+                            id: signedEvent.id, // Use the actual signed event ID
+                            author: this.nym,
+                            pubkey: this.pubkey,
+                            content: content,
+                            timestamp: new Date(),
+                            isOwn: true,
+                            isPM: true,
+                            conversationKey: conversationKey,
+                            conversationPubkey: recipientPubkey
+                        };
+
+                        this.pmMessages.get(conversationKey).push(pmMessage);
+
+                        if (this.inPMMode && this.currentPM === recipientPubkey) {
+                            this.displayMessage(pmMessage);
+                        }
+
+                        return true;
+                    }
+
+                    return false;
                 } catch (error) {
                     console.error('Failed to send PM:', error);
                     this.displaySystemMessage('Failed to send PM: ' + error.message);
@@ -4006,7 +4531,7 @@
 
                     this.sendToRelay(["EVENT", signedEvent]);
 
-                    return true;
+                    return signedEvent; // Return the signed event so we can use its ID
                 } catch (error) {
                     console.error('Failed to send NIP-04 PM:', error);
                     throw error;
@@ -4474,7 +4999,6 @@
                         return;
                     }
                 } else {
-
                     if (this.inPMMode) {
                         return;
                     }
@@ -4525,7 +5049,7 @@
                     return;
                 }
 
-                // Check if nym is flooding
+                // Check if nym is flooding (but not for PMs)
                 if (!message.isPM && this.isFlooding(message.pubkey)) {
                     messageEl.className = 'message flooded';
                 }
@@ -4545,9 +5069,11 @@
 
                     const authorClass = message.isOwn ? 'self' : '';
 
+                    // Check if this is a valid event ID (not temporary PM ID)
                     const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
                     const isMobile = window.innerWidth <= 768;
 
+                    // Show reaction button for all messages with valid IDs (including PMs)
                     const reactionButton = isValidEventId && !isMobile ? `
             <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
                 <svg viewBox="0 0 24 24">
@@ -4584,7 +5110,7 @@
 
                 container.appendChild(messageEl);
 
-                // Add existing reactions if any (this ensures reactions persist when switching channels)
+                // Add existing reactions if any (for both channel messages and PMs)
                 if (message.id && this.reactions.has(message.id)) {
                     this.updateMessageReactions(message.id);
                 }
@@ -5051,21 +5577,11 @@
                 });
 
                 // Modal controls
-                document.getElementById('relaySelect').addEventListener('change', (e) => {
-                    document.getElementById('customRelayGroup').style.display =
-                        e.target.value === 'custom' ? 'block' : 'none';
-                });
-
                 document.getElementById('channelTypeSelect').addEventListener('change', (e) => {
                     document.getElementById('standardChannelGroup').style.display =
                         e.target.value === 'standard' ? 'block' : 'none';
                     document.getElementById('geohashGroup').style.display =
                         e.target.value === 'geohash' ? 'block' : 'none';
-                });
-
-                document.getElementById('connectedRelaySelect').addEventListener('change', (e) => {
-                    document.getElementById('customConnectedRelay').style.display =
-                        e.target.value === 'custom' ? 'block' : 'none';
                 });
             }
 
@@ -5371,36 +5887,11 @@
                     this.handleCommand(content);
                 } else {
                     if (this.inPMMode && this.currentPM) {
-                        // Send PM
-                        const success = await this.sendPM(content, this.currentPM);
-
-                        if (success) {
-                            // Display own PM immediately
-                            const conversationKey = this.getPMConversationKey(this.currentPM);
-                            if (!this.pmMessages.has(conversationKey)) {
-                                this.pmMessages.set(conversationKey, []);
-                            }
-
-                            const pmMessage = {
-                                id: 'temp-' + Date.now().toString(), // Temporary ID for PMs
-                                author: this.nym,
-                                pubkey: this.pubkey,
-                                content: content,
-                                timestamp: new Date(),
-                                isOwn: true,
-                                isPM: true,
-                                conversationKey: conversationKey,
-                                conversationPubkey: this.currentPM
-                            };
-
-                            this.pmMessages.get(conversationKey).push(pmMessage);
-                            this.displayMessage(pmMessage);
-                        }
+                        // Send PM and let sendPM handle the display
+                        await this.sendPM(content, this.currentPM);
                     } else {
-                        // Send regular message - this will get proper event ID from relay
-                        const success = await this.publishMessage(content, this.currentChannel, this.currentGeohash);
-
-                        // Don't display own message immediately since it will come back from relay with proper ID
+                        // Send regular message
+                        await this.publishMessage(content, this.currentChannel, this.currentGeohash);
                     }
                 }
 
@@ -6166,15 +6657,32 @@
             }
 
             updateConnectionStatus(status) {
-                document.getElementById('connectionStatus').textContent = status;
+                const statusEl = document.getElementById('connectionStatus');
                 const dot = document.getElementById('statusDot');
 
-                if (status === 'Connected') {
-                    dot.style.background = 'var(--primary)';
-                } else if (status.includes('Connecting')) {
-                    dot.style.background = 'var(--warning)';
+                // If status is a custom message, show it
+                if (status && typeof status === 'string') {
+                    statusEl.textContent = status;
+
+                    // Update dot color based on status text
+                    if (status.includes('Connected') || status.includes('relays')) {
+                        dot.style.background = 'var(--primary)';
+                    } else if (status.includes('Connecting') || status.includes('Discovering')) {
+                        dot.style.background = 'var(--warning)';
+                    } else if (status.includes('Failed') || status.includes('Disconnected')) {
+                        dot.style.background = 'var(--danger)';
+                    }
                 } else {
-                    dot.style.background = 'var(--danger)';
+                    // Show actual connected relay count
+                    const connectedRelays = this.relayPool.size;
+
+                    if (connectedRelays > 0) {
+                        statusEl.textContent = `Connected (${connectedRelays} relays)`;
+                        dot.style.background = 'var(--primary)';
+                    } else {
+                        statusEl.textContent = 'Disconnected';
+                        dot.style.background = 'var(--danger)';
+                    }
                 }
             }
 
@@ -6446,20 +6954,7 @@
         }
 
         function showSettings() {
-            // Set current relay
-            if (nym.relayUrl) {
-                const select = document.getElementById('connectedRelaySelect');
-                const option = Array.from(select.options).find(opt => opt.value === nym.relayUrl);
-
-                if (option) {
-                    select.value = nym.relayUrl;
-                } else {
-                    select.value = 'custom';
-                    document.getElementById('customConnectedRelay').value = nym.relayUrl;
-                    document.getElementById('customConnectedRelay').style.display = 'block';
-                }
-            }
-
+            nym.updateRelayStatus();
             document.getElementById('themeSelect').value = nym.settings.theme;
             document.getElementById('soundSelect').value = nym.settings.sound;
             document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
@@ -6487,21 +6982,22 @@
         }
 
         function showAbout() {
+            const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-                ═══ NYM - Nostr Ynstant Messenger v1.2.4 ═══<br>
-                Protocol: Nostr (kind 20000/23333 channels)<br>
-                Relay: ${nym.relayUrl || 'Not connected'}<br>
-                Your nym: ${nym.nym || 'Not set'}<br>
-                <br>
-                Created for ephemeral, anonymous communication.<br>
-                Your identity exists only for this session.<br>
-                No accounts. No persistence. Just nyms.<br>
-                <br>
-                Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br>
-                <br>
-                NYM is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br>
-                Made with ♥ by <a href="https://nostr.band/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas</a>
-            `);
+        ═══ NYM - Nostr Ynstant Messenger v1.3.4 ═══<br>
+        Protocol: Nostr (kinds 20000 and 23333 channels)<br>
+        Connected Relays: ${connectedRelays} relays<br>
+        Your nym: ${nym.nym || 'Not set'}<br>
+        <br>
+        Created for ephemeral, anonymous communication.<br>
+        Your identity exists only for this session.<br>
+        No accounts. No persistence. Just nyms.<br>
+        <br>
+        Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br>
+        <br>
+        NYM is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br>
+        Made with ♥ by <a href="https://nostr.band/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas</a>
+    `);
         }
 
         function showChannelModal() {
@@ -6589,7 +7085,6 @@
 
                     // Clear any saved connection for ephemeral mode
                     localStorage.removeItem('nym_connection_mode');
-                    localStorage.removeItem('nym_relay_url');
 
                 } else if (mode === 'extension') {
                     // For extension mode, set temporary nym first
@@ -6608,25 +7103,13 @@
                     }
                 }
 
-                // Get relay URL
-                const relaySelect = document.getElementById('relaySelect').value;
-                const relayUrl = relaySelect === 'custom' ?
-                    document.getElementById('customRelayInput').value :
-                    relaySelect;
-
-                if (!relayUrl) {
-                    alert('Please select or enter a relay URL');
-                    return;
-                }
-
                 // Save connection preferences if using extension
                 if (mode === 'extension') {
                     localStorage.setItem('nym_connection_mode', mode);
-                    localStorage.setItem('nym_relay_url', relayUrl);
                 }
 
-                // Connect to relay
-                await nym.connectToRelay(relayUrl);
+                // Connect to relays using NIP-66 discovery
+                await nym.connectToRelays();
 
                 // For extension mode, try fetching profile again after connection
                 if (mode === 'extension' && nym.connected) {
@@ -6678,8 +7161,28 @@
         document.addEventListener('DOMContentLoaded', () => {
             nym.initialize();
 
+            // Pre-connect to a broadcast relay for instant connection
+            async function preConnect() {
+                for (const relayUrl of nym.broadcastRelays) {
+                    try {
+                        await nym.connectToRelay(relayUrl, 'broadcast');
+                        console.log(`Pre-connected to ${relayUrl}`);
+                        nym.updateConnectionStatus('Ready');
+                        return; // Stop after first successful connection
+                    } catch (err) {
+                        console.log(`Failed to pre-connect to ${relayUrl}, trying next...`);
+                    }
+                }
+                // If all failed, just log it - the main connection flow will try again
+                console.log('Pre-connection failed, will retry during initialization');
+            }
+
+            preConnect();
+
             // Auto-focus nickname input
             document.getElementById('nymInput').focus();
+
+            // ... rest of the existing DOMContentLoaded code ...
 
             // Connection mode change listener
             document.getElementById('connectionMode').addEventListener('change', (e) => {
@@ -6693,11 +7196,19 @@
                 }
             });
 
-            // Relay selection listener
-            document.getElementById('relaySelect').addEventListener('change', (e) => {
-                document.getElementById('customRelayGroup').style.display =
-                    e.target.value === 'custom' ? 'block' : 'none';
-            });
+            // Periodically clean up non-responsive relays
+            setInterval(() => {
+                if (nym.connected) {
+                    nym.cleanupNonResponsiveRelays();
+                }
+            }, 30000); // Check every 30 seconds
+
+            // Periodically update connection status
+            setInterval(() => {
+                if (nym.connected) {
+                    nym.updateConnectionStatus();
+                }
+            }, 5000); // Update every 5 seconds
 
             // Check for saved connection AFTER initialization is complete
             setTimeout(() => {

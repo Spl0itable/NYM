@@ -1,3 +1,8 @@
+## v1.3.4 - 2025-08-28
+
+New: NIP-66 integration for relay discovery
+Hotfix: added reactions to PMs
+
 ## v1.2.4 - 2025-08-26
 
 Hotfix: saves custom joined/created channels to localstorage
