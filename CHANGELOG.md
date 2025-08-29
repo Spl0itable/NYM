@@ -1,3 +1,7 @@
+## v1.3.5 - 2025-08-29
+
+Hotfix: channel sorting issue and not keeping current channel focused
+
 ## v1.3.4 - 2025-08-28
 
 New: NIP-66 integration for relay discovery

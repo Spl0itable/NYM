@@ -281,6 +281,7 @@
             overflow-y: auto;
             display: flex;
             flex-direction: column;
+            position: relative;
         }
 
         .channel-item,
@@ -294,6 +295,8 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            pointer-events: auto;
+            z-index: 1;
         }
 
         .channel-item.pinned {
@@ -346,7 +349,13 @@
             display: flex;
             gap: 5px;
             align-items: center;
+            pointer-events: none;
         }
+
+        .channel-badges>* {
+            pointer-events: auto;
+        }
+
 
         .pin-btn {
             font-size: 12px;
@@ -5751,6 +5760,35 @@
                     this.autoResizeTextarea(e.target);
                 });
 
+                // Use event delegation for channel clicks
+                document.getElementById('channelList').addEventListener('click', (e) => {
+                    // Handle channel item clicks
+                    const channelItem = e.target.closest('.channel-item');
+                    if (channelItem && !e.target.closest('.pin-btn')) {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        const channel = channelItem.dataset.channel;
+                        const geohash = channelItem.dataset.geohash || '';
+
+                        // Don't reload if already in channel
+                        if (!this.inPMMode && channel === this.currentChannel && geohash === this.currentGeohash) {
+                            return;
+                        }
+
+                        // Add debounce to prevent double-clicks
+                        if (channelItem.dataset.clicking === 'true') return;
+                        channelItem.dataset.clicking = 'true';
+
+                        this.switchChannel(channel, geohash);
+
+                        // Reset click flag after a short delay
+                        setTimeout(() => {
+                            delete channelItem.dataset.clicking;
+                        }, 300);
+                    }
+                });
+
                 // Global click handler for closing dropdowns and modals
                 document.addEventListener('click', (e) => {
                     // Close command palette if clicking outside
@@ -5775,20 +5813,6 @@
                         !e.target.closest('.icon-btn.input-btn[title="Emoji"]') &&
                         !e.target.closest('#ctxReact')) {
                         this.closeEnhancedEmojiModal();
-                    }
-
-                    // Handle channel switching
-                    if (e.target.closest('.channel-item')) {
-                        const item = e.target.closest('.channel-item');
-                        const channel = item.dataset.channel;
-                        const geohash = item.dataset.geohash || '';
-
-                        // Don't reload if already in channel
-                        if (!this.inPMMode && channel === this.currentChannel && geohash === this.currentGeohash) {
-                            return;
-                        }
-
-                        this.switchChannel(channel, geohash);
                     }
 
                     // Handle command palette item click
@@ -6545,7 +6569,7 @@
                     // Don't show pin button for #bar
                     const isBar = channel === 'bar' && !geohash;
                     const pinButton = isBar ? '' : `
-            <span class="pin-btn ${isPinned ? 'pinned' : ''}" onclick="event.stopPropagation(); nym.togglePin('${channel}', '${geohash}')">
+            <span class="pin-btn ${isPinned ? 'pinned' : ''}" data-channel="${channel}" data-geohash="${geohash}">
                 <svg viewBox="0 0 24 24">
                     <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/>
                 </svg>
@@ -6560,6 +6584,19 @@
                 <span class="unread-badge" style="display:none">0</span>
             </div>
         `;
+
+                    // Add pin button handler using event listener instead of inline onclick
+                    if (!isBar) {
+                        const pinBtn = item.querySelector('.pin-btn');
+                        if (pinBtn) {
+                            pinBtn.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                this.togglePin(channel, geohash);
+                            });
+                        }
+                    }
+
                     list.appendChild(item);
 
                     this.channels.set(key, { channel, geohash });
@@ -6786,6 +6823,19 @@
                 const channelList = document.getElementById('channelList');
                 const channels = Array.from(channelList.querySelectorAll('.channel-item'));
 
+                // Store current scroll position AND the active channel element
+                const scrollTop = channelList.scrollTop;
+                const activeChannel = channelList.querySelector('.channel-item.active');
+                const activeChannelRect = activeChannel ? activeChannel.getBoundingClientRect() : null;
+                const listRect = channelList.getBoundingClientRect();
+
+                // Calculate the active channel's position relative to the list container
+                const activeChannelOffset = activeChannel ?
+                    activeChannel.offsetTop - channelList.scrollTop : null;
+
+                // Create a document fragment for better performance
+                const fragment = document.createDocumentFragment();
+
                 channels.sort((a, b) => {
                     // Always keep #bar at the very top
                     const aIsBar = a.dataset.channel === 'bar' && !a.dataset.geohash;
@@ -6816,8 +6866,48 @@
                     return bUnread - aUnread;
                 });
 
-                // Re-append in sorted order
-                channels.forEach(channel => channelList.appendChild(channel));
+                // Append sorted channels to fragment
+                channels.forEach(channel => fragment.appendChild(channel));
+
+                // Clear and append in one operation
+                channelList.innerHTML = '';
+                channelList.appendChild(fragment);
+
+                // Restore scroll position - prioritize keeping active channel visible
+                if (activeChannel) {
+                    // Find the active channel in its new position
+                    const newActiveChannel = channelList.querySelector('.channel-item.active');
+                    if (newActiveChannel) {
+                        // Check if the active channel was visible before
+                        if (activeChannelRect) {
+                            const wasVisible =
+                                activeChannelRect.top >= listRect.top &&
+                                activeChannelRect.bottom <= listRect.bottom;
+
+                            if (wasVisible) {
+                                // Keep the active channel in the same relative position
+                                const newOffset = newActiveChannel.offsetTop;
+                                const targetScroll = newOffset - activeChannelOffset;
+
+                                // Ensure we don't scroll past boundaries
+                                channelList.scrollTop = Math.max(0,
+                                    Math.min(targetScroll, channelList.scrollHeight - channelList.clientHeight));
+                            } else {
+                                // If it wasn't visible, just restore the previous scroll position
+                                channelList.scrollTop = scrollTop;
+                            }
+                        } else {
+                            // Fallback to restoring scroll position
+                            channelList.scrollTop = scrollTop;
+                        }
+                    } else {
+                        // Fallback if we can't find the active channel
+                        channelList.scrollTop = scrollTop;
+                    }
+                } else {
+                    // No active channel, just restore scroll position
+                    channelList.scrollTop = scrollTop;
+                }
             }
 
             clearUnreadCount(channel) {
@@ -7212,7 +7302,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.3.4 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.3.5 ═══<br>
         Protocol: Nostr (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -7409,8 +7499,6 @@
 
             // Auto-focus nickname input
             document.getElementById('nymInput').focus();
-
-            // ... rest of the existing DOMContentLoaded code ...
 
             // Connection mode change listener
             document.getElementById('connectionMode').addEventListener('change', (e) => {
