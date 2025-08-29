@@ -28,6 +28,9 @@
     <!-- Import nostr-tools -->
     <script src="https://unpkg.com/nostr-tools/lib/nostr.bundle.js"></script>
 
+    <!-- Import QRCode library for Lightning invoices -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
     <style>
         * {
             margin: 0;
@@ -42,6 +45,7 @@
             --danger: #ff0000;
             --purple: #ff00ff;
             --blue: #0080ff;
+            --lightning: #f7931a;
             --bg: #000000;
             --bg-secondary: #0a0a0a;
             --bg-tertiary: #111111;
@@ -663,6 +667,204 @@
 
         .message:hover .reaction-btn {
             opacity: 1;
+        }
+
+        .zap-badge {
+            background: linear-gradient(135deg, rgba(247, 147, 26, 0.3), rgba(247, 147, 26, 0.2));
+            border: 1px solid var(--lightning);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            color: var(--lightning);
+            font-weight: bold;
+            animation: zapGlow 2s infinite;
+        }
+
+        @keyframes zapGlow {
+
+            0%,
+            100% {
+                box-shadow: 0 0 5px rgba(247, 147, 26, 0.3);
+            }
+
+            50% {
+                box-shadow: 0 0 10px rgba(247, 147, 26, 0.5);
+            }
+        }
+
+        .zap-icon {
+            width: 14px;
+            height: 14px;
+            fill: var(--lightning);
+        }
+
+        .zap-modal .modal-content {
+            max-width: 400px;
+        }
+
+        .zap-amounts {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        .zap-amount-btn {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 15px 10px;
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 14px;
+            transition: all 0.2s;
+            text-align: center;
+            position: relative;
+        }
+
+        .zap-amount-btn:hover {
+            border-color: var(--lightning);
+            background: rgba(247, 147, 26, 0.1);
+        }
+
+        .zap-amount-btn.selected {
+            border-color: var(--lightning);
+            background: rgba(247, 147, 26, 0.2);
+            box-shadow: 0 0 10px rgba(247, 147, 26, 0.3);
+        }
+
+        .zap-amount-btn .sats {
+            display: block;
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--lightning);
+        }
+
+        .zap-custom-amount {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .zap-custom-amount input {
+            flex: 1;
+        }
+
+        .zap-comment {
+            margin-top: 20px;
+        }
+
+        .zap-invoice {
+            background: var(--bg);
+            border: 1px solid var(--lightning);
+            padding: 15px;
+            margin: 20px 0;
+            word-break: break-all;
+            font-size: 12px;
+            color: var(--text-dim);
+            position: relative;
+        }
+
+        .zap-invoice-qr {
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .zap-invoice-qr canvas {
+            border: 2px solid var(--lightning);
+            padding: 10px;
+            background: white;
+        }
+
+        .zap-invoice-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .zap-status {
+            text-align: center;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid var(--border);
+            background: var(--bg);
+        }
+
+        .zap-status.checking {
+            border-color: var(--warning);
+            color: var(--warning);
+        }
+
+        .zap-status.paid {
+            border-color: var(--primary);
+            color: var(--primary);
+            animation: zapSuccess 0.5s;
+        }
+
+        @keyframes zapSuccess {
+            0% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.05);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
+
+        .context-menu-item.lightning {
+            color: var(--lightning);
+        }
+
+        .context-menu-item.lightning:hover {
+            background: rgba(247, 147, 26, 0.1);
+            color: var(--lightning);
+        }
+
+        .lightning-address-display {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            color: var(--lightning);
+            margin-top: 5px;
+        }
+
+        .lightning-address-display svg {
+            width: 12px;
+            height: 12px;
+            fill: var(--lightning);
+        }
+
+        .add-zap-btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            opacity: 0.6;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .add-zap-btn:hover {
+            opacity: 1;
+            border-color: var(--lightning);
+            background: rgba(247, 147, 26, 0.1);
+        }
+
+        .add-zap-btn svg {
+            width: 16px;
+            height: 16px;
         }
 
         .reaction-btn {
@@ -1575,6 +1777,10 @@
                 font-size: 11px;
             }
 
+            .zap-amounts {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
             .reaction-btn {
                 display: none;
             }
@@ -1706,6 +1912,7 @@
             --danger: #666666;
             --purple: #999999;
             --blue: #bbbbbb;
+            --lightning: #cccccc;
             --bg: #000000;
             --bg-secondary: #0a0a0a;
             --bg-tertiary: #111111;
@@ -1733,6 +1940,7 @@
     <div class="context-menu" id="contextMenu">
         <div class="context-menu-item" id="ctxReact">React</div>
         <div class="context-menu-item" id="ctxMention">Mention</div>
+        <div class="context-menu-item lightning" id="ctxZap" style="display: none;">⚡ Zap</div>
         <div class="context-menu-item" id="ctxPM">Private Message</div>
         <div class="context-menu-item" id="ctxQuote">Quote Message</div>
         <div class="context-menu-item danger" id="ctxBlock">Block User</div>
@@ -1909,7 +2117,7 @@
     <!-- Initial Setup Modal -->
     <div class="modal active" id="setupModal">
         <div class="modal-content">
-            <div class="modal-header">Welcome to NYM</div>
+            <div class="modal-header">Welcome to NYM<br/><label style="color: var(--warning); margin-top:5px;" class="form-label">Ephemeral, anonymous, decentralized chat</label></div>
             <div class="modal-body">
                 <div class="form-group">
                     <label class="form-label">Connection Mode</label>
@@ -1926,16 +2134,11 @@
                     <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
 
-                <div class="form-group" id="customRelayGroup" style="display:none">
-                    <label class="form-label">Custom Relay URL</label>
-                    <input type="text" class="form-input" id="customRelayInput" placeholder="wss://relay.example.com">
-                </div>
-
                 <div
                     style="color: var(--warning); font-size: 12px; margin-top: 15px; padding: 10px; border: 1px solid var(--warning);">
-                    💬 NYM is for ephemeral, anonymous chat. Channels are bridged with Bitchat geohash. Messages are
-                    public and temporary. Your identity exists
-                    only for this session.
+                    NOTE: Channels are bridged with Bitchat geohash. Messages are
+                    public and temporary; sent across the Nostr network. Your nym exists
+                    only for this session and will be burned.
                 </div>
             </div>
             <div class="modal-actions">
@@ -1957,6 +2160,13 @@
                     </div>
                     <button class="icon-btn" onclick="nym.refreshRelays()"
                         style="margin-top: 10px; width: 100%;">Refresh Relay List</button>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">⚡ Lightning Address</label>
+                    <input type="text" class="form-input" id="lightningAddressInput"
+                        placeholder="your@lightning-address.com">
+                    <div class="form-hint">Your Lightning address for receiving zaps</div>
                 </div>
 
                 <div class="form-group">
@@ -2049,6 +2259,79 @@
             <div class="modal-actions">
                 <button class="icon-btn" onclick="closeModal('channelModal')">Cancel</button>
                 <button class="send-btn" onclick="joinChannel()">Join</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Zap Modal -->
+    <div class="modal zap-modal" id="zapModal">
+        <div class="modal-content">
+            <div class="modal-header">⚡ Send Lightning Zap</div>
+            <div class="modal-body">
+                <div id="zapRecipientInfo" style="text-align: center; margin-bottom: 20px; color: var(--text-dim);">
+                </div>
+
+                <div id="zapAmountSection">
+                    <div class="form-group">
+                        <label class="form-label">Select Amount</label>
+                        <div class="zap-amounts">
+                            <button class="zap-amount-btn" data-amount="21">
+                                <span class="sats">21</span>
+                                sats
+                            </button>
+                            <button class="zap-amount-btn" data-amount="100">
+                                <span class="sats">100</span>
+                                sats
+                            </button>
+                            <button class="zap-amount-btn" data-amount="500">
+                                <span class="sats">500</span>
+                                sats
+                            </button>
+                            <button class="zap-amount-btn" data-amount="1000">
+                                <span class="sats">1K</span>
+                                sats
+                            </button>
+                            <button class="zap-amount-btn" data-amount="5000">
+                                <span class="sats">5K</span>
+                                sats
+                            </button>
+                            <button class="zap-amount-btn" data-amount="10000">
+                                <span class="sats">10K</span>
+                                sats
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group zap-custom-amount">
+                        <input type="number" class="form-input" id="zapCustomAmount" placeholder="Custom amount (sats)"
+                            min="1">
+                    </div>
+
+                    <div class="form-group zap-comment">
+                        <label class="form-label">Comment (optional)</label>
+                        <input type="text" class="form-input" id="zapComment" placeholder="Add a comment to your zap">
+                    </div>
+                </div>
+
+                <div id="zapInvoiceSection" style="display: none;">
+                    <div class="zap-status checking" id="zapStatus">
+                        <span class="loader"></span> Generating invoice...
+                    </div>
+
+                    <div id="zapInvoiceDisplay" style="display: none;">
+                        <div class="zap-invoice-qr" id="zapQRCode"></div>
+                        <div class="zap-invoice" id="zapInvoice"></div>
+                        <div class="zap-invoice-actions">
+                            <button class="icon-btn" onclick="nym.copyZapInvoice()" style="flex: 1;">Copy
+                                Invoice</button>
+                            <button class="icon-btn" onclick="nym.openInWallet()" style="flex: 1;">Open Wallet</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" onclick="nym.closeZapModal()">Cancel</button>
+                <button class="send-btn" id="zapSendBtn" onclick="nym.generateZapInvoice()">Generate Invoice</button>
             </div>
         </div>
     </div>
@@ -2225,6 +2508,13 @@
                 this.swipeThreshold = 50;
                 this.enhancedEmojiModal = null;
                 this.loadRecentEmojis();
+                this.lightningAddress = null;
+                this.userLightningAddresses = new Map();
+                this.zaps = new Map();
+                this.currentZapTarget = null;
+                this.currentZapInvoice = null;
+                this.zapCheckInterval = null;
+                this.zapInvoiceData = null;
             }
 
             updateRelayStatus() {
@@ -2386,6 +2676,12 @@
                     this.loadBlockedKeywords();
                     this.loadPinnedChannels();
 
+                    // Load lightning address
+                    await this.loadLightningAddress();
+
+                    // Clean up old localStorage format
+                    this.cleanupOldLightningAddress();
+
                     console.log('NYM initialized successfully');
                 } catch (error) {
                     console.error('Failed to initialize NYM:', error);
@@ -2450,6 +2746,31 @@
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
+
+                // Add zap handler
+                document.getElementById('ctxZap').addEventListener('click', async () => {
+                    if (this.contextMenuData && this.contextMenuData.messageId) {
+                        const { messageId, pubkey, nym } = this.contextMenuData;
+
+                        // Close context menu immediately
+                        document.getElementById('contextMenu').classList.remove('active');
+
+                        // Show loading message
+                        this.displaySystemMessage(`Checking if @${nym} can receive zaps...`);
+
+                        // Fetch the lightning address (will check cache first, then fetch if needed)
+                        const lnAddress = await this.fetchLightningAddressForUser(pubkey);
+
+                        if (lnAddress) {
+                            // User has lightning address, show zap modal
+                            this.showZapModal(messageId, pubkey, nym);
+                        } else {
+                            // No lightning address found
+                            this.displaySystemMessage(`@${nym} cannot receive zaps (no lightning address set)`);
+                        }
+                    }
+                });
+
 
                 // Add slap handler
                 let slapOption = document.getElementById('ctxSlap');
@@ -2544,6 +2865,19 @@
 
                 // Show slap option only if not yourself
                 slapOption.style.display = pubkey === this.pubkey ? 'none' : 'block';
+
+                // Add zap option handling
+                const zapOption = document.getElementById('ctxZap');
+                if (zapOption) {
+                    // Show zap option if:
+                    // 1. Not your own message
+                    // 2. Has a valid message ID
+                    if (pubkey !== this.pubkey && messageId) {
+                        zapOption.style.display = 'block';
+                    } else {
+                        zapOption.style.display = 'none';
+                    }
+                }
 
                 // Hide block option if it's your own message
                 const blockOption = document.getElementById('ctxBlock');
@@ -2847,6 +3181,18 @@
                 ];
                 ws.send(JSON.stringify(reactionsSub));
 
+                // Subscribe to ALL zap receipts (they contain the e tag for message ID)
+                const zapsSub = [
+                    "REQ",
+                    "zaps-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [9735], // Zap receipt events
+                        limit: 1000,
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                    }
+                ];
+                ws.send(JSON.stringify(zapsSub));
+
                 // Subscribe to PMs if we have a pubkey
                 if (this.pubkey) {
                     const pmSub = [
@@ -3129,6 +3475,791 @@
                 }
             }
 
+            // Generate QR code for invoice
+            generateQRCode(text, elementId) {
+                const element = document.getElementById(elementId);
+                if (!element) return;
+
+                // Create QR code using canvas
+                const qr = new QRCode(element, {
+                    text: text,
+                    width: 256,
+                    height: 256,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: QRCode.CorrectLevel.L
+                });
+            }
+
+            // Fetch invoice from LNURL
+            async fetchLightningInvoice(lnAddress, amountSats, comment) {
+                try {
+                    const [username, domain] = lnAddress.split('@');
+                    if (!username || !domain) {
+                        throw new Error('Invalid lightning address format');
+                    }
+
+                    // Fetch LNURL endpoint
+                    const lnurlResponse = await fetch(`https://${domain}/.well-known/lnurlp/${username}`);
+                    if (!lnurlResponse.ok) {
+                        throw new Error('Failed to fetch LNURL endpoint');
+                    }
+
+                    const lnurlData = await lnurlResponse.json();
+
+                    // Convert sats to millisats
+                    const amountMillisats = parseInt(amountSats) * 1000;
+
+                    // Check bounds
+                    if (amountMillisats < lnurlData.minSendable || amountMillisats > lnurlData.maxSendable) {
+                        throw new Error(`Amount must be between ${lnurlData.minSendable / 1000} and ${lnurlData.maxSendable / 1000} sats`);
+                    }
+
+                    // Build callback URL
+                    const callbackUrl = new URL(lnurlData.callback);
+                    callbackUrl.searchParams.set('amount', amountMillisats);
+
+                    // Add comment if allowed
+                    if (comment && lnurlData.commentAllowed) {
+                        callbackUrl.searchParams.set('comment', comment.substring(0, lnurlData.commentAllowed));
+                    }
+
+                    // Add nostr params for zap
+                    if (lnurlData.allowsNostr && lnurlData.nostrPubkey) {
+                        // Create zap request event
+                        const zapRequest = await this.createZapRequest(amountSats, comment);
+                        if (zapRequest) {
+                            callbackUrl.searchParams.set('nostr', JSON.stringify(zapRequest));
+                        }
+                    }
+
+                    // Fetch invoice
+                    const invoiceResponse = await fetch(callbackUrl.toString());
+                    if (!invoiceResponse.ok) {
+                        throw new Error('Failed to fetch invoice');
+                    }
+
+                    const invoiceData = await invoiceResponse.json();
+
+                    if (invoiceData.pr) {
+                        return {
+                            pr: invoiceData.pr,
+                            successAction: invoiceData.successAction,
+                            verify: invoiceData.verify,
+                            amount: amountSats
+                        };
+                    } else {
+                        throw new Error('No payment request in response');
+                    }
+                } catch (error) {
+                    console.error('Error fetching lightning invoice:', error);
+                    throw error;
+                }
+            }
+
+            async fetchLightningAddressForUser(pubkey) {
+                // Check if already cached
+                if (this.userLightningAddresses.has(pubkey)) {
+                    return this.userLightningAddresses.get(pubkey);
+                }
+
+                return new Promise((resolve) => {
+                    const timeout = setTimeout(() => {
+                        console.log('No lightning address found for user');
+                        resolve(null);
+                    }, 3000); // 3 second timeout
+
+                    const subId = "ln-addr-" + Math.random().toString(36).substring(7);
+                    let foundAddress = false;
+
+                    // Create a temporary handler for this specific request
+                    const handleMessage = (msg, relayUrl) => {
+                        if (!Array.isArray(msg)) return;
+
+                        const [type, ...data] = msg;
+
+                        if (type === 'EVENT' && data[0] === subId) {
+                            const event = data[1];
+                            if (event && event.kind === 0 && event.pubkey === pubkey) {
+                                try {
+                                    const profile = JSON.parse(event.content);
+
+                                    // Check for lightning address
+                                    if (profile.lud16 || profile.lud06) {
+                                        const lnAddress = profile.lud16 || profile.lud06;
+                                        // Cache it for future use
+                                        this.userLightningAddresses.set(pubkey, lnAddress);
+                                        console.log(`Found lightning address for ${pubkey}:`, lnAddress);
+
+                                        clearTimeout(timeout);
+                                        foundAddress = true;
+                                        resolve(lnAddress);
+
+                                        // Close the subscription
+                                        this.sendToRelay(["CLOSE", subId]);
+                                        return;
+                                    }
+                                } catch (e) {
+                                    console.error('Failed to parse profile:', e);
+                                }
+                            }
+                        } else if (type === 'EOSE' && data[0] === subId) {
+                            // End of stored events, no lightning address found
+                            if (!foundAddress) {
+                                clearTimeout(timeout);
+                                resolve(null);
+                                // Close the subscription
+                                this.sendToRelay(["CLOSE", subId]);
+                            }
+                        }
+                    };
+
+                    // Store original handler
+                    const originalHandler = this.handleRelayMessage.bind(this);
+
+                    // Override handleRelayMessage to intercept responses
+                    this.handleRelayMessage = (msg, relayUrl) => {
+                        handleMessage(msg, relayUrl);
+                        originalHandler(msg, relayUrl);
+                    };
+
+                    // Request the user's profile from ALL connected relays
+                    const subscription = [
+                        "REQ",
+                        subId,
+                        {
+                            kinds: [0],
+                            authors: [pubkey],
+                            limit: 1
+                        }
+                    ];
+
+                    // Send to relay immediately
+                    this.sendToRelay(subscription);
+
+                    // Clean up after timeout + buffer
+                    setTimeout(() => {
+                        this.handleRelayMessage = originalHandler;
+                        if (!foundAddress) {
+                            this.sendToRelay(["CLOSE", subId]);
+                        }
+                    }, 3500);
+                });
+            }
+
+            async loadLightningAddress() {
+                // Only load if we have a pubkey
+                if (!this.pubkey) return;
+
+                // First, try to load from pubkey-specific localStorage
+                const saved = localStorage.getItem(`nym_lightning_address_${this.pubkey}`);
+                if (saved) {
+                    this.lightningAddress = saved;
+                    this.updateLightningAddressDisplay();
+                    return;
+                }
+
+                // If not in localStorage, try to fetch from Nostr profile
+                const profileAddress = await this.fetchLightningAddressForUser(this.pubkey);
+                if (profileAddress) {
+                    this.lightningAddress = profileAddress;
+                    // Cache it in localStorage for this pubkey
+                    localStorage.setItem(`nym_lightning_address_${this.pubkey}`, profileAddress);
+                    this.updateLightningAddressDisplay();
+                }
+            }
+
+            async saveLightningAddress(address) {
+                if (address) {
+                    this.lightningAddress = address;
+                    // Save with pubkey-specific key
+                    localStorage.setItem(`nym_lightning_address_${this.pubkey}`, address);
+
+                    // Always save to Nostr profile (not just for extension users)
+                    await this.saveToNostrProfile();
+                } else {
+                    this.lightningAddress = null;
+                    localStorage.removeItem(`nym_lightning_address_${this.pubkey}`);
+                }
+
+                this.updateLightningAddressDisplay();
+            }
+
+            updateLightningAddressDisplay() {
+                const display = document.getElementById('lightningAddressDisplay');
+                const value = document.getElementById('lightningAddressValue');
+
+                if (this.lightningAddress && display && value) {
+                    display.style.display = 'flex';
+                    value.textContent = this.lightningAddress;
+                } else if (display) {
+                    display.style.display = 'none';
+                }
+            }
+
+            async saveToNostrProfile() {
+                if (!this.pubkey || !this.lightningAddress) return;
+
+                try {
+                    // Create kind 0 (profile) event with lightning address
+                    const profileEvent = {
+                        kind: 0,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [],
+                        content: JSON.stringify({
+                            name: this.nym,
+                            lud16: this.lightningAddress, // Lightning address field
+                            about: `NYM user - ${this.nym}`,
+                            display_name: this.nym
+                        }),
+                        pubkey: this.pubkey
+                    };
+
+                    // Sign event
+                    let signedEvent;
+                    if (window.nostr && !this.privkey) {
+                        signedEvent = await window.nostr.signEvent(profileEvent);
+                    } else if (this.privkey) {
+                        signedEvent = window.NostrTools.finalizeEvent(profileEvent, this.privkey);
+                    }
+
+                    if (signedEvent) {
+                        this.sendToRelay(["EVENT", signedEvent]);
+                        this.displaySystemMessage('Lightning address saved to the Nostr profile');
+                    }
+                } catch (error) {
+                    console.error('Failed to save lightning address to profile:', error);
+                    this.displaySystemMessage('Failed to save lightning address to profile: ' + error.message);
+                }
+            }
+
+            async fetchLightningAddressFromProfile(pubkey) {
+                // Create a request for the user's profile
+                const subscription = [
+                    "REQ",
+                    "profile-ln-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [0],
+                        authors: [pubkey],
+                        limit: 1
+                    }
+                ];
+
+                // Send request
+                this.sendToRelay(subscription);
+
+                // Set timeout to close subscription
+                setTimeout(() => {
+                    this.sendToRelay(["CLOSE", subscription[1]]);
+                }, 3000);
+            }
+
+            // Show zap modal
+            showZapModal(messageId, recipientPubkey, recipientNym) {
+                // Check if recipient has lightning address
+                const lnAddress = this.userLightningAddresses.get(recipientPubkey);
+
+                if (!lnAddress) {
+                    this.displaySystemMessage(`${recipientNym} doesn't have a lightning address set`);
+                    return;
+                }
+
+                // Store target info
+                this.currentZapTarget = {
+                    messageId,
+                    recipientPubkey,
+                    recipientNym,
+                    lnAddress
+                };
+
+                // Reset modal state
+                document.getElementById('zapAmountSection').style.display = 'block';
+                document.getElementById('zapInvoiceSection').style.display = 'none';
+                document.getElementById('zapRecipientInfo').textContent = `Zapping @${recipientNym}`;
+                document.getElementById('zapCustomAmount').value = '';
+                document.getElementById('zapComment').value = '';
+                document.getElementById('zapSendBtn').textContent = 'Generate Invoice';
+                document.getElementById('zapSendBtn').onclick = () => this.generateZapInvoice();
+
+                // Clear selected amounts
+                document.querySelectorAll('.zap-amount-btn').forEach(btn => {
+                    btn.classList.remove('selected');
+                    btn.onclick = (e) => {
+                        document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
+                        e.target.closest('.zap-amount-btn').classList.add('selected');
+                        document.getElementById('zapCustomAmount').value = '';
+                    };
+                });
+
+                // Show modal
+                document.getElementById('zapModal').classList.add('active');
+            }
+
+            cleanupOldLightningAddress() {
+                // Remove old non-pubkey-specific entry if it exists
+                const oldAddress = localStorage.getItem('nym_lightning_address');
+                if (oldAddress) {
+                    localStorage.removeItem('nym_lightning_address');
+                    console.log('Cleaned up old lightning address format');
+                }
+            }
+
+            // Create zap request event (NIP-57)
+            async createZapRequest(amountSats, comment) {
+                try {
+                    if (!this.currentZapTarget || !this.currentZapTarget.messageId) {
+                        console.error('No target message for zap request');
+                        return null;
+                    }
+
+                    const zapRequest = {
+                        kind: 9734,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [
+                            ['e', this.currentZapTarget.messageId], // Event being zapped
+                            ['p', this.currentZapTarget.recipientPubkey], // Recipient of zap
+                            ['amount', (parseInt(amountSats) * 1000).toString()], // Amount in millisats
+                            ['relays', ...this.broadcastRelays.slice(0, 5)] // Limit to 5 relays
+                        ],
+                        content: comment || '',
+                        pubkey: this.pubkey
+                    };
+
+                    // Sign the request
+                    let signedEvent;
+                    if (window.nostr && !this.privkey) {
+                        signedEvent = await window.nostr.signEvent(zapRequest);
+                    } else if (this.privkey) {
+                        signedEvent = window.NostrTools.finalizeEvent(zapRequest, this.privkey);
+                    }
+
+                    return signedEvent;
+                } catch (error) {
+                    console.error('Failed to create zap request:', error);
+                    return null;
+                }
+            }
+
+            // Generate and display invoice
+            async generateZapInvoice() {
+                if (!this.currentZapTarget) return;
+
+                // Get amount
+                const selectedBtn = document.querySelector('.zap-amount-btn.selected');
+                const customAmount = document.getElementById('zapCustomAmount').value;
+                const amount = customAmount || (selectedBtn ? selectedBtn.dataset.amount : null);
+
+                if (!amount || amount <= 0) {
+                    this.displaySystemMessage('Please select or enter an amount');
+                    return;
+                }
+
+                const comment = document.getElementById('zapComment').value || '';
+
+                // Show loading state
+                document.getElementById('zapAmountSection').style.display = 'none';
+                document.getElementById('zapInvoiceSection').style.display = 'block';
+                document.getElementById('zapStatus').className = 'zap-status checking';
+                document.getElementById('zapStatus').innerHTML = '<span class="loader"></span> Generating invoice...';
+
+                try {
+                    // Fetch the invoice
+                    const invoice = await this.fetchLightningInvoice(
+                        this.currentZapTarget.lnAddress,
+                        amount,
+                        comment
+                    );
+
+                    if (invoice) {
+                        this.currentZapInvoice = invoice;
+                        this.zapInvoiceData = {
+                            ...invoice,
+                            messageId: this.currentZapTarget.messageId,
+                            recipientPubkey: this.currentZapTarget.recipientPubkey
+                        };
+
+                        // Display invoice
+                        this.displayZapInvoice(invoice);
+
+                        // Start checking for payment
+                        this.checkZapPayment(invoice);
+                    }
+                } catch (error) {
+                    console.error('Failed to generate invoice:', error);
+                    document.getElementById('zapStatus').className = 'zap-status';
+                    document.getElementById('zapStatus').innerHTML = `Failed: ${error.message}`;
+                }
+            }
+
+            // Display the invoice with QR code
+            displayZapInvoice(invoice) {
+                document.getElementById('zapStatus').style.display = 'none';
+                document.getElementById('zapInvoiceDisplay').style.display = 'block';
+
+                // Display invoice text
+                const invoiceEl = document.getElementById('zapInvoice');
+                invoiceEl.textContent = invoice.pr;
+
+                // Generate QR code
+                const qrContainer = document.getElementById('zapQRCode');
+                qrContainer.innerHTML = ''; // Clear existing QR
+
+                // Set container to center content
+                qrContainer.style.cssText = 'text-align: center; display: flex; justify-content: center; align-items: center;';
+
+                // Create QR code element with white border styling
+                const qrDiv = document.createElement('div');
+                qrDiv.id = 'zapQRCodeCanvas';
+                qrDiv.style.cssText = 'display: inline-block; padding: 15px; background: white; border: 5px solid white; border-radius: 10px;';
+                qrContainer.appendChild(qrDiv);
+
+                // Generate QR using the invoice
+                try {
+                    new QRCode(qrDiv, {
+                        text: invoice.pr,  // Just the raw invoice, no lightning: prefix
+                        width: 200,
+                        height: 200,
+                        colorDark: "#000000",
+                        colorLight: "#ffffff",
+                        correctLevel: QRCode.CorrectLevel.L
+                    });
+
+                    console.log('Generated QR code for invoice:', invoice.pr.substring(0, 50) + '...');
+                } catch (err) {
+                    console.error('QRCode generation failed:', err);
+                    // Fallback if QRCode library not loaded
+                    qrContainer.innerHTML = `
+            <div style="display: inline-block; padding: 20px; border: 5px solid white; background: white; color: black; text-align: center; border-radius: 10px;">
+                <div style="font-size: 14px; margin-bottom: 10px;">Lightning Invoice</div>
+                <div style="font-size: 10px; word-break: break-all;">${invoice.pr.substring(0, 60)}...</div>
+                <div style="margin-top: 10px; font-size: 12px; color: red;">QR generation failed - copy invoice manually</div>
+            </div>
+        `;
+                }
+
+                // Update button
+                document.getElementById('zapSendBtn').textContent = 'Close';
+                document.getElementById('zapSendBtn').onclick = () => this.closeZapModal();
+            }
+
+            // Check if payment was made
+            async checkZapPayment(invoice) {
+                if (!invoice.verify) {
+                    // No verify URL, just wait for zap receipt event
+                    this.listenForZapReceipt();
+                    return;
+                }
+
+                let checkCount = 0;
+                const maxChecks = 60; // Check for up to 60 seconds
+
+                this.zapCheckInterval = setInterval(async () => {
+                    checkCount++;
+
+                    try {
+                        const response = await fetch(invoice.verify);
+                        const data = await response.json();
+
+                        if (data.settled || data.paid) {
+                            // Payment confirmed!
+                            clearInterval(this.zapCheckInterval);
+                            this.handleZapPaymentSuccess(invoice.amount);
+                        } else if (checkCount >= maxChecks) {
+                            // Timeout
+                            clearInterval(this.zapCheckInterval);
+                            document.getElementById('zapStatus').style.display = 'block';
+                            document.getElementById('zapStatus').className = 'zap-status';
+                            document.getElementById('zapStatus').innerHTML = 'Payment timeout - please check your wallet';
+                        }
+                    } catch (error) {
+                        console.error('Error checking payment:', error);
+                    }
+                }, 1000); // Check every second
+            }
+
+            // Listen for zap receipt events
+            listenForZapReceipt() {
+                // Subscribe to zap receipt events (kind 9735) for this specific event
+                const subscription = [
+                    "REQ",
+                    "zap-receipt-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [9735],
+                        "#e": [this.currentZapTarget.messageId],
+                        since: Math.floor(Date.now() / 1000) - 300, // Last 5 minutes
+                        limit: 10
+                    }
+                ];
+
+                this.sendToRelay(subscription);
+
+                // Also close the subscription after 60 seconds
+                setTimeout(() => {
+                    this.sendToRelay(["CLOSE", subscription[1]]);
+                }, 60000);
+            }
+
+            // Handle successful payment
+            handleZapPaymentSuccess(amount) {
+                if (!this.currentZapTarget) return;
+
+                // Clear check interval
+                if (this.zapCheckInterval) {
+                    clearInterval(this.zapCheckInterval);
+                    this.zapCheckInterval = null;
+                }
+
+                // Update UI
+                document.getElementById('zapInvoiceDisplay').style.display = 'none';
+                document.getElementById('zapStatus').style.display = 'block';
+                document.getElementById('zapStatus').className = 'zap-status paid';
+                document.getElementById('zapStatus').innerHTML = `
+        <div style="font-size: 24px; margin-bottom: 10px;">⚡</div>
+        <div>Zap sent successfully!</div>
+        <div style="font-size: 20px; margin-top: 10px;">${amount} sats</div>
+    `;
+
+                // Close modal after 2 seconds
+                setTimeout(() => {
+                    this.closeZapModal();
+                }, 2000);
+            }
+
+            // Handle zap receipt events (NIP-57)
+            handleZapReceipt(event) {
+                if (event.kind !== 9735) return;
+
+                // Parse zap receipt
+                const eTag = event.tags.find(t => t[0] === 'e');
+                const pTag = event.tags.find(t => t[0] === 'p');
+                const boltTag = event.tags.find(t => t[0] === 'bolt11');
+                const descriptionTag = event.tags.find(t => t[0] === 'description');
+
+                if (!eTag || !boltTag) return;
+
+                const messageId = eTag[1];
+                const bolt11 = boltTag[1];
+
+                // Parse amount from bolt11
+                const amount = this.parseAmountFromBolt11(bolt11);
+
+                if (amount) {
+                    // Get zapper pubkey from description if available
+                    let zapperPubkey = event.pubkey; // This is usually the zap service pubkey
+
+                    if (descriptionTag) {
+                        try {
+                            const zapRequest = JSON.parse(descriptionTag[1]);
+                            if (zapRequest.pubkey) {
+                                zapperPubkey = zapRequest.pubkey; // This is the actual zapper
+                            }
+                        } catch (e) {
+                            // Ignore parse errors
+                        }
+                    }
+
+                    // Initialize zaps tracking for this message if needed
+                    if (!this.zaps.has(messageId)) {
+                        this.zaps.set(messageId, {
+                            receipts: new Set(), // Track receipt IDs to prevent duplicates
+                            amounts: new Map()   // Map of pubkey -> total amount
+                        });
+                    }
+
+                    const messageZaps = this.zaps.get(messageId);
+
+                    // Check if we've already processed this receipt (deduplication)
+                    if (messageZaps.receipts.has(event.id)) {
+                        return; // Already processed this zap receipt
+                    }
+
+                    // Mark this receipt as processed
+                    messageZaps.receipts.add(event.id);
+
+                    // Update the amount for this zapper
+                    const currentAmount = messageZaps.amounts.get(zapperPubkey) || 0;
+                    messageZaps.amounts.set(zapperPubkey, currentAmount + amount);
+
+                    // Update display for this message
+                    this.updateMessageZaps(messageId);
+
+                    // Check if this is for our current pending zap
+                    if (this.currentZapTarget &&
+                        this.currentZapTarget.messageId === messageId &&
+                        zapperPubkey === this.pubkey) {
+                        this.handleZapPaymentSuccess(amount);
+                    }
+                }
+            }
+
+            // Parse amount from bolt11 invoice (simplified)
+            parseAmountFromBolt11(bolt11) {
+                const match = bolt11.match(/lnbc(\d+)([munp])/i);
+                if (match) {
+                    const amount = parseInt(match[1]);
+                    const multiplier = match[2];
+
+                    switch (multiplier) {
+                        case 'm': return amount * 100000; // millisats to sats
+                        case 'u': return amount * 100; // microsats to sats
+                        case 'n': return Math.round(amount / 10); // nanosats to sats
+                        case 'p': return Math.round(amount / 10000); // picosats to sats
+                        default: return amount;
+                    }
+                }
+                return null;
+            }
+
+            // Update message with zap display
+            updateMessageZaps(messageId) {
+                const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+                if (!messageEl) return;
+
+                const messageZaps = this.zaps.get(messageId);
+
+                // Find or create reactions row
+                let reactionsRow = messageEl.querySelector('.reactions-row');
+                if (!reactionsRow) {
+                    reactionsRow = document.createElement('div');
+                    reactionsRow.className = 'reactions-row';
+                    messageEl.appendChild(reactionsRow);
+                }
+
+                // Remove existing zap badges
+                const existingZap = reactionsRow.querySelector('.zap-badge');
+                if (existingZap) {
+                    existingZap.remove();
+                }
+                const existingZapBtn = reactionsRow.querySelector('.add-zap-btn');
+                if (existingZapBtn) {
+                    existingZapBtn.remove();
+                }
+
+                // Only add badges if there are zaps
+                if (messageZaps && messageZaps.amounts.size > 0) {
+                    // Calculate total zaps from the amounts map
+                    let totalZaps = 0;
+                    messageZaps.amounts.forEach(amount => {
+                        totalZaps += amount;
+                    });
+
+                    const zapBadge = document.createElement('span');
+                    zapBadge.className = 'zap-badge';
+                    zapBadge.innerHTML = `
+            <svg class="zap-icon" viewBox="0 0 24 24">
+                <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"/>
+            </svg>
+            ${totalZaps}
+        `;
+
+                    const zapperCount = messageZaps.amounts.size;
+                    zapBadge.title = `${zapperCount} zapper${zapperCount > 1 ? 's' : ''} • ${totalZaps} sats total`;
+
+                    // Insert at beginning of reactions row
+                    reactionsRow.insertBefore(zapBadge, reactionsRow.firstChild);
+
+                    // Add quick zap button ONLY if zaps exist and not own message
+                    const pubkey = messageEl.dataset.pubkey;
+                    if (pubkey && pubkey !== this.pubkey) {
+                        const addZapBtn = document.createElement('span');
+                        addZapBtn.className = 'add-zap-btn';
+                        addZapBtn.innerHTML = `
+                <svg viewBox="0 0 24 24">
+                    <path d="M11 2L1 14h8l-1 8 10-12h-8l1-8z" stroke="var(--text)" fill="var(--text)"/>
+                    <circle cx="19" cy="6" r="5" fill="var(--text)" stroke="none"></circle>
+                    <line x1="19" y1="4" x2="19" y2="8" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
+                    <line x1="17" y1="6" x2="21" y2="6" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
+                </svg>
+            `;
+                        addZapBtn.title = 'Quick zap';
+                        addZapBtn.onclick = async (e) => {
+                            e.stopPropagation();
+                            await this.handleQuickZap(messageId, pubkey, messageEl);
+                        };
+
+                        // Insert after zap badge
+                        reactionsRow.insertBefore(addZapBtn, zapBadge.nextSibling);
+                    }
+                }
+            }
+
+            async handleQuickZap(messageId, pubkey, messageEl) {
+                // Get the author's nym
+                const author = messageEl.dataset.author;
+
+                // Show loading message
+                this.displaySystemMessage(`Checking if @${author} can receive zaps...`);
+
+                // Fetch the lightning address
+                const lnAddress = await this.fetchLightningAddressForUser(pubkey);
+
+                if (lnAddress) {
+                    // User has lightning address, show zap modal
+                    this.showZapModal(messageId, pubkey, author);
+                } else {
+                    // No lightning address found
+                    this.displaySystemMessage(`@${author} cannot receive zaps (no lightning address set)`);
+                }
+            }
+
+            // Close zap modal
+            closeZapModal() {
+                const modal = document.getElementById('zapModal');
+                modal.classList.remove('active');
+
+                // Clear interval if running
+                if (this.zapCheckInterval) {
+                    clearInterval(this.zapCheckInterval);
+                    this.zapCheckInterval = null;
+                }
+
+                // Reset state
+                this.currentZapTarget = null;
+                this.currentZapInvoice = null;
+                this.zapInvoiceData = null;
+            }
+
+            // Copy invoice to clipboard
+            copyZapInvoice() {
+                if (!this.currentZapInvoice) return;
+
+                navigator.clipboard.writeText(this.currentZapInvoice.pr).then(() => {
+                    // Show feedback
+                    const btn = event.target;
+                    const originalText = btn.textContent;
+                    btn.textContent = 'Copied!';
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                    }, 2000);
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                    this.displaySystemMessage('Failed to copy invoice');
+                });
+            }
+
+            // Open invoice in wallet
+            openInWallet() {
+                if (!this.currentZapInvoice) return;
+
+                // Try multiple methods to open wallet
+                const invoice = this.currentZapInvoice.pr;
+
+                // Check if invoice already has lightning: prefix
+                const invoiceToOpen = invoice.toLowerCase().startsWith('lightning:') ?
+                    invoice : `lightning:${invoice}`;
+
+                // Try opening with lightning: URI scheme
+                window.open(invoiceToOpen, '_blank');
+
+                // Also copy to clipboard as fallback (just the raw invoice)
+                navigator.clipboard.writeText(invoice).then(() => {
+                    this.displaySystemMessage('Invoice copied - paste in your wallet');
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                    this.displaySystemMessage('Failed to copy invoice');
+                });
+            }
+
             // Discovering relays via NIP-66
             async discoverRelays() {
                 try {
@@ -3287,20 +4418,37 @@
 
                 this.sendToRelay(subscription);
 
-                // Also subscribe to reactions tagged to our pubkey for our supported kinds
-                if (this.pubkey) {
-                    const userReactionsSubscription = [
-                        "REQ",
-                        "user-reactions-" + Math.random().toString(36).substring(7),
-                        {
-                            kinds: [7],
-                            "#p": [this.pubkey], // Reactions to our messages
-                            "#k": ["20000", "23333", "4"], // Only for our supported kinds
-                            limit: 500
-                        }
-                    ];
+                // Subscribe to zap receipts for ALL messages we might care about
+                const zapSubscription = [
+                    "REQ",
+                    "zaps-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [9735], // Zap receipt events
+                        limit: 1000,
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                    }
+                ];
 
-                    this.sendToRelay(userReactionsSubscription);
+                this.sendToRelay(zapSubscription);
+
+                // Also subscribe to zap receipts specifically for messages in current view
+                const currentChannelKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                const channelMessages = this.messages.get(currentChannelKey) || [];
+
+                if (channelMessages.length > 0) {
+                    const messageIds = channelMessages.map(m => m.id).filter(id => id);
+                    if (messageIds.length > 0) {
+                        const channelZapSubscription = [
+                            "REQ",
+                            "channel-zaps-" + Math.random().toString(36).substring(7),
+                            {
+                                kinds: [9735],
+                                "#e": messageIds.slice(0, 100), // Limit to 100 most recent messages
+                                since: Math.floor(Date.now() / 1000) - 86400
+                            }
+                        ];
+                        this.sendToRelay(channelZapSubscription);
+                    }
                 }
             }
 
@@ -3527,6 +4675,37 @@
                             }
                         }
 
+                        // Handle profile events (kind 0) for lightning addresses
+                        if (event && event.kind === 0) {
+                            try {
+                                const profile = JSON.parse(event.content);
+                                const pubkey = event.pubkey;
+
+                                // Store lightning address if present
+                                if (profile.lud16 || profile.lud06) {
+                                    const lnAddress = profile.lud16 || profile.lud06;
+                                    this.userLightningAddresses.set(pubkey, lnAddress);
+                                    console.log(`Got lightning address for ${pubkey}:`, lnAddress);
+                                }
+
+                                // Update nym if we don't have one for this user
+                                if (profile.name || profile.username || profile.display_name) {
+                                    const profileName = profile.name || profile.username || profile.display_name;
+                                    if (!this.users.has(pubkey) || this.users.get(pubkey).nym.startsWith('anon-')) {
+                                        this.users.set(pubkey, {
+                                            nym: profileName.substring(0, 20),
+                                            pubkey: pubkey,
+                                            lastSeen: Date.now(),
+                                            status: 'online',
+                                            channels: new Set()
+                                        });
+                                    }
+                                }
+                            } catch (e) {
+                                // Ignore profile parse errors
+                            }
+                        }
+
                         // Deduplicate events by ID
                         if (event && event.id) {
                             if (this.eventDeduplication.has(event.id)) {
@@ -3735,6 +4914,9 @@
                 } else if (event.kind === 7) {
                     // Handle reactions (NIP-25) - no flood protection for reactions
                     this.handleReaction(event);
+                } else if (event.kind === 9735) {
+                    // Handle zap receipt (NIP-57)
+                    this.handleZapReceipt(event);
                 } else if (event.kind === 4) {
                     // Handle legacy NIP-04 encrypted DMs - no flood protection for PMs
                     await this.handleEncryptedDM(event);
@@ -3833,7 +5015,11 @@
                 if (!messageEl) return;
 
                 const reactions = this.reactions.get(messageId);
-                if (!reactions || reactions.size === 0) return;
+                if (!reactions || reactions.size === 0) {
+                    // Even if no reactions, update zaps display
+                    this.updateMessageZaps(messageId);
+                    return;
+                }
 
                 // Hide the hover reaction button since we have reactions
                 const hoverReactionBtn = messageEl.querySelector('.reaction-btn');
@@ -3841,8 +5027,23 @@
                     hoverReactionBtn.style.display = 'none';
                 }
 
-                // Remove existing reactions display
+                // Remove existing reactions display but preserve zap badges
                 let reactionsRow = messageEl.querySelector('.reactions-row');
+                let zapBadge = null;
+                let addZapBtn = null;
+
+                if (reactionsRow) {
+                    // Save zap badge and button if they exist
+                    zapBadge = reactionsRow.querySelector('.zap-badge');
+                    if (zapBadge) {
+                        zapBadge = zapBadge.cloneNode(true);
+                    }
+                    addZapBtn = reactionsRow.querySelector('.add-zap-btn');
+                    if (addZapBtn) {
+                        addZapBtn = addZapBtn.cloneNode(true);
+                    }
+                }
+
                 if (!reactionsRow) {
                     reactionsRow = document.createElement('div');
                     reactionsRow.className = 'reactions-row';
@@ -3851,6 +5052,25 @@
 
                 // Clear and rebuild reactions
                 reactionsRow.innerHTML = '';
+
+                // Re-add zap badge first if it exists
+                if (zapBadge) {
+                    reactionsRow.appendChild(zapBadge);
+                }
+
+                // Re-add quick zap button ONLY if it already existed (meaning there are zaps)
+                if (addZapBtn) {
+                    reactionsRow.appendChild(addZapBtn);
+                    // Re-attach the click handler
+                    const pubkey = messageEl.dataset.pubkey;
+                    addZapBtn.onclick = async (e) => {
+                        e.stopPropagation();
+                        await this.handleQuickZap(messageId, pubkey, messageEl);
+                    };
+                }
+                // DO NOT create a new quick zap button here - only in updateMessageZaps when zaps exist
+
+                // Clear and rebuild reactions
                 reactions.forEach((reactors, emoji) => {
                     const badge = document.createElement('span');
 
@@ -3905,15 +5125,15 @@
                 const addBtn = document.createElement('span');
                 addBtn.className = 'add-reaction-btn';
                 addBtn.innerHTML = `
-                <svg viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <circle cx="9" cy="9" r="1"></circle>
-                    <circle cx="15" cy="9" r="1"></circle>
-                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-                    <circle cx="18" cy="6" r="5" fill="var(--text)" stroke="none"></circle>
-                    <line x1="18" y1="4" x2="18" y2="8" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
-                    <line x1="16" y1="6" x2="20" y2="6" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
-                </svg>
+        <svg viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"></circle>
+            <circle cx="9" cy="9" r="1"></circle>
+            <circle cx="15" cy="9" r="1"></circle>
+            <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+            <circle cx="18" cy="6" r="5" fill="var(--text)" stroke="none"></circle>
+            <line x1="18" y1="4" x2="18" y2="8" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
+            <line x1="16" y1="6" x2="20" y2="6" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
+        </svg>
     `;
                 addBtn.title = 'Add reaction';
                 addBtn.onclick = (e) => {
@@ -4441,6 +5661,10 @@
                         this.addPMConversation(otherNym, conversationPubkey);
                     }
 
+                    // Check if this is a historical message (older than 10 seconds)
+                    const messageAge = Date.now() - (event.created_at * 1000);
+                    const isHistorical = messageAge > 10000;
+
                     // Store the PM message with the actual event ID from the relay
                     const pmMessage = {
                         id: event.id,
@@ -4451,7 +5675,8 @@
                         isOwn: !isIncoming,
                         isPM: true,
                         conversationKey: conversationKey,
-                        conversationPubkey: conversationPubkey
+                        conversationPubkey: conversationPubkey,
+                        isHistorical: isHistorical
                     };
 
                     this.pmMessages.get(conversationKey).push(pmMessage);
@@ -4462,10 +5687,10 @@
                     // Display if in PM mode with this user
                     if (this.inPMMode && this.currentPM === conversationPubkey) {
                         this.displayMessage(pmMessage);
-                    } else if (isIncoming) {
-                        // Update unread count for incoming messages
+                    } else if (isIncoming && !isHistorical) {
+                        // Only update unread count and show notification for NEW incoming messages
                         this.updateUnreadCount(conversationKey);
-                        // Show notification
+                        // Show notification only for new messages
                         if (document.hidden || !this.inPMMode || this.currentPM !== conversationPubkey) {
                             this.showNotification(`PM from ${senderNym}`, actualContent);
                         }
@@ -4911,19 +6136,14 @@
 
             async fetchProfileFromRelay(pubkey) {
                 return new Promise((resolve) => {
-                    // Set a timeout in case profile doesn't exist
                     const timeout = setTimeout(() => {
                         console.log('No profile found, using default nym');
                         resolve();
                     }, 3000);
 
-                    // Create a temporary subscription for profile
                     const subId = "profile-" + Math.random().toString(36).substring(7);
-
-                    // Store original message handler
                     const originalHandler = this.handleRelayMessage.bind(this);
 
-                    // Override handleRelayMessage temporarily
                     this.handleRelayMessage = (msg) => {
                         if (!Array.isArray(msg)) return;
 
@@ -4934,35 +6154,41 @@
                             if (event && event.kind === 0 && event.pubkey === pubkey) {
                                 try {
                                     const profile = JSON.parse(event.content);
+
+                                    // Get name
                                     if (profile.name || profile.username || profile.display_name) {
-                                        // Use the first available name field
                                         const profileName = profile.name || profile.username || profile.display_name;
-                                        this.nym = profileName.substring(0, 20); // Limit to 20 chars
+                                        this.nym = profileName.substring(0, 20);
                                         document.getElementById('currentNym').textContent = this.nym;
                                         console.log('Profile loaded:', this.nym);
+                                    }
+
+                                    // Get lightning address if it's our own profile
+                                    if (pubkey === this.pubkey && (profile.lud16 || profile.lud06)) {
+                                        const lnAddress = profile.lud16 || profile.lud06;
+                                        this.lightningAddress = lnAddress;
+                                        // Cache it with pubkey-specific key
+                                        localStorage.setItem(`nym_lightning_address_${this.pubkey}`, lnAddress);
+                                        this.updateLightningAddressDisplay();
+                                        console.log('Lightning address loaded from profile:', lnAddress);
                                     }
                                 } catch (e) {
                                     console.error('Failed to parse profile:', e);
                                 }
 
                                 clearTimeout(timeout);
-                                // Restore original handler
                                 this.handleRelayMessage = originalHandler;
                                 resolve();
                             }
                         } else if (type === 'EOSE' && data[0] === subId) {
-                            // End of stored events, no profile found
                             clearTimeout(timeout);
-                            // Restore original handler
                             this.handleRelayMessage = originalHandler;
                             resolve();
                         }
 
-                        // Also call original handler
                         originalHandler(msg);
                     };
 
-                    // Request profile event
                     const subscription = [
                         "REQ",
                         subId,
@@ -4973,16 +6199,12 @@
                         }
                     ];
 
-                    // If connected, send immediately, otherwise queue
                     if (this.connected) {
                         this.sendToRelay(subscription);
-
-                        // Unsubscribe after getting the data
                         setTimeout(() => {
                             this.sendToRelay(["CLOSE", subId]);
                         }, 3500);
                     } else {
-                        // Queue for when connected
                         this.messageQueue.push(JSON.stringify(subscription));
                     }
                 });
@@ -5352,6 +6574,11 @@
                     this.updateMessageReactions(message.id);
                 }
 
+                // Add zaps display - check if this message has any zaps
+                if (message.id && this.zaps.has(message.id)) {
+                    this.updateMessageZaps(message.id);
+                }
+
                 if (shouldScroll && this.settings.autoscroll) {
                     container.scrollTop = container.scrollHeight;
                 }
@@ -5366,11 +6593,27 @@
                     const quotedText = quoteMatch[2];
                     const remainingContent = content.substring(quoteMatch[0].length).trim();
 
-                    let html = `<div class="message-quote">@${this.escapeHtml(quotedUser)}: ${this.escapeHtml(quotedText)}</div>`;
-                    if (remainingContent) {
-                        html += this.formatMessage(remainingContent);
+                    // Check if the quoted text might be ASCII art
+                    const quotedLines = quotedText.split('\n');
+                    const isAsciiArt = quotedLines.some(line => {
+                        const specialCharCount = (line.match(/[^\w\s]/g) || []).length;
+                        return specialCharCount > 5 && line.length > 10;
+                    });
+
+                    if (isAsciiArt) {
+                        // Preserve ASCII art in quotes
+                        let html = `<div class="message-quote">@${this.escapeHtml(quotedUser)}: <pre style="margin: 5px 0; font-family: var(--font-mono);">${this.escapeHtml(quotedText)}</pre></div>`;
+                        if (remainingContent) {
+                            html += this.formatMessage(remainingContent);
+                        }
+                        return html;
+                    } else {
+                        let html = `<div class="message-quote">@${this.escapeHtml(quotedUser)}: ${this.escapeHtml(quotedText)}</div>`;
+                        if (remainingContent) {
+                            html += this.formatMessage(remainingContent);
+                        }
+                        return html;
                     }
-                    return html;
                 }
 
                 return this.formatMessage(content);
@@ -5398,6 +6641,28 @@
             formatMessage(content) {
                 let formatted = content;
 
+                // First, detect if this looks like ASCII art
+                // ASCII art typically has multiple lines with special characters and consistent spacing
+                const lines = content.split('\n');
+                const looksLikeAsciiArt = lines.length > 2 && lines.some(line => {
+                    // Check for common ASCII art patterns
+                    const specialCharCount = (line.match(/[^\w\s]/g) || []).length;
+                    const spaceCount = (line.match(/\s{2,}/g) || []).length;
+                    return (specialCharCount > 5 || spaceCount > 2) && line.length > 10;
+                });
+
+                // If it looks like ASCII art, preserve it with minimal formatting
+                if (looksLikeAsciiArt) {
+                    // Only escape HTML entities and wrap in pre tag
+                    formatted = formatted.replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;');
+
+                    // Wrap in pre tag to preserve formatting
+                    return `<pre style="font-family: var(--font-mono); line-height: 1.2;">${formatted}</pre>`;
+                }
+
                 // First, escape HTML entities
                 formatted = formatted.replace(/&/g, '&amp;')
                     .replace(/</g, '&lt;')
@@ -5411,14 +6676,19 @@
                     return `<pre><code>${formattedCode}</code></pre>`;
                 });
 
-                // Inline code
-                formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+                // Inline code - protect from further formatting
+                const codeBlocks = [];
+                formatted = formatted.replace(/`([^`]+)`/g, (match, code) => {
+                    const placeholder = `__CODE_BLOCK_${codeBlocks.length}__`;
+                    codeBlocks.push(`<code>${code}</code>`);
+                    return placeholder;
+                });
 
                 // Bold **text** or __text__
                 formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
                 formatted = formatted.replace(/__(.+?)__/g, '<strong>$1</strong>');
 
-                // Italic *text* or _text_ (avoid URLs)
+                // Italic *text* or _text_ (avoid URLs and code blocks)
                 formatted = formatted.replace(/(?<![:/])(\*|_)([^*_\s][^*_]*)\1/g, '<em>$2</em>');
 
                 // Strikethrough ~~text~~
@@ -5438,19 +6708,19 @@
                     '<img src="$1" alt="Image" onclick="nym.expandImage(\'$1\')" />'
                 );
 
-                // Convert other URLs to links
+                // Convert other URLs to links (but not placeholders)
                 formatted = formatted.replace(
-                    /(https?:\/\/[^\s]+)(?![^<]*>)/g,
+                    /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
                     '<a href="$1" target="_blank" rel="noopener">$1</a>'
                 );
 
-                // Highlight mentions - but don't touch # in usernames
+                // Highlight mentions
                 formatted = formatted.replace(
                     /@(\w+)/g,
                     '<span style="color: var(--secondary)">@$1</span>'
                 );
 
-                // Channel references - only match # at word boundaries, not within usernames
+                // Channel references
                 formatted = formatted.replace(
                     /(?:^|\s)#(\w+)(?=\s|$)/g,
                     (match, channel, offset) => {
@@ -5460,6 +6730,11 @@
                         return `${space}<span class="channel-link" onclick="nym.quickJoinChannel('${channel}')">#${channel}${badge}</span>`;
                     }
                 );
+
+                // Restore code blocks
+                codeBlocks.forEach((code, index) => {
+                    formatted = formatted.replace(`__CODE_BLOCK_${index}__`, code);
+                });
 
                 return formatted;
             }
@@ -7113,35 +8388,40 @@
                         secondary: '#00ffff',
                         text: '#00ff00',
                         textDim: '#008800',
-                        textBright: '#00ffaa'
+                        textBright: '#00ffaa',
+                        lightning: '#f7931a'
                     },
                     amber: {
                         primary: '#ffb000',
                         secondary: '#ffd700',
                         text: '#ffb000',
                         textDim: '#cc8800',
-                        textBright: '#ffcc00'
+                        textBright: '#ffcc00',
+                        lightning: '#ffa500'
                     },
                     cyber: {
                         primary: '#ff00ff',
                         secondary: '#00ffff',
                         text: '#ff00ff',
                         textDim: '#aa00aa',
-                        textBright: '#ff66ff'
+                        textBright: '#ff66ff',
+                        lightning: '#ffaa00'
                     },
                     hacker: {
                         primary: '#00ffff',
                         secondary: '#00ff00',
                         text: '#00ffff',
                         textDim: '#008888',
-                        textBright: '#66ffff'
+                        textBright: '#66ffff',
+                        lightning: '#00ff88'
                     },
                     ghost: {
                         primary: '#ffffff',
                         secondary: '#cccccc',
                         text: '#ffffff',
                         textDim: '#666666',
-                        textBright: '#ffffff'
+                        textBright: '#ffffff',
+                        lightning: '#dddddd'
                     }
                 };
 
@@ -7273,6 +8553,13 @@
 
         function showSettings() {
             nym.updateRelayStatus();
+
+            // Load lightning address
+            const lightningInput = document.getElementById('lightningAddressInput');
+            if (lightningInput) {
+                lightningInput.value = nym.lightningAddress || '';
+            }
+
             document.getElementById('themeSelect').value = nym.settings.theme;
             document.getElementById('soundSelect').value = nym.settings.sound;
             document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
@@ -7282,7 +8569,17 @@
             document.getElementById('settingsModal').classList.add('active');
         }
 
-        function saveSettings() {
+        async function saveSettings() {
+            // Get lightning address
+            const lightningAddress = document.getElementById('lightningAddressInput').value.trim();
+
+            // Save lightning address
+            if (lightningAddress) {
+                await nym.saveLightningAddress(lightningAddress);
+            } else {
+                await nym.saveLightningAddress(null);
+            }
+
             nym.settings.theme = document.getElementById('themeSelect').value;
             nym.settings.sound = document.getElementById('soundSelect').value;
             nym.settings.autoscroll = document.getElementById('autoscrollSelect').value === 'true';
@@ -7396,7 +8693,6 @@
 
                 // Generate or use extension
                 if (mode === 'ephemeral') {
-                    // For ephemeral mode, use input or generate random
                     nym.nym = nymInput || nym.generateRandomNym();
                     document.getElementById('currentNym').textContent = nym.nym;
                     await nym.generateKeypair();
@@ -7405,21 +8701,21 @@
                     localStorage.removeItem('nym_connection_mode');
 
                 } else if (mode === 'extension') {
-                    // For extension mode, set temporary nym first
                     nym.nym = nymInput || 'Loading profile...';
                     document.getElementById('currentNym').textContent = nym.nym;
                     await nym.useExtension();
 
-                    // If no profile was found and no input, generate random
                     if (nym.nym === 'Loading profile...' && !nymInput) {
                         nym.nym = nym.generateRandomNym();
                         document.getElementById('currentNym').textContent = nym.nym;
                     } else if (nymInput && nym.nym === 'Loading profile...') {
-                        // Use input if profile wasn't found
                         nym.nym = nymInput;
                         document.getElementById('currentNym').textContent = nym.nym;
                     }
                 }
+
+                // Load lightning address for this specific pubkey
+                await nym.loadLightningAddress();
 
                 // Save connection preferences if using extension
                 if (mode === 'extension') {
@@ -7496,6 +8792,11 @@
             }
 
             preConnect();
+
+            // Add QRCode library check
+            if (typeof QRCode === 'undefined') {
+                console.warn('QRCode library not loaded, falling back to text display for invoices');
+            }
 
             // Auto-focus nickname input
             document.getElementById('nymInput').focus();

@@ -1,3 +1,9 @@
+## v1.4.5 - 2025-08-29
+
+New: zaps! send bitcoin to other nymmers
+Hotfix: corrected PM notifications when login with browser extension
+Hotfix: borked ascii art
+
 ## v1.3.5 - 2025-08-29
 
 Hotfix: channel sorting issue and not keeping current channel focused
