@@ -1921,7 +1921,7 @@
 
                 <div class="form-group">
                     <label class="form-label">Choose Your Nym's nickname (optional)</label>
-                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nym nick"
+                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nick"
                         maxlength="20">
                     <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
@@ -1933,7 +1933,8 @@
 
                 <div
                     style="color: var(--warning); font-size: 12px; margin-top: 15px; padding: 10px; border: 1px solid var(--warning);">
-                    💬 NYM is for ephemeral, anonymous chat. Messages are public and temporary. Your identity exists
+                    💬 NYM is for ephemeral, anonymous chat. Channels are bridged with Bitchat geohash. Messages are
+                    public and temporary. Your identity exists
                     only for this session.
                 </div>
             </div>
@@ -2559,10 +2560,9 @@
                 // Show/hide quote option
                 document.getElementById('ctxQuote').style.display = content ? 'block' : 'none';
 
-                // Show/hide React option based on mobile view and messageId
+                // Show/hide React option
                 const reactOption = document.getElementById('ctxReact');
-                const isMobile = window.innerWidth <= 768;
-                reactOption.style.display = isMobile && messageId ? 'block' : 'none';
+                reactOption.style.display = messageId ? 'block' : 'none';
 
                 // Position menu
                 menu.style.left = e.pageX + 'px';
@@ -7508,7 +7508,7 @@
                     document.getElementById('nymInput').placeholder = 'Override profile name (optional)';
                 } else {
                     hint.textContent = 'Your ephemeral pseudonym for this session';
-                    document.getElementById('nymInput').placeholder = 'Leave empty for random nym';
+                    document.getElementById('nymInput').placeholder = 'Leave empty for random nick';
                 }
             });
 
