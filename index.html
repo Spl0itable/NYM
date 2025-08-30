@@ -7983,6 +7983,12 @@
                 // Clear saved connection preferences
                 localStorage.removeItem('nym_connection_mode');
                 localStorage.removeItem('nym_relay_url');
+                localStorage.removeItem('nym_nsec'); // Clear saved nsec
+
+                // Clear pubkey-specific lightning address
+                if (this.pubkey) {
+                    localStorage.removeItem(`nym_lightning_address_${this.pubkey}`);
+                }
 
                 if (this.ws) {
                     this.ws.close();
@@ -8868,16 +8874,27 @@
             const savedMode = localStorage.getItem('nym_connection_mode');
             const savedRelay = localStorage.getItem('nym_relay_url');
 
-            if (savedMode === 'extension' && savedRelay && window.nostr) {
+            if (savedMode && savedMode !== 'ephemeral' && ((savedMode === 'extension' && window.nostr) || savedMode === 'nsec')) {
                 try {
                     // Hide setup modal properly by removing active class
                     const setupModal = document.getElementById('setupModal');
                     setupModal.classList.remove('active');
 
-                    nym.displaySystemMessage('Reconnecting with Nostr extension...');
-
-                    // Use extension
-                    await nym.useExtension();
+                    if (savedMode === 'extension') {
+                        nym.displaySystemMessage('Reconnecting with Nostr extension...');
+                        // Use extension
+                        await nym.useExtension();
+                    } else if (savedMode === 'nsec') {
+                        nym.displaySystemMessage('Restoring NSEC session...');
+                        // Restore from saved nsec
+                        const savedNsec = localStorage.getItem('nym_nsec');
+                        if (savedNsec) {
+                            nym.privkey = nym.decodeNsec(savedNsec);
+                            nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
+                        } else {
+                            throw new Error('No saved NSEC found');
+                        }
+                    }
 
                     // Connect to saved relay
                     await nym.connectToRelay(savedRelay);
@@ -8902,6 +8919,7 @@
                     // Show setup modal if auto-connect fails - ensure it has active class
                     localStorage.removeItem('nym_connection_mode');
                     localStorage.removeItem('nym_relay_url');
+                    localStorage.removeItem('nym_nsec'); // Remove invalid nsec
                     document.getElementById('setupModal').classList.add('active');
                 }
             }
@@ -8937,7 +8955,16 @@
                     }
 
                 } else if (mode === 'nsec') {
-                    const nsecValue = document.getElementById('nsecInput').value.trim();
+                    let nsecValue = document.getElementById('nsecInput').value.trim();
+
+                    // Check if we have a saved nsec
+                    if (!nsecValue) {
+                        const savedNsec = localStorage.getItem('nym_nsec');
+                        if (savedNsec) {
+                            nsecValue = savedNsec;
+                        }
+                    }
+
                     if (!nsecValue) {
                         throw new Error('Please enter your NSEC');
                     }
@@ -8951,9 +8978,6 @@
 
                     // Store NSEC securely (consider encryption in production)
                     localStorage.setItem('nym_nsec', nsecValue);
-
-                    nym.nym = nymInput || 'Loading profile...';
-                    document.getElementById('currentNym').textContent = nym.nym;
                 }
 
                 // Load lightning address for this specific pubkey
@@ -9051,6 +9075,7 @@
                 const nymGroup = document.getElementById('nymGroup');
                 const hint = document.getElementById('nymHint');
                 const nymInput = document.getElementById('nymInput');
+                const nsecInput = document.getElementById('nsecInput');
 
                 // Hide all special groups first
                 nsecGroup.style.display = 'none';
@@ -9068,6 +9093,12 @@
                         nsecGroup.style.display = 'block';
                         hint.textContent = 'Will use your Nostr profile name if available';
                         nymInput.placeholder = 'Override profile name (optional)';
+
+                        // Auto-fill saved nsec if available
+                        const savedNsec = localStorage.getItem('nym_nsec');
+                        if (savedNsec) {
+                            nsecInput.value = savedNsec;
+                        }
                         break;
                 }
             });
