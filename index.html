@@ -125,6 +125,7 @@
             transition: transform 0.3s;
             position: relative;
             z-index: 2;
+            overflow-y: auto;
         }
 
         .sidebar-header {
@@ -281,8 +282,8 @@
 
         .channel-list,
         .pm-list {
-            max-height: 400px;
-            overflow-y: auto;
+            max-height: none;
+            overflow-y: visible;
             display: flex;
             flex-direction: column;
             position: relative;
@@ -462,9 +463,10 @@
         }
 
         .user-list {
-            flex: 1;
-            overflow-y: auto;
+            flex: 0 1 auto;
+            overflow-y: visible;
             padding: 10px;
+            min-height: 0;
         }
 
         .user-item {
@@ -1706,6 +1708,26 @@
         }
 
         @media (max-width: 768px) {
+            .nav-section {
+                flex-shrink: 0;
+            }
+
+            .channel-list,
+            .pm-list {
+                max-height: none;
+                overflow-y: visible;
+            }
+
+            .user-list {
+                flex: 1 1 auto;
+                overflow-y: visible;
+                max-height: none;
+            }
+
+            #userListContent {
+                max-height: none;
+            }
+
             .sidebar {
                 position: fixed;
                 left: 0;
@@ -1714,6 +1736,8 @@
                 z-index: 9999;
                 transform: translateX(-100%);
                 width: 280px;
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
             }
 
             .sidebar.open {
@@ -1961,6 +1985,13 @@
                 </div>
             </div>
 
+            <div class="sidebar-actions">
+                <button class="icon-btn" onclick="showChannelModal(); nym.closeSidebar();">+ Channel</button>
+                <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();">Settings</button>
+                <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Signout">Signout</button>
+                <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();">About</button>
+            </div>
+
             <div class="nav-section">
                 <div class="nav-title">
                     <span class="nav-title-text">Channels</span>
@@ -2018,13 +2049,6 @@
                 <input type="text" class="search-input" id="userSearch" placeholder="Search users..."
                     onkeyup="nym.filterUsers(this.value)">
                 <div id="userListContent"></div>
-            </div>
-
-            <div class="sidebar-actions">
-                <button class="icon-btn" onclick="showChannelModal(); nym.closeSidebar();">+ Channel</button>
-                <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();">Settings</button>
-                <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Signout">Signout</button>
-                <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();">About</button>
             </div>
         </aside>
 
