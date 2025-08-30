@@ -2754,10 +2754,18 @@
             }
 
             setupContextMenu() {
-                // Close context menu on click outside
+                // Close context menu on click outside - using event delegation
                 document.addEventListener('click', (e) => {
+                    const contextMenu = document.getElementById('contextMenu');
+
+                    // Only proceed if context menu is actually active
+                    if (!contextMenu.classList.contains('active')) {
+                        return;
+                    }
+
+                    // If clicking outside the context menu and not on enhanced emoji modal
                     if (!e.target.closest('.context-menu') && !e.target.closest('.enhanced-emoji-modal')) {
-                        document.getElementById('contextMenu').classList.remove('active');
+                        contextMenu.classList.remove('active');
                     }
                 });
 
@@ -2804,7 +2812,6 @@
                         }
                     }
                 });
-
 
                 // Add slap handler
                 let slapOption = document.getElementById('ctxSlap');
@@ -2932,8 +2939,10 @@
                 const reactOption = document.getElementById('ctxReact');
                 reactOption.style.display = messageId ? 'block' : 'none';
 
-                // Position menu with boundary checking
-                menu.style.display = 'block'; // Temporarily show to get dimensions
+                // Add active class first to make visible
+                menu.classList.add('active');
+
+                // Get dimensions after making visible
                 const menuRect = menu.getBoundingClientRect();
                 const windowHeight = window.innerHeight;
                 const windowWidth = window.innerWidth;
@@ -2957,7 +2966,9 @@
 
                 menu.style.left = left + 'px';
                 menu.style.top = top + 'px';
-                menu.classList.add('active');
+
+                // Prevent the click from immediately closing the menu
+                e.stopImmediatePropagation();
             }
 
             showMobileReactionPicker(messageId) {
