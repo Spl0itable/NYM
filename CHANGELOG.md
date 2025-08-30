@@ -1,3 +1,10 @@
+## v1.5.5 - 2025-08-30
+
+New: added NSEC login
+New: added /zap command
+Hotfix: better failed relay connection handling
+Hotfix: saving settings no longer nukes persistent identity profile
+
 ## v1.4.5 - 2025-08-29
 
 New: zaps! send bitcoin to other nymmers

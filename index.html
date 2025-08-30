@@ -2117,19 +2117,28 @@
     <!-- Initial Setup Modal -->
     <div class="modal active" id="setupModal">
         <div class="modal-content">
-            <div class="modal-header">Welcome to NYM<br/><label style="color: var(--warning); margin-top:5px;" class="form-label">Ephemeral, anonymous, decentralized chat</label></div>
+            <div class="modal-header">Welcome to NYM<br /><label style="color: var(--warning); margin-top:5px;"
+                    class="form-label">Ephemeral, anonymous, decentralized chat</label></div>
             <div class="modal-body">
                 <div class="form-group">
                     <label class="form-label">Connection Mode</label>
                     <select class="form-select" id="connectionMode">
                         <option value="ephemeral">Ephemeral (Auto-generate temporary keys)</option>
                         <option value="extension">Use Nostr Extension (Persistent identity)</option>
+                        <option value="nsec">Use NSEC Private Key</option>
                     </select>
                 </div>
 
-                <div class="form-group">
+                <!-- NSEC -->
+                <div class="form-group" id="nsecGroup" style="display:none">
+                    <label class="form-label">Enter your NSEC</label>
+                    <input type="password" class="form-input" id="nsecInput" placeholder="nsec1...">
+                    <div class="form-hint">Your private key will be stored locally</div>
+                </div>
+
+                <div class="form-group" id="nymGroup">
                     <label class="form-label">Choose Your Nym's nickname (optional)</label>
-                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nick"
+                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for profile name"
                         maxlength="20">
                     <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
@@ -2361,6 +2370,8 @@
                 this.pubkey = null;
                 this.privkey = null;
                 this.nym = null;
+                this.connectionMode = 'ephemeral';
+                this.originalProfile = null;
                 this.currentChannel = 'bar';
                 this.currentGeohash = '';
                 this.currentPM = null;
@@ -2389,6 +2400,8 @@
                 this.geohashRegex = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
                 this.pinnedChannels = new Set();
                 this.reactions = new Map();
+                this.failedRelays = new Map();
+                this.relayRetryDelay = 15 * 60 * 1000;
                 this.floodTracking = new Map();
                 this.activeReactionPicker = null;
                 this.activeReactionPickerButton = null;
@@ -2515,6 +2528,22 @@
                 this.currentZapInvoice = null;
                 this.zapCheckInterval = null;
                 this.zapInvoiceData = null;
+            }
+
+            // NSEC decode method
+            decodeNsec(nsec) {
+                try {
+                    // Use nostr-tools nip19 decode
+                    if (window.NostrTools && window.NostrTools.nip19) {
+                        const decoded = window.NostrTools.nip19.decode(nsec);
+                        if (decoded.type === 'nsec') {
+                            return decoded.data;
+                        }
+                    }
+                    throw new Error('Invalid nsec format');
+                } catch (error) {
+                    throw new Error('Failed to decode nsec: ' + error.message);
+                }
             }
 
             updateRelayStatus() {
@@ -2758,8 +2787,13 @@
                         // Show loading message
                         this.displaySystemMessage(`Checking if @${nym} can receive zaps...`);
 
-                        // Fetch the lightning address (will check cache first, then fetch if needed)
-                        const lnAddress = await this.fetchLightningAddressForUser(pubkey);
+                        // Force fetch the lightning address (bypass cache to ensure fresh check)
+                        let lnAddress = this.userLightningAddresses.get(pubkey);
+
+                        // If not cached or we want to be sure, fetch it
+                        if (!lnAddress) {
+                            lnAddress = await this.fetchLightningAddressForUser(pubkey);
+                        }
 
                         if (lnAddress) {
                             // User has lightning address, show zap modal
@@ -2898,9 +2932,31 @@
                 const reactOption = document.getElementById('ctxReact');
                 reactOption.style.display = messageId ? 'block' : 'none';
 
-                // Position menu
-                menu.style.left = e.pageX + 'px';
-                menu.style.top = e.pageY + 'px';
+                // Position menu with boundary checking
+                menu.style.display = 'block'; // Temporarily show to get dimensions
+                const menuRect = menu.getBoundingClientRect();
+                const windowHeight = window.innerHeight;
+                const windowWidth = window.innerWidth;
+
+                let top = e.pageY;
+                let left = e.pageX;
+
+                // Check if menu would go off bottom of screen
+                if (top + menuRect.height > windowHeight) {
+                    top = windowHeight - menuRect.height - 10;
+                }
+
+                // Check if menu would go off right of screen
+                if (left + menuRect.width > windowWidth) {
+                    left = windowWidth - menuRect.width - 10;
+                }
+
+                // Ensure menu doesn't go off top or left
+                top = Math.max(10, top);
+                left = Math.max(10, left);
+
+                menu.style.left = left + 'px';
+                menu.style.top = top + 'px';
                 menu.classList.add('active');
             }
 
@@ -3040,6 +3096,11 @@
                     // If not already connected, try to connect to broadcast relays one by one
                     if (!initialConnected) {
                         for (const relayUrl of this.broadcastRelays) {
+                            if (!this.shouldRetryRelay(relayUrl)) {
+                                console.log(`Skipping broadcast relay ${relayUrl} - waiting for retry delay`);
+                                continue;
+                            }
+
                             try {
                                 await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000);
                                 initialConnected = true;
@@ -3048,6 +3109,7 @@
                                 break;
                             } catch (err) {
                                 console.log(`Failed to connect to ${relayUrl}, trying next...`);
+                                this.trackRelayFailure(relayUrl);
                             }
                         }
                     }
@@ -3070,30 +3132,38 @@
 
                     // Now connect to remaining broadcast relays in background
                     this.broadcastRelays.forEach(relayUrl => {
-                        if (!this.relayPool.has(relayUrl)) {
+                        if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                             this.connectToRelay(relayUrl, 'broadcast')
                                 .then(() => {
                                     this.subscribeToSingleRelay(relayUrl);
                                     this.updateConnectionStatus();
                                 })
-                                .catch(err => console.log(`Failed to connect to ${relayUrl}:`, err));
+                                .catch(err => {
+                                    console.log(`Failed to connect to ${relayUrl}:`, err);
+                                    this.trackRelayFailure(relayUrl);
+                                });
                         }
                     });
 
                     // Connect to nosflare for sending only (no subscriptions)
-                    this.connectToRelay(this.nosflareRelay, 'nosflare')
-                        .then(() => {
-                            console.log('Connected to nosflare for broadcasting');
-                            this.updateConnectionStatus();
-                        })
-                        .catch(err => console.log(`Failed to connect to nosflare:`, err));
+                    if (this.shouldRetryRelay(this.nosflareRelay)) {
+                        this.connectToRelay(this.nosflareRelay, 'nosflare')
+                            .then(() => {
+                                console.log('Connected to nosflare for broadcasting');
+                                this.updateConnectionStatus();
+                            })
+                            .catch(err => {
+                                console.log(`Failed to connect to nosflare:`, err);
+                                this.trackRelayFailure(this.nosflareRelay);
+                            });
+                    }
 
                     // Discover additional relays in the background
                     setTimeout(() => {
                         this.discoverRelays().then(() => {
                             // Connect to discovered relays for additional reading sources
                             const relaysToConnect = Array.from(this.discoveredRelays)
-                                .filter(url => !this.relayPool.has(url))
+                                .filter(url => !this.relayPool.has(url) && this.shouldRetryRelay(url))
                                 .slice(0, this.maxRelaysForReq);
 
                             if (relaysToConnect.length > 0) {
@@ -3105,7 +3175,10 @@
                                                 this.subscribeToSingleRelay(relayUrl);
                                                 this.updateConnectionStatus();
                                             })
-                                            .catch(err => console.log(`Failed to connect to ${relayUrl}:`, err));
+                                            .catch(err => {
+                                                console.log(`Failed to connect to ${relayUrl}:`, err);
+                                                this.trackRelayFailure(relayUrl);
+                                            });
                                     }, index * 100);
                                 });
                             }
@@ -3126,6 +3199,11 @@
             async quickConnect() {
                 // Try broadcast relays in order with very short timeout
                 for (const relayUrl of this.broadcastRelays) {
+                    if (!this.shouldRetryRelay(relayUrl)) {
+                        console.log(`Skipping quick connect to ${relayUrl} - waiting for retry delay`);
+                        continue;
+                    }
+
                     try {
                         await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 1500); // 1.5 second timeout
 
@@ -3142,6 +3220,7 @@
                         return true;
                     } catch (err) {
                         console.log(`Quick connect failed to ${relayUrl}, trying next...`);
+                        this.trackRelayFailure(relayUrl);
                     }
                 }
 
@@ -3217,6 +3296,22 @@
                 ]);
             }
 
+            shouldRetryRelay(relayUrl) {
+                const failedAttempt = this.failedRelays.get(relayUrl);
+                if (!failedAttempt) return true; // Never failed before, OK to retry
+
+                const now = Date.now();
+                return now - failedAttempt > this.relayRetryDelay; // Check if enough time has passed
+            }
+
+            trackRelayFailure(relayUrl) {
+                this.failedRelays.set(relayUrl, Date.now());
+            }
+
+            clearRelayFailure(relayUrl) {
+                this.failedRelays.delete(relayUrl);
+            }
+
             async connectToRelay(relayUrl, type = 'read') {
                 return new Promise((resolve, reject) => {
                     try {
@@ -3228,6 +3323,12 @@
                                 return;
                             }
                             // Was expired and removed, continue connecting
+                        }
+
+                        if (!this.shouldRetryRelay(relayUrl)) {
+                            console.log(`Skipping relay ${relayUrl} - waiting for retry delay to expire`);
+                            resolve();
+                            return;
                         }
 
                         // Skip if already connected
@@ -3247,6 +3348,8 @@
                                 connectedAt: Date.now() // Track when connected
                             });
                             console.log(`Connected to ${type} relay: ${relayUrl}`);
+
+                            this.clearRelayFailure(relayUrl);
 
                             // For broadcast/nosflare relays, just resolve
                             if (type === 'broadcast' || type === 'nosflare') {
@@ -3345,6 +3448,7 @@
                                         })
                                         .catch(err => {
                                             console.error(`Failed to reconnect to ${relayUrl}:`, err);
+                                            this.trackRelayFailure(relayUrl);
                                             // Keep trying, but don't spam messages
                                         });
                                 }, 5000);
@@ -3353,6 +3457,7 @@
 
                     } catch (error) {
                         console.error(`Connection failed for ${relayUrl}:`, error);
+                        this.trackRelayFailure(relayUrl);
                         reject(error);
                     }
                 });
@@ -3393,7 +3498,8 @@
                         !this.blacklistedRelays.has(relay) &&
                         !this.broadcastRelays.includes(relay) &&
                         relay !== this.nosflareRelay &&
-                        !relaysToTry.includes(relay)) {
+                        !relaysToTry.includes(relay) &&
+                        this.shouldRetryRelay(relay)) {
                         relaysToTry.push(relay);
                     }
                 }
@@ -3413,6 +3519,7 @@
                                 })
                                 .catch(err => {
                                     console.log(`Failed to reconnect to ${relayUrl}:`, err);
+                                    this.trackRelayFailure(relayUrl);
                                 });
                         }, i * 200); // Stagger by 200ms
                     }
@@ -3426,7 +3533,8 @@
                             .filter(url => !this.relayPool.has(url) &&
                                 !this.blacklistedRelays.has(url) &&
                                 !this.broadcastRelays.includes(url) &&
-                                url !== this.nosflareRelay)
+                                url !== this.nosflareRelay &&
+                                this.shouldRetryRelay(url))
                             .slice(0, 10);
 
                         if (newRelaysToTry.length > 0) {
@@ -3441,6 +3549,7 @@
                                         })
                                         .catch(err => {
                                             console.log(`Failed to connect to ${relayUrl}:`, err);
+                                            this.trackRelayFailure(relayUrl);
                                         });
                                 }, index * 200);
                             });
@@ -3700,36 +3809,60 @@
             async saveToNostrProfile() {
                 if (!this.pubkey || !this.lightningAddress) return;
 
-                try {
-                    // Create kind 0 (profile) event with lightning address
-                    const profileEvent = {
-                        kind: 0,
-                        created_at: Math.floor(Date.now() / 1000),
-                        tags: [],
-                        content: JSON.stringify({
-                            name: this.nym,
-                            lud16: this.lightningAddress, // Lightning address field
-                            about: `NYM user - ${this.nym}`,
-                            display_name: this.nym
-                        }),
-                        pubkey: this.pubkey
-                    };
+                // Don't modify profile for non-ephemeral connections unless only updating lightning address
+                if (this.connectionMode !== 'ephemeral' && this.originalProfile) {
+                    try {
+                        // Only update lightning address in existing profile
+                        const updatedProfile = {
+                            ...this.originalProfile,
+                            lud16: this.lightningAddress
+                        };
 
-                    // Sign event
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        signedEvent = await window.nostr.signEvent(profileEvent);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(profileEvent, this.privkey);
+                        const profileEvent = {
+                            kind: 0,
+                            created_at: Math.floor(Date.now() / 1000),
+                            tags: [],
+                            content: JSON.stringify(updatedProfile),
+                            pubkey: this.pubkey
+                        };
+
+                        // Sign based on connection mode
+                        let signedEvent;
+                        if (this.connectionMode === 'extension' && window.nostr) {
+                            signedEvent = await window.nostr.signEvent(profileEvent);
+                        } else if (this.connectionMode === 'nsec' && this.privkey) {
+                            signedEvent = window.NostrTools.finalizeEvent(profileEvent, this.privkey);
+                        }
+
+                        if (signedEvent) {
+                            this.sendToRelay(["EVENT", signedEvent]);
+                            this.displaySystemMessage('Lightning address updated in profile');
+                        }
+                    } catch (error) {
+                        console.error('Failed to update profile:', error);
                     }
+                } else if (this.connectionMode === 'ephemeral') {
+                    // Original ephemeral behavior - create minimal profile
+                    try {
+                        const profileEvent = {
+                            kind: 0,
+                            created_at: Math.floor(Date.now() / 1000),
+                            tags: [],
+                            content: JSON.stringify({
+                                name: this.nym,
+                                lud16: this.lightningAddress,
+                                about: `NYM user - ${this.nym}`,
+                                display_name: this.nym
+                            }),
+                            pubkey: this.pubkey
+                        };
 
-                    if (signedEvent) {
+                        const signedEvent = window.NostrTools.finalizeEvent(profileEvent, this.privkey);
                         this.sendToRelay(["EVENT", signedEvent]);
-                        this.displaySystemMessage('Lightning address saved to the Nostr profile');
+                        this.displaySystemMessage('Lightning address saved to profile');
+                    } catch (error) {
+                        console.error('Failed to save profile:', error);
                     }
-                } catch (error) {
-                    console.error('Failed to save lightning address to profile:', error);
-                    this.displaySystemMessage('Failed to save lightning address to profile: ' + error.message);
                 }
             }
 
@@ -3795,6 +3928,39 @@
                 document.getElementById('zapModal').classList.add('active');
             }
 
+            showProfileZapModal(recipientPubkey, recipientNym, lnAddress) {
+                // Store target info for profile zap (no messageId)
+                this.currentZapTarget = {
+                    messageId: null, // No message ID for profile zaps
+                    recipientPubkey,
+                    recipientNym,
+                    lnAddress,
+                    isProfileZap: true
+                };
+
+                // Reset modal state
+                document.getElementById('zapAmountSection').style.display = 'block';
+                document.getElementById('zapInvoiceSection').style.display = 'none';
+                document.getElementById('zapRecipientInfo').textContent = `Zapping @${recipientNym}'s profile`;
+                document.getElementById('zapCustomAmount').value = '';
+                document.getElementById('zapComment').value = '';
+                document.getElementById('zapSendBtn').textContent = 'Generate Invoice';
+                document.getElementById('zapSendBtn').onclick = () => this.generateZapInvoice();
+
+                // Clear selected amounts
+                document.querySelectorAll('.zap-amount-btn').forEach(btn => {
+                    btn.classList.remove('selected');
+                    btn.onclick = (e) => {
+                        document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
+                        e.target.closest('.zap-amount-btn').classList.add('selected');
+                        document.getElementById('zapCustomAmount').value = '';
+                    };
+                });
+
+                // Show modal
+                document.getElementById('zapModal').classList.add('active');
+            }
+
             cleanupOldLightningAddress() {
                 // Remove old non-pubkey-specific entry if it exists
                 const oldAddress = localStorage.getItem('nym_lightning_address');
@@ -3807,8 +3973,8 @@
             // Create zap request event (NIP-57)
             async createZapRequest(amountSats, comment) {
                 try {
-                    if (!this.currentZapTarget || !this.currentZapTarget.messageId) {
-                        console.error('No target message for zap request');
+                    if (!this.currentZapTarget) {
+                        console.error('No target for zap request');
                         return null;
                     }
 
@@ -3816,7 +3982,6 @@
                         kind: 9734,
                         created_at: Math.floor(Date.now() / 1000),
                         tags: [
-                            ['e', this.currentZapTarget.messageId], // Event being zapped
                             ['p', this.currentZapTarget.recipientPubkey], // Recipient of zap
                             ['amount', (parseInt(amountSats) * 1000).toString()], // Amount in millisats
                             ['relays', ...this.broadcastRelays.slice(0, 5)] // Limit to 5 relays
@@ -3824,6 +3989,11 @@
                         content: comment || '',
                         pubkey: this.pubkey
                     };
+
+                    // Add event tag only if this is a message zap (not profile zap)
+                    if (this.currentZapTarget.messageId) {
+                        zapRequest.tags.unshift(['e', this.currentZapTarget.messageId]); // Event being zapped
+                    }
 
                     // Sign the request
                     let signedEvent;
@@ -6155,6 +6325,11 @@
                                 try {
                                     const profile = JSON.parse(event.content);
 
+                                    // Store original profile for non-ephemeral connections
+                                    if (this.connectionMode !== 'ephemeral') {
+                                        this.originalProfile = profile;
+                                    }
+
                                     // Get name
                                     if (profile.name || profile.username || profile.display_name) {
                                         const profileName = profile.name || profile.username || profile.display_name;
@@ -6163,14 +6338,12 @@
                                         console.log('Profile loaded:', this.nym);
                                     }
 
-                                    // Get lightning address if it's our own profile
+                                    // Get lightning address
                                     if (pubkey === this.pubkey && (profile.lud16 || profile.lud06)) {
                                         const lnAddress = profile.lud16 || profile.lud06;
                                         this.lightningAddress = lnAddress;
-                                        // Cache it with pubkey-specific key
                                         localStorage.setItem(`nym_lightning_address_${this.pubkey}`, lnAddress);
                                         this.updateLightningAddressDisplay();
-                                        console.log('Lightning address loaded from profile:', lnAddress);
                                     }
                                 } catch (e) {
                                     console.error('Failed to parse profile:', e);
@@ -7139,8 +7312,8 @@
                     '/q': { desc: 'Shortcut for /quote', fn: (args) => this.cmdQuote(args) },
                     '/brb': { desc: 'Set away message', fn: (args) => this.cmdBRB(args) },
                     '/back': { desc: 'Clear away message', fn: () => this.cmdBack() },
+                    '/zap': { desc: 'Zap a user profile', fn: (args) => this.cmdZap(args) },
                     '/leave': { desc: 'Leave current channel', fn: () => this.cmdLeave() },
-                    '/part': { desc: 'Alias for /leave', fn: () => this.cmdLeave() },
                     '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() }
                 };
             }
@@ -7302,15 +7475,27 @@
 
                 if (users.length > 0) {
                     dropdown.innerHTML = users.map((user, index) => `
-                        <div class="autocomplete-item ${index === 0 ? 'selected' : ''}" data-nym="${user.nym}">
-                            <strong>@${this.escapeHtml(user.nym)}</strong>
-                        </div>
-                    `).join('');
+            <div class="autocomplete-item ${index === 0 ? 'selected' : ''}" 
+                 data-nym="${user.nym}"
+                 onclick="nym.selectSpecificAutocomplete('${user.nym}')">
+                <strong>@${this.escapeHtml(user.nym)}</strong>
+            </div>
+        `).join('');
                     dropdown.classList.add('active');
                     this.autocompleteIndex = 0;
                 } else {
                     this.hideAutocomplete();
                 }
+            }
+
+            selectSpecificAutocomplete(nym) {
+                const input = document.getElementById('messageInput');
+                const value = input.value;
+                const lastAtIndex = value.lastIndexOf('@');
+
+                input.value = value.substring(0, lastAtIndex) + '@' + nym + ' ';
+                input.focus();
+                this.hideAutocomplete();
             }
 
             hideAutocomplete() {
@@ -7750,6 +7935,45 @@
                     this.updateUserList();
                 } else {
                     this.displaySystemMessage('You were not away');
+                }
+            }
+
+            async cmdZap(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /zap nym');
+                    return;
+                }
+
+                const targetNym = args.trim();
+
+                // Find user by nym
+                let targetPubkey = null;
+                this.users.forEach((user, pubkey) => {
+                    if (user.nym === targetNym) {
+                        targetPubkey = pubkey;
+                    }
+                });
+
+                if (!targetPubkey) {
+                    this.displaySystemMessage(`User ${targetNym} not found`);
+                    return;
+                }
+
+                if (targetPubkey === this.pubkey) {
+                    this.displaySystemMessage("You can't zap yourself");
+                    return;
+                }
+
+                // Check for lightning address
+                this.displaySystemMessage(`Checking if @${targetNym} can receive zaps...`);
+
+                const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
+
+                if (lnAddress) {
+                    // Show zap modal for profile zap (no messageId)
+                    this.showProfileZapModal(targetPubkey, targetNym, lnAddress);
+                } else {
+                    this.displaySystemMessage(`@${targetNym} cannot receive zaps (no lightning address set)`);
                 }
             }
 
@@ -8599,7 +8823,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.3.5 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.5.5 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -8687,17 +8911,16 @@
         async function initializeNym() {
             try {
                 const mode = document.getElementById('connectionMode').value;
+                nym.connectionMode = mode; // Store connection mode
 
                 // Get or generate nym first
                 const nymInput = document.getElementById('nymInput').value.trim();
 
-                // Generate or use extension
+                // Handle different connection modes
                 if (mode === 'ephemeral') {
                     nym.nym = nymInput || nym.generateRandomNym();
                     document.getElementById('currentNym').textContent = nym.nym;
                     await nym.generateKeypair();
-
-                    // Clear any saved connection for ephemeral mode
                     localStorage.removeItem('nym_connection_mode');
 
                 } else if (mode === 'extension') {
@@ -8712,21 +8935,40 @@
                         nym.nym = nymInput;
                         document.getElementById('currentNym').textContent = nym.nym;
                     }
+
+                } else if (mode === 'nsec') {
+                    const nsecValue = document.getElementById('nsecInput').value.trim();
+                    if (!nsecValue) {
+                        throw new Error('Please enter your NSEC');
+                    }
+
+                    // Decode NSEC to get private key
+                    nym.privkey = nym.decodeNsec(nsecValue);
+                    nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
+
+                    nym.nym = nymInput || 'Loading profile...';
+                    document.getElementById('currentNym').textContent = nym.nym;
+
+                    // Store NSEC securely (consider encryption in production)
+                    localStorage.setItem('nym_nsec', nsecValue);
+
+                    nym.nym = nymInput || 'Loading profile...';
+                    document.getElementById('currentNym').textContent = nym.nym;
                 }
 
                 // Load lightning address for this specific pubkey
                 await nym.loadLightningAddress();
 
-                // Save connection preferences if using extension
-                if (mode === 'extension') {
+                // Save connection preferences
+                if (mode !== 'ephemeral') {
                     localStorage.setItem('nym_connection_mode', mode);
                 }
 
-                // Connect to relays using NIP-66 discovery
+                // Connect to relays
                 await nym.connectToRelays();
 
-                // For extension mode, try fetching profile again after connection
-                if (mode === 'extension' && nym.connected) {
+                // Fetch profile after connection for persistent modes
+                if ((mode === 'extension' || mode === 'nsec') && nym.connected) {
                     await nym.fetchProfileFromRelay(nym.pubkey);
                 }
 
@@ -8739,8 +8981,9 @@
                 closeModal('setupModal');
 
                 // Show welcome message
+                const modeText = mode === 'ephemeral' ? 'ephemeral' : 'persistent Nostr';
                 nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Type /help for available commands.`);
-                nym.displaySystemMessage(`Your ${mode === 'extension' ? 'Nostr' : 'ephemeral'} identity is active for this session${mode === 'extension' ? '' : ' only'}.`);
+                nym.displaySystemMessage(`Your ${modeText} identity is active${mode === 'ephemeral' ? ' for this session only' : ''}.`);
                 nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
             } catch (error) {
@@ -8803,13 +9046,29 @@
 
             // Connection mode change listener
             document.getElementById('connectionMode').addEventListener('change', (e) => {
+                const mode = e.target.value;
+                const nsecGroup = document.getElementById('nsecGroup');
+                const nymGroup = document.getElementById('nymGroup');
                 const hint = document.getElementById('nymHint');
-                if (e.target.value === 'extension') {
-                    hint.textContent = 'Will use your Nostr profile name if available';
-                    document.getElementById('nymInput').placeholder = 'Override profile name (optional)';
-                } else {
-                    hint.textContent = 'Your ephemeral pseudonym for this session';
-                    document.getElementById('nymInput').placeholder = 'Leave empty for random nick';
+                const nymInput = document.getElementById('nymInput');
+
+                // Hide all special groups first
+                nsecGroup.style.display = 'none';
+
+                switch (mode) {
+                    case 'ephemeral':
+                        hint.textContent = 'Your ephemeral pseudonym for this session';
+                        nymInput.placeholder = 'Leave empty for random nick';
+                        break;
+                    case 'extension':
+                        hint.textContent = 'Will use your Nostr profile name if available';
+                        nymInput.placeholder = 'Override profile name (optional)';
+                        break;
+                    case 'nsec':
+                        nsecGroup.style.display = 'block';
+                        hint.textContent = 'Will use your Nostr profile name if available';
+                        nymInput.placeholder = 'Override profile name (optional)';
+                        break;
                 }
             });
 
