@@ -5840,6 +5840,9 @@
                     if (!this.pmConversations.has(conversationPubkey)) {
                         const otherNym = isIncoming ? senderNym : this.getNymFromPubkey(conversationPubkey);
                         this.addPMConversation(otherNym, conversationPubkey);
+                    } else if (isIncoming && !isHistorical) {
+                        // Move existing PM conversation to top when new message received
+                        this.movePMToTop(conversationPubkey);
                     }
 
                     // Check if this is a historical message (older than 10 seconds)
@@ -6150,6 +6153,18 @@
                 }
             }
 
+            movePMToTop(pubkey) {
+                const pmList = document.getElementById('pmList');
+                const pmItem = pmList.querySelector(`[data-pubkey="${pubkey}"]`);
+
+                if (pmItem && pmList.firstChild !== pmItem) {
+                    // Remove from current position
+                    pmItem.remove();
+                    // Insert at the beginning
+                    pmList.insertBefore(pmItem, pmList.firstChild);
+                }
+            }
+
             addPMConversation(nym, pubkey) {
                 if (!this.pmConversations.has(pubkey)) {
                     this.pmConversations.set(pubkey, nym);
@@ -6159,15 +6174,17 @@
                     item.className = 'pm-item';
                     item.dataset.pubkey = pubkey;
                     item.innerHTML = `
-                                    <span class="pm-name">@${this.escapeHtml(nym)}</span>
-                                    <div class="channel-badges">
-                                        <span class="pm-badge">PM</span>
-                                        <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
-                                        <span class="unread-badge" style="display:none">0</span>
-                                    </div>
-                                `;
+            <span class="pm-name">@${this.escapeHtml(nym)}</span>
+            <div class="channel-badges">
+                <span class="pm-badge">PM</span>
+                <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
+                <span class="unread-badge" style="display:none">0</span>
+            </div>
+        `;
                     item.onclick = () => this.openPM(nym, pubkey);
-                    pmList.appendChild(item);
+
+                    // Insert at the beginning instead of appendChild
+                    pmList.insertBefore(item, pmList.firstChild);
                 }
             }
 
