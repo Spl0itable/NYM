@@ -8873,7 +8873,60 @@
         async function checkSavedConnection() {
             const savedMode = localStorage.getItem('nym_connection_mode');
             const savedRelay = localStorage.getItem('nym_relay_url');
+            const savedNsec = localStorage.getItem('nym_nsec');
 
+            // Check if we have a saved nsec session (even without connection mode)
+            if (savedNsec && !savedMode) {
+                try {
+                    // Hide setup modal
+                    const setupModal = document.getElementById('setupModal');
+                    setupModal.classList.remove('active');
+
+                    nym.displaySystemMessage('Restoring NSEC session...');
+
+                    // Restore from saved nsec
+                    nym.privkey = nym.decodeNsec(savedNsec);
+                    nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
+                    nym.connectionMode = 'nsec'; // Set connection mode
+
+                    // Set a default nym while loading profile
+                    nym.nym = 'Loading profile...';
+                    document.getElementById('currentNym').textContent = nym.nym;
+
+                    // Connect to relays
+                    await nym.connectToRelays();
+
+                    // Fetch profile after connection
+                    if (nym.connected) {
+                        await nym.fetchProfileFromRelay(nym.pubkey);
+
+                        // If still loading profile, generate a default nym
+                        if (nym.nym === 'Loading profile...') {
+                            nym.nym = nym.generateRandomNym();
+                            document.getElementById('currentNym').textContent = nym.nym;
+                        }
+                    }
+
+                    // Request notification permission
+                    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+                        Notification.requestPermission();
+                    }
+
+                    // Show welcome back message
+                    nym.displaySystemMessage(`Welcome back to NYM, ${nym.nym}!`);
+                    nym.displaySystemMessage(`Your Nostr identity has been restored.`);
+                    nym.displaySystemMessage(`Type /help for available commands.`);
+
+                } catch (error) {
+                    console.error('Failed to restore connection:', error);
+                    // Clear invalid data and show setup modal
+                    localStorage.removeItem('nym_nsec');
+                    document.getElementById('setupModal').classList.add('active');
+                }
+                return;
+            }
+
+            // Original connection mode restoration logic
             if (savedMode && savedMode !== 'ephemeral' && ((savedMode === 'extension' && window.nostr) || savedMode === 'nsec')) {
                 try {
                     // Hide setup modal properly by removing active class
