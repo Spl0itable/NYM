@@ -8875,8 +8875,8 @@
             const savedRelay = localStorage.getItem('nym_relay_url');
             const savedNsec = localStorage.getItem('nym_nsec');
 
-            // Check if we have a saved nsec session (even without connection mode)
-            if (savedNsec && !savedMode) {
+            // Check if we have a saved nsec - this should be the priority check
+            if (savedNsec) {
                 try {
                     // Hide setup modal
                     const setupModal = document.getElementById('setupModal');
@@ -8921,33 +8921,23 @@
                     console.error('Failed to restore connection:', error);
                     // Clear invalid data and show setup modal
                     localStorage.removeItem('nym_nsec');
+                    localStorage.removeItem('nym_connection_mode');
+                    localStorage.removeItem('nym_relay_url');
                     document.getElementById('setupModal').classList.add('active');
                 }
                 return;
             }
 
-            // Original connection mode restoration logic
-            if (savedMode && savedMode !== 'ephemeral' && ((savedMode === 'extension' && window.nostr) || savedMode === 'nsec')) {
+            // Original connection mode restoration logic for extension mode
+            if (savedMode === 'extension' && window.nostr) {
                 try {
                     // Hide setup modal properly by removing active class
                     const setupModal = document.getElementById('setupModal');
                     setupModal.classList.remove('active');
 
-                    if (savedMode === 'extension') {
-                        nym.displaySystemMessage('Reconnecting with Nostr extension...');
-                        // Use extension
-                        await nym.useExtension();
-                    } else if (savedMode === 'nsec') {
-                        nym.displaySystemMessage('Restoring NSEC session...');
-                        // Restore from saved nsec
-                        const savedNsec = localStorage.getItem('nym_nsec');
-                        if (savedNsec) {
-                            nym.privkey = nym.decodeNsec(savedNsec);
-                            nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
-                        } else {
-                            throw new Error('No saved NSEC found');
-                        }
-                    }
+                    nym.displaySystemMessage('Reconnecting with Nostr extension...');
+                    // Use extension
+                    await nym.useExtension();
 
                     // Connect to saved relay
                     await nym.connectToRelay(savedRelay);
@@ -8972,7 +8962,6 @@
                     // Show setup modal if auto-connect fails - ensure it has active class
                     localStorage.removeItem('nym_connection_mode');
                     localStorage.removeItem('nym_relay_url');
-                    localStorage.removeItem('nym_nsec'); // Remove invalid nsec
                     document.getElementById('setupModal').classList.add('active');
                 }
             }
