@@ -302,6 +302,7 @@
             justify-content: space-between;
             pointer-events: auto;
             z-index: 1;
+            min-height: 35px;
         }
 
         .channel-item.pinned {
@@ -348,6 +349,12 @@
         .channel-name,
         .pm-name {
             flex: 1;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            word-break: break-word;
+            min-width: 0;
+            max-width: 100%;
+            display: block;
         }
 
         .channel-badges {
@@ -355,6 +362,8 @@
             gap: 5px;
             align-items: center;
             pointer-events: none;
+            flex-shrink: 0;
+            margin-left: 5px;
         }
 
         .channel-badges>* {
@@ -1021,6 +1030,9 @@
             font-size: 12px;
             color: var(--text-dim);
             font-style: italic;
+            word-wrap: break-word;
+            overflow-wrap: anywhere;
+            max-width: 100%;
         }
 
         .message-content a {
@@ -1068,6 +1080,7 @@
             padding: 2px 4px;
             font-family: var(--font-mono);
             color: var(--secondary);
+            word-break: break-word;
         }
 
         .message-content pre {
@@ -1076,6 +1089,18 @@
             padding: 10px;
             margin: 10px 0;
             overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-width: 100%;
+        }
+
+        pre {
+            font-family: var(--font-mono);
+            line-height: 1.2;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-width: 100%;
         }
 
         .message-content blockquote {
@@ -1988,7 +2013,7 @@
             <div class="sidebar-actions">
                 <button class="icon-btn" onclick="showChannelModal(); nym.closeSidebar();">+ Channel</button>
                 <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();">Settings</button>
-                <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Signout">Signout</button>
+                <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Logout">Logout</button>
                 <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();">About</button>
             </div>
 
@@ -2063,7 +2088,7 @@
                 <div class="header-actions">
                     <button class="icon-btn" onclick="showChannelModal()">+ Channel</button>
                     <button class="icon-btn" onclick="showSettings()">Settings</button>
-                    <button class="icon-btn" onclick="signOut()" title="Signout">Signout</button>
+                    <button class="icon-btn" onclick="signOut()" title="Logout">Logout</button>
                     <button class="icon-btn" onclick="showAbout()">About</button>
                 </div>
             </header>
@@ -2285,8 +2310,10 @@
 
                 <div class="form-group" id="geohashGroup" style="display:none">
                     <label class="form-label">Geohash</label>
-                    <input type="text" class="form-input" id="geohashInput" placeholder="e.g., w1, dr5r, etc.">
-                    <div class="form-hint">Enter a geohash code for location-based channel</div>
+                    <input type="text" class="form-input" id="geohashInput" placeholder="e.g., w1, dr5r, etc."
+                        maxlength="12"
+                        oninput="this.value = this.value.toLowerCase().replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '')">
+                    <div class="form-hint">Enter a geohash code (valid chars: 0-9, b-z except a,i,l,o)</div>
                 </div>
             </div>
             <div class="modal-actions">
@@ -2378,7 +2405,284 @@
                 this.relayKinds = new Map();
                 this.relayVerificationTimeout = 10000;
                 this.monitorRelays = ['wss://relay.nostr.watch', 'wss://monitorlizard.nostr1.com'];
-                this.broadcastRelays = ['wss://relay.damus.io', 'wss://offchain.pub', 'wss://relay.primal.net', 'wss://nos.lol'];
+                this.broadcastRelays = [
+                    'wss://relay.damus.io',
+                    'wss://offchain.pub',
+                    'wss://relay.primal.net',
+                    'wss://nos.lol',
+                    'wss://a.nos.lol',
+                    'wss://adre.su',
+                    'wss://alien.macneilmediagroup.com',
+                    'wss://articles.layer3.news',
+                    'wss://black.nostrcity.club',
+                    'wss://bostr.bitcointxoko.com',
+                    'wss://bostr.shop',
+                    'wss://bostr.syobon.net',
+                    'wss://bucket.coracle.social',
+                    'wss://chorus.pjv.me',
+                    'wss://communities.nos.social',
+                    'wss://cyberspace.nostr1.com',
+                    'wss://dev-nostr.bityacht.io',
+                    'wss://dev-relay.lnfi.network',
+                    'wss://fanfares.nostr1.com',
+                    'wss://freelay.sovbit.host',
+                    'wss://gnostr.com',
+                    'wss://inbox.azzamo.net',
+                    'wss://ithurtswhenip.ee',
+                    'wss://khatru.nostrver.se',
+                    'wss://kitchen.zap.cooking',
+                    'wss://knostr.neutrine.com',
+                    'wss://librerelay.aaroniumii.com',
+                    'wss://multiplexer.huszonegy.world',
+                    'wss://n.ok0.org',
+                    'wss://no.str.cr',
+                    'wss://nostrelites.org',
+                    'wss://nostr-01.yakihonne.com',
+                    'wss://nostr-02.dorafactory.org',
+                    'wss://nostr-02.yakihonne.com',
+                    'wss://nostr-03.dorafactory.org',
+                    'wss://nostr-1.nbo.angani.co',
+                    'wss://nostr-2.21crypto.ch',
+                    'wss://nostr-dev.wellorder.net',
+                    'wss://nostr-pub.wellorder.net',
+                    'wss://nostr-relay-1.trustlessenterprise.com',
+                    'wss://nostr-relay.amethyst.name',
+                    'wss://nostr-relay.cbrx.io',
+                    'wss://nostr-relay.moe.gift',
+                    'wss://nostr-relay.online',
+                    'wss://nostr-relay.psfoundation.info',
+                    'wss://nostr-relay.schnitzel.world',
+                    'wss://nostr-relay.shirogaku.xyz',
+                    'wss://nostr-relay.zimage.com',
+                    'wss://nostr-rs-relay-ishosta.phamthanh.me',
+                    'wss://nostr-rs-relay.dev.fedibtc.com',
+                    'wss://nostr-verif.slothy.win',
+                    'wss://nostr-verified.wellorder.net',
+                    'wss://nostr.0x7e.xyz',
+                    'wss://nostr.21crypto.ch',
+                    'wss://nostr.2b9t.xyz',
+                    'wss://nostr.4rs.nl',
+                    'wss://nostr.agentcampfire.com',
+                    'wss://nostr.azzamo.net',
+                    'wss://nostr.bilthon.dev',
+                    'wss://nostr.blankfors.se',
+                    'wss://nostr.camalolo.com',
+                    'wss://nostr.carroarmato0.be',
+                    'wss://nostr.chaima.info',
+                    'wss://nostr.coincards.com',
+                    'wss://nostr.coincrowd.fund',
+                    'wss://nostr.community.ath.cx',
+                    'wss://nostr.data.haus',
+                    'wss://nostr.dbtc.link',
+                    'wss://nostr.easydns.ca',
+                    'wss://nostr.einundzwanzig.space',
+                    'wss://nostr.excentered.com',
+                    'wss://nostr.fbxl.net',
+                    'wss://nostr.hekster.org',
+                    'wss://nostr.hifish.org',
+                    'wss://nostr.hoppe-relay.it.com',
+                    'wss://nostr.huszonegy.world',
+                    'wss://nostr.jfischer.org',
+                    'wss://nostr.kalf.org',
+                    'wss://nostr.kungfu-g.rip',
+                    'wss://nostr.l484.com',
+                    'wss://nostr.liberty.fans',
+                    'wss://nostr.lojong.info',
+                    'wss://nostr.makibisskey.work',
+                    'wss://nostr.massmux.com',
+                    'wss://nostr.middling.mydns.jp',
+                    'wss://nostr.mom',
+                    'wss://nostr.myshosholoza.co.za',
+                    'wss://nostr.n7ekb.net',
+                    'wss://nostr.namek.link',
+                    'wss://nostr.night7.space',
+                    'wss://nostr.nodeofsven.com',
+                    'wss://nostr.notribe.net',
+                    'wss://nostr.novacisko.cz',
+                    'wss://nostr.now',
+                    'wss://nostr.overmind.lol',
+                    'wss://nostr.oxtr.dev',
+                    'wss://nostr.plantroon.com',
+                    'wss://nostr.prl.plus',
+                    'wss://nostr.rblb.it',
+                    'wss://nostr.red5d.dev',
+                    'wss://nostr.rikmeijer.nl',
+                    'wss://nostr.rohoss.com',
+                    'wss://nostr.roundrockbitcoiners.com',
+                    'wss://nostr.rtvslawenia.com',
+                    'wss://nostr.sagaciousd.com',
+                    'wss://nostr.sathoarder.com',
+                    'wss://nostr.satstralia.com',
+                    'wss://nostr.slothy.win',
+                    'wss://nostr.smut.cloud',
+                    'wss://nostr.spaceshell.xyz',
+                    'wss://nostr.spicyz.io',
+                    'wss://nostr.stakey.net',
+                    'wss://nostr.tac.lol',
+                    'wss://nostr.tadryanom.me',
+                    'wss://nostr.tavux.tech',
+                    'wss://nostr.tegila.com.br',
+                    'wss://nostr.thaliyal.com',
+                    'wss://nostr.thebiglake.org',
+                    'wss://nostr.veladan.dev',
+                    'wss://nostr.vulpem.com',
+                    'wss://nostr.yael.at',
+                    'wss://nostr.zenon.network',
+                    'wss://nostrelay.circum.space',
+                    'wss://nostrelay.memory-art.xyz',
+                    'wss://nostrja-kari.heguro.com',
+                    'wss://nostrue.com',
+                    'wss://noxir.kpherox.dev',
+                    'wss://nproxy.kristapsk.lv',
+                    'wss://orangepiller.org',
+                    'wss://orangesync.tech',
+                    'wss://portal-relay.pareto.space',
+                    'wss://premium.primal.net',
+                    'wss://prl.plus',
+                    'wss://promenade.fiatjaf.com',
+                    'wss://purplerelay.com',
+                    'wss://pyramid.fiatjaf.com',
+                    'wss://r.bitcoinhold.net',
+                    'wss://relay-admin.thaliyal.com',
+                    'wss://relay-dev.satlantis.io',
+                    'wss://relay-rpi.edufeed.org',
+                    'wss://relay-testnet.k8s.layer3.news',
+                    'wss://relay.13room.space',
+                    'wss://relay.21e6.cz',
+                    'wss://relay.agorist.space',
+                    'wss://relay.angor.io',
+                    'wss://relay.anzenkodo.workers.dev',
+                    'wss://relay.artiostr.ch',
+                    'wss://relay.artx.market',
+                    'wss://relay.arx-ccn.com',
+                    'wss://relay.bankless.at',
+                    'wss://relay.barine.co',
+                    'wss://relay.bitcoinartclock.com',
+                    'wss://relay.bitcoinveneto.org',
+                    'wss://relay.bullishbounty.com',
+                    'wss://relay.chakany.systems',
+                    'wss://relay.chorus.community',
+                    'wss://relay.coinos.io',
+                    'wss://relay.conduit.market',
+                    'wss://relay.copylaradio.com',
+                    'wss://relay.cosmicbolt.net',
+                    'wss://relay.credenso.cafe',
+                    'wss://relay.cypherflow.ai',
+                    'wss://relay.davidebtc.me',
+                    'wss://relay.degmods.com',
+                    'wss://relay.digitalezukunft.cyou',
+                    'wss://relay.dwadziesciajeden.pl',
+                    'wss://relay.etch.social',
+                    'wss://relay.evanverma.com',
+                    'wss://relay.fountain.fm',
+                    'wss://relay.fr13nd5.com',
+                    'wss://relay.freeplace.nl',
+                    'wss://relay.froth.zone',
+                    'wss://relay.g1sms.fr',
+                    'wss://relay.getsafebox.app',
+                    'wss://relay.goodmorningbitcoin.com',
+                    'wss://relay.hasenpfeffr.com',
+                    'wss://relay.hivetalk.org',
+                    'wss://relay.hodl.ar',
+                    'wss://relay.holzeis.me',
+                    'wss://relay.illuminodes.com',
+                    'wss://relay.javi.space',
+                    'wss://relay.jeffg.fyi',
+                    'wss://relay.laantungir.net',
+                    'wss://relay.letsfo.com',
+                    'wss://relay.lexingtonbitcoin.org',
+                    'wss://relay.lnfi.network',
+                    'wss://relay.lumina.rocks',
+                    'wss://relay.magiccity.live',
+                    'wss://relay.mattybs.lol',
+                    'wss://relay.mccormick.cx',
+                    'wss://relay.mess.ch',
+                    'wss://relay.minibolt.info',
+                    'wss://relay.mostro.network',
+                    'wss://relay.mwaters.net',
+                    'wss://relay.netstr.io',
+                    'wss://relay.nosto.re',
+                    'wss://relay.nostr.band',
+                    'wss://relay.nostr.com.au',
+                    'wss://relay.nostr.net',
+                    'wss://relay.nostr.wirednet.jp',
+                    'wss://relay.nostrcal.com',
+                    'wss://relay.nostrcheck.me',
+                    'wss://relay.nostrdice.com',
+                    'wss://relay.nostrhub.fr',
+                    'wss://relay.nostrhub.tech',
+                    'wss://relay.nostriot.com',
+                    'wss://relay.nostromo.social',
+                    'wss://relay.nostx.io',
+                    'wss://relay.notoshi.win',
+                    'wss://relay.nsnip.io',
+                    'wss://relay.oldenburg.cool',
+                    'wss://relay.orangepill.ovh',
+                    'wss://relay.puresignal.news',
+                    'wss://relay.ru.ac.th',
+                    'wss://relay.satlantis.io',
+                    'wss://relay.satsdays.com',
+                    'wss://relay.siamdev.cc',
+                    'wss://relay.sigit.io',
+                    'wss://relay.sincensura.org',
+                    'wss://relay.stream.labs.h3.se',
+                    'wss://relay.tagayasu.xyz',
+                    'wss://relay.tapestry.ninja',
+                    'wss://relay.toastr.net',
+                    'wss://relay.usefusion.ai',
+                    'wss://relay.utxo.farm',
+                    'wss://relay.varke.eu',
+                    'wss://relay.verified-nostr.com',
+                    'wss://relay.vrtmrz.net',
+                    'wss://relay.wavefunc.live',
+                    'wss://relay.wavlake.com',
+                    'wss://relay.wellorder.net',
+                    'wss://relay.wolfcoil.com',
+                    'wss://relay.zone667.com',
+                    'wss://relay01.lnfi.network',
+                    'wss://relay02.lnfi.network',
+                    'wss://relay03.lnfi.network',
+                    'wss://relay04.lnfi.network',
+                    'wss://relay1.nostrchat.io',
+                    'wss://relay2.angor.io',
+                    'wss://relay2.nostrchat.io',
+                    'wss://relay5.bitransfer.org',
+                    'wss://relayone.geektank.ai',
+                    'wss://relayone.soundhsa.com',
+                    'wss://relayrs.notoshi.win',
+                    'wss://rn1.sotiras.org',
+                    'wss://santo.iguanatech.net',
+                    'wss://satsage.xyz',
+                    'wss://schnorr.me',
+                    'wss://slick.mjex.me',
+                    'wss://social.proxymana.net',
+                    'wss://soloco.nl',
+                    'wss://srtrelay.c-stellar.net',
+                    'wss://strfry.bonsai.com',
+                    'wss://strfry.felixzieger.de',
+                    'wss://strfry.openhoofd.nl',
+                    'wss://strfry.shock.network',
+                    'wss://temp.iris.to',
+                    'wss://theoutpost.life',
+                    'wss://tollbooth.stens.dev',
+                    'wss://travis-shears-nostr-relay-v2.fly.dev',
+                    'wss://vidono.apps.slidestr.net',
+                    'wss://vitor.nostr1.com',
+                    'wss://wheat.happytavern.co',
+                    'wss://wot.brightbolt.net',
+                    'wss://wot.codingarena.top',
+                    'wss://wot.downisontheup.ca',
+                    'wss://wot.dtonon.com',
+                    'wss://wot.geektank.ai',
+                    'wss://wot.nostr.net',
+                    'wss://wot.nostr.party',
+                    'wss://wot.nostr.place',
+                    'wss://wot.sebastix.social',
+                    'wss://wot.soundhsa.com',
+                    'wss://wot.sudocarlos.com',
+                    'wss://x.kojira.io',
+                    'wss://zap.watch'
+                ];
                 this.nosflareRelay = 'wss://sendit.nosflare.com';
                 this.discoveredRelays = new Set();
                 this.relayList = [];
@@ -2552,6 +2856,12 @@
                 this.currentZapInvoice = null;
                 this.zapCheckInterval = null;
                 this.zapInvoiceData = null;
+            }
+
+            validateGeohashInput(input) {
+                // Geohash valid characters: 0-9, b-z excluding a, i, l, o
+                const validChars = '0123456789bcdefghjkmnpqrstuvwxyz';
+                return input.split('').every(char => validChars.includes(char.toLowerCase()));
             }
 
             // NSEC decode method
@@ -3165,6 +3475,13 @@
                     this.updateConnectionStatus();
                     this.displaySystemMessage(`Connected to the Nostr network via multiple relays...`);
 
+                    // Load synced settings for persistent connections
+                    if (this.connectionMode !== 'ephemeral') {
+                        setTimeout(() => {
+                            this.loadSyncedSettings();
+                        }, 1000);
+                    }
+
                     // Now connect to remaining broadcast relays in background
                     this.broadcastRelays.forEach(relayUrl => {
                         if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
@@ -3449,11 +3766,6 @@
                                     this.reconnectingRelays = new Set();
                                 }
 
-                                // Show message only once for the first disconnection
-                                if (this.reconnectingRelays.size === 0) {
-                                    this.displaySystemMessage(`Lost connection to relays, reconnecting...`);
-                                }
-
                                 this.reconnectingRelays.add(relayUrl);
 
                                 setTimeout(() => {
@@ -3471,7 +3783,6 @@
 
                                             // Show reconnected message only when all relays are back
                                             if (this.reconnectingRelays.size === 0) {
-                                                this.displaySystemMessage(`Reconnected to relays`);
 
                                                 // After broadcast relays reconnect, also retry discovered relays
                                                 if (type === 'broadcast') {
@@ -3842,62 +4153,57 @@
             }
 
             async saveToNostrProfile() {
-                if (!this.pubkey || !this.lightningAddress) return;
+                if (!this.pubkey) return;
 
-                // Don't modify profile for non-ephemeral connections unless only updating lightning address
-                if (this.connectionMode !== 'ephemeral' && this.originalProfile) {
-                    try {
-                        // Only update lightning address in existing profile
-                        const updatedProfile = {
+                try {
+                    let profileToSave;
+
+                    // For persistent connections, update the existing profile
+                    if (this.connectionMode !== 'ephemeral') {
+                        // Fetch current profile if we don't have it
+                        if (!this.originalProfile) {
+                            await this.fetchProfileFromRelay(this.pubkey);
+                        }
+
+                        profileToSave = {
                             ...this.originalProfile,
-                            lud16: this.lightningAddress
+                            name: this.nym,  // Update the name with current nym
+                            display_name: this.nym,
+                            lud16: this.lightningAddress || this.originalProfile?.lud16,
+                            about: this.originalProfile?.about || `NYM user - ${this.nym}`
                         };
-
-                        const profileEvent = {
-                            kind: 0,
-                            created_at: Math.floor(Date.now() / 1000),
-                            tags: [],
-                            content: JSON.stringify(updatedProfile),
-                            pubkey: this.pubkey
+                    } else {
+                        // Ephemeral mode - minimal profile
+                        profileToSave = {
+                            name: this.nym,
+                            display_name: this.nym,
+                            lud16: this.lightningAddress,
+                            about: `NYM user - ${this.nym}`
                         };
-
-                        // Sign based on connection mode
-                        let signedEvent;
-                        if (this.connectionMode === 'extension' && window.nostr) {
-                            signedEvent = await window.nostr.signEvent(profileEvent);
-                        } else if (this.connectionMode === 'nsec' && this.privkey) {
-                            signedEvent = window.NostrTools.finalizeEvent(profileEvent, this.privkey);
-                        }
-
-                        if (signedEvent) {
-                            this.sendToRelay(["EVENT", signedEvent]);
-                            this.displaySystemMessage('Settings saved to Nostr');
-                        }
-                    } catch (error) {
-                        console.error('Failed to update profile:', error);
                     }
-                } else if (this.connectionMode === 'ephemeral') {
-                    // Original ephemeral behavior - create minimal profile
-                    try {
-                        const profileEvent = {
-                            kind: 0,
-                            created_at: Math.floor(Date.now() / 1000),
-                            tags: [],
-                            content: JSON.stringify({
-                                name: this.nym,
-                                lud16: this.lightningAddress,
-                                about: `NYM user - ${this.nym}`,
-                                display_name: this.nym
-                            }),
-                            pubkey: this.pubkey
-                        };
 
-                        const signedEvent = window.NostrTools.finalizeEvent(profileEvent, this.privkey);
+                    const profileEvent = {
+                        kind: 0,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [],
+                        content: JSON.stringify(profileToSave),
+                        pubkey: this.pubkey
+                    };
+
+                    // Sign based on connection mode
+                    let signedEvent;
+                    if (this.connectionMode === 'extension' && window.nostr) {
+                        signedEvent = await window.nostr.signEvent(profileEvent);
+                    } else if (this.privkey) {
+                        signedEvent = window.NostrTools.finalizeEvent(profileEvent, this.privkey);
+                    }
+
+                    if (signedEvent) {
                         this.sendToRelay(["EVENT", signedEvent]);
-                        this.displaySystemMessage('Settings saved');
-                    } catch (error) {
-                        console.error('Failed to save profile:', error);
+                        console.log('Profile saved to Nostr');
                     }
+                } catch (error) {
+                    console.error('Failed to save profile:', error);
                 }
             }
 
@@ -4675,7 +4981,7 @@
             }
 
             async loadSyncedSettings() {
-                if (!this.pubkey || !this.usingExtension) return;
+                if (!this.pubkey || this.connectionMode === 'ephemeral') return;
 
                 // Request NIP-78 settings (kind 30078)
                 const subscription = [
@@ -4684,15 +4990,21 @@
                     {
                         kinds: [30078],
                         authors: [this.pubkey],
+                        "#d": ["nym-settings"],
                         limit: 1
                     }
                 ];
 
                 this.sendToRelay(subscription);
+
+                // Close subscription after timeout
+                setTimeout(() => {
+                    this.sendToRelay(["CLOSE", subscription[1]]);
+                }, 3000);
             }
 
             async saveSyncedSettings() {
-                if (!this.pubkey || !this.usingExtension) return;
+                if (!this.pubkey) return;
 
                 try {
                     const settingsData = {
@@ -4702,7 +5014,9 @@
                         showTimestamps: this.settings.showTimestamps,
                         pinnedChannels: Array.from(this.pinnedChannels),
                         blockedUsers: Array.from(this.blockedUsers),
-                        blockedKeywords: Array.from(this.blockedKeywords)
+                        blockedKeywords: Array.from(this.blockedKeywords),
+                        userJoinedChannels: Array.from(this.userJoinedChannels),
+                        lightningAddress: this.lightningAddress
                     };
 
                     const event = {
@@ -4718,14 +5032,17 @@
 
                     // Sign event
                     let signedEvent;
-                    if (window.nostr) {
+                    if (this.connectionMode === 'extension' && window.nostr) {
                         signedEvent = await window.nostr.signEvent(event);
-                    } else if (this.privkey) {
+                    } else if (this.connectionMode === 'nsec' && this.privkey) {
                         signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                    } else {
+                        return; // Can't sign, skip
                     }
 
                     if (signedEvent) {
                         this.sendToRelay(["EVENT", signedEvent]);
+                        console.log('Settings synced to Nostr');
                     }
                 } catch (error) {
                     console.error('Failed to save synced settings:', error);
@@ -5149,7 +5466,7 @@
                 try {
                     const settings = JSON.parse(event.content);
 
-                    // Apply synced settings
+                    // Apply all settings
                     if (settings.theme) {
                         this.settings.theme = settings.theme;
                         this.applyTheme(settings.theme);
@@ -5175,9 +5492,25 @@
                         this.blockedKeywords = new Set(settings.blockedKeywords);
                         this.updateKeywordList();
                     }
+                    if (settings.userJoinedChannels) {
+                        // Restore user joined channels
+                        settings.userJoinedChannels.forEach(key => {
+                            this.userJoinedChannels.add(key);
+                            // Parse and add channel
+                            if (this.isValidGeohash(key)) {
+                                this.addChannel(key, key);
+                            } else {
+                                this.addChannel(key, '');
+                            }
+                        });
+                    }
+                    if (settings.lightningAddress) {
+                        this.lightningAddress = settings.lightningAddress;
+                        this.updateLightningAddressDisplay();
+                    }
 
                     this.saveSettings();
-                    this.displaySystemMessage('Settings synced with Nostr');
+                    this.displaySystemMessage('Settings synced from Nostr');
                 } catch (error) {
                     console.error('Failed to parse synced settings:', error);
                 }
@@ -5860,18 +6193,33 @@
                         this.pmMessages.set(conversationKey, []);
                     }
 
-                    // Add PM conversation if not exists
-                    if (!this.pmConversations.has(conversationPubkey)) {
-                        const otherNym = isIncoming ? senderNym : this.getNymFromPubkey(conversationPubkey);
-                        this.addPMConversation(otherNym, conversationPubkey);
-                    } else if (isIncoming && !isHistorical) {
-                        // Move existing PM conversation to top when new message received
-                        this.movePMToTop(conversationPubkey);
-                    }
-
                     // Check if this is a historical message (older than 10 seconds)
                     const messageAge = Date.now() - (event.created_at * 1000);
                     const isHistorical = messageAge > 10000;
+
+                    // Add PM conversation if not exists
+                    if (!this.pmConversations.has(conversationPubkey)) {
+                        const otherNym = isIncoming ? senderNym : this.getNymFromPubkey(conversationPubkey);
+                        this.addPMConversation(otherNym, conversationPubkey, event.created_at * 1000);
+                    } else {
+                        // Update existing conversation with new timestamp
+                        const conversation = this.pmConversations.get(conversationPubkey);
+                        if (conversation) {
+                            conversation.lastMessageTime = event.created_at * 1000;
+                            conversation.nym = isIncoming ? senderNym : conversation.nym; // Update nym if needed
+                        }
+
+                        // Update DOM element timestamp and reorder
+                        const pmItem = document.querySelector(`[data-pubkey="${conversationPubkey}"]`);
+                        if (pmItem) {
+                            pmItem.dataset.lastMessageTime = event.created_at * 1000;
+
+                            // Reorder PMs to maintain chronological order
+                            if (!isHistorical) {
+                                this.reorderPMs();
+                            }
+                        }
+                    }
 
                     // Store the PM message with the actual event ID from the relay
                     const pmMessage = {
@@ -6181,22 +6529,51 @@
                 const pmList = document.getElementById('pmList');
                 const pmItem = pmList.querySelector(`[data-pubkey="${pubkey}"]`);
 
-                if (pmItem && pmList.firstChild !== pmItem) {
-                    // Remove from current position
+                if (pmItem) {
+                    // Update the timestamp
+                    const now = Date.now();
+                    pmItem.dataset.lastMessageTime = now;
+
+                    // Update in memory
+                    const conversation = this.pmConversations.get(pubkey);
+                    if (conversation) {
+                        conversation.lastMessageTime = now;
+                    }
+
+                    // Remove and re-insert in correct order
                     pmItem.remove();
-                    // Insert at the beginning
-                    pmList.insertBefore(pmItem, pmList.firstChild);
+                    this.insertPMInOrder(pmItem, pmList);
                 }
             }
 
-            addPMConversation(nym, pubkey) {
+            reorderPMs() {
+                const pmList = document.getElementById('pmList');
+                const items = Array.from(pmList.querySelectorAll('.pm-item'));
+
+                // Sort by timestamp (most recent first)
+                items.sort((a, b) => {
+                    const timeA = parseInt(a.dataset.lastMessageTime || '0');
+                    const timeB = parseInt(b.dataset.lastMessageTime || '0');
+                    return timeB - timeA;
+                });
+
+                // Clear and re-append in order
+                pmList.innerHTML = '';
+                items.forEach(item => pmList.appendChild(item));
+            }
+
+            addPMConversation(nym, pubkey, timestamp = Date.now()) {
                 if (!this.pmConversations.has(pubkey)) {
-                    this.pmConversations.set(pubkey, nym);
+                    this.pmConversations.set(pubkey, {
+                        nym: nym,
+                        lastMessageTime: timestamp
+                    });
 
                     const pmList = document.getElementById('pmList');
                     const item = document.createElement('div');
                     item.className = 'pm-item';
                     item.dataset.pubkey = pubkey;
+                    item.dataset.lastMessageTime = timestamp;
                     item.innerHTML = `
             <span class="pm-name">@${this.escapeHtml(nym)}</span>
             <div class="channel-badges">
@@ -6207,8 +6584,29 @@
         `;
                     item.onclick = () => this.openPM(nym, pubkey);
 
-                    // Insert at the beginning instead of appendChild
-                    pmList.insertBefore(item, pmList.firstChild);
+                    // Insert in chronological order (most recent first)
+                    this.insertPMInOrder(item, pmList);
+                }
+            }
+
+            insertPMInOrder(newItem, pmList) {
+                const newTime = parseInt(newItem.dataset.lastMessageTime);
+                const existingItems = Array.from(pmList.querySelectorAll('.pm-item'));
+
+                // Find the correct position to insert (most recent first)
+                let insertBefore = null;
+                for (const item of existingItems) {
+                    const itemTime = parseInt(item.dataset.lastMessageTime || '0');
+                    if (newTime > itemTime) {
+                        insertBefore = item;
+                        break;
+                    }
+                }
+
+                if (insertBefore) {
+                    pmList.insertBefore(newItem, insertBefore);
+                } else {
+                    pmList.appendChild(newItem);
                 }
             }
 
@@ -6672,6 +7070,14 @@
                         // Add message and sort by timestamp
                         this.messages.get(storageKey).push(message);
                         this.messages.get(storageKey).sort((a, b) => a.timestamp - b.timestamp);
+
+                        // Prune messages if exceeding limit (10,000 max)
+                        const messages = this.messages.get(storageKey);
+                        if (messages.length > 10000) {
+                            // Keep only the most recent 10,000 messages
+                            this.messages.set(storageKey, messages.slice(-10000));
+                            console.log(`Pruned messages in ${storageKey} to 10,000 max`);
+                        }
                     }
 
                     // Check if this is for current channel
@@ -6806,6 +7212,21 @@
 
                 if (shouldScroll && this.settings.autoscroll) {
                     container.scrollTop = container.scrollHeight;
+                }
+            }
+
+            pruneChannelMessages(channelKey, maxMessages = 10000) {
+                const messages = this.messages.get(channelKey);
+                if (!messages || messages.length <= maxMessages) return;
+
+                // Keep only the most recent messages
+                const prunedMessages = messages.slice(-maxMessages);
+                this.messages.set(channelKey, prunedMessages);
+
+                // If currently viewing this channel, refresh the display
+                const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                if (currentKey === channelKey) {
+                    this.loadChannelMessages(channelKey);
                 }
             }
 
@@ -7766,7 +8187,6 @@
                 const oldNym = this.nym;
                 const newNym = args.trim().substring(0, 20);
 
-                // Don't do anything if the nick is the same
                 if (oldNym === newNym) {
                     this.displaySystemMessage('That is already your current nym');
                     return;
@@ -7775,15 +8195,13 @@
                 this.nym = newNym;
                 document.getElementById('currentNym').textContent = this.nym;
 
-                // Create the change message
-                const changeMessage = `Your nym's new nick is now ${this.nym}`;
-
-                // Send as a system-style message to the current channel
-                if (this.inPMMode) {
-                    this.displaySystemMessage(changeMessage);
-                } else {
-                    this.displaySystemMessage(changeMessage);
+                // Save profile for persistent connections
+                if (this.connectionMode !== 'ephemeral') {
+                    await this.saveToNostrProfile();
                 }
+
+                const changeMessage = `Your nym's new nick is now ${this.nym}`;
+                this.displaySystemMessage(changeMessage);
             }
 
             cmdWho() {
@@ -8870,9 +9288,9 @@
             nym.applyTheme(nym.settings.theme);
             nym.saveSettings();
 
-            // Save to synced settings if using extension
-            if (nym.usingExtension) {
-                nym.saveSyncedSettings();
+            // Save to synced settings if using extension or nsec
+            if (nym.connectionMode !== 'ephemeral') {
+                await nym.saveSyncedSettings();
             }
 
             closeModal('settingsModal');
@@ -8881,7 +9299,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.5.5 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.5.6 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -8910,9 +9328,20 @@
                     await nym.cmdJoin(name);
                 }
             } else {
-                const geohash = document.getElementById('geohashInput').value.trim();
+                let geohash = document.getElementById('geohashInput').value.trim().toLowerCase();
+
+                // Remove invalid characters
+                geohash = geohash.replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
+
                 if (geohash) {
+                    if (!nym.isValidGeohash(geohash)) {
+                        alert('Invalid geohash. Valid characters are: 0-9, b-z (except a, i, l, o)');
+                        return;
+                    }
                     await nym.cmdJoin('#' + geohash);
+                } else {
+                    alert('Please enter a valid geohash');
+                    return;
                 }
             }
 
@@ -8920,6 +9349,7 @@
             document.getElementById('channelNameInput').value = '';
             document.getElementById('geohashInput').value = '';
         }
+
 
         // Function to check for saved connection on page load
         async function checkSavedConnection() {

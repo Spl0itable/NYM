@@ -1,3 +1,11 @@
+## v1.5.6 - 2025-09-02
+
+Hotfix: word wrap issue
+Hotfix: memory issue with volume of messages
+Hotfix: user settings not saving to nostr
+Hotfix: integrated all geolocated relays bitchat uses
+Hotfix: order of PMs
+
 ## v1.5.5 - 2025-08-30
 
 New: added NSEC login
