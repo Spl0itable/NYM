@@ -3483,19 +3483,7 @@
                     }
 
                     // Now connect to remaining broadcast relays in background
-                    this.broadcastRelays.forEach(relayUrl => {
-                        if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                            this.connectToRelay(relayUrl, 'broadcast')
-                                .then(() => {
-                                    this.subscribeToSingleRelay(relayUrl);
-                                    this.updateConnectionStatus();
-                                })
-                                .catch(err => {
-                                    console.log(`Failed to connect to ${relayUrl}:`, err);
-                                    this.trackRelayFailure(relayUrl);
-                                });
-                        }
-                    });
+                    this.connectToRelaysInBatches();
 
                     // Connect to nosflare for sending only (no subscriptions)
                     if (this.shouldRetryRelay(this.nosflareRelay)) {
@@ -3577,6 +3565,49 @@
                 }
 
                 return false; // All broadcast relays failed
+            }
+
+            async connectToRelaysInBatches() {
+                const batchSize = 10;
+                const delayBetweenBatches = 1000;
+
+                // Get relays that need to be connected
+                const relaysToConnect = this.broadcastRelays.filter(relayUrl =>
+                    !this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)
+                );
+
+                console.log(`Attempting to connect to ${relaysToConnect.length} additional relays in batches of ${batchSize}`);
+
+                // Process in batches
+                for (let i = 0; i < relaysToConnect.length; i += batchSize) {
+                    const batch = relaysToConnect.slice(i, i + batchSize);
+                    console.log(`Connecting to relay batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(relaysToConnect.length / batchSize)}`);
+
+                    // Connect all relays in current batch
+                    const connectionPromises = batch.map(relayUrl =>
+                        this.connectToRelay(relayUrl, 'broadcast')
+                            .then(() => {
+                                this.subscribeToSingleRelay(relayUrl);
+                                this.updateConnectionStatus();
+                                console.log(`✓ Connected to ${relayUrl}`);
+                            })
+                            .catch(err => {
+                                console.log(`✗ Failed to connect to ${relayUrl}:`, err.message);
+                                this.trackRelayFailure(relayUrl);
+                            })
+                    );
+
+                    // Wait for all connections in batch to complete (but don't fail if some fail)
+                    await Promise.allSettled(connectionPromises);
+
+                    // Wait before next batch (if not last batch)
+                    if (i + batchSize < relaysToConnect.length) {
+                        console.log(`Waiting ${delayBetweenBatches}ms before next batch...`);
+                        await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
+                    }
+                }
+
+                console.log('Finished connecting to all broadcast relays');
             }
 
             subscribeToSingleRelay(relayUrl) {
