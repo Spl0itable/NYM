@@ -1872,12 +1872,6 @@
                 padding-top: 30px;
             }
 
-            .input-container {
-                padding: 10px;
-                flex-direction: column;
-                gap: 10px;
-            }
-
             .input-wrapper {
                 width: 100%;
             }
@@ -3437,6 +3431,11 @@
                     });
 
                     this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
+
+                    // Sync to Nostr for persistent connections
+                    if (this.connectionMode !== 'ephemeral') {
+                        this.saveSyncedSettings();
+                    }
                 }
             }
 
@@ -3462,6 +3461,11 @@
                 });
 
                 this.displaySystemMessage(`Unblocked keyword: "${keyword}"`);
+
+                // Sync to Nostr for persistent connections
+                if (this.connectionMode !== 'ephemeral') {
+                    this.saveSyncedSettings();
+                }
             }
 
             updateKeywordList() {
@@ -3551,9 +3555,10 @@
 
                     // Load synced settings for persistent connections
                     if (this.connectionMode !== 'ephemeral') {
+                        // Wait a bit longer to ensure relays are ready
                         setTimeout(() => {
                             this.loadSyncedSettings();
-                        }, 1000);
+                        }, 2000); // Increased from 1000ms
                     }
 
                     // Now connect to remaining broadcast relays in background
@@ -5564,51 +5569,103 @@
                 try {
                     const settings = JSON.parse(event.content);
 
-                    // Apply all settings
+                    // Apply theme
                     if (settings.theme) {
                         this.settings.theme = settings.theme;
                         this.applyTheme(settings.theme);
-                    }
-                    if (settings.sound !== undefined) {
-                        this.settings.sound = settings.sound;
-                    }
-                    if (settings.autoscroll !== undefined) {
-                        this.settings.autoscroll = settings.autoscroll;
-                    }
-                    if (settings.showTimestamps !== undefined) {
-                        this.settings.showTimestamps = settings.showTimestamps;
-                    }
-                    if (settings.pinnedChannels) {
-                        this.pinnedChannels = new Set(settings.pinnedChannels);
-                        this.updateChannelPins();
-                    }
-                    if (settings.blockedUsers) {
-                        this.blockedUsers = new Set(settings.blockedUsers);
-                        this.updateBlockedList();
-                    }
-                    if (settings.blockedKeywords) {
-                        this.blockedKeywords = new Set(settings.blockedKeywords);
-                        this.updateKeywordList();
-                    }
-                    if (settings.userJoinedChannels) {
-                        // Restore user joined channels
-                        settings.userJoinedChannels.forEach(key => {
-                            this.userJoinedChannels.add(key);
-                            // Parse and add channel
-                            if (this.isValidGeohash(key)) {
-                                this.addChannel(key, key);
-                            } else {
-                                this.addChannel(key, '');
-                            }
-                        });
-                    }
-                    if (settings.lightningAddress) {
-                        this.lightningAddress = settings.lightningAddress;
-                        this.updateLightningAddressDisplay();
+                        localStorage.setItem('nym_theme', settings.theme);
                     }
 
-                    this.saveSettings();
+                    // Apply sound settings
+                    if (settings.sound !== undefined) {
+                        this.settings.sound = settings.sound;
+                        localStorage.setItem('nym_sound', settings.sound);
+                    }
+
+                    // Apply autoscroll
+                    if (settings.autoscroll !== undefined) {
+                        this.settings.autoscroll = settings.autoscroll;
+                        localStorage.setItem('nym_autoscroll', settings.autoscroll);
+                    }
+
+                    // Apply timestamp settings
+                    if (settings.showTimestamps !== undefined) {
+                        this.settings.showTimestamps = settings.showTimestamps;
+                        localStorage.setItem('nym_timestamps', settings.showTimestamps);
+                    }
+
+                    // Restore pinned channels
+                    if (settings.pinnedChannels) {
+                        this.pinnedChannels = new Set(settings.pinnedChannels);
+                        localStorage.setItem('nym_pinned_channels', JSON.stringify(settings.pinnedChannels));
+                        this.updateChannelPins();
+                    }
+
+                    // Restore blocked users
+                    if (settings.blockedUsers) {
+                        this.blockedUsers = new Set(settings.blockedUsers);
+                        localStorage.setItem('nym_blocked', JSON.stringify(settings.blockedUsers));
+                        this.updateBlockedList();
+                    }
+
+                    // Restore blocked keywords
+                    if (settings.blockedKeywords) {
+                        this.blockedKeywords = new Set(settings.blockedKeywords);
+                        localStorage.setItem('nym_blocked_keywords', JSON.stringify(settings.blockedKeywords));
+                        this.updateKeywordList();
+                    }
+
+                    // Restore user joined channels
+                    if (settings.userJoinedChannels) {
+                        // Clear existing and restore from sync
+                        this.userJoinedChannels.clear();
+
+                        settings.userJoinedChannels.forEach(key => {
+                            this.userJoinedChannels.add(key);
+                            // Parse and add channel if not already present
+                            if (!this.channels.has(key)) {
+                                if (this.isValidGeohash(key)) {
+                                    this.addChannel(key, key);
+                                } else {
+                                    this.addChannel(key, '');
+                                }
+                            }
+                        });
+
+                        // Save to localStorage
+                        localStorage.setItem('nym_user_joined_channels', JSON.stringify(settings.userJoinedChannels));
+                        localStorage.setItem('nym_user_channels', JSON.stringify(
+                            settings.userJoinedChannels.map(key => ({
+                                key: key,
+                                channel: this.isValidGeohash(key) ? key : key,
+                                geohash: this.isValidGeohash(key) ? key : ''
+                            }))
+                        ));
+                    }
+
+                    // Restore lightning address
+                    if (settings.lightningAddress) {
+                        this.lightningAddress = settings.lightningAddress;
+                        localStorage.setItem(`nym_lightning_address_${this.pubkey}`, settings.lightningAddress);
+                        this.updateLightningAddressDisplay();
+
+                        // Update in settings modal if open
+                        const lightningInput = document.getElementById('lightningAddressInput');
+                        if (lightningInput) {
+                            lightningInput.value = settings.lightningAddress;
+                        }
+                    }
+
+                    // Update UI elements if settings modal is open
+                    if (document.getElementById('settingsModal').classList.contains('active')) {
+                        document.getElementById('themeSelect').value = this.settings.theme;
+                        document.getElementById('soundSelect').value = this.settings.sound;
+                        document.getElementById('autoscrollSelect').value = String(this.settings.autoscroll);
+                        document.getElementById('timestampSelect').value = String(this.settings.showTimestamps);
+                    }
+
                     this.displaySystemMessage('Settings synced from Nostr');
+                    console.log('Settings synced successfully:', Object.keys(settings));
                 } catch (error) {
                     console.error('Failed to parse synced settings:', error);
                 }
@@ -7747,8 +7804,8 @@
                 this.savePinnedChannels();
                 this.updateChannelPins();
 
-                // Save to synced settings if using extension
-                if (this.usingExtension) {
+                // Save to synced settings for persistent connections
+                if (this.connectionMode !== 'ephemeral') {
                     this.saveSyncedSettings();
                 }
             }
@@ -9491,27 +9548,34 @@
         }
 
         async function saveSettings() {
-            // Get lightning address
+            // Get all settings values
             const lightningAddress = document.getElementById('lightningAddressInput').value.trim();
+            const theme = document.getElementById('themeSelect').value;
+            const sound = document.getElementById('soundSelect').value;
+            const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
+            const showTimestamps = document.getElementById('timestampSelect').value === 'true';
 
-            // Save lightning address
-            if (lightningAddress) {
-                await nym.saveLightningAddress(lightningAddress);
-            } else {
-                await nym.saveLightningAddress(null);
-            }
+            // Apply all settings
+            nym.settings.theme = theme;
+            nym.settings.sound = sound;
+            nym.settings.autoscroll = autoscroll;
+            nym.settings.showTimestamps = showTimestamps;
 
-            nym.settings.theme = document.getElementById('themeSelect').value;
-            nym.settings.sound = document.getElementById('soundSelect').value;
-            nym.settings.autoscroll = document.getElementById('autoscrollSelect').value === 'true';
-            nym.settings.showTimestamps = document.getElementById('timestampSelect').value === 'true';
-
-            nym.applyTheme(nym.settings.theme);
+            // Save locally
+            nym.applyTheme(theme);
             nym.saveSettings();
 
-            // Save to synced settings if using extension or nsec
+            // Save lightning address
+            if (lightningAddress !== nym.lightningAddress) {
+                await nym.saveLightningAddress(lightningAddress || null);
+            }
+
+            // Force sync ALL settings to Nostr for persistent connections
             if (nym.connectionMode !== 'ephemeral') {
                 await nym.saveSyncedSettings();
+                nym.displaySystemMessage('Settings saved and synced to Nostr');
+            } else {
+                nym.displaySystemMessage('Settings saved locally');
             }
 
             closeModal('settingsModal');
@@ -9738,7 +9802,13 @@
 
                 // Fetch profile after connection for persistent modes
                 if ((mode === 'extension' || mode === 'nsec') && nym.connected) {
+                    // Fetch profile
                     await nym.fetchProfileFromRelay(nym.pubkey);
+
+                    // Load synced settings (give relays time to respond)
+                    setTimeout(() => {
+                        nym.loadSyncedSettings();
+                    }, 2000);
                 }
 
                 // Request notification permission

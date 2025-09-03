@@ -1,4 +1,4 @@
-## v1.5.7 - 2025-09-04
+## v1.5.7 - 2025-09-03
 
 Hotfix: zap button wouldn't work on first click
 Hotfix: blocked users not being saved to nostr
