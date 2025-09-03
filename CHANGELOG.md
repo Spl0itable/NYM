@@ -1,3 +1,10 @@
+## v1.5.7 - 2025-09-04
+
+Hotfix: zap button wouldn't work on first click
+Hotfix: blocked users not being saved to nostr
+Hotfix: message input not always displaying on mobile
+Hotfix: sidebar now shows "view more" on large lists
+
 ## v1.5.6 - 2025-09-02
 
 Hotfix: word wrap issue
@@ -5,6 +12,7 @@ Hotfix: memory issue with volume of messages
 Hotfix: user settings not saving to nostr
 Hotfix: integrated all geolocated relays bitchat uses
 Hotfix: order of PMs
+Hotfix: geohash room join/creation modal format
 
 ## v1.5.5 - 2025-08-30
 

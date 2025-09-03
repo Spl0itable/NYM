@@ -280,6 +280,38 @@
             box-shadow: 0 0 5px rgba(0, 255, 0, 0.3);
         }
 
+        .view-more-btn {
+            padding: 8px 10px;
+            margin: 5px 10px;
+            text-align: center;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.2s;
+            display: block !important;
+        }
+
+        .view-more-btn:hover {
+            border-color: var(--primary);
+            background: rgba(0, 255, 0, 0.1);
+            color: var(--text);
+        }
+
+        .list-collapsed .list-item:nth-child(n+21) {
+            display: none !important;
+        }
+
+        .list-expanded .view-more-btn {
+            display: none;
+        }
+
+        .list-expanded .list-item {
+            display: flex !important;
+        }
+
         .channel-list,
         .pm-list {
             max-height: none;
@@ -355,6 +387,8 @@
             min-width: 0;
             max-width: 100%;
             display: block;
+            white-space: normal;
+            line-height: 1.3;
         }
 
         .channel-badges {
@@ -487,6 +521,15 @@
             gap: 8px;
             cursor: pointer;
             transition: all 0.2s;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .user-item span:last-child {
+            word-break: break-word;
+            overflow-wrap: break-word;
+            flex: 1;
+            min-width: 0;
         }
 
         .user-item:hover {
@@ -1159,6 +1202,9 @@
             gap: 10px;
             align-items: stretch;
             position: relative;
+            position: sticky;
+            bottom: 0;
+            z-index: 100;
         }
 
         .input-wrapper {
@@ -1782,8 +1828,35 @@
                 margin-left: 0;
             }
 
+            .input-container {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                padding: 10px;
+                flex-direction: column;
+                gap: 10px;
+                background: var(--bg-secondary);
+                border-top: 2px solid var(--border);
+                z-index: 500;
+            }
+
             .messages-container {
-                padding: 15px 10px;
+                padding-bottom: 120px;
+            }
+
+            .message-input {
+                font-size: 16px !important;
+                min-height: 44px;
+                -webkit-appearance: none;
+                border-radius: 0;
+            }
+
+            .message-input:focus {
+                font-size: 16px !important;
+                outline: none;
+                border-color: var(--primary);
+                box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
             }
 
             .modal-content {
@@ -2856,6 +2929,7 @@
                 this.currentZapInvoice = null;
                 this.zapCheckInterval = null;
                 this.zapInvoiceData = null;
+                this.listExpansionStates = new Map();
             }
 
             validateGeohashInput(input) {
@@ -3129,20 +3203,20 @@
                         // Show loading message
                         this.displaySystemMessage(`Checking if @${nym} can receive zaps...`);
 
-                        // Force fetch the lightning address (bypass cache to ensure fresh check)
-                        let lnAddress = this.userLightningAddresses.get(pubkey);
+                        try {
+                            // Always fetch fresh to ensure we have the latest
+                            const lnAddress = await this.fetchLightningAddressForUser(pubkey);
 
-                        // If not cached or we want to be sure, fetch it
-                        if (!lnAddress) {
-                            lnAddress = await this.fetchLightningAddressForUser(pubkey);
-                        }
-
-                        if (lnAddress) {
-                            // User has lightning address, show zap modal
-                            this.showZapModal(messageId, pubkey, nym);
-                        } else {
-                            // No lightning address found
-                            this.displaySystemMessage(`@${nym} cannot receive zaps (no lightning address set)`);
+                            if (lnAddress) {
+                                // User has lightning address, show zap modal
+                                this.showZapModal(messageId, pubkey, nym);
+                            } else {
+                                // No lightning address found
+                                this.displaySystemMessage(`@${nym} cannot receive zaps (no lightning address set)`);
+                            }
+                        } catch (error) {
+                            console.error('Error fetching lightning address:', error);
+                            this.displaySystemMessage(`Failed to check if @${nym} can receive zaps`);
                         }
                     }
                 });
@@ -4019,15 +4093,29 @@
                 }
 
                 return new Promise((resolve) => {
-                    const timeout = setTimeout(() => {
-                        console.log('No lightning address found for user');
-                        resolve(null);
-                    }, 3000); // 3 second timeout
-
                     const subId = "ln-addr-" + Math.random().toString(36).substring(7);
                     let foundAddress = false;
+                    let messageHandlers = [];
 
-                    // Create a temporary handler for this specific request
+                    const cleanup = () => {
+                        // Restore original handlers
+                        messageHandlers.forEach(handler => {
+                            const index = this.relayMessageHandlers?.indexOf(handler);
+                            if (index > -1) {
+                                this.relayMessageHandlers.splice(index, 1);
+                            }
+                        });
+                        // Close subscription
+                        this.sendToRelay(["CLOSE", subId]);
+                    };
+
+                    const timeout = setTimeout(() => {
+                        console.log('Timeout: No lightning address found for user');
+                        cleanup();
+                        resolve(null);
+                    }, 5000); // Increased to 5 seconds for slower relays
+
+                    // Create handler for this specific request
                     const handleMessage = (msg, relayUrl) => {
                         if (!Array.isArray(msg)) return;
 
@@ -4046,37 +4134,48 @@
                                         this.userLightningAddresses.set(pubkey, lnAddress);
                                         console.log(`Found lightning address for ${pubkey}:`, lnAddress);
 
-                                        clearTimeout(timeout);
-                                        foundAddress = true;
-                                        resolve(lnAddress);
-
-                                        // Close the subscription
-                                        this.sendToRelay(["CLOSE", subId]);
-                                        return;
+                                        if (!foundAddress) {
+                                            foundAddress = true;
+                                            clearTimeout(timeout);
+                                            cleanup();
+                                            resolve(lnAddress);
+                                        }
+                                        return true; // Handled
                                     }
                                 } catch (e) {
                                     console.error('Failed to parse profile:', e);
                                 }
                             }
                         } else if (type === 'EOSE' && data[0] === subId) {
-                            // End of stored events, no lightning address found
-                            if (!foundAddress) {
-                                clearTimeout(timeout);
-                                resolve(null);
-                                // Close the subscription
-                                this.sendToRelay(["CLOSE", subId]);
-                            }
+                            // End of stored events from this relay
+                            // Don't resolve null yet - wait for other relays or timeout
+                            console.log(`EOSE received from ${relayUrl} for lightning address lookup`);
                         }
+
+                        return false; // Not handled
                     };
 
-                    // Store original handler
-                    const originalHandler = this.handleRelayMessage.bind(this);
+                    // Hook into relay message handling
+                    if (!this.relayMessageHandlers) {
+                        this.relayMessageHandlers = [];
+                        const originalHandler = this.handleRelayMessage.bind(this);
+                        this.handleRelayMessage = (msg, relayUrl) => {
+                            // Process through handlers
+                            let handled = false;
+                            for (const handler of this.relayMessageHandlers) {
+                                if (handler(msg, relayUrl)) {
+                                    handled = true;
+                                    break;
+                                }
+                            }
+                            // Always call original handler
+                            originalHandler(msg, relayUrl);
+                        };
+                    }
 
-                    // Override handleRelayMessage to intercept responses
-                    this.handleRelayMessage = (msg, relayUrl) => {
-                        handleMessage(msg, relayUrl);
-                        originalHandler(msg, relayUrl);
-                    };
+                    // Add our handler
+                    this.relayMessageHandlers.push(handleMessage);
+                    messageHandlers.push(handleMessage);
 
                     // Request the user's profile from ALL connected relays
                     const subscription = [
@@ -4089,16 +4188,8 @@
                         }
                     ];
 
-                    // Send to relay immediately
+                    // Send to all connected relays
                     this.sendToRelay(subscription);
-
-                    // Clean up after timeout + buffer
-                    setTimeout(() => {
-                        this.handleRelayMessage = originalHandler;
-                        if (!foundAddress) {
-                            this.sendToRelay(["CLOSE", subId]);
-                        }
-                    }, 3500);
                 });
             }
 
@@ -4701,15 +4792,20 @@
                 // Show loading message
                 this.displaySystemMessage(`Checking if @${author} can receive zaps...`);
 
-                // Fetch the lightning address
-                const lnAddress = await this.fetchLightningAddressForUser(pubkey);
+                try {
+                    // Always fetch fresh to ensure we have the latest
+                    const lnAddress = await this.fetchLightningAddressForUser(pubkey);
 
-                if (lnAddress) {
-                    // User has lightning address, show zap modal
-                    this.showZapModal(messageId, pubkey, author);
-                } else {
-                    // No lightning address found
-                    this.displaySystemMessage(`@${author} cannot receive zaps (no lightning address set)`);
+                    if (lnAddress) {
+                        // User has lightning address, show zap modal
+                        this.showZapModal(messageId, pubkey, author);
+                    } else {
+                        // No lightning address found
+                        this.displaySystemMessage(`@${author} cannot receive zaps (no lightning address set)`);
+                    }
+                } catch (error) {
+                    console.error('Error fetching lightning address:', error);
+                    this.displaySystemMessage(`Failed to check if @${author} can receive zaps`);
                 }
             }
 
@@ -5024,7 +5120,8 @@
                         created_at: Math.floor(Date.now() / 1000),
                         tags: [
                             ["d", "nym-settings"],
-                            ["title", "NYM Settings"]
+                            ["title", "NYM Settings"],
+                            ["encrypted"] // Mark as encrypted for privacy
                         ],
                         content: JSON.stringify(settingsData),
                         pubkey: this.pubkey
@@ -5034,15 +5131,16 @@
                     let signedEvent;
                     if (this.connectionMode === 'extension' && window.nostr) {
                         signedEvent = await window.nostr.signEvent(event);
-                    } else if (this.connectionMode === 'nsec' && this.privkey) {
+                    } else if ((this.connectionMode === 'nsec' || this.connectionMode === 'ephemeral') && this.privkey) {
                         signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
                     } else {
+                        console.log('Cannot sign settings - no signing method available');
                         return; // Can't sign, skip
                     }
 
                     if (signedEvent) {
                         this.sendToRelay(["EVENT", signedEvent]);
-                        console.log('Settings synced to Nostr');
+                        console.log('Settings synced to Nostr including:', Object.keys(settingsData));
                     }
                 } catch (error) {
                     console.error('Failed to save synced settings:', error);
@@ -6560,6 +6658,9 @@
                 // Clear and re-append in order
                 pmList.innerHTML = '';
                 items.forEach(item => pmList.appendChild(item));
+
+                // Re-add/update view more button
+                this.updateViewMoreButton('pmList');
             }
 
             addPMConversation(nym, pubkey, timestamp = Date.now()) {
@@ -6571,7 +6672,7 @@
 
                     const pmList = document.getElementById('pmList');
                     const item = document.createElement('div');
-                    item.className = 'pm-item';
+                    item.className = 'pm-item list-item'; // Add list-item class
                     item.dataset.pubkey = pubkey;
                     item.dataset.lastMessageTime = timestamp;
                     item.innerHTML = `
@@ -6586,6 +6687,9 @@
 
                     // Insert in chronological order (most recent first)
                     this.insertPMInOrder(item, pmList);
+
+                    // Update view more button
+                    this.updateViewMoreButton('pmList');
                 }
             }
 
@@ -7485,7 +7589,12 @@
                 });
 
                 const allUsers = Array.from(uniqueUsers.values())
-                    .sort((a, b) => a.nym.localeCompare(b.nym));
+                    .filter(user => user && user.nym) // Ensure user and nym exist
+                    .sort((a, b) => {
+                        const nymA = String(a.nym || '');
+                        const nymB = String(b.nym || '');
+                        return nymA.localeCompare(nymB);
+                    });
 
                 // Filter users based on search term
                 let displayUsers = allUsers;
@@ -7504,15 +7613,18 @@
                     }).length;
 
                 // Display deduplicated users in sidebar with click to open PM and right-click for context menu
-                userListContent.innerHTML = displayUsers.map(user => `
-                    <div class="user-item" 
-                         onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
-                         oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
-                         data-nym="${this.escapeHtml(user.nym)}">
-                        <span class="user-status ${user.status}"></span>
-                        <span>${this.escapeHtml(user.nym)}</span>
-                    </div>
-                `).join('');
+                userListContent.innerHTML = displayUsers.map((user, index) => `
+        <div class="user-item list-item" 
+             onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
+             oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
+             data-nym="${this.escapeHtml(user.nym)}">
+            <span class="user-status ${user.status}"></span>
+            <span>${this.escapeHtml(user.nym)}</span>
+        </div>
+    `).join('');
+
+                // Add view more button for users
+                this.updateViewMoreButton('userListContent');
 
                 // Update active nyms count in title
                 const userListTitle = document.querySelector('#userList .nav-title-text');
@@ -7529,6 +7641,20 @@
             filterChannels(searchTerm) {
                 const items = document.querySelectorAll('.channel-item');
                 const term = searchTerm.toLowerCase();
+                const list = document.getElementById('channelList');
+
+                // Temporarily expand list if searching
+                if (term) {
+                    list.classList.remove('list-collapsed');
+                    list.classList.add('search-active');
+                } else {
+                    list.classList.remove('search-active');
+                    // Restore previous state
+                    const isExpanded = this.listExpansionStates.get('channelList');
+                    if (!isExpanded && items.length > 20) {
+                        list.classList.add('list-collapsed');
+                    }
+                }
 
                 items.forEach(item => {
                     const channelName = item.querySelector('.channel-name').textContent.toLowerCase();
@@ -7538,11 +7664,31 @@
                         item.style.display = 'none';
                     }
                 });
+
+                // Hide view more button during search
+                const viewMoreBtn = list.querySelector('.view-more-btn');
+                if (viewMoreBtn) {
+                    viewMoreBtn.style.display = term ? 'none' : 'block';
+                }
             }
 
             filterPMs(searchTerm) {
                 const items = document.querySelectorAll('.pm-item');
                 const term = searchTerm.toLowerCase();
+                const list = document.getElementById('pmList');
+
+                // Temporarily expand list if searching
+                if (term) {
+                    list.classList.remove('list-collapsed');
+                    list.classList.add('search-active');
+                } else {
+                    list.classList.remove('search-active');
+                    // Restore previous state
+                    const isExpanded = this.listExpansionStates.get('pmList');
+                    if (!isExpanded && items.length > 20) {
+                        list.classList.add('list-collapsed');
+                    }
+                }
 
                 items.forEach(item => {
                     const pmName = item.querySelector('.pm-name').textContent.toLowerCase();
@@ -7552,10 +7698,34 @@
                         item.style.display = 'none';
                     }
                 });
+
+                // Hide view more button during search
+                const viewMoreBtn = list.querySelector('.view-more-btn');
+                if (viewMoreBtn) {
+                    viewMoreBtn.style.display = term ? 'none' : 'block';
+                }
             }
 
             filterUsers(searchTerm) {
                 this.userSearchTerm = searchTerm;
+                const list = document.getElementById('userListContent');
+
+                // Temporarily expand list if searching
+                if (searchTerm) {
+                    list.classList.remove('list-collapsed');
+                    list.classList.add('search-active');
+                } else {
+                    list.classList.remove('search-active');
+                    // Restore previous state after clearing search
+                    const isExpanded = this.listExpansionStates.get('userListContent');
+                    if (!isExpanded) {
+                        const items = list.querySelectorAll('.list-item');
+                        if (items.length > 20) {
+                            list.classList.add('list-collapsed');
+                        }
+                    }
+                }
+
                 this.updateUserList();
             }
 
@@ -8223,7 +8393,7 @@
                 this.displaySystemMessage('Chat cleared');
             }
 
-            cmdBlock(args) {
+            async cmdBlock(args) {
                 if (!args) {
                     this.displaySystemMessage('Usage: /block nym');
                     return;
@@ -8233,7 +8403,7 @@
 
                 // Check if already blocked to toggle
                 if (this.blockedUsers.has(nym)) {
-                    this.cmdUnblock(nym);
+                    await this.cmdUnblock(nym); // Make async
                     return;
                 }
 
@@ -8251,13 +8421,13 @@
                 this.updateUserList();
                 this.updateBlockedList();
 
-                // Save to synced settings if using extension
-                if (this.usingExtension) {
-                    this.saveSyncedSettings();
+                // Save to synced settings for all persistent connections
+                if (this.connectionMode !== 'ephemeral') {
+                    await this.saveSyncedSettings();
                 }
             }
 
-            cmdUnblock(args) {
+            async cmdUnblock(args) {
                 if (!args) {
                     this.displaySystemMessage('Usage: /unblock nym');
                     return;
@@ -8281,9 +8451,9 @@
                 this.updateUserList();
                 this.updateBlockedList();
 
-                // Save to synced settings if using extension
-                if (this.usingExtension) {
-                    this.saveSyncedSettings();
+                // Save to synced settings for all persistent connections
+                if (this.connectionMode !== 'ephemeral') {
+                    await this.saveSyncedSettings();
                 }
             }
 
@@ -8529,7 +8699,7 @@
 
                 if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]`)) {
                     const item = document.createElement('div');
-                    item.className = 'channel-item';
+                    item.className = 'channel-item list-item'; // Add list-item class
                     item.dataset.channel = channel;
                     item.dataset.geohash = geohash;
 
@@ -8576,6 +8746,82 @@
 
                     this.channels.set(key, { channel, geohash });
                     this.updateChannelPins();
+
+                    // Check if we need to add/update view more button
+                    this.updateViewMoreButton('channelList');
+                }
+            }
+
+            updateViewMoreButton(listId) {
+                const list = document.getElementById(listId);
+                if (!list) return;
+
+                const items = list.querySelectorAll('.list-item');
+                let existingBtn = list.querySelector('.view-more-btn');
+
+                // Get current expansion state
+                const isExpanded = this.listExpansionStates.get(listId) || false;
+
+                if (items.length > 20) {
+                    // We need a button
+                    if (!existingBtn) {
+                        const btn = document.createElement('div');
+                        btn.className = 'view-more-btn';
+                        btn.onclick = () => this.toggleListExpansion(listId);
+                        list.appendChild(btn);
+                        existingBtn = btn;
+                    }
+
+                    // Update button text based on state
+                    if (isExpanded) {
+                        existingBtn.textContent = 'Show less';
+                        list.classList.remove('list-collapsed');
+                        list.classList.add('list-expanded');
+                    } else {
+                        existingBtn.textContent = `View ${items.length - 20} more...`;
+                        list.classList.add('list-collapsed');
+                        list.classList.remove('list-expanded');
+                    }
+
+                    // Make sure button is visible
+                    existingBtn.style.display = 'block';
+                } else {
+                    // Don't need a button - remove if exists
+                    if (existingBtn) {
+                        existingBtn.remove();
+                    }
+                    list.classList.remove('list-collapsed', 'list-expanded');
+                    // Clear expansion state since button is gone
+                    this.listExpansionStates.delete(listId);
+                }
+            }
+
+            toggleListExpansion(listId) {
+                const list = document.getElementById(listId);
+                if (!list) return;
+
+                const btn = list.querySelector('.view-more-btn');
+                const items = list.querySelectorAll('.list-item');
+
+                // Toggle the state
+                const currentState = this.listExpansionStates.get(listId) || false;
+                const newState = !currentState;
+                this.listExpansionStates.set(listId, newState);
+
+                if (newState) {
+                    // Expanding
+                    list.classList.remove('list-collapsed');
+                    list.classList.add('list-expanded');
+                    if (btn) {
+                        btn.textContent = 'Show less';
+                    }
+                } else {
+                    // Collapsing
+                    list.classList.add('list-collapsed');
+                    list.classList.remove('list-expanded');
+                    if (btn) {
+                        btn.textContent = `View ${items.length - 20} more...`;
+                    }
                 }
             }
 
@@ -8798,26 +9044,31 @@
                 const channelList = document.getElementById('channelList');
                 const channels = Array.from(channelList.querySelectorAll('.channel-item'));
 
-                // Store current scroll position AND the active channel element
-                const scrollTop = channelList.scrollTop;
-                const activeChannel = channelList.querySelector('.channel-item.active');
-                const activeChannelRect = activeChannel ? activeChannel.getBoundingClientRect() : null;
-                const listRect = channelList.getBoundingClientRect();
+                // Save view more button if it exists
+                const viewMoreBtn = channelList.querySelector('.view-more-btn');
 
-                // Calculate the active channel's position relative to the list container
-                const activeChannelOffset = activeChannel ?
-                    activeChannel.offsetTop - channelList.scrollTop : null;
+                // Store current scroll position
+                const scrollTop = channelList.scrollTop;
 
                 // Create a document fragment for better performance
                 const fragment = document.createDocumentFragment();
 
                 channels.sort((a, b) => {
-                    // Always keep #bar at the very top
+                    // Get current active channel
+                    const aIsActive = a.classList.contains('active');
+                    const bIsActive = b.classList.contains('active');
+
+                    // Active channel always stays at top (after #bar)
                     const aIsBar = a.dataset.channel === 'bar' && !a.dataset.geohash;
                     const bIsBar = b.dataset.channel === 'bar' && !b.dataset.geohash;
 
+                    // #bar is always first
                     if (aIsBar) return -1;
                     if (bIsBar) return 1;
+
+                    // Active channel is second
+                    if (aIsActive && !bIsActive) return -1;
+                    if (!aIsActive && bIsActive) return 1;
 
                     // Then sort by pinned status
                     const aPinned = a.classList.contains('pinned');
@@ -8848,41 +9099,11 @@
                 channelList.innerHTML = '';
                 channelList.appendChild(fragment);
 
-                // Restore scroll position - prioritize keeping active channel visible
-                if (activeChannel) {
-                    // Find the active channel in its new position
-                    const newActiveChannel = channelList.querySelector('.channel-item.active');
-                    if (newActiveChannel) {
-                        // Check if the active channel was visible before
-                        if (activeChannelRect) {
-                            const wasVisible =
-                                activeChannelRect.top >= listRect.top &&
-                                activeChannelRect.bottom <= listRect.bottom;
+                // Re-add view more button and update its state
+                this.updateViewMoreButton('channelList');
 
-                            if (wasVisible) {
-                                // Keep the active channel in the same relative position
-                                const newOffset = newActiveChannel.offsetTop;
-                                const targetScroll = newOffset - activeChannelOffset;
-
-                                // Ensure we don't scroll past boundaries
-                                channelList.scrollTop = Math.max(0,
-                                    Math.min(targetScroll, channelList.scrollHeight - channelList.clientHeight));
-                            } else {
-                                // If it wasn't visible, just restore the previous scroll position
-                                channelList.scrollTop = scrollTop;
-                            }
-                        } else {
-                            // Fallback to restoring scroll position
-                            channelList.scrollTop = scrollTop;
-                        }
-                    } else {
-                        // Fallback if we can't find the active channel
-                        channelList.scrollTop = scrollTop;
-                    }
-                } else {
-                    // No active channel, just restore scroll position
-                    channelList.scrollTop = scrollTop;
-                }
+                // Restore scroll position
+                channelList.scrollTop = scrollTop;
             }
 
             clearUnreadCount(channel) {
@@ -9299,7 +9520,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.5.6 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.5.7 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
