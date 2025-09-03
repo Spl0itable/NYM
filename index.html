@@ -1128,7 +1128,6 @@
 
         .message-content pre {
             background: var(--bg-tertiary);
-            border: 1px solid var(--border);
             padding: 10px;
             margin: 10px 0;
             overflow-x: auto;
@@ -2930,6 +2929,12 @@
                 this.zapCheckInterval = null;
                 this.zapInvoiceData = null;
                 this.listExpansionStates = new Map();
+                this.pendingUpdates = new Map();
+                this.updateDebounceTimer = null;
+                this.pendingReactionUpdates = new Set();
+                this.pendingZapUpdates = new Set();
+                this.reactionUpdateTimer = null;
+                this.zapUpdateTimer = null;
             }
 
             validateGeohashInput(input) {
@@ -3437,6 +3442,11 @@
                     });
 
                     this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
+
+                    // Sync to Nostr for persistent connections
+                    if (this.connectionMode !== 'ephemeral') {
+                        this.saveSyncedSettings();
+                    }
                 }
             }
 
@@ -3462,6 +3472,11 @@
                 });
 
                 this.displaySystemMessage(`Unblocked keyword: "${keyword}"`);
+
+                // Sync to Nostr for persistent connections
+                if (this.connectionMode !== 'ephemeral') {
+                    this.saveSyncedSettings();
+                }
             }
 
             updateKeywordList() {
@@ -3551,9 +3566,10 @@
 
                     // Load synced settings for persistent connections
                     if (this.connectionMode !== 'ephemeral') {
+                        // Wait a bit longer to ensure relays are ready
                         setTimeout(() => {
                             this.loadSyncedSettings();
-                        }, 1000);
+                        }, 2000); // Increased from 1000ms
                     }
 
                     // Now connect to remaining broadcast relays in background
@@ -4647,13 +4663,13 @@
 
                 if (amount) {
                     // Get zapper pubkey from description if available
-                    let zapperPubkey = event.pubkey; // This is usually the zap service pubkey
+                    let zapperPubkey = event.pubkey;
 
                     if (descriptionTag) {
                         try {
                             const zapRequest = JSON.parse(descriptionTag[1]);
                             if (zapRequest.pubkey) {
-                                zapperPubkey = zapRequest.pubkey; // This is the actual zapper
+                                zapperPubkey = zapRequest.pubkey;
                             }
                         } catch (e) {
                             // Ignore parse errors
@@ -4663,16 +4679,16 @@
                     // Initialize zaps tracking for this message if needed
                     if (!this.zaps.has(messageId)) {
                         this.zaps.set(messageId, {
-                            receipts: new Set(), // Track receipt IDs to prevent duplicates
-                            amounts: new Map()   // Map of pubkey -> total amount
+                            receipts: new Set(),
+                            amounts: new Map()
                         });
                     }
 
                     const messageZaps = this.zaps.get(messageId);
 
-                    // Check if we've already processed this receipt (deduplication)
+                    // Check if we've already processed this receipt
                     if (messageZaps.receipts.has(event.id)) {
-                        return; // Already processed this zap receipt
+                        return;
                     }
 
                     // Mark this receipt as processed
@@ -4682,8 +4698,8 @@
                     const currentAmount = messageZaps.amounts.get(zapperPubkey) || 0;
                     messageZaps.amounts.set(zapperPubkey, currentAmount + amount);
 
-                    // Update display for this message
-                    this.updateMessageZaps(messageId);
+                    // Use batched update
+                    this.batchUpdateZaps([messageId]);
 
                     // Check if this is for our current pending zap
                     if (this.currentZapTarget &&
@@ -4714,6 +4730,10 @@
 
             // Update message with zap display
             updateMessageZaps(messageId) {
+                this.batchUpdateZaps([messageId]);
+            }
+
+            _updateMessageZapsInternal(messageId) {
                 const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
                 if (!messageEl) return;
 
@@ -4727,7 +4747,7 @@
                     messageEl.appendChild(reactionsRow);
                 }
 
-                // Remove existing zap badges
+                // Remove existing zap badges (but preserve other elements)
                 const existingZap = reactionsRow.querySelector('.zap-badge');
                 if (existingZap) {
                     existingZap.remove();
@@ -4783,6 +4803,44 @@
                         reactionsRow.insertBefore(addZapBtn, zapBadge.nextSibling);
                     }
                 }
+            }
+
+            // Batch update zaps
+            batchUpdateZaps(messageIds) {
+                // Collect all updates
+                messageIds.forEach(messageId => {
+                    this.pendingZapUpdates.add(messageId);
+                });
+
+                // Clear existing timer
+                if (this.zapUpdateTimer) {
+                    clearTimeout(this.zapUpdateTimer);
+                }
+
+                // Process in next frame
+                this.zapUpdateTimer = requestAnimationFrame(() => {
+                    const updates = Array.from(this.pendingZapUpdates);
+                    this.pendingZapUpdates.clear();
+
+                    // Process in chunks
+                    const chunkSize = 50;
+                    let index = 0;
+
+                    const processChunk = () => {
+                        const chunk = updates.slice(index, index + chunkSize);
+                        chunk.forEach(messageId => {
+                            this._updateMessageZapsInternal(messageId);
+                        });
+
+                        index += chunkSize;
+                        if (index < updates.length) {
+                            requestAnimationFrame(processChunk);
+                        }
+                    };
+
+                    processChunk();
+                    this.zapUpdateTimer = null;
+                });
             }
 
             async handleQuickZap(messageId, pubkey, messageEl) {
@@ -5564,51 +5622,103 @@
                 try {
                     const settings = JSON.parse(event.content);
 
-                    // Apply all settings
+                    // Apply theme
                     if (settings.theme) {
                         this.settings.theme = settings.theme;
                         this.applyTheme(settings.theme);
-                    }
-                    if (settings.sound !== undefined) {
-                        this.settings.sound = settings.sound;
-                    }
-                    if (settings.autoscroll !== undefined) {
-                        this.settings.autoscroll = settings.autoscroll;
-                    }
-                    if (settings.showTimestamps !== undefined) {
-                        this.settings.showTimestamps = settings.showTimestamps;
-                    }
-                    if (settings.pinnedChannels) {
-                        this.pinnedChannels = new Set(settings.pinnedChannels);
-                        this.updateChannelPins();
-                    }
-                    if (settings.blockedUsers) {
-                        this.blockedUsers = new Set(settings.blockedUsers);
-                        this.updateBlockedList();
-                    }
-                    if (settings.blockedKeywords) {
-                        this.blockedKeywords = new Set(settings.blockedKeywords);
-                        this.updateKeywordList();
-                    }
-                    if (settings.userJoinedChannels) {
-                        // Restore user joined channels
-                        settings.userJoinedChannels.forEach(key => {
-                            this.userJoinedChannels.add(key);
-                            // Parse and add channel
-                            if (this.isValidGeohash(key)) {
-                                this.addChannel(key, key);
-                            } else {
-                                this.addChannel(key, '');
-                            }
-                        });
-                    }
-                    if (settings.lightningAddress) {
-                        this.lightningAddress = settings.lightningAddress;
-                        this.updateLightningAddressDisplay();
+                        localStorage.setItem('nym_theme', settings.theme);
                     }
 
-                    this.saveSettings();
+                    // Apply sound settings
+                    if (settings.sound !== undefined) {
+                        this.settings.sound = settings.sound;
+                        localStorage.setItem('nym_sound', settings.sound);
+                    }
+
+                    // Apply autoscroll
+                    if (settings.autoscroll !== undefined) {
+                        this.settings.autoscroll = settings.autoscroll;
+                        localStorage.setItem('nym_autoscroll', settings.autoscroll);
+                    }
+
+                    // Apply timestamp settings
+                    if (settings.showTimestamps !== undefined) {
+                        this.settings.showTimestamps = settings.showTimestamps;
+                        localStorage.setItem('nym_timestamps', settings.showTimestamps);
+                    }
+
+                    // Restore pinned channels
+                    if (settings.pinnedChannels) {
+                        this.pinnedChannels = new Set(settings.pinnedChannels);
+                        localStorage.setItem('nym_pinned_channels', JSON.stringify(settings.pinnedChannels));
+                        this.updateChannelPins();
+                    }
+
+                    // Restore blocked users
+                    if (settings.blockedUsers) {
+                        this.blockedUsers = new Set(settings.blockedUsers);
+                        localStorage.setItem('nym_blocked', JSON.stringify(settings.blockedUsers));
+                        this.updateBlockedList();
+                    }
+
+                    // Restore blocked keywords
+                    if (settings.blockedKeywords) {
+                        this.blockedKeywords = new Set(settings.blockedKeywords);
+                        localStorage.setItem('nym_blocked_keywords', JSON.stringify(settings.blockedKeywords));
+                        this.updateKeywordList();
+                    }
+
+                    // Restore user joined channels
+                    if (settings.userJoinedChannels) {
+                        // Clear existing and restore from sync
+                        this.userJoinedChannels.clear();
+
+                        settings.userJoinedChannels.forEach(key => {
+                            this.userJoinedChannels.add(key);
+                            // Parse and add channel if not already present
+                            if (!this.channels.has(key)) {
+                                if (this.isValidGeohash(key)) {
+                                    this.addChannel(key, key);
+                                } else {
+                                    this.addChannel(key, '');
+                                }
+                            }
+                        });
+
+                        // Save to localStorage
+                        localStorage.setItem('nym_user_joined_channels', JSON.stringify(settings.userJoinedChannels));
+                        localStorage.setItem('nym_user_channels', JSON.stringify(
+                            settings.userJoinedChannels.map(key => ({
+                                key: key,
+                                channel: this.isValidGeohash(key) ? key : key,
+                                geohash: this.isValidGeohash(key) ? key : ''
+                            }))
+                        ));
+                    }
+
+                    // Restore lightning address
+                    if (settings.lightningAddress) {
+                        this.lightningAddress = settings.lightningAddress;
+                        localStorage.setItem(`nym_lightning_address_${this.pubkey}`, settings.lightningAddress);
+                        this.updateLightningAddressDisplay();
+
+                        // Update in settings modal if open
+                        const lightningInput = document.getElementById('lightningAddressInput');
+                        if (lightningInput) {
+                            lightningInput.value = settings.lightningAddress;
+                        }
+                    }
+
+                    // Update UI elements if settings modal is open
+                    if (document.getElementById('settingsModal').classList.contains('active')) {
+                        document.getElementById('themeSelect').value = this.settings.theme;
+                        document.getElementById('soundSelect').value = this.settings.sound;
+                        document.getElementById('autoscrollSelect').value = String(this.settings.autoscroll);
+                        document.getElementById('timestampSelect').value = String(this.settings.showTimestamps);
+                    }
+
                     this.displaySystemMessage('Settings synced from Nostr');
+                    console.log('Settings synced successfully:', Object.keys(settings));
                 } catch (error) {
                     console.error('Failed to parse synced settings:', error);
                 }
@@ -5636,24 +5746,28 @@
 
                 const messageReactions = this.reactions.get(messageId);
                 if (!messageReactions.has(reactionContent)) {
-                    messageReactions.set(reactionContent, new Map()); // Map of pubkey -> nym
+                    messageReactions.set(reactionContent, new Map());
                 }
 
                 // Store pubkey with nym
                 messageReactions.get(reactionContent).set(event.pubkey, reactorNym);
 
-                // Update UI if message is visible
-                this.updateMessageReactions(messageId);
+                // Use batched update instead of immediate update
+                this.batchUpdateReactions([messageId]);
             }
 
             updateMessageReactions(messageId) {
+                this.batchUpdateReactions([messageId]);
+            }
+
+            _updateMessageReactionsInternal(messageId) {
                 const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
                 if (!messageEl) return;
 
                 const reactions = this.reactions.get(messageId);
                 if (!reactions || reactions.size === 0) {
                     // Even if no reactions, update zaps display
-                    this.updateMessageZaps(messageId);
+                    this._updateMessageZapsInternal(messageId);
                     return;
                 }
 
@@ -5663,7 +5777,7 @@
                     hoverReactionBtn.style.display = 'none';
                 }
 
-                // Remove existing reactions display but preserve zap badges
+                // Find or create reactions row
                 let reactionsRow = messageEl.querySelector('.reactions-row');
                 let zapBadge = null;
                 let addZapBtn = null;
@@ -5694,7 +5808,7 @@
                     reactionsRow.appendChild(zapBadge);
                 }
 
-                // Re-add quick zap button ONLY if it already existed (meaning there are zaps)
+                // Re-add quick zap button if it already existed
                 if (addZapBtn) {
                     reactionsRow.appendChild(addZapBtn);
                     // Re-attach the click handler
@@ -5704,9 +5818,8 @@
                         await this.handleQuickZap(messageId, pubkey, messageEl);
                     };
                 }
-                // DO NOT create a new quick zap button here - only in updateMessageZaps when zaps exist
 
-                // Clear and rebuild reactions
+                // Add reaction badges
                 reactions.forEach((reactors, emoji) => {
                     const badge = document.createElement('span');
 
@@ -5733,7 +5846,7 @@
                         badge.title = `Click to also react with ${emoji} | ${users}`;
                     }
 
-                    // Add click handler that updates badge immediately
+                    // Add click handler
                     badge.onclick = async (e) => {
                         e.stopPropagation();
                         if (!hasReacted) {
@@ -5757,7 +5870,7 @@
                     reactionsRow.appendChild(badge);
                 });
 
-                // Adds "add reaction" badge
+                // Add "add reaction" button
                 const addBtn = document.createElement('span');
                 addBtn.className = 'add-reaction-btn';
                 addBtn.innerHTML = `
@@ -5777,6 +5890,44 @@
                     this.showEnhancedReactionPicker(messageId, addBtn);
                 };
                 reactionsRow.appendChild(addBtn);
+            }
+
+            // Batch update reactions
+            batchUpdateReactions(messageIds) {
+                // Collect all updates
+                messageIds.forEach(messageId => {
+                    this.pendingReactionUpdates.add(messageId);
+                });
+
+                // Clear existing timer
+                if (this.reactionUpdateTimer) {
+                    clearTimeout(this.reactionUpdateTimer);
+                }
+
+                // Process in next frame
+                this.reactionUpdateTimer = requestAnimationFrame(() => {
+                    const updates = Array.from(this.pendingReactionUpdates);
+                    this.pendingReactionUpdates.clear();
+
+                    // Process in chunks to avoid blocking
+                    const chunkSize = 50;
+                    let index = 0;
+
+                    const processChunk = () => {
+                        const chunk = updates.slice(index, index + chunkSize);
+                        chunk.forEach(messageId => {
+                            this._updateMessageReactionsInternal(messageId);
+                        });
+
+                        index += chunkSize;
+                        if (index < updates.length) {
+                            requestAnimationFrame(processChunk);
+                        }
+                    };
+
+                    processChunk();
+                    this.reactionUpdateTimer = null;
+                });
             }
 
             showReactionPicker(messageId, button) {
@@ -6271,10 +6422,11 @@
                         senderNym = this.getNymFromPubkey(event.pubkey);
                     }
 
-                    // Update user tracking with the nym
-                    if (!this.users.has(event.pubkey) || this.users.get(event.pubkey).nym.startsWith('anon-')) {
+                    // Update user tracking with the nym - FIX: Check if user exists and nym is a string
+                    const existingUser = this.users.get(event.pubkey);
+                    if (!existingUser || !existingUser.nym || typeof existingUser.nym !== 'string' || existingUser.nym.startsWith('anon-')) {
                         this.users.set(event.pubkey, {
-                            nym: senderNym,
+                            nym: senderNym || this.getNymFromPubkey(event.pubkey),
                             pubkey: event.pubkey,
                             lastSeen: Date.now(),
                             status: 'online',
@@ -6773,33 +6925,20 @@
 
                 const pmMessages = this.pmMessages.get(conversationKey) || [];
 
-                // Only show messages that are part of this specific conversation
-                const filteredMessages = pmMessages.filter(msg => {
-                    // Ensure the message is between the current user and the PM recipient only
-                    return msg.conversationKey === conversationKey &&
-                        (msg.pubkey === this.pubkey || msg.pubkey === this.currentPM);
-                });
-
-                // Sort messages by timestamp
-                filteredMessages.sort((a, b) => a.timestamp - b.timestamp);
-
-                // Display only these filtered messages
-                filteredMessages.forEach(msg => {
-                    // Double-check this is a PM before displaying
-                    if (msg.isPM && msg.conversationKey === conversationKey) {
-                        // Use displayMessage to properly handle reactions
-                        this.displayMessage(msg);
-                    }
-                });
+                // Filter and sort once
+                const filteredMessages = pmMessages
+                    .filter(msg =>
+                        msg.conversationKey === conversationKey &&
+                        (msg.pubkey === this.pubkey || msg.pubkey === this.currentPM)
+                    )
+                    .sort((a, b) => a.timestamp - b.timestamp);
 
                 if (filteredMessages.length === 0) {
                     this.displaySystemMessage('Start of private message');
+                    return;
                 }
 
-                // Scroll to bottom
-                if (this.settings.autoscroll) {
-                    container.scrollTop = container.scrollHeight;
-                }
+                this.batchRenderMessagesInOrder(filteredMessages, container);
             }
 
             openUserPM(nym, pubkey) {
@@ -7141,15 +7280,11 @@
             }
 
             displayMessage(message) {
-                // Handle PM messages differently
+                // Handle PM messages
                 if (message.isPM) {
-                    // Check if we should display this PM now
                     if (!this.inPMMode || this.currentPM !== message.conversationPubkey) {
-                        // Not viewing this PM conversation right now, but message is already stored
                         return;
                     }
-
-                    // Don't display if it's not part of the current conversation
                     const currentConversationKey = this.getPMConversationKey(this.currentPM);
                     if (message.conversationKey !== currentConversationKey) {
                         return;
@@ -7157,7 +7292,6 @@
                 } else {
                     // Regular channel message
                     if (this.inPMMode) {
-                        // In PM mode, don't display channel messages
                         return;
                     }
 
@@ -7168,26 +7302,32 @@
                         this.messages.set(storageKey, []);
                     }
 
-                    // Check if message already exists
-                    const exists = this.messages.get(storageKey).some(m => m.id === message.id);
-                    if (!exists) {
-                        // Add message and sort by timestamp
-                        this.messages.get(storageKey).push(message);
-                        this.messages.get(storageKey).sort((a, b) => a.timestamp - b.timestamp);
+                    const messages = this.messages.get(storageKey);
+                    const exists = messages.some(m => m.id === message.id);
 
-                        // Prune messages if exceeding limit (10,000 max)
-                        const messages = this.messages.get(storageKey);
+                    if (!exists) {
+                        // Insert message in correct position to maintain order
+                        let inserted = false;
+                        for (let i = messages.length - 1; i >= 0; i--) {
+                            if (messages[i].timestamp <= message.timestamp) {
+                                messages.splice(i + 1, 0, message);
+                                inserted = true;
+                                break;
+                            }
+                        }
+                        if (!inserted) {
+                            messages.unshift(message); // Add at beginning if oldest
+                        }
+
+                        // Prune if needed
                         if (messages.length > 10000) {
-                            // Keep only the most recent 10,000 messages
                             this.messages.set(storageKey, messages.slice(-10000));
-                            console.log(`Pruned messages in ${storageKey} to 10,000 max`);
                         }
                     }
 
                     // Check if this is for current channel
                     const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                     if (storageKey !== currentKey) {
-                        // Message is for different channel, update unread count but don't display
                         if (!message.isOwn && !exists && !message.isHistorical) {
                             this.updateUnreadCount(storageKey);
                         }
@@ -7195,92 +7335,30 @@
                     }
                 }
 
-                // Don't re-add if already displayed in DOM
+                // Check if already displayed
                 if (document.querySelector(`[data-message-id="${message.id}"]`)) {
                     return;
                 }
 
-                // Now actually display the message in the DOM
+                // Create message element
                 const container = document.getElementById('messagesContainer');
-                const shouldScroll = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+                const messageEl = this.createMessageElement(message);
 
-                const time = this.settings.showTimestamps ?
-                    message.timestamp.toLocaleTimeString('en-US', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: false
-                    }) : '';
+                if (!messageEl) return;
 
-                const messageEl = document.createElement('div');
-
-                // Check if nym is blocked or message contains blocked keywords
-                if (this.blockedUsers.has(message.author) || this.hasBlockedKeyword(message.content)) {
-                    messageEl.className = 'message blocked';
-                    return;
+                // Add event listener for author click
+                const authorSpan = messageEl.querySelector('.message-author');
+                if (authorSpan) {
+                    authorSpan.style.cursor = 'pointer';
+                    authorSpan.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.showContextMenu(e, message.author, message.pubkey, message.content, message.id);
+                        return false;
+                    });
                 }
 
-                // Check if nym is flooding in THIS CHANNEL (but not for PMs and not for historical messages)
-                const channelToCheck = message.geohash || message.channel;
-                if (!message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
-                    messageEl.className = 'message flooded';
-                }
-
-                // Check if message mentions the user
-                const isMentioned = !message.isOwn && this.isMentioned(message.content);
-
-                // Check for action messages
-                if (message.content.startsWith('/me ')) {
-                    messageEl.className = 'action-message';
-                    messageEl.innerHTML = `* ${this.escapeHtml(message.author)} ${this.formatMessage(message.content.substring(4))}`;
-                } else {
-                    messageEl.className = message.isPM ? 'message pm' : (isMentioned ? 'message mentioned' : 'message');
-                    messageEl.dataset.messageId = message.id;
-                    messageEl.dataset.author = message.author;
-                    messageEl.dataset.pubkey = message.pubkey;
-                    messageEl.dataset.timestamp = message.timestamp.getTime(); // Add timestamp for sorting
-
-                    const authorClass = message.isOwn ? 'self' : '';
-
-                    // Check if this is a valid event ID (not temporary PM ID)
-                    const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
-                    const isMobile = window.innerWidth <= 768;
-
-                    // Show reaction button for all messages with valid IDs (including PMs)
-                    const reactionButton = isValidEventId && !isMobile ? `
-            <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
-                <svg viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-                    <circle cx="9" cy="9" r="1"></circle>
-                    <circle cx="15" cy="9" r="1"></circle>
-                </svg>
-            </button>
-        ` : '';
-
-                    // Build the initial HTML with quote detection
-                    const formattedContent = this.formatMessageWithQuotes(message.content);
-
-                    messageEl.innerHTML = `
-            ${time ? `<span class="message-time">${time}</span>` : ''}
-            <span class="message-author ${authorClass}">${this.escapeHtml(message.author)}:</span>
-            <span class="message-content">${formattedContent}</span>
-            ${reactionButton}
-        `;
-
-                    const authorSpan = messageEl.querySelector('.message-author');
-                    if (authorSpan) {
-                        authorSpan.style.cursor = 'pointer';
-                        authorSpan.addEventListener('click', (e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            // Pass messageId for mobile reaction option
-                            this.showContextMenu(e, message.author, message.pubkey, message.content, message.id);
-                            return false;
-                        });
-                    }
-                }
-
-                // Find the correct position to insert the message based on timestamp
+                // Find correct position to insert based on timestamp
                 const existingMessages = Array.from(container.querySelectorAll('.message[data-timestamp]'));
                 const messageTimestamp = message.timestamp.getTime();
 
@@ -7296,6 +7374,7 @@
                 if (insertBefore) {
                     container.insertBefore(messageEl, insertBefore);
                 } else {
+                    // Append at end if newest
                     const typingIndicator = container.querySelector('.typing-indicator');
                     if (typingIndicator) {
                         container.insertBefore(messageEl, typingIndicator);
@@ -7304,16 +7383,18 @@
                     }
                 }
 
-                // Add existing reactions if any (for both channel messages and PMs)
-                if (message.id && this.reactions.has(message.id)) {
-                    this.updateMessageReactions(message.id);
+                // Update reactions and zaps if needed
+                if (message.id) {
+                    if (this.reactions.has(message.id)) {
+                        this.updateMessageReactions(message.id);
+                    }
+                    if (this.zaps.has(message.id)) {
+                        this.updateMessageZaps(message.id);
+                    }
                 }
 
-                // Add zaps display - check if this message has any zaps
-                if (message.id && this.zaps.has(message.id)) {
-                    this.updateMessageZaps(message.id);
-                }
-
+                // Auto-scroll
+                const shouldScroll = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
                 if (shouldScroll && this.settings.autoscroll) {
                     container.scrollTop = container.scrollHeight;
                 }
@@ -7574,7 +7655,15 @@
             }
 
             updateUserList() {
+                this.debouncedUpdate('userList', () => {
+                    this._updateUserListInternal();
+                }, 100); // 100ms debounce delay
+            }
+
+            _updateUserListInternal() {
                 const userListContent = document.getElementById('userListContent');
+                if (!userListContent) return;
+
                 const currentChannelKey = this.currentGeohash || this.currentChannel;
 
                 // Get deduplicated active users (one entry per pubkey)
@@ -7612,16 +7701,42 @@
                         return user && Date.now() - user.lastSeen < 300000 && !this.blockedUsers.has(user.nym);
                     }).length;
 
-                // Display deduplicated users in sidebar with click to open PM and right-click for context menu
-                userListContent.innerHTML = displayUsers.map((user, index) => `
-        <div class="user-item list-item" 
-             onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
-             oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
-             data-nym="${this.escapeHtml(user.nym)}">
-            <span class="user-status ${user.status}"></span>
-            <span>${this.escapeHtml(user.nym)}</span>
-        </div>
-    `).join('');
+                // Build HTML using document fragment for better performance
+                const fragment = document.createDocumentFragment();
+
+                displayUsers.forEach((user, index) => {
+                    const userItem = document.createElement('div');
+                    userItem.className = 'user-item list-item';
+                    userItem.dataset.nym = this.escapeHtml(user.nym);
+
+                    // Create status dot
+                    const statusSpan = document.createElement('span');
+                    statusSpan.className = `user-status ${user.status}`;
+
+                    // Create name span
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = this.escapeHtml(user.nym);
+
+                    userItem.appendChild(statusSpan);
+                    userItem.appendChild(nameSpan);
+
+                    // Add click handler
+                    userItem.addEventListener('click', () => {
+                        this.openUserPM(user.nym, user.pubkey);
+                    });
+
+                    // Add context menu handler
+                    userItem.addEventListener('contextmenu', (e) => {
+                        e.preventDefault();
+                        this.showContextMenu(e, user.nym, user.pubkey);
+                    });
+
+                    fragment.appendChild(userItem);
+                });
+
+                // Clear and append all at once
+                userListContent.innerHTML = '';
+                userListContent.appendChild(fragment);
 
                 // Add view more button for users
                 this.updateViewMoreButton('userListContent');
@@ -7634,7 +7749,10 @@
 
                 // Update channel meta with channel-specific count
                 if (!this.inPMMode) {
-                    document.getElementById('channelMeta').textContent = `${channelUserCount} online nyms`;
+                    const channelMeta = document.getElementById('channelMeta');
+                    if (channelMeta) {
+                        channelMeta.textContent = `${channelUserCount} online nyms`;
+                    }
                 }
             }
 
@@ -7747,8 +7865,8 @@
                 this.savePinnedChannels();
                 this.updateChannelPins();
 
-                // Save to synced settings if using extension
-                if (this.usingExtension) {
+                // Save to synced settings for persistent connections
+                if (this.connectionMode !== 'ephemeral') {
                     this.saveSyncedSettings();
                 }
             }
@@ -8676,21 +8794,164 @@
 
             loadChannelMessages(displayName) {
                 const container = document.getElementById('messagesContainer');
-                container.innerHTML = '';
 
-                // Use the storage key format (no # for standard channels)
+                // Use the storage key format
                 const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                 const channelMessages = this.messages.get(storageKey) || [];
 
-                // Sort messages by timestamp
-                channelMessages.sort((a, b) => a.timestamp - b.timestamp);
+                // Sort messages once by timestamp
+                const sortedMessages = [...channelMessages].sort((a, b) => a.timestamp - b.timestamp);
 
-                // Display messages
-                channelMessages.forEach(msg => this.displayMessage(msg));
+                // Clear container once
+                container.innerHTML = '';
 
-                if (channelMessages.length === 0) {
+                if (sortedMessages.length === 0) {
                     this.displaySystemMessage(`Joined ${displayName}`);
+                    return;
                 }
+
+                // Use efficient batch rendering that maintains order
+                this.batchRenderMessagesInOrder(sortedMessages, container);
+            }
+
+            batchRenderMessagesInOrder(messages, container, batchSize = 100) {
+                // Build all message elements first but insert in batches
+                const fragment = document.createDocumentFragment();
+                let elementsToAdd = [];
+                let messagesWithReactions = [];
+                let messagesWithZaps = [];
+
+                // Create all message elements
+                messages.forEach(message => {
+                    const messageEl = this.createMessageElement(message);
+                    if (messageEl) {
+                        // Add event listener for author click
+                        const authorSpan = messageEl.querySelector('.message-author');
+                        if (authorSpan) {
+                            authorSpan.style.cursor = 'pointer';
+                            authorSpan.addEventListener('click', (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                this.showContextMenu(e, message.author, message.pubkey, message.content, message.id);
+                                return false;
+                            });
+                        }
+                        elementsToAdd.push({ element: messageEl, message: message });
+
+                        // Collect messages that need reaction/zap updates
+                        if (message.id) {
+                            if (this.reactions.has(message.id)) {
+                                messagesWithReactions.push(message.id);
+                            }
+                            if (this.zaps.has(message.id)) {
+                                messagesWithZaps.push(message.id);
+                            }
+                        }
+                    }
+                });
+
+                // Add all elements to fragment at once (maintains order)
+                elementsToAdd.forEach(({ element }) => {
+                    fragment.appendChild(element);
+                });
+
+                // Append entire fragment to DOM in one operation
+                container.appendChild(fragment);
+
+                // Batch update reactions and zaps after DOM insertion
+                if (messagesWithReactions.length > 0) {
+                    this.batchUpdateReactions(messagesWithReactions);
+                }
+
+                if (messagesWithZaps.length > 0) {
+                    this.batchUpdateZaps(messagesWithZaps);
+                }
+
+                // Scroll to bottom after everything is rendered
+                requestAnimationFrame(() => {
+                    if (this.settings.autoscroll) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                });
+            }
+
+            createMessageElement(message) {
+                // Check if blocked
+                if (this.blockedUsers.has(message.author) || this.hasBlockedKeyword(message.content)) {
+                    return null;
+                }
+
+                const messageEl = document.createElement('div');
+
+                // Check flooding status
+                const channelToCheck = message.geohash || message.channel;
+                if (!message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
+                    messageEl.className = 'message flooded';
+                }
+
+                const isMentioned = !message.isOwn && this.isMentioned(message.content);
+                const time = this.settings.showTimestamps ?
+                    message.timestamp.toLocaleTimeString('en-US', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false
+                    }) : '';
+
+                // Handle action messages
+                if (message.content.startsWith('/me ')) {
+                    messageEl.className = 'action-message';
+                    messageEl.innerHTML = `* ${this.escapeHtml(message.author)} ${this.formatMessage(message.content.substring(4))}`;
+                } else {
+                    messageEl.className = message.isPM ? 'message pm' : (isMentioned ? 'message mentioned' : 'message');
+                    messageEl.dataset.messageId = message.id;
+                    messageEl.dataset.author = message.author;
+                    messageEl.dataset.pubkey = message.pubkey;
+                    messageEl.dataset.timestamp = message.timestamp.getTime();
+
+                    const authorClass = message.isOwn ? 'self' : '';
+                    const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
+                    const isMobile = window.innerWidth <= 768;
+
+                    const reactionButton = isValidEventId && !isMobile ? `
+            <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
+                <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                    <circle cx="9" cy="9" r="1"></circle>
+                    <circle cx="15" cy="9" r="1"></circle>
+                </svg>
+            </button>
+        ` : '';
+
+                    const formattedContent = this.formatMessageWithQuotes(message.content);
+
+                    messageEl.innerHTML = `
+            ${time ? `<span class="message-time">${time}</span>` : ''}
+            <span class="message-author ${authorClass}">${this.escapeHtml(message.author)}:</span>
+            <span class="message-content">${formattedContent}</span>
+            ${reactionButton}
+        `;
+                }
+
+                return messageEl;
+            }
+
+            debouncedUpdate(updateType, updateFn, delay = 100) {
+                // Store the update function
+                this.pendingUpdates.set(updateType, updateFn);
+
+                // Clear existing timer
+                if (this.updateDebounceTimer) {
+                    clearTimeout(this.updateDebounceTimer);
+                }
+
+                // Set new timer
+                this.updateDebounceTimer = setTimeout(() => {
+                    // Execute all pending updates
+                    this.pendingUpdates.forEach(fn => fn());
+                    this.pendingUpdates.clear();
+                    this.updateDebounceTimer = null;
+                }, delay);
             }
 
             addChannel(channel, geohash = '') {
@@ -9491,27 +9752,34 @@
         }
 
         async function saveSettings() {
-            // Get lightning address
+            // Get all settings values
             const lightningAddress = document.getElementById('lightningAddressInput').value.trim();
+            const theme = document.getElementById('themeSelect').value;
+            const sound = document.getElementById('soundSelect').value;
+            const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
+            const showTimestamps = document.getElementById('timestampSelect').value === 'true';
 
-            // Save lightning address
-            if (lightningAddress) {
-                await nym.saveLightningAddress(lightningAddress);
-            } else {
-                await nym.saveLightningAddress(null);
-            }
+            // Apply all settings
+            nym.settings.theme = theme;
+            nym.settings.sound = sound;
+            nym.settings.autoscroll = autoscroll;
+            nym.settings.showTimestamps = showTimestamps;
 
-            nym.settings.theme = document.getElementById('themeSelect').value;
-            nym.settings.sound = document.getElementById('soundSelect').value;
-            nym.settings.autoscroll = document.getElementById('autoscrollSelect').value === 'true';
-            nym.settings.showTimestamps = document.getElementById('timestampSelect').value === 'true';
-
-            nym.applyTheme(nym.settings.theme);
+            // Save locally
+            nym.applyTheme(theme);
             nym.saveSettings();
 
-            // Save to synced settings if using extension or nsec
+            // Save lightning address
+            if (lightningAddress !== nym.lightningAddress) {
+                await nym.saveLightningAddress(lightningAddress || null);
+            }
+
+            // Force sync ALL settings to Nostr for persistent connections
             if (nym.connectionMode !== 'ephemeral') {
                 await nym.saveSyncedSettings();
+                nym.displaySystemMessage('Settings saved and synced to Nostr');
+            } else {
+                nym.displaySystemMessage('Settings saved locally');
             }
 
             closeModal('settingsModal');
@@ -9520,7 +9788,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.5.7 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.5.8 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -9736,9 +10004,15 @@
                 // Connect to relays
                 await nym.connectToRelays();
 
-                // Fetch profile after connection for persistent modes
+                // For persistent connections, wait for settings sync
                 if ((mode === 'extension' || mode === 'nsec') && nym.connected) {
+                    // Fetch profile
                     await nym.fetchProfileFromRelay(nym.pubkey);
+
+                    // Load synced settings (give relays time to respond)
+                    setTimeout(() => {
+                        nym.loadSyncedSettings();
+                    }, 2000);
                 }
 
                 // Request notification permission
