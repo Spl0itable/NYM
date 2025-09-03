@@ -7311,7 +7311,7 @@
                         this.messages.get(storageKey).push(message);
                         this.messages.get(storageKey).sort((a, b) => a.timestamp - b.timestamp);
 
-                        // Prune messages if exceeding limit (10,000 max)
+                        // Prune messages if exceeding limit (1000 max)
                         const messages = this.messages.get(storageKey);
                         if (messages.length > 10000) {
                             // Keep only the most recent 10,000 messages
@@ -7456,7 +7456,7 @@
                 }
             }
 
-            pruneChannelMessages(channelKey, maxMessages = 10000) {
+            pruneChannelMessages(channelKey, maxMessages = 1000) {
                 const messages = this.messages.get(channelKey);
                 if (!messages || messages.length <= maxMessages) return;
 
