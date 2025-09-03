@@ -5405,8 +5405,6 @@
             }
 
             async handleEvent(event) {
-                // Determine if this is a historical message (from initial load)
-                // Messages are considered historical if they're older than 10 seconds
                 const messageAge = Date.now() - (event.created_at * 1000);
                 const isHistorical = messageAge > 10000; // Older than 10 seconds
 
@@ -5420,6 +5418,11 @@
 
                     // Check if user is blocked or message contains blocked keywords
                     if (this.blockedUsers.has(nym) || this.hasBlockedKeyword(event.content)) {
+                        return;
+                    }
+
+                    if (this.isSpamMessage(event.content)) {
+                        console.log('Blocked spam message from', nym);
                         return;
                     }
 
@@ -5486,6 +5489,11 @@
                         return;
                     }
 
+                    if (this.isSpamMessage(event.content)) {
+                        console.log('Blocked spam message from', nym);
+                        return;
+                    }
+
                     // Check flooding FOR THIS CHANNEL (only for non-historical messages)
                     if (!isHistorical && this.isFlooding(event.pubkey, channel)) {
                         return;
@@ -5549,6 +5557,51 @@
                     // Handle synced settings - no flood protection
                     this.handleSyncedSettings(event);
                 }
+            }
+
+            isSpamMessage(content) {
+                // Remove whitespace to check the core content
+                const trimmed = content.trim();
+
+                // Allow empty messages or very short ones
+                if (trimmed.length < 20) return false;
+
+                // Check if it's a URL (contains :// or starts with www.)
+                if (trimmed.includes('://') || trimmed.startsWith('www.')) return false;
+
+                // Check for Lightning invoices (lnbc, lntb, lnts prefixes)
+                if (/^ln(bc|tb|ts)/i.test(trimmed)) return false;
+
+                // Check for Cashu tokens
+                if (/^cashu/i.test(trimmed)) return false;
+
+                // Check for npub/nsec/note identifiers (Nostr specific)
+                if (/^(npub|nsec|note|nevent|naddr)1[a-z0-9]+$/i.test(trimmed)) return false;
+
+                // Check if the message has reasonable spacing (at least one space per 50 chars on average)
+                const spaceCount = (trimmed.match(/\s/g) || []).length;
+                const avgCharsPerSpace = trimmed.length / (spaceCount + 1);
+
+                // If average chars between spaces is > 50, likely spam
+                if (avgCharsPerSpace > 50) {
+                    // Additional check: does it look like base64 or random hex?
+                    const hasOnlyAlphaNumeric = /^[a-zA-Z0-9]+$/.test(trimmed);
+                    if (hasOnlyAlphaNumeric && trimmed.length > 100) {
+                        return true; // Very likely spam
+                    }
+
+                    // Check for reasonable distribution of characters
+                    // Real text typically has vowels and consonants mixed
+                    const vowelCount = (trimmed.match(/[aeiouAEIOU]/g) || []).length;
+                    const vowelRatio = vowelCount / trimmed.length;
+
+                    // Normal English text has ~38% vowels, spam often has much less
+                    if (vowelRatio < 0.15 && spaceCount === 0) {
+                        return true; // Likely spam - no spaces and very few vowels
+                    }
+                }
+
+                return false;
             }
 
             async sendBRBResponse(mentioner, awayMessage) {
@@ -5664,7 +5717,7 @@
                         document.getElementById('timestampSelect').value = String(this.settings.showTimestamps);
                     }
 
-                    this.displaySystemMessage('Settings synced from Nostr');
+                    //this.displaySystemMessage('Settings synced from Nostr');
                     console.log('Settings synced successfully:', Object.keys(settings));
                 } catch (error) {
                     console.error('Failed to parse synced settings:', error);
@@ -7236,8 +7289,8 @@
                         const messages = this.messages.get(storageKey);
                         if (messages.length > 10000) {
                             // Keep only the most recent 10,000 messages
-                            this.messages.set(storageKey, messages.slice(-10000));
-                            console.log(`Pruned messages in ${storageKey} to 10,000 max`);
+                            this.messages.set(storageKey, messages.slice(-1000));
+                            console.log(`Pruned messages in ${storageKey} to 1000 max`);
                         }
                     }
 
@@ -7272,6 +7325,11 @@
 
                 // Check if nym is blocked or message contains blocked keywords
                 if (this.blockedUsers.has(message.author) || this.hasBlockedKeyword(message.content)) {
+                    messageEl.className = 'message blocked';
+                    return;
+                }
+
+                if (this.isSpamMessage(message.content)) {
                     messageEl.className = 'message blocked';
                     return;
                 }
@@ -9584,7 +9642,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.5.7 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.5.8 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>

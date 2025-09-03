@@ -1,3 +1,7 @@
+## v1.5.8 - 2025-09-04
+
+Hotfix: added some spam filtering
+
 ## v1.5.7 - 2025-09-03
 
 Hotfix: zap button wouldn't work on first click
