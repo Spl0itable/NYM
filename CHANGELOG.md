@@ -1,3 +1,7 @@
+## v1.5.9 - 2025-09-04
+
+Hotfix: blocked users' messages not being removed
+
 ## v1.5.8 - 2025-09-04
 
 Hotfix: added some spam filtering

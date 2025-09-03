@@ -6896,6 +6896,16 @@
 
                 // Only show messages that are part of this specific conversation
                 const filteredMessages = pmMessages.filter(msg => {
+                    // Check if message is from blocked user
+                    if (this.blockedUsers.has(msg.author) || msg.blocked) {
+                        return false;
+                    }
+
+                    // Check if message content is spam
+                    if (this.isSpamMessage(msg.content)) {
+                        return false;
+                    }
+
                     // Ensure the message is between the current user and the PM recipient only
                     return msg.conversationKey === conversationKey &&
                         (msg.pubkey === this.pubkey || msg.pubkey === this.currentPM);
@@ -7262,6 +7272,11 @@
             }
 
             displayMessage(message) {
+                // Check if message is from a blocked user (from stored state)
+                if (message.blocked || this.blockedUsers.has(message.author)) {
+                    return; // Don't display blocked messages
+                }
+
                 // Handle PM messages differently
                 if (message.isPM) {
                     // Check if we should display this PM now
@@ -7334,14 +7349,11 @@
 
                 const messageEl = document.createElement('div');
 
-                // Check if nym is blocked or message contains blocked keywords
-                if (this.blockedUsers.has(message.author) || this.hasBlockedKeyword(message.content)) {
-                    messageEl.className = 'message blocked';
-                    return;
-                }
-
-                if (this.isSpamMessage(message.content)) {
-                    messageEl.className = 'message blocked';
+                // Check if nym is blocked or message contains blocked keywords or is spam
+                if (this.blockedUsers.has(message.author) ||
+                    this.hasBlockedKeyword(message.content) ||
+                    this.isSpamMessage(message.content)) {
+                    // Don't create the element at all for blocked/spam content
                     return;
                 }
 
@@ -7363,7 +7375,7 @@
                     messageEl.dataset.messageId = message.id;
                     messageEl.dataset.author = message.author;
                     messageEl.dataset.pubkey = message.pubkey;
-                    messageEl.dataset.timestamp = message.timestamp.getTime(); // Add timestamp for sorting
+                    messageEl.dataset.timestamp = message.timestamp.getTime();
 
                     const authorClass = message.isOwn ? 'self' : '';
 
@@ -7399,7 +7411,6 @@
                         authorSpan.addEventListener('click', (e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            // Pass messageId for mobile reaction option
                             this.showContextMenu(e, message.author, message.pubkey, message.content, message.id);
                             return false;
                         });
@@ -8529,28 +8540,52 @@
 
                 // Check if already blocked to toggle
                 if (this.blockedUsers.has(nym)) {
-                    await this.cmdUnblock(nym); // Make async
+                    await this.cmdUnblock(nym);
                     return;
                 }
 
                 this.blockedUsers.add(nym);
                 this.saveBlockedUsers();
 
-                // Hide existing messages from this user
-                document.querySelectorAll('.message').forEach(msg => {
-                    if (msg.dataset.author === nym) {
-                        msg.classList.add('blocked');
-                    }
-                });
+                // Hide all messages from this user across all channels
+                this.hideMessagesFromBlockedUser(nym);
 
                 this.displaySystemMessage(`Blocked ${nym}`);
                 this.updateUserList();
                 this.updateBlockedList();
 
-                // Save to synced settings for all persistent connections
+                // Save to synced settings for persistent connections
                 if (this.connectionMode !== 'ephemeral') {
                     await this.saveSyncedSettings();
                 }
+            }
+
+            hideMessagesFromBlockedUser(nym) {
+                // Hide messages in current DOM
+                document.querySelectorAll('.message').forEach(msg => {
+                    if (msg.dataset.author === nym) {
+                        msg.style.display = 'none';
+                        msg.classList.add('blocked-user-message');
+                    }
+                });
+
+                // Mark messages as blocked in stored messages
+                this.messages.forEach((channelMessages, channel) => {
+                    channelMessages.forEach(msg => {
+                        if (msg.author === nym) {
+                            msg.blocked = true;
+                        }
+                    });
+                });
+
+                // Mark PM messages as blocked
+                this.pmMessages.forEach((conversationMessages, conversationKey) => {
+                    conversationMessages.forEach(msg => {
+                        if (msg.author === nym) {
+                            msg.blocked = true;
+                        }
+                    });
+                });
             }
 
             async cmdUnblock(args) {
@@ -8563,24 +8598,48 @@
                 this.blockedUsers.delete(nym);
                 this.saveBlockedUsers();
 
-                // Show messages from this user (if not blocked by keywords)
-                document.querySelectorAll('.message').forEach(msg => {
-                    if (msg.dataset.author === nym) {
-                        const content = msg.querySelector('.message-content');
-                        if (!content || !this.hasBlockedKeyword(content.textContent)) {
-                            msg.classList.remove('blocked');
-                        }
-                    }
-                });
+                // Show messages from this user again
+                this.showMessagesFromUnblockedUser(nym);
 
                 this.displaySystemMessage(`Unblocked ${nym}`);
                 this.updateUserList();
                 this.updateBlockedList();
 
-                // Save to synced settings for all persistent connections
+                // Save to synced settings for persistent connections
                 if (this.connectionMode !== 'ephemeral') {
                     await this.saveSyncedSettings();
                 }
+            }
+
+            showMessagesFromUnblockedUser(nym) {
+                // Show messages in current DOM (unless blocked by keywords)
+                document.querySelectorAll('.message.blocked-user-message').forEach(msg => {
+                    if (msg.dataset.author === nym) {
+                        const content = msg.querySelector('.message-content');
+                        if (!content || !this.hasBlockedKeyword(content.textContent)) {
+                            msg.style.display = '';
+                            msg.classList.remove('blocked-user-message');
+                        }
+                    }
+                });
+
+                // Unmark messages in stored messages
+                this.messages.forEach((channelMessages, channel) => {
+                    channelMessages.forEach(msg => {
+                        if (msg.author === nym) {
+                            delete msg.blocked;
+                        }
+                    });
+                });
+
+                // Unmark PM messages
+                this.pmMessages.forEach((conversationMessages, conversationKey) => {
+                    conversationMessages.forEach(msg => {
+                        if (msg.author === nym) {
+                            delete msg.blocked;
+                        }
+                    });
+                });
             }
 
             async cmdSlap(args) {
@@ -8804,15 +8863,18 @@
                 const container = document.getElementById('messagesContainer');
                 container.innerHTML = '';
 
-                // Use the storage key format (no # for standard channels)
                 const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                 const channelMessages = this.messages.get(storageKey) || [];
 
                 // Sort messages by timestamp
                 channelMessages.sort((a, b) => a.timestamp - b.timestamp);
 
-                // Display messages
-                channelMessages.forEach(msg => this.displayMessage(msg));
+                // Display messages, filtering out blocked users
+                channelMessages.forEach(msg => {
+                    if (!this.blockedUsers.has(msg.author) && !msg.blocked) {
+                        this.displayMessage(msg);
+                    }
+                });
 
                 if (channelMessages.length === 0) {
                     this.displaySystemMessage(`Joined ${displayName}`);
@@ -9653,7 +9715,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.5.8 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.5.9 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
