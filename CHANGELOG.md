@@ -1,9 +1,4 @@
-## v1.5.8 - 2025-09-03
-
-Hotfix: corrected settings not saving/syncing to nostr
-Hotfix: batch loading to prevent memory exhaustion
-
-## v1.5.7 - 2025-09-03
+## v1.5.7 - 2025-09-04
 
 Hotfix: zap button wouldn't work on first click
 Hotfix: blocked users not being saved to nostr
