@@ -5560,6 +5560,9 @@
             }
 
             isSpamMessage(content) {
+                // Check if spam filter is disabled
+                if (this.spamFilterEnabled === false) return false;
+
                 // Remove whitespace to check the core content
                 const trimmed = content.trim();
 
@@ -5575,29 +5578,37 @@
                 // Check for Cashu tokens
                 if (/^cashu/i.test(trimmed)) return false;
 
-                // Check for npub/nsec/note identifiers (Nostr specific)
+                // Check for Nostr identifiers (npub/nsec/note/nevent/naddr)
                 if (/^(npub|nsec|note|nevent|naddr)1[a-z0-9]+$/i.test(trimmed)) return false;
 
-                // Check if the message has reasonable spacing (at least one space per 50 chars on average)
-                const spaceCount = (trimmed.match(/\s/g) || []).length;
-                const avgCharsPerSpace = trimmed.length / (spaceCount + 1);
+                // Check for code blocks or formatted content
+                if (trimmed.includes('```') || trimmed.includes('`')) return false;
 
-                // If average chars between spaces is > 50, likely spam
-                if (avgCharsPerSpace > 50) {
-                    // Additional check: does it look like base64 or random hex?
+                const words = trimmed.split(/[\s\u3000\u2000-\u200B\u0020\u00A0.,;!?。、，；！？\n]/);
+                const longestWord = Math.max(...words.map(w => w.length));
+
+                if (longestWord > 100) {
+                    if (trimmed.startsWith('data:image')) return false;
+
                     const hasOnlyAlphaNumeric = /^[a-zA-Z0-9]+$/.test(trimmed);
                     if (hasOnlyAlphaNumeric && trimmed.length > 100) {
-                        return true; // Very likely spam
+                        return true;
                     }
 
-                    // Check for reasonable distribution of characters
-                    // Real text typically has vowels and consonants mixed
-                    const vowelCount = (trimmed.match(/[aeiouAEIOU]/g) || []).length;
-                    const vowelRatio = vowelCount / trimmed.length;
+                    if (/^[a-zA-Z0-9]+$/.test(words.find(w => w.length > 100))) {
+                        const longWord = words.find(w => w.length > 100);
+                        const charFreq = {};
+                        for (const char of longWord) {
+                            charFreq[char] = (charFreq[char] || 0) + 1;
+                        }
 
-                    // Normal English text has ~38% vowels, spam often has much less
-                    if (vowelRatio < 0.15 && spaceCount === 0) {
-                        return true; // Likely spam - no spaces and very few vowels
+                        const frequencies = Object.values(charFreq);
+                        const avgFreq = longWord.length / Object.keys(charFreq).length;
+                        const variance = frequencies.reduce((sum, freq) => sum + Math.pow(freq - avgFreq, 2), 0) / frequencies.length;
+
+                        if (variance < 2 && longWord.length > 100) {
+                            return true;
+                        }
                     }
                 }
 
