@@ -1778,6 +1778,58 @@
             transform: scale(1.2);
         }
 
+        .verified-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            margin-left: 5px;
+            margin-right: 5px;
+            position: relative;
+            cursor: help;
+            transition: transform 0.2s, box-shadow 0.2s;
+            vertical-align: middle;
+        }
+
+        .verified-badge::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: var(--primary);
+            --lobes: conic-gradient(from 0deg,
+                    #000 0 22.5deg, transparent 22.5deg 45deg,
+                    #000 45deg 67.5deg, transparent 67.5deg 90deg,
+                    #000 90deg 112.5deg, transparent 112.5deg 135deg,
+                    #000 135deg 157.5deg, transparent 157.5deg 180deg,
+                    #000 180deg 202.5deg, transparent 202.5deg 225deg,
+                    #000 225deg 247.5deg, transparent 247.5deg 270deg,
+                    #000 270deg 292.5deg, transparent 292.5deg 315deg,
+                    #000 315deg 337.5deg, transparent 337.5deg 360deg);
+            --round: radial-gradient(circle at 50% 50%, #000 70%, transparent 71%);
+            -webkit-mask: var(--lobes), var(--round);
+            -webkit-mask-composite: source-in;
+            mask: var(--lobes);
+            mask-composite: intersect;
+        }
+
+        .verified-badge::after {
+            content: "✔";
+            position: absolute;
+            top: 55%;
+            left: 50%;
+            transform: translate(-50%, -52%);
+            font-size: 25px;
+            font-weight: 900;
+            color: #1DA1F2;
+            line-height: 1;
+        }
+
+        .verified-badge:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 10px var(--primary);
+        }
+
         @media (max-width: 768px) {
             .nav-section {
                 flex-shrink: 0;
@@ -2924,6 +2976,15 @@
                 this.zapCheckInterval = null;
                 this.zapInvoiceData = null;
                 this.listExpansionStates = new Map();
+                this.verifiedDeveloper = {
+                    npub: 'npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv',
+                    pubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
+                    title: 'NYM Developer'
+                };
+            }
+
+            isVerifiedDeveloper(pubkey) {
+                return pubkey === this.verifiedDeveloper.pubkey;
             }
 
             validateGeohashInput(input) {
@@ -6793,11 +6854,15 @@
 
                     const pmList = document.getElementById('pmList');
                     const item = document.createElement('div');
-                    item.className = 'pm-item list-item'; // Add list-item class
+                    item.className = 'pm-item list-item';
                     item.dataset.pubkey = pubkey;
                     item.dataset.lastMessageTime = timestamp;
+
+                    const verifiedBadge = this.isVerifiedDeveloper(pubkey) ?
+                        `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
+
                     item.innerHTML = `
-            <span class="pm-name">@${this.escapeHtml(nym)}</span>
+            <span class="pm-name">@${this.escapeHtml(nym)} ${verifiedBadge}</span>
             <div class="channel-badges">
                 <span class="pm-badge">PM</span>
                 <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
@@ -7379,31 +7444,35 @@
 
                     const authorClass = message.isOwn ? 'self' : '';
 
+                    // Add verified badge if this is the developer
+                    const verifiedBadge = this.isVerifiedDeveloper(message.pubkey) ?
+                        `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
+
                     // Check if this is a valid event ID (not temporary PM ID)
                     const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
                     const isMobile = window.innerWidth <= 768;
 
                     // Show reaction button for all messages with valid IDs (including PMs)
                     const reactionButton = isValidEventId && !isMobile ? `
-            <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
-                <svg viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-                    <circle cx="9" cy="9" r="1"></circle>
-                    <circle cx="15" cy="9" r="1"></circle>
-                </svg>
-            </button>
-        ` : '';
+        <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
+            <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                <circle cx="9" cy="9" r="1"></circle>
+                <circle cx="15" cy="9" r="1"></circle>
+            </svg>
+        </button>
+    ` : '';
 
                     // Build the initial HTML with quote detection
                     const formattedContent = this.formatMessageWithQuotes(message.content);
 
                     messageEl.innerHTML = `
-            ${time ? `<span class="message-time">${time}</span>` : ''}
-            <span class="message-author ${authorClass}">${this.escapeHtml(message.author)}:</span>
-            <span class="message-content">${formattedContent}</span>
-            ${reactionButton}
-        `;
+    ${time ? `<span class="message-time">${time}</span>` : ''}
+    <span class="message-author ${authorClass}">${this.escapeHtml(message.author)} ${verifiedBadge}</span>
+    <span class="message-content">: ${formattedContent}</span>
+    ${reactionButton}
+`;
 
                     const authorSpan = messageEl.querySelector('.message-author');
                     if (authorSpan) {
@@ -7750,15 +7819,20 @@
                     }).length;
 
                 // Display deduplicated users in sidebar with click to open PM and right-click for context menu
-                userListContent.innerHTML = displayUsers.map((user, index) => `
+                userListContent.innerHTML = displayUsers.map((user, index) => {
+                    const verifiedBadge = this.isVerifiedDeveloper(user.pubkey) ?
+                        `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>` : '';
+
+                    return `
         <div class="user-item list-item" 
              onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
              oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
              data-nym="${this.escapeHtml(user.nym)}">
             <span class="user-status ${user.status}"></span>
-            <span>${this.escapeHtml(user.nym)}</span>
+            <span>${this.escapeHtml(user.nym)} ${verifiedBadge}</span>
         </div>
-    `).join('');
+    `;
+                }).join('');
 
                 // Add view more button for users
                 this.updateViewMoreButton('userListContent');
@@ -9715,7 +9789,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.5.9 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.6.9 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
