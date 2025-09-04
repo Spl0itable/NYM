@@ -1048,6 +1048,12 @@
             cursor: pointer;
         }
 
+        .nym-suffix {
+            opacity: 0.7;
+            font-size: 0.9em;
+            font-weight: 100;
+        }
+
         .message-author:hover {
             text-decoration: underline;
         }
@@ -1055,6 +1061,10 @@
         .message-author.self {
             color: var(--primary);
             text-shadow: 0 0 3px var(--primary);
+        }
+
+        .message-author.self .nym-suffix {
+            color: var(--primary);
         }
 
         .message-content {
@@ -3899,7 +3909,7 @@
 
                 // Get last 4 characters of pubkey
                 const suffix = pubkey ? pubkey.slice(-4) : '????';
-                return `${nym}#${suffix}`;
+                return `${nym}<span class="nym-suffix">#${suffix}</span>`;
             }
 
             getPubkeySuffix(pubkey) {
@@ -7866,10 +7876,12 @@
                     const formattedContent = this.formatMessageWithQuotes(message.content);
 
                     const displayAuthor = this.formatNymWithPubkey(message.author, message.pubkey);
+                    const escapedAuthorBase = this.escapeHtml(message.author).split('#')[0] || this.escapeHtml(message.author);
+                    const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
                     messageEl.innerHTML = `
     ${time ? `<span class="message-time">${time}</span>` : ''}
-    <span class="message-author ${authorClass}">${this.escapeHtml(displayAuthor)}${verifiedBadge}:</span>
+    <span class="message-author ${authorClass}">${authorWithHtml}${verifiedBadge}:</span>
     <span class="message-content">${formattedContent}</span>
     ${reactionButton}
 `;
