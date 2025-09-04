@@ -9010,7 +9010,7 @@
                     console.log(`Getting location for geohash ${geohash}: ${location}`);
 
                     if (location) {
-                        fullTitle = `${displayName} • ${location}`;
+                        fullTitle = `${displayName} <font size="2">• ${location}</font>`;
 
                         if (this.userLocation && this.settings.sortByProximity) {
                             try {
@@ -9019,7 +9019,7 @@
                                     this.userLocation.lat, this.userLocation.lng,
                                     coords.lat, coords.lng
                                 );
-                                fullTitle = `${displayName} • ${location} (${distance.toFixed(1)}km)`;
+                                fullTitle = `${displayName} <font size="2">• ${location} (${distance.toFixed(1)}km)</font>`;
                             } catch (e) {
                                 console.error('Distance calculation error:', e);
                             }
@@ -9028,7 +9028,7 @@
                 }
 
                 console.log('Setting channel title to:', fullTitle);
-                document.getElementById('currentChannel').textContent = fullTitle;
+                document.getElementById('currentChannel').innerHTML = fullTitle;
 
                 // Update active state
                 document.querySelectorAll('.channel-item').forEach(item => {
