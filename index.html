@@ -1830,6 +1830,111 @@
             box-shadow: 0 0 10px var(--primary);
         }
 
+        .share-channel-btn {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            opacity: 0.4;
+            transition: opacity 0.2s, transform 0.2s;
+            padding: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .share-channel-btn:hover {
+            opacity: 1;
+            transform: scale(1.1);
+        }
+
+        .share-channel-btn svg {
+            fill: var(--primary);
+        }
+
+        .share-modal {
+            max-width: 500px;
+        }
+
+        .share-url-container {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            align-items: stretch;
+        }
+
+        .share-url-input {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px;
+            font-family: var(--font-mono);
+            font-size: 14px;
+            outline: none;
+        }
+
+        .share-url-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 5px rgba(0, 255, 0, 0.3);
+        }
+
+        .copy-url-btn {
+            background: var(--bg);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            padding: 10px 20px;
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .copy-url-btn:hover {
+            background: var(--primary);
+            color: var(--bg);
+            box-shadow: 0 0 10px var(--primary);
+        }
+
+        .copy-url-btn.copied {
+            background: var(--primary);
+            color: var(--bg);
+        }
+
+        .share-options {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .share-option-btn {
+            flex: 1;
+            padding: 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+        }
+
+        .share-option-btn:hover {
+            border-color: var(--primary);
+            background: rgba(0, 255, 0, 0.1);
+        }
+
+        .share-option-btn svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
         @media (max-width: 768px) {
             .nav-section {
                 flex-shrink: 0;
@@ -2199,9 +2304,18 @@
         <main class="main-content">
             <header class="chat-header">
                 <div class="channel-info">
-                    <div>
-                        <div class="channel-title" id="currentChannel">#bar</div>
-                        <div class="channel-meta" id="channelMeta">0 nyms in channel</div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div>
+                            <div class="channel-title" id="currentChannel">#bar</div>
+                            <div class="channel-meta" id="channelMeta">0 nyms in channel</div>
+                        </div>
+                        <button class="share-channel-btn" id="shareChannelBtn" onclick="nym.shareChannel()"
+                            title="Share channel URL">
+                            <svg viewBox="0 0 24 24" width="20" height="20">
+                                <path
+                                    d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z" />
+                            </svg>
+                        </button>
                     </div>
                 </div>
                 <div class="header-actions">
@@ -2404,6 +2518,13 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Blocked Channels</label>
+                    <div class="blocked-list" id="blockedChannelsList">
+                        <div style="color: var(--text-dim); font-size: 12px;">No blocked channels</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Blocked Users</label>
                     <div class="blocked-list" id="blockedList">
                         <div style="color: var(--text-dim); font-size: 12px;">No blocked users</div>
@@ -2520,6 +2641,49 @@
             <div class="modal-actions">
                 <button class="icon-btn" onclick="nym.closeZapModal()">Cancel</button>
                 <button class="send-btn" id="zapSendBtn" onclick="nym.generateZapInvoice()">Generate Invoice</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Share Channel Modal -->
+    <div class="modal" id="shareModal">
+        <div class="modal-content share-modal">
+            <div class="modal-header">Share Channel</div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Channel URL</label>
+                    <div class="share-url-container">
+                        <input type="text" class="share-url-input" id="shareUrlInput" readonly>
+                        <button class="copy-url-btn" onclick="nym.copyShareUrl()">COPY</button>
+                    </div>
+                    <div class="form-hint">Share this URL to invite others to this channel</div>
+                </div>
+
+                <div class="share-options">
+                    <button class="share-option-btn" onclick="nym.shareToTwitter()">
+                        <svg viewBox="0 0 24 24">
+                            <path
+                                d="M23 3a10.9 10.9 0 01-3.14 1.53 4.48 4.48 0 00-7.86 3v1A10.66 10.66 0 013 4s-4 9 5 13a11.64 11.64 0 01-7 2c9 5 20 0 20-11.5a4.5 4.5 0 00-.08-.83A7.72 7.72 0 0023 3z" />
+                        </svg>
+                        Twitter
+                    </button>
+                    <button class="share-option-btn" onclick="nym.shareToNostr()">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z" />
+                        </svg>
+                        Nostr
+                    </button>
+                    <button class="share-option-btn" onclick="nym.shareToClipboard()">
+                        <svg viewBox="0 0 24 24">
+                            <path
+                                d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
+                        </svg>
+                        Clipboard
+                    </button>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" onclick="closeModal('shareModal')">Close</button>
             </div>
         </div>
     </div>
@@ -2840,6 +3004,7 @@
                 this.unreadCounts = new Map();
                 this.blockedUsers = new Set();
                 this.blockedKeywords = new Set();
+                this.blockedChannels = new Set();
                 this.settings = this.loadSettings();
                 this.commandHistory = [];
                 this.historyIndex = -1;
@@ -2992,6 +3157,77 @@
                     pubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
                     title: 'NYM Developer'
                 };
+            }
+
+            shareChannel() {
+                // Generate the share URL
+                const baseUrl = window.location.origin + window.location.pathname;
+                const channelPart = this.currentGeohash || this.currentChannel;
+                const shareUrl = `${baseUrl}#${channelPart}`;
+
+                // Set the URL in the input
+                document.getElementById('shareUrlInput').value = shareUrl;
+
+                // Show the modal
+                document.getElementById('shareModal').classList.add('active');
+
+                // Auto-select the text
+                setTimeout(() => {
+                    document.getElementById('shareUrlInput').select();
+                }, 100);
+            }
+
+            copyShareUrl() {
+                const input = document.getElementById('shareUrlInput');
+                input.select();
+
+                navigator.clipboard.writeText(input.value).then(() => {
+                    const btn = document.querySelector('.copy-url-btn');
+                    const originalText = btn.textContent;
+                    btn.textContent = 'COPIED!';
+                    btn.classList.add('copied');
+
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.classList.remove('copied');
+                    }, 2000);
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                    this.displaySystemMessage('Failed to copy URL');
+                });
+            }
+
+            shareToTwitter() {
+                const url = document.getElementById('shareUrlInput').value;
+                const channelName = this.currentGeohash || this.currentChannel;
+                const text = `Join me in the #${channelName} channel on NYM - ephemeral Nostr chat`;
+                const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
+                window.open(twitterUrl, '_blank');
+            }
+
+            shareToNostr() {
+                const url = document.getElementById('shareUrlInput').value;
+                const channelName = this.currentGeohash || this.currentChannel;
+                const content = `Join me in the #${channelName} channel on NYM - ephemeral Nostr chat\n\n${url}`;
+
+                // Copy to clipboard with Nostr note format
+                const note = `nostr:note1${content}`;
+                navigator.clipboard.writeText(content).then(() => {
+                    this.displaySystemMessage('Channel link copied for Nostr sharing');
+                    closeModal('shareModal');
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                    this.displaySystemMessage('Failed to copy for Nostr');
+                });
+            }
+
+            shareToClipboard() {
+                this.copyShareUrl();
+            }
+
+            // Add a command for sharing
+            cmdShare() {
+                this.shareChannel();
             }
 
             decodeGeohash(geohash) {
@@ -3238,6 +3474,7 @@
                     this.applyTheme(this.settings.theme);
                     this.loadBlockedUsers();
                     this.loadBlockedKeywords();
+                    this.loadBlockedChannels();
                     this.loadPinnedChannels();
 
                     // Load lightning address
@@ -3419,7 +3656,9 @@
                 e.stopPropagation();
 
                 const menu = document.getElementById('contextMenu');
-                this.contextMenuData = { nym, pubkey, content, messageId };
+                // Parse base nym from display format
+                const baseNym = this.parseNymFromDisplay(nym);
+                this.contextMenuData = { nym: baseNym, pubkey, content, messageId };
 
                 // Add slap option if it doesn't exist
                 let slapOption = document.getElementById('ctxSlap');
@@ -3621,12 +3860,59 @@
             }
 
             generateRandomNym() {
-                const adjectives = ['cosmic', 'neon', 'cyber', 'shadow', 'plasma', 'quantum', 'echo', 'nexus', 'void', 'flux'];
-                const nouns = ['ghost', 'nomad', 'drift', 'pulse', 'wave', 'spark', 'node', 'byte', 'mesh', 'link'];
+                const adjectives = [
+                    'quantum', 'neon', 'cyber', 'shadow', 'plasma',
+                    'echo', 'nexus', 'void', 'flux', 'ghost',
+                    'phantom', 'stealth', 'cryptic', 'dark', 'neural',
+                    'binary', 'matrix', 'digital', 'virtual', 'zero',
+                    'null', 'anon', 'masked', 'hidden', 'cipher',
+                    'enigma', 'spectral', 'rogue', 'omega', 'alpha',
+                    'delta', 'sigma', 'vortex', 'turbo', 'razor',
+                    'blade', 'frost', 'storm', 'glitch', 'pixel'
+                ];
+
+                const nouns = [
+                    'ghost', 'nomad', 'drift', 'pulse', 'wave',
+                    'spark', 'node', 'byte', 'mesh', 'link',
+                    'runner', 'hacker', 'coder', 'agent', 'proxy',
+                    'daemon', 'virus', 'worm', 'bot', 'droid',
+                    'reaper', 'shadow', 'wraith', 'specter', 'shade',
+                    'entity', 'unit', 'core', 'nexus', 'cypher',
+                    'breach', 'exploit', 'overflow', 'inject', 'root',
+                    'kernel', 'shell', 'terminal', 'console', 'script'
+                ];
+
                 const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
                 const noun = nouns[Math.floor(Math.random() * nouns.length)];
-                const num = Math.floor(Math.random() * 999);
-                return `${adj}_${noun}_${num}`;
+
+                // Get last 4 chars of pubkey if available
+                const suffix = this.pubkey ? this.pubkey.slice(-4) : Math.floor(Math.random() * 9999).toString().padStart(4, '0');
+
+                return `${adj}_${noun}#${suffix}`;
+            }
+
+            formatNymWithPubkey(nym, pubkey) {
+                // If nym already has a # suffix, don't add another
+                if (nym.includes('#')) {
+                    return nym;
+                }
+
+                // Get last 4 characters of pubkey
+                const suffix = pubkey ? pubkey.slice(-4) : '????';
+                return `${nym}#${suffix}`;
+            }
+
+            getPubkeySuffix(pubkey) {
+                return pubkey ? pubkey.slice(-4) : '????';
+            }
+
+            parseNymFromDisplay(displayNym) {
+                // Remove the #xxxx suffix if present
+                const hashIndex = displayNym.lastIndexOf('#');
+                if (hashIndex !== -1) {
+                    return displayNym.substring(0, hashIndex);
+                }
+                return displayNym;
             }
 
             async connectToRelays() {
@@ -5250,6 +5536,7 @@
                         pinnedChannels: Array.from(this.pinnedChannels),
                         blockedUsers: Array.from(this.blockedUsers),
                         blockedKeywords: Array.from(this.blockedKeywords),
+                        blockedChannels: Array.from(this.blockedChannels),
                         userJoinedChannels: Array.from(this.userJoinedChannels),
                         lightningAddress: this.lightningAddress
                     };
@@ -5570,8 +5857,8 @@
                         this.trackMessage(event.pubkey, geohash, isHistorical);
                     }
 
-                    // Check for BRB auto-response (UNIVERSAL)
-                    if (this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
+                    // Check for BRB auto-response (UNIVERSAL) - only for NEW messages
+                    if (!isHistorical && this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
                         // Check if we haven't already responded to this user in this session
                         const responseKey = `brb_universal_${this.pubkey}_${nym}`;
                         if (!sessionStorage.getItem(responseKey)) {
@@ -5583,8 +5870,8 @@
                         }
                     }
 
-                    // Add channel if it's new
-                    if (geohash && !this.channels.has(geohash)) {
+                    // Add channel if it's new (and not blocked)
+                    if (geohash && !this.channels.has(geohash) && !this.isChannelBlocked(geohash, geohash)) {
                         this.addChannelToList(geohash, geohash);
                     }
 
@@ -5638,8 +5925,8 @@
                         this.trackMessage(event.pubkey, channel, isHistorical);
                     }
 
-                    // Check for BRB auto-response (UNIVERSAL)
-                    if (this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
+                    // Check for BRB auto-response (UNIVERSAL) - only for NEW messages
+                    if (!isHistorical && this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
                         // Check if we haven't already responded to this user in this session
                         const responseKey = `brb_universal_${this.pubkey}_${nym}`;
                         if (!sessionStorage.getItem(responseKey)) {
@@ -5651,8 +5938,8 @@
                         }
                     }
 
-                    // Add channel if it's new
-                    if (!this.channels.has(channel)) {
+                    // Add channel if it's new (and not blocked)
+                    if (!this.channels.has(channel) && !this.isChannelBlocked(channel, '')) {
                         this.addChannelToList(channel, '');
                     }
 
@@ -5679,16 +5966,16 @@
                         }
                     }
                 } else if (event.kind === 7) {
-                    // Handle reactions (NIP-25) - no flood protection for reactions
+                    // Handle reactions (NIP-25)
                     this.handleReaction(event);
                 } else if (event.kind === 9735) {
                     // Handle zap receipt (NIP-57)
                     this.handleZapReceipt(event);
                 } else if (event.kind === 4) {
-                    // Handle legacy NIP-04 encrypted DMs - no flood protection for PMs
+                    // Handle legacy NIP-04 encrypted DMs
                     await this.handleEncryptedDM(event);
                 } else if (event.kind === 30078) {
-                    // Handle synced settings - no flood protection
+                    // Handle synced settings
                     this.handleSyncedSettings(event);
                 }
             }
@@ -5825,6 +6112,13 @@
                         this.pinnedChannels = new Set(settings.pinnedChannels);
                         localStorage.setItem('nym_pinned_channels', JSON.stringify(settings.pinnedChannels));
                         this.updateChannelPins();
+                    }
+
+                    // Restore blocked channels
+                    if (settings.blockedChannels) {
+                        this.blockedChannels = new Set(settings.blockedChannels);
+                        localStorage.setItem('nym_blocked_channels', JSON.stringify(settings.blockedChannels));
+                        this.updateBlockedChannelsList();
                     }
 
                     // Restore blocked users
@@ -7426,15 +7720,18 @@
 
             getNymFromPubkey(pubkey) {
                 const user = this.users.get(pubkey);
-                if (user) return user.nym;
+                if (user) {
+                    return this.formatNymWithPubkey(user.nym, pubkey);
+                }
 
                 // Check PM conversations for saved nyms
                 if (this.pmConversations.has(pubkey)) {
-                    return this.pmConversations.get(pubkey);
+                    const nym = this.pmConversations.get(pubkey).nym;
+                    return this.formatNymWithPubkey(nym, pubkey);
                 }
 
-                // Return shortened pubkey as fallback
-                return 'anon-' + pubkey.substring(0, 6);
+                // Return shortened pubkey as fallback with anon prefix
+                return `anon#${pubkey.slice(-4)}`;
             }
 
             displayMessage(message) {
@@ -7568,9 +7865,11 @@
                     // Build the initial HTML with quote detection
                     const formattedContent = this.formatMessageWithQuotes(message.content);
 
+                    const displayAuthor = this.formatNymWithPubkey(message.author, message.pubkey);
+
                     messageEl.innerHTML = `
     ${time ? `<span class="message-time">${time}</span>` : ''}
-    <span class="message-author ${authorClass}">${this.escapeHtml(message.author)}${verifiedBadge}:</span>
+    <span class="message-author ${authorClass}">${this.escapeHtml(displayAuthor)}${verifiedBadge}:</span>
     <span class="message-content">${formattedContent}</span>
     ${reactionButton}
 `;
@@ -7921,6 +8220,7 @@
 
                 // Display deduplicated users in sidebar with click to open PM and right-click for context menu
                 userListContent.innerHTML = displayUsers.map((user, index) => {
+                    const displayNym = this.formatNymWithPubkey(user.nym, user.pubkey);
                     const verifiedBadge = this.isVerifiedDeveloper(user.pubkey) ?
                         `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>` : '';
 
@@ -7928,9 +8228,9 @@
         <div class="user-item list-item" 
              onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
              oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
-             data-nym="${this.escapeHtml(user.nym)}">
+             data-nym="${this.escapeHtml(displayNym)}">
             <span class="user-status ${user.status}"></span>
-            <span>${this.escapeHtml(user.nym)} ${verifiedBadge}</span>
+            <span>${this.escapeHtml(displayNym)} ${verifiedBadge}</span>
         </div>
     `;
                 }).join('');
@@ -8250,7 +8550,7 @@
                     '/who': { desc: 'List online nyms', fn: () => this.cmdWho() },
                     '/w': { desc: 'Shortcut for /who', fn: () => this.cmdWho() },
                     '/clear': { desc: 'Clear chat messages', fn: () => this.cmdClear() },
-                    '/block': { desc: 'Block a user', fn: (args) => this.cmdBlock(args) },
+                    '/block': { desc: 'Block a user or #channel', fn: (args) => this.cmdBlock(args) },
                     '/unblock': { desc: 'Unblock a user', fn: (args) => this.cmdUnblock(args) },
                     '/slap': { desc: 'Slap someone with a trout', fn: (args) => this.cmdSlap(args) },
                     '/me': { desc: 'Action message', fn: (args) => this.cmdMe(args) },
@@ -8268,6 +8568,8 @@
                     '/brb': { desc: 'Set away message', fn: (args) => this.cmdBRB(args) },
                     '/back': { desc: 'Clear away message', fn: () => this.cmdBack() },
                     '/zap': { desc: 'Zap a user profile', fn: (args) => this.cmdZap(args) },
+                    '/invite': { desc: 'Invite a user to current channel', fn: (args) => this.cmdInvite(args) },
+                    '/share': { desc: 'Share current channel URL', fn: () => this.cmdShare() },
                     '/leave': { desc: 'Leave current channel', fn: () => this.cmdLeave() },
                     '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() }
                 };
@@ -8415,27 +8717,56 @@
             showAutocomplete(search) {
                 const dropdown = document.getElementById('autocompleteDropdown');
 
-                // Show deduplicated active users for autocomplete
-                const uniqueUsers = new Map();
+                // Get current time for activity check
+                const now = Date.now();
+                const activeThreshold = 300000; // 5 minutes
+
+                // Collect and categorize users
+                const onlineUsers = [];
+                const offlineUsers = [];
+
                 this.users.forEach((user, pubkey) => {
-                    if (Date.now() - user.lastSeen < 300000 &&
-                        !this.blockedUsers.has(user.nym) &&
-                        user.nym.toLowerCase().includes(search.toLowerCase()) &&
-                        !uniqueUsers.has(pubkey)) {
-                        uniqueUsers.set(pubkey, user);
+                    if (!this.blockedUsers.has(user.nym) &&
+                        user.nym.toLowerCase().includes(search.toLowerCase())) {
+
+                        const userEntry = {
+                            nym: user.nym,
+                            pubkey: pubkey,
+                            displayNym: this.formatNymWithPubkey(user.nym, pubkey),
+                            lastSeen: user.lastSeen
+                        };
+
+                        if (now - user.lastSeen < activeThreshold) {
+                            onlineUsers.push(userEntry);
+                        } else {
+                            offlineUsers.push(userEntry);
+                        }
                     }
                 });
 
-                const users = Array.from(uniqueUsers.values()).slice(0, 5);
+                // Sort each group alphabetically
+                onlineUsers.sort((a, b) => a.nym.localeCompare(b.nym));
+                offlineUsers.sort((a, b) => a.nym.localeCompare(b.nym));
 
-                if (users.length > 0) {
-                    dropdown.innerHTML = users.map((user, index) => `
-            <div class="autocomplete-item ${index === 0 ? 'selected' : ''}" 
-                 data-nym="${user.nym}"
-                 onclick="nym.selectSpecificAutocomplete('${user.nym}')">
-                <strong>@${this.escapeHtml(user.nym)}</strong>
-            </div>
-        `).join('');
+                // Combine with online users first
+                const allUsers = [...onlineUsers, ...offlineUsers].slice(0, 8);
+
+                if (allUsers.length > 0) {
+                    dropdown.innerHTML = allUsers.map((user, index) => {
+                        const isOnline = now - user.lastSeen < activeThreshold;
+                        const statusIndicator = isOnline ?
+                            '<span style="color: var(--primary); margin-right: 5px;">●</span>' :
+                            '<span style="color: var(--text-dim); margin-right: 5px;">○</span>';
+
+                        return `
+                <div class="autocomplete-item ${index === 0 ? 'selected' : ''}" 
+                     data-nym="${user.nym}"
+                     data-pubkey="${user.pubkey}"
+                     onclick="nym.selectSpecificAutocomplete('${user.nym}', '${user.pubkey}')">
+                    ${statusIndicator}<strong>@${this.escapeHtml(user.displayNym)}</strong>
+                </div>
+            `;
+                    }).join('');
                     dropdown.classList.add('active');
                     this.autocompleteIndex = 0;
                 } else {
@@ -8443,11 +8774,12 @@
                 }
             }
 
-            selectSpecificAutocomplete(nym) {
+            selectSpecificAutocomplete(nym, pubkey) {
                 const input = document.getElementById('messageInput');
                 const value = input.value;
                 const lastAtIndex = value.lastIndexOf('@');
 
+                // Use just the base nym without suffix in the message
                 input.value = value.substring(0, lastAtIndex) + '@' + nym + ' ';
                 input.focus();
                 this.hideAutocomplete();
@@ -8476,10 +8808,12 @@
                 const selected = document.querySelector('.autocomplete-item.selected');
                 if (selected) {
                     const nym = selected.dataset.nym;
+                    const pubkey = selected.dataset.pubkey;
                     const input = document.getElementById('messageInput');
                     const value = input.value;
                     const lastAtIndex = value.lastIndexOf('@');
 
+                    // Use just the base nym without suffix in the message
                     input.value = value.substring(0, lastAtIndex) + '@' + nym + ' ';
                     input.focus();
                     this.hideAutocomplete();
@@ -8587,7 +8921,7 @@
                 const helpText = Object.entries(this.commands)
                     .map(([cmd, info]) => `${cmd} - ${info.desc}`)
                     .join('\n');
-                this.displaySystemMessage(`Available commands:\n${helpText}\n\nMarkdown supported: **bold**, *italic*, ~~strikethrough~~, \`code\`, > quote\n\nType : to quickly pick an emoji\n\nClick on users for more options`);
+                this.displaySystemMessage(`Available commands:\n${helpText}\n\nMarkdown supported: **bold**, *italic*, ~~strikethrough~~, \`code\`, > quote\n\nType : to quickly pick an emoji\n\nNyms are shown as name#xxxx where xxxx is the last 4 characters of their pubkey\n\nClick on users for more options`);
             }
 
             async cmdJoin(args) {
@@ -8633,24 +8967,56 @@
 
             cmdPM(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /pm nym');
+                    this.displaySystemMessage('Usage: /pm nym or /pm nym#xxxx');
                     return;
                 }
 
-                const targetNym = args.trim();
+                const targetInput = args.trim();
 
-                // Find user by nym
-                let targetPubkey = null;
+                // Check if input has #xxxx suffix
+                const hashIndex = targetInput.indexOf('#');
+                let searchNym = targetInput;
+                let searchSuffix = null;
+
+                if (hashIndex !== -1) {
+                    searchNym = targetInput.substring(0, hashIndex);
+                    searchSuffix = targetInput.substring(hashIndex + 1);
+                }
+
+                // Find user by nym, considering suffix if provided
+                const matches = [];
                 this.users.forEach((user, pubkey) => {
-                    if (user.nym === targetNym) {
-                        targetPubkey = pubkey;
+                    if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+                        if (searchSuffix) {
+                            // If suffix provided, only match exact pubkey suffix
+                            if (pubkey.endsWith(searchSuffix)) {
+                                matches.push({ nym: user.nym, pubkey: pubkey });
+                            }
+                        } else {
+                            // No suffix provided, collect all matches
+                            matches.push({ nym: user.nym, pubkey: pubkey });
+                        }
                     }
                 });
 
-                if (!targetPubkey) {
-                    this.displaySystemMessage(`User ${targetNym} not found`);
+                if (matches.length === 0) {
+                    this.displaySystemMessage(`User ${targetInput} not found`);
                     return;
                 }
+
+                if (matches.length > 1 && !searchSuffix) {
+                    // Multiple users with same nym, show them
+                    const matchList = matches.map(m =>
+                        `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                    ).join(', ');
+                    this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                    this.displaySystemMessage('Please specify using the #xxxx suffix');
+                    return;
+                }
+
+                // Single match or exact suffix match
+                const targetPubkey = matches[0].pubkey;
+                const targetNym = matches[0].nym;
 
                 if (targetPubkey === this.pubkey) {
                     this.displaySystemMessage("You can't send private messages to yourself");
@@ -8694,7 +9060,7 @@
                     .map(pubkey => this.users.get(pubkey))
                     .filter(u => u && Date.now() - u.lastSeen < 300000)
                     .filter(u => !this.blockedUsers.has(u.nym))
-                    .map(u => u.nym)
+                    .map(u => this.formatNymWithPubkey(u.nym, u.pubkey))
                     .join(', ');
 
                 this.displaySystemMessage(`Online nyms in this channel: ${users || 'none'}`);
@@ -8705,27 +9071,189 @@
                 this.displaySystemMessage('Chat cleared');
             }
 
-            async cmdBlock(args) {
+            async cmdInvite(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /block nym');
+                    this.displaySystemMessage('Usage: /invite nym or /invite nym#xxxx');
                     return;
                 }
 
-                const nym = args.trim();
+                if (this.inPMMode) {
+                    this.displaySystemMessage('Cannot invite users while in PM mode');
+                    return;
+                }
+
+                const targetInput = args.trim();
+                let targetPubkey = null;
+                let matchedNym = null;
+
+                // Check if input has #xxxx suffix
+                const hashIndex = targetInput.indexOf('#');
+                let searchNym = targetInput;
+                let searchSuffix = null;
+
+                if (hashIndex !== -1) {
+                    searchNym = targetInput.substring(0, hashIndex);
+                    searchSuffix = targetInput.substring(hashIndex + 1);
+                }
+
+                // Find user by nym, considering suffix if provided
+                const matches = [];
+                this.users.forEach((user, pubkey) => {
+                    if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+                        if (searchSuffix) {
+                            // If suffix provided, only match exact pubkey suffix
+                            if (pubkey.endsWith(searchSuffix)) {
+                                matches.push({ nym: user.nym, pubkey: pubkey });
+                            }
+                        } else {
+                            // No suffix provided, collect all matches
+                            matches.push({ nym: user.nym, pubkey: pubkey });
+                        }
+                    }
+                });
+
+                if (matches.length === 0) {
+                    this.displaySystemMessage(`User ${targetInput} not found`);
+                    return;
+                }
+
+                if (matches.length > 1 && !searchSuffix) {
+                    // Multiple users with same nym, show them
+                    const matchList = matches.map(m =>
+                        `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                    ).join(', ');
+                    this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                    this.displaySystemMessage('Please specify using the #xxxx suffix');
+                    return;
+                }
+
+                // Single match or exact suffix match
+                targetPubkey = matches[0].pubkey;
+                matchedNym = matches[0].nym;
+
+                if (targetPubkey === this.pubkey) {
+                    this.displaySystemMessage("You can't invite yourself");
+                    return;
+                }
+
+                // Create channel info
+                const channelInfo = this.currentGeohash ?
+                    `#${this.currentGeohash} [GEO]` :
+                    `#${this.currentChannel} [STD]`;
+
+                // Send an invitation as a PM
+                const inviteMessage = `📨 Channel Invitation: You've been invited to join ${channelInfo}. Use /join ${this.currentGeohash || this.currentChannel} to join!`;
+
+                // Send as PM
+                const sent = await this.sendPM(inviteMessage, targetPubkey);
+
+                if (sent) {
+                    const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
+                    this.displaySystemMessage(`Invitation sent to ${displayNym} for ${channelInfo}`);
+
+                    // Also send a mention in the current channel
+                    const publicNotice = `@${matchedNym} you've been invited to this channel! Check your PMs for details.`;
+                    await this.publishMessage(publicNotice, this.currentChannel, this.currentGeohash);
+                } else {
+                    this.displaySystemMessage(`Failed to send invitation to ${this.formatNymWithPubkey(matchedNym, targetPubkey)}`);
+                }
+            }
+
+            async cmdBlock(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /block nym, /block nym#xxxx, or /block #channel');
+                    return;
+                }
+
+                const target = args.trim();
+
+                // Check if it's a channel block
+                if (target.startsWith('#') && !target.includes('@')) {
+                    const channelName = target.substring(1);
+
+                    // Check if it's current channel
+                    if ((this.currentChannel === channelName && !this.currentGeohash) ||
+                        (this.currentGeohash === channelName)) {
+                        this.displaySystemMessage("Leave the channel first before blocking it");
+                        return;
+                    }
+
+                    // Don't allow blocking #bar
+                    if (channelName === 'bar') {
+                        this.displaySystemMessage("Cannot block the default #bar channel");
+                        return;
+                    }
+
+                    // Determine if it's a geohash or standard channel
+                    if (this.isValidGeohash(channelName)) {
+                        this.blockChannel(channelName, channelName);
+                        this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
+                    } else {
+                        this.blockChannel(channelName, '');
+                        this.displaySystemMessage(`Blocked channel #${channelName}`);
+                    }
+
+                    this.updateBlockedChannelsList();
+
+                    // Sync to Nostr
+                    if (this.connectionMode !== 'ephemeral') {
+                        await this.saveSyncedSettings();
+                    }
+
+                    return;
+                }
+
+                // Handle user blocking with optional #xxxx suffix
+                const hashIndex = target.indexOf('#');
+                let searchNym = target;
+                let searchSuffix = null;
+
+                if (hashIndex !== -1) {
+                    searchNym = target.substring(0, hashIndex);
+                    searchSuffix = target.substring(hashIndex + 1);
+                }
+
+                // Find matching users
+                const matches = [];
+                this.users.forEach((user, pubkey) => {
+                    if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+                        if (searchSuffix) {
+                            if (pubkey.endsWith(searchSuffix)) {
+                                matches.push({ nym: user.nym, pubkey: pubkey });
+                            }
+                        } else {
+                            matches.push({ nym: user.nym, pubkey: pubkey });
+                        }
+                    }
+                });
+
+                if (matches.length === 0) {
+                    this.displaySystemMessage(`User ${target} not found`);
+                    return;
+                }
+
+                if (matches.length > 1 && !searchSuffix) {
+                    const matchList = matches.map(m =>
+                        `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                    ).join(', ');
+                    this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                    this.displaySystemMessage('Please specify using the #xxxx suffix');
+                    return;
+                }
+
+                const nym = matches[0].nym;
 
                 // Check if already blocked to toggle
                 if (this.blockedUsers.has(nym)) {
-                    await this.cmdUnblock(nym);
+                    await this.cmdUnblock(target);
                     return;
                 }
 
                 this.blockedUsers.add(nym);
                 this.saveBlockedUsers();
-
-                // Hide all messages from this user across all channels
                 this.hideMessagesFromBlockedUser(nym);
 
-                this.displaySystemMessage(`Blocked ${nym}`);
+                this.displaySystemMessage(`Blocked ${this.formatNymWithPubkey(nym, matches[0].pubkey)}`);
                 this.updateUserList();
                 this.updateBlockedList();
 
@@ -8765,18 +9293,45 @@
 
             async cmdUnblock(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /unblock nym');
+                    this.displaySystemMessage('Usage: /unblock nym or /unblock nym#xxxx');
                     return;
                 }
 
-                const nym = args.trim();
-                this.blockedUsers.delete(nym);
+                const target = args.trim();
+                const hashIndex = target.indexOf('#');
+                let searchNym = target;
+                let searchSuffix = null;
+
+                if (hashIndex !== -1) {
+                    searchNym = target.substring(0, hashIndex);
+                    searchSuffix = target.substring(hashIndex + 1);
+                }
+
+                // Try to find the exact nym in blocked list
+                let nymToUnblock = null;
+
+                if (this.blockedUsers.has(searchNym)) {
+                    nymToUnblock = searchNym;
+                } else {
+                    // Search case-insensitively
+                    for (const blockedNym of this.blockedUsers) {
+                        if (blockedNym.toLowerCase() === searchNym.toLowerCase()) {
+                            nymToUnblock = blockedNym;
+                            break;
+                        }
+                    }
+                }
+
+                if (!nymToUnblock) {
+                    this.displaySystemMessage(`User ${target} is not blocked`);
+                    return;
+                }
+
+                this.blockedUsers.delete(nymToUnblock);
                 this.saveBlockedUsers();
+                this.showMessagesFromUnblockedUser(nymToUnblock);
 
-                // Show messages from this user again
-                this.showMessagesFromUnblockedUser(nym);
-
-                this.displaySystemMessage(`Unblocked ${nym}`);
+                this.displaySystemMessage(`Unblocked ${nymToUnblock}`);
                 this.updateUserList();
                 this.updateBlockedList();
 
@@ -8819,10 +9374,46 @@
 
             async cmdSlap(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /slap nym');
+                    this.displaySystemMessage('Usage: /slap nym or /slap nym#xxxx');
                     return;
                 }
-                await this.publishMessage(`/me slaps ${args} around a bit with a large trout`);
+
+                const targetInput = args.trim();
+                const hashIndex = targetInput.indexOf('#');
+                let searchNym = targetInput;
+                let searchSuffix = null;
+
+                if (hashIndex !== -1) {
+                    searchNym = targetInput.substring(0, hashIndex);
+                    searchSuffix = targetInput.substring(hashIndex + 1);
+                }
+
+                // Find matching users
+                const matches = [];
+                this.users.forEach((user, pubkey) => {
+                    if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+                        if (searchSuffix) {
+                            if (pubkey.endsWith(searchSuffix)) {
+                                matches.push({ nym: user.nym, pubkey: pubkey });
+                            }
+                        } else {
+                            matches.push({ nym: user.nym, pubkey: pubkey });
+                        }
+                    }
+                });
+
+                if (matches.length > 1 && !searchSuffix) {
+                    const matchList = matches.map(m =>
+                        `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                    ).join(', ');
+                    this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                    this.displaySystemMessage('Please specify using the #xxxx suffix');
+                    return;
+                }
+
+                // Use the target nym for the action (without suffix for cleaner message)
+                const targetNym = matches.length > 0 ? matches[0].nym : searchNym;
+                await this.publishMessage(`/me slaps ${targetNym} around a bit with a large trout`);
             }
 
             async cmdMe(args) {
@@ -8940,24 +9531,50 @@
 
             async cmdZap(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /zap nym');
+                    this.displaySystemMessage('Usage: /zap nym or /zap nym#xxxx');
                     return;
                 }
 
-                const targetNym = args.trim();
+                const targetInput = args.trim();
+                const hashIndex = targetInput.indexOf('#');
+                let searchNym = targetInput;
+                let searchSuffix = null;
 
-                // Find user by nym
-                let targetPubkey = null;
+                if (hashIndex !== -1) {
+                    searchNym = targetInput.substring(0, hashIndex);
+                    searchSuffix = targetInput.substring(hashIndex + 1);
+                }
+
+                // Find matching users
+                const matches = [];
                 this.users.forEach((user, pubkey) => {
-                    if (user.nym === targetNym) {
-                        targetPubkey = pubkey;
+                    if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+                        if (searchSuffix) {
+                            if (pubkey.endsWith(searchSuffix)) {
+                                matches.push({ nym: user.nym, pubkey: pubkey });
+                            }
+                        } else {
+                            matches.push({ nym: user.nym, pubkey: pubkey });
+                        }
                     }
                 });
 
-                if (!targetPubkey) {
-                    this.displaySystemMessage(`User ${targetNym} not found`);
+                if (matches.length === 0) {
+                    this.displaySystemMessage(`User ${targetInput} not found`);
                     return;
                 }
+
+                if (matches.length > 1 && !searchSuffix) {
+                    const matchList = matches.map(m =>
+                        `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                    ).join(', ');
+                    this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                    this.displaySystemMessage('Please specify using the #xxxx suffix');
+                    return;
+                }
+
+                const targetPubkey = matches[0].pubkey;
+                const targetNym = matches[0].nym;
 
                 if (targetPubkey === this.pubkey) {
                     this.displaySystemMessage("You can't zap yourself");
@@ -8965,7 +9582,8 @@
                 }
 
                 // Check for lightning address
-                this.displaySystemMessage(`Checking if @${targetNym} can receive zaps...`);
+                const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
+                this.displaySystemMessage(`Checking if @${displayNym} can receive zaps...`);
 
                 const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
 
@@ -8973,7 +9591,7 @@
                     // Show zap modal for profile zap (no messageId)
                     this.showProfileZapModal(targetPubkey, targetNym, lnAddress);
                 } else {
-                    this.displaySystemMessage(`@${targetNym} cannot receive zaps (no lightning address set)`);
+                    this.displaySystemMessage(`@${displayNym} cannot receive zaps (no lightning address set)`);
                 }
             }
 
@@ -8996,6 +9614,94 @@
                 setTimeout(() => {
                     location.reload();
                 }, 1000);
+            }
+
+            loadBlockedChannels() {
+                const saved = localStorage.getItem('nym_blocked_channels');
+                if (saved) {
+                    this.blockedChannels = new Set(JSON.parse(saved));
+                }
+            }
+
+            saveBlockedChannels() {
+                localStorage.setItem('nym_blocked_channels', JSON.stringify(Array.from(this.blockedChannels)));
+            }
+
+            isChannelBlocked(channel, geohash) {
+                const key = geohash || channel;
+                return this.blockedChannels.has(key);
+            }
+
+            blockChannel(channel, geohash) {
+                const key = geohash || channel;
+                this.blockedChannels.add(key);
+                this.saveBlockedChannels();
+
+                // Remove from DOM if present
+                const selector = geohash ?
+                    `[data-geohash="${geohash}"]` :
+                    `[data-channel="${channel}"][data-geohash=""]`;
+                const element = document.querySelector(selector);
+                if (element) {
+                    element.style.display = 'none';
+                }
+
+                // Remove from channels map
+                this.channels.delete(key);
+
+                // If currently in this channel, switch to #bar
+                if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
+                    (geohash && this.currentGeohash === geohash)) {
+                    this.switchChannel('bar', '');
+                }
+            }
+
+            unblockChannel(channel, geohash) {
+                const key = geohash || channel;
+                this.blockedChannels.delete(key);
+                this.saveBlockedChannels();
+
+                // Re-show in DOM if it was hidden
+                const selector = geohash ?
+                    `[data-geohash="${geohash}"]` :
+                    `[data-channel="${channel}"][data-geohash=""]`;
+                const element = document.querySelector(selector);
+                if (element) {
+                    element.style.display = '';
+                }
+            }
+
+            updateBlockedChannelsList() {
+                const container = document.getElementById('blockedChannelsList');
+                if (!container) return;
+
+                if (this.blockedChannels.size === 0) {
+                    container.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked channels</div>';
+                } else {
+                    container.innerHTML = Array.from(this.blockedChannels).map(key => {
+                        const displayName = this.isValidGeohash(key) ? `#${key} [GEO]` : `#${key} [STD]`;
+                        return `
+                <div class="blocked-item">
+                    <span>${this.escapeHtml(displayName)}</span>
+                    <button class="unblock-btn" onclick="nym.unblockChannelFromSettings('${this.escapeHtml(key)}')">Unblock</button>
+                </div>
+            `;
+                    }).join('');
+                }
+            }
+
+            unblockChannelFromSettings(key) {
+                if (this.isValidGeohash(key)) {
+                    this.unblockChannel(key, key);
+                } else {
+                    this.unblockChannel(key, '');
+                }
+                this.updateBlockedChannelsList();
+
+                // Sync to Nostr if logged in
+                if (this.connectionMode !== 'ephemeral') {
+                    this.saveSyncedSettings();
+                }
             }
 
             switchChannel(channel, geohash = '') {
@@ -9085,6 +9791,12 @@
             addChannel(channel, geohash = '') {
                 const list = document.getElementById('channelList');
                 const key = geohash || channel;
+
+                // Don't add blocked channels
+                if (this.isChannelBlocked(channel, geohash)) {
+                    console.log(`Channel ${key} is blocked, not adding to list`);
+                    return;
+                }
 
                 if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]`)) {
                     const item = document.createElement('div');
@@ -9915,6 +10627,7 @@
             document.getElementById('timestampSelect').value = nym.settings.showTimestamps;
             nym.updateBlockedList();
             nym.updateKeywordList();
+            nym.updateBlockedChannelsList();
             document.getElementById('settingsModal').classList.add('active');
         }
 
@@ -10000,7 +10713,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.7.9 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.8.9 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -10241,6 +10954,9 @@
                 nym.displaySystemMessage(`Your ${modeText} identity is active${mode === 'ephemeral' ? ' for this session only' : ''}.`);
                 nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
+                // Route to channel from URL if present
+                await routeToUrlChannel();
+
             } catch (error) {
                 console.error('Initialization failed:', error);
                 alert('Failed to initialize: ' + error.message);
@@ -10271,6 +10987,9 @@
 
         // Initialize on load
         document.addEventListener('DOMContentLoaded', () => {
+            // Parse URL for channel routing BEFORE initialization
+            parseUrlChannel();
+
             nym.initialize();
 
             // Pre-connect to a broadcast relay for instant connection
@@ -10383,6 +11102,48 @@
                 }
             }, 30000);
         });
+
+        // Parse URL for channel routing
+        function parseUrlChannel() {
+            const hash = window.location.hash;
+            if (hash && hash.length > 1) {
+                const channelFromUrl = hash.substring(1).toLowerCase();
+
+                // Store for use after initialization
+                window.pendingChannel = channelFromUrl;
+                console.log('Channel from URL:', channelFromUrl);
+            }
+        }
+
+        // Handle channel routing after initialization
+        async function routeToUrlChannel() {
+            if (window.pendingChannel) {
+                const channel = window.pendingChannel;
+                delete window.pendingChannel;
+
+                // Determine if it's a geohash or standard channel
+                if (nym.isValidGeohash(channel)) {
+                    // It's a geohash channel
+                    nym.addChannel(channel, channel);
+                    nym.switchChannel(channel, channel);
+                    nym.userJoinedChannels.add(channel);
+                    nym.displaySystemMessage(`Joined geohash channel #${channel} from URL`);
+                } else {
+                    // It's a standard channel
+                    nym.addChannel(channel, '');
+                    nym.switchChannel(channel, '');
+                    await nym.createChannel(channel);
+                    nym.userJoinedChannels.add(channel);
+                    nym.displaySystemMessage(`Joined channel #${channel} from URL`);
+                }
+
+                // Save the joined channel
+                nym.saveUserChannels();
+
+                // Clear the URL hash to clean up
+                history.replaceState(null, null, window.location.pathname);
+            }
+        }
     </script>
 </body>
 

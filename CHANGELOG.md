@@ -1,3 +1,10 @@
+## v1.8.9 - 2025-09-05
+
+New: nyms now suffixed with last 4 digits of pubkey to align with bitchat
+New: invite users to channel through /invite command
+New: block channels using `/block #channel` or by adding to list in settings
+New: share current channel with others through new URL routing
+
 ## v1.7.9 - 2025-09-04
 
 New: geohash channels now show matching GPS coordinates
