@@ -5703,6 +5703,9 @@
                 // Allow empty messages or very short ones
                 if (trimmed.length < 20) return false;
 
+                // Block client spam
+                if (trimmed.includes('joined the channel via bitchat.land')) return true;
+
                 // Check if it's a URL (contains :// or starts with www.)
                 if (trimmed.includes('://') || trimmed.startsWith('www.')) return false;
 
