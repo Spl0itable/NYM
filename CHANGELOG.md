@@ -1,6 +1,6 @@
 ## v1.6.9 - 2025-09-04
 
-New: shows verfied badge for NYM dev
+New: shows verified badge for NYM dev
 
 ## v1.5.9 - 2025-09-04
 
