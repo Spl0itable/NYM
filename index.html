@@ -7469,8 +7469,8 @@
 
                     messageEl.innerHTML = `
     ${time ? `<span class="message-time">${time}</span>` : ''}
-    <span class="message-author ${authorClass}">${this.escapeHtml(message.author)} ${verifiedBadge}</span>
-    <span class="message-content">: ${formattedContent}</span>
+    <span class="message-author ${authorClass}">${this.escapeHtml(message.author)}${verifiedBadge}:</span>
+    <span class="message-content">${formattedContent}</span>
     ${reactionButton}
 `;
 
