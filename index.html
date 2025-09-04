@@ -2340,6 +2340,15 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Sort Geohash Channels by Proximity</label>
+                    <select class="form-select" id="proximitySelect">
+                        <option value="false">Disabled</option>
+                        <option value="true">Enabled (requires location access)</option>
+                    </select>
+                    <div class="form-hint">Sort geohash channels by distance from your location</div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">⚡ Lightning Address</label>
                     <input type="text" class="form-input" id="lightningAddressInput"
                         placeholder="your@lightning-address.com">
@@ -2976,11 +2985,74 @@
                 this.zapCheckInterval = null;
                 this.zapInvoiceData = null;
                 this.listExpansionStates = new Map();
+                this.userLocation = null;
+                this.sortByProximity = localStorage.getItem('nym_sort_proximity') === 'true';
                 this.verifiedDeveloper = {
                     npub: 'npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv',
                     pubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
                     title: 'NYM Developer'
                 };
+            }
+
+            decodeGeohash(geohash) {
+                const BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
+                const bounds = {
+                    lat: [-90, 90],
+                    lng: [-180, 180]
+                };
+
+                let isEven = true;
+                for (let i = 0; i < geohash.length; i++) {
+                    const cd = BASE32.indexOf(geohash[i].toLowerCase());
+                    if (cd === -1) throw new Error('Invalid geohash character');
+
+                    for (let j = 4; j >= 0; j--) {
+                        const mask = 1 << j;
+                        if (isEven) {
+                            bounds.lng = (cd & mask) ?
+                                [(bounds.lng[0] + bounds.lng[1]) / 2, bounds.lng[1]] :
+                                [bounds.lng[0], (bounds.lng[0] + bounds.lng[1]) / 2];
+                        } else {
+                            bounds.lat = (cd & mask) ?
+                                [(bounds.lat[0] + bounds.lat[1]) / 2, bounds.lat[1]] :
+                                [bounds.lat[0], (bounds.lat[0] + bounds.lat[1]) / 2];
+                        }
+                        isEven = !isEven;
+                    }
+                }
+
+                return {
+                    lat: (bounds.lat[0] + bounds.lat[1]) / 2,
+                    lng: (bounds.lng[0] + bounds.lng[1]) / 2
+                };
+            }
+
+            getGeohashLocation(geohash) {
+                try {
+                    const coords = this.decodeGeohash(geohash);
+                    const lat = coords.lat;
+                    const lng = coords.lng;
+
+                    // Format coordinates properly with N/S and E/W
+                    const latStr = Math.abs(lat).toFixed(2) + '°' + (lat >= 0 ? 'N' : 'S');
+                    const lngStr = Math.abs(lng).toFixed(2) + '°' + (lng >= 0 ? 'E' : 'W');
+
+                    return `${latStr}, ${lngStr}`;
+                } catch (e) {
+                    console.error('Error decoding geohash:', e);
+                    return '';
+                }
+            }
+
+            calculateDistance(lat1, lon1, lat2, lon2) {
+                const R = 6371; // Earth radius in km
+                const dLat = (lat2 - lat1) * Math.PI / 180;
+                const dLon = (lon2 - lon1) * Math.PI / 180;
+                const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                return R * c;
             }
 
             isVerifiedDeveloper(pubkey) {
@@ -5174,6 +5246,7 @@
                         sound: this.settings.sound,
                         autoscroll: this.settings.autoscroll,
                         showTimestamps: this.settings.showTimestamps,
+                        sortByProximity: this.settings.sortByProximity,
                         pinnedChannels: Array.from(this.pinnedChannels),
                         blockedUsers: Array.from(this.blockedUsers),
                         blockedKeywords: Array.from(this.blockedKeywords),
@@ -5187,7 +5260,7 @@
                         tags: [
                             ["d", "nym-settings"],
                             ["title", "NYM Settings"],
-                            ["encrypted"] // Mark as encrypted for privacy
+                            ["encrypted"]
                         ],
                         content: JSON.stringify(settingsData),
                         pubkey: this.pubkey
@@ -5201,7 +5274,7 @@
                         signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
                     } else {
                         console.log('Cannot sign settings - no signing method available');
-                        return; // Can't sign, skip
+                        return;
                     }
 
                     if (signedEvent) {
@@ -5693,6 +5766,31 @@
 
                 try {
                     const settings = JSON.parse(event.content);
+
+                    // Restore proximity sorting preference
+                    if (settings.sortByProximity !== undefined) {
+                        this.settings.sortByProximity = settings.sortByProximity;
+                        localStorage.setItem('nym_sort_proximity', settings.sortByProximity);
+
+                        // If enabled, try to get location
+                        if (settings.sortByProximity && !this.userLocation) {
+                            navigator.geolocation.getCurrentPosition(
+                                (position) => {
+                                    this.userLocation = {
+                                        lat: position.coords.latitude,
+                                        lng: position.coords.longitude
+                                    };
+                                    this.sortChannelsByActivity();
+                                    console.log('Location restored for proximity sorting');
+                                },
+                                (error) => {
+                                    console.log('Location access denied during settings restore');
+                                    this.settings.sortByProximity = false;
+                                    localStorage.setItem('nym_sort_proximity', 'false');
+                                }
+                            );
+                        }
+                    }
 
                     // Apply theme
                     if (settings.theme) {
@@ -8904,7 +9002,33 @@
                 this.currentGeohash = geohash;
 
                 const displayName = geohash ? `#${geohash}` : `#${channel}`;
-                document.getElementById('currentChannel').textContent = displayName;
+                let fullTitle = displayName;
+
+                // Add location for geohash channels
+                if (geohash && geohash !== '') {
+                    const location = this.getGeohashLocation(geohash);
+                    console.log(`Getting location for geohash ${geohash}: ${location}`);
+
+                    if (location) {
+                        fullTitle = `${displayName} • ${location}`;
+
+                        if (this.userLocation && this.settings.sortByProximity) {
+                            try {
+                                const coords = this.decodeGeohash(geohash);
+                                const distance = this.calculateDistance(
+                                    this.userLocation.lat, this.userLocation.lng,
+                                    coords.lat, coords.lng
+                                );
+                                fullTitle = `${displayName} • ${location} (${distance.toFixed(1)}km)`;
+                            } catch (e) {
+                                console.error('Distance calculation error:', e);
+                            }
+                        }
+                    }
+                }
+
+                console.log('Setting channel title to:', fullTitle);
+                document.getElementById('currentChannel').textContent = fullTitle;
 
                 // Update active state
                 document.querySelectorAll('.channel-item').forEach(item => {
@@ -8961,12 +9085,21 @@
 
                 if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]`)) {
                     const item = document.createElement('div');
-                    item.className = 'channel-item list-item'; // Add list-item class
+                    item.className = 'channel-item list-item';
                     item.dataset.channel = channel;
                     item.dataset.geohash = geohash;
 
                     const displayName = geohash ? `#${geohash}` : `#${channel}`;
                     const badge = geohash ? '<span class="geohash-badge">GEO</span>' : '<span class="std-badge">STD</span>';
+
+                    // Get location information for geohash channels
+                    let locationHint = '';
+                    if (geohash) {
+                        const location = this.getGeohashLocation(geohash);
+                        if (location) {
+                            locationHint = ` title="${location}"`;
+                        }
+                    }
 
                     const isPinned = this.pinnedChannels.has(key);
                     if (isPinned) {
@@ -8984,7 +9117,7 @@
         `;
 
                     item.innerHTML = `
-            <span class="channel-name">${displayName}</span>
+            <span class="channel-name"${locationHint}>${displayName}</span>
             <div class="channel-badges">
                 ${pinButton}
                 ${badge}
@@ -9312,23 +9445,18 @@
                 // Store current scroll position
                 const scrollTop = channelList.scrollTop;
 
-                // Create a document fragment for better performance
-                const fragment = document.createDocumentFragment();
-
                 channels.sort((a, b) => {
-                    // Get current active channel
-                    const aIsActive = a.classList.contains('active');
-                    const bIsActive = b.classList.contains('active');
-
-                    // Active channel always stays at top (after #bar)
+                    // #bar is always first
                     const aIsBar = a.dataset.channel === 'bar' && !a.dataset.geohash;
                     const bIsBar = b.dataset.channel === 'bar' && !b.dataset.geohash;
 
-                    // #bar is always first
                     if (aIsBar) return -1;
                     if (bIsBar) return 1;
 
                     // Active channel is second
+                    const aIsActive = a.classList.contains('active');
+                    const bIsActive = b.classList.contains('active');
+
                     if (aIsActive && !bIsActive) return -1;
                     if (!aIsActive && bIsActive) return 1;
 
@@ -9339,29 +9467,56 @@
                     if (aPinned && !bPinned) return -1;
                     if (!aPinned && bPinned) return 1;
 
-                    // Within same pin status, sort by unread count
+                    // Check if these are geohash channels
+                    const aIsGeo = !!a.dataset.geohash && a.dataset.geohash !== '';
+                    const bIsGeo = !!b.dataset.geohash && b.dataset.geohash !== '';
+
+                    // PRIORITY: If proximity sorting is enabled, sort ALL geohash channels by distance first
+                    if (this.settings.sortByProximity && this.userLocation) {
+                        // If both are geohash, sort by distance
+                        if (aIsGeo && bIsGeo) {
+                            try {
+                                const coordsA = this.decodeGeohash(a.dataset.geohash);
+                                const coordsB = this.decodeGeohash(b.dataset.geohash);
+
+                                const distA = this.calculateDistance(
+                                    this.userLocation.lat, this.userLocation.lng,
+                                    coordsA.lat, coordsA.lng
+                                );
+                                const distB = this.calculateDistance(
+                                    this.userLocation.lat, this.userLocation.lng,
+                                    coordsB.lat, coordsB.lng
+                                );
+
+                                // Return distance comparison (don't fall through to unread count)
+                                return distA - distB;
+                            } catch (e) {
+                                console.error('Error calculating distance:', e);
+                                // Fall through to unread count if error
+                            }
+                        }
+
+                        // If only one is geo, put geo channels first when proximity sorting is on
+                        if (aIsGeo && !bIsGeo) return -1;
+                        if (!aIsGeo && bIsGeo) return 1;
+                    }
+
+                    // Default: sort by unread count for non-geo or when proximity is off
                     const aChannel = a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel;
                     const bChannel = b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel;
 
                     const aUnread = this.unreadCounts.get(aChannel) || 0;
                     const bUnread = this.unreadCounts.get(bChannel) || 0;
 
-                    // If unread counts are the same, maintain original order
-                    if (aUnread === bUnread) {
-                        return 0;
-                    }
-
+                    if (aUnread === bUnread) return 0;
                     return bUnread - aUnread;
                 });
 
-                // Append sorted channels to fragment
-                channels.forEach(channel => fragment.appendChild(channel));
-
-                // Clear and append in one operation
+                // Clear and re-append
                 channelList.innerHTML = '';
-                channelList.appendChild(fragment);
+                channels.forEach(channel => channelList.appendChild(channel));
 
-                // Re-add view more button and update its state
+                // Re-add view more button
                 this.updateViewMoreButton('channelList');
 
                 // Restore scroll position
@@ -9626,7 +9781,8 @@
                     theme: localStorage.getItem('nym_theme') || 'matrix',
                     sound: localStorage.getItem('nym_sound') || 'beep',
                     autoscroll: localStorage.getItem('nym_autoscroll') !== 'false',
-                    showTimestamps: localStorage.getItem('nym_timestamps') !== 'false'
+                    showTimestamps: localStorage.getItem('nym_timestamps') !== 'false',
+                    sortByProximity: localStorage.getItem('nym_sort_proximity') === 'true'
                 };
             }
 
@@ -9635,6 +9791,7 @@
                 localStorage.setItem('nym_sound', this.settings.sound);
                 localStorage.setItem('nym_autoscroll', this.settings.autoscroll);
                 localStorage.setItem('nym_timestamps', this.settings.showTimestamps);
+                localStorage.setItem('nym_sort_proximity', this.settings.sortByProximity);
             }
 
             loadBlockedUsers() {
@@ -9743,6 +9900,12 @@
                 lightningInput.value = nym.lightningAddress || '';
             }
 
+            // Load proximity sorting setting
+            const proximitySelect = document.getElementById('proximitySelect');
+            if (proximitySelect) {
+                proximitySelect.value = nym.settings.sortByProximity ? 'true' : 'false';
+            }
+
             document.getElementById('themeSelect').value = nym.settings.theme;
             document.getElementById('soundSelect').value = nym.settings.sound;
             document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
@@ -9759,6 +9922,7 @@
             const sound = document.getElementById('soundSelect').value;
             const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
             const showTimestamps = document.getElementById('timestampSelect').value === 'true';
+            const sortByProximity = document.getElementById('proximitySelect').value === 'true';
 
             // Apply all settings
             nym.settings.theme = theme;
@@ -9766,7 +9930,51 @@
             nym.settings.autoscroll = autoscroll;
             nym.settings.showTimestamps = showTimestamps;
 
-            // Save locally
+            // Handle proximity sorting
+            if (sortByProximity) {
+                if (!nym.userLocation) {
+                    // Request location permission
+                    navigator.geolocation.getCurrentPosition(
+                        async (position) => {
+                            nym.userLocation = {
+                                lat: position.coords.latitude,
+                                lng: position.coords.longitude
+                            };
+                            nym.settings.sortByProximity = true;
+                            localStorage.setItem('nym_sort_proximity', 'true');
+
+                            // IMPORTANT: Re-sort immediately after getting location
+                            nym.sortChannelsByActivity();
+
+                            nym.displaySystemMessage('Location access granted. Geohash channels sorted by proximity.');
+
+                            // Sync to Nostr if logged in
+                            if (nym.connectionMode !== 'ephemeral') {
+                                await nym.saveSyncedSettings();
+                            }
+                        },
+                        (error) => {
+                            nym.displaySystemMessage('Location access denied. Proximity sorting disabled.');
+                            nym.settings.sortByProximity = false;
+                            localStorage.setItem('nym_sort_proximity', 'false');
+                            document.getElementById('proximitySelect').value = 'false';
+                        }
+                    );
+                } else {
+                    // Already have location
+                    nym.settings.sortByProximity = true;
+                    localStorage.setItem('nym_sort_proximity', 'true');
+                    nym.sortChannelsByActivity(); // Re-sort
+                }
+            } else {
+                // Disabling
+                nym.settings.sortByProximity = false;
+                localStorage.setItem('nym_sort_proximity', 'false');
+                nym.userLocation = null;
+                nym.sortChannelsByActivity(); // Re-sort to default
+            }
+
+            // Save theme and other settings
             nym.applyTheme(theme);
             nym.saveSettings();
 
@@ -9775,7 +9983,7 @@
                 await nym.saveLightningAddress(lightningAddress || null);
             }
 
-            // Force sync ALL settings to Nostr for persistent connections
+            // Sync to Nostr
             if (nym.connectionMode !== 'ephemeral') {
                 await nym.saveSyncedSettings();
                 nym.displaySystemMessage('Settings saved and synced to Nostr');
@@ -9789,7 +9997,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.6.9 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.7.9 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -10122,6 +10330,29 @@
                         break;
                 }
             });
+
+            // Check if proximity sorting was enabled
+            setTimeout(() => {
+                if (nym.settings.sortByProximity === true) {
+                    console.log('Proximity sorting is enabled, requesting location...');
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            nym.userLocation = {
+                                lat: position.coords.latitude,
+                                lng: position.coords.longitude
+                            };
+                            console.log('Got user location:', nym.userLocation);
+                            // Re-sort channels with location
+                            nym.sortChannelsByActivity();
+                        },
+                        (error) => {
+                            console.error('Location error:', error);
+                            nym.settings.sortByProximity = false;
+                            localStorage.setItem('nym_sort_proximity', 'false');
+                        }
+                    );
+                }
+            }, 1000);
 
             // Periodically clean up non-responsive relays
             setInterval(() => {

@@ -1,3 +1,8 @@
+## v1.7.9 - 2025-09-04
+
+New: geohash channels now show matching GPS coordinates
+New: sort geohash channels by proximity to location by enabling access from settings
+
 ## v1.6.9 - 2025-09-04
 
 New: shows verified badge for NYM dev
