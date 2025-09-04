@@ -10918,9 +10918,6 @@
                     localStorage.setItem('nym_nsec', nsecValue);
                 }
 
-                // Load lightning address for this specific pubkey
-                await nym.loadLightningAddress();
-
                 // Save connection preferences
                 if (mode !== 'ephemeral') {
                     localStorage.setItem('nym_connection_mode', mode);
