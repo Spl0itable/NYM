@@ -1,3 +1,7 @@
+## v1.8.10 - 2025-09-05
+
+Hotfix: various minor bug fixes
+
 ## v1.8.9 - 2025-09-05
 
 New: nyms now suffixed with last 4 digits of pubkey to align with bitchat

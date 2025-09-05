@@ -1164,12 +1164,13 @@
         }
 
         pre {
-            font-family: var(--font-mono);
-            line-height: 1.2;
+            font-family: monospace !important;
+            line-height: 1 !important;
             overflow-x: auto;
-            white-space: pre-wrap;
-            word-wrap: break-word;
+            white-space: pre !important;
+            word-wrap: normal !important;
             max-width: 100%;
+            font-size: 12px;
         }
 
         .message-content blockquote {
@@ -1971,7 +1972,15 @@
             fill: currentColor;
         }
 
+        .list-item.search-hidden {
+            display: none !important;
+        }
+
         @media (max-width: 768px) {
+            pre {
+                font-size: 10px;
+            }
+
             .nav-section {
                 flex-shrink: 0;
             }
@@ -2443,7 +2452,7 @@
                     <select class="form-select" id="connectionMode">
                         <option value="ephemeral">Ephemeral (Auto-generate temporary keys)</option>
                         <option value="extension">Use Nostr Extension (Persistent identity)</option>
-                        <option value="nsec">Use NSEC Private Key</option>
+                        <option value="nsec">Use NSEC Private Key (Persistent identity)</option>
                     </select>
                 </div>
 
@@ -2693,29 +2702,6 @@
                         <button class="copy-url-btn" onclick="nym.copyShareUrl()">COPY</button>
                     </div>
                     <div class="form-hint">Share this URL to invite others to this channel</div>
-                </div>
-
-                <div class="share-options">
-                    <button class="share-option-btn" onclick="nym.shareToTwitter()">
-                        <svg viewBox="0 0 24 24">
-                            <path
-                                d="M23 3a10.9 10.9 0 01-3.14 1.53 4.48 4.48 0 00-7.86 3v1A10.66 10.66 0 013 4s-4 9 5 13a11.64 11.64 0 01-7 2c9 5 20 0 20-11.5a4.5 4.5 0 00-.08-.83A7.72 7.72 0 0023 3z" />
-                        </svg>
-                        Twitter
-                    </button>
-                    <button class="share-option-btn" onclick="nym.shareToNostr()">
-                        <svg viewBox="0 0 24 24">
-                            <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z" />
-                        </svg>
-                        Nostr
-                    </button>
-                    <button class="share-option-btn" onclick="nym.shareToClipboard()">
-                        <svg viewBox="0 0 24 24">
-                            <path
-                                d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
-                        </svg>
-                        Clipboard
-                    </button>
                 </div>
             </div>
             <div class="modal-actions">
@@ -3580,9 +3566,10 @@
                 // Context menu actions
                 document.getElementById('ctxMention').addEventListener('click', () => {
                     if (this.contextMenuData) {
-                        const formattedNym = this.contextMenuData.nym;
+                        const baseNym = this.contextMenuData.nym.split('#')[0] || this.contextMenuData.nym;
                         const pubkey = this.contextMenuData.pubkey;
-                        const fullNym = `${formattedNym}#${this.getPubkeySuffix(pubkey)}`;
+                        const suffix = this.getPubkeySuffix(pubkey);
+                        const fullNym = `${baseNym}#${suffix}`;
                         this.insertMention(fullNym);
                     }
                     document.getElementById('contextMenu').classList.remove('active');
@@ -3591,7 +3578,11 @@
 
                 document.getElementById('ctxPM').addEventListener('click', () => {
                     if (this.contextMenuData) {
-                        this.openUserPM(this.contextMenuData.nym, this.contextMenuData.pubkey);
+                        // Include suffix when opening PM
+                        const baseNym = this.contextMenuData.nym.split('#')[0] || this.contextMenuData.nym;
+                        const suffix = this.getPubkeySuffix(this.contextMenuData.pubkey);
+                        const fullNym = `${baseNym}#${suffix}`;
+                        this.openUserPM(fullNym, this.contextMenuData.pubkey);
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
@@ -3677,7 +3668,11 @@
                 document.getElementById('ctxQuote').addEventListener('click', () => {
                     if (this.contextMenuData && this.contextMenuData.content) {
                         const input = document.getElementById('messageInput');
-                        input.value = `> @${this.contextMenuData.nym}: ${this.contextMenuData.content}\n\n`;
+                        // Include the pubkey suffix in the quote
+                        const baseNym = this.contextMenuData.nym.split('#')[0] || this.contextMenuData.nym;
+                        const suffix = this.getPubkeySuffix(this.contextMenuData.pubkey);
+                        const fullNym = `${baseNym}#${suffix}`;
+                        input.value = `> @${fullNym}: ${this.contextMenuData.content}\n\n`;
                         input.focus();
                     }
                     document.getElementById('contextMenu').classList.remove('active');
@@ -7316,6 +7311,7 @@
             insertPMInOrder(newItem, pmList) {
                 const newTime = parseInt(newItem.dataset.lastMessageTime);
                 const existingItems = Array.from(pmList.querySelectorAll('.pm-item'));
+                const viewMoreBtn = pmList.querySelector('.view-more-btn');
 
                 // Find the correct position to insert (most recent first)
                 let insertBefore = null;
@@ -7327,9 +7323,14 @@
                     }
                 }
 
+                // If we found a position, insert there
                 if (insertBefore) {
                     pmList.insertBefore(newItem, insertBefore);
+                } else if (viewMoreBtn) {
+                    // If no position found but there's a view more button, insert before it
+                    pmList.insertBefore(newItem, viewMoreBtn);
                 } else {
+                    // Otherwise append to the end
                     pmList.appendChild(newItem);
                 }
             }
@@ -7362,8 +7363,13 @@
                 this.currentChannel = null;
                 this.currentGeohash = null;
 
-                // Update UI
-                document.getElementById('currentChannel').textContent = `@${nym} (PM)`;
+                // Format the nym with pubkey suffix for display
+                const baseNym = nym.split('#')[0] || nym;
+                const suffix = this.getPubkeySuffix(pubkey);
+                const displayNym = `${baseNym}#${suffix}`;
+
+                // Update UI with formatted nym
+                document.getElementById('currentChannel').textContent = `@${displayNym} (PM)`;
                 document.getElementById('channelMeta').textContent = 'Private message';
 
                 // Update active states
@@ -7439,10 +7445,13 @@
                     return;
                 }
 
+                // Extract base nym if it has a suffix
+                const baseNym = nym.split('#')[0] || nym;
+
                 // Add to PM conversations if not exists
-                this.addPMConversation(nym, pubkey);
+                this.addPMConversation(baseNym, pubkey);
                 // Open the PM
-                this.openPM(nym, pubkey);
+                this.openPM(baseNym, pubkey);
             }
 
             isMentioned(content) {
@@ -7809,9 +7818,11 @@
                     // Check if message already exists
                     const exists = this.messages.get(storageKey).some(m => m.id === message.id);
                     if (!exists) {
-                        // Add message and sort by timestamp
+                        // Add message and sort by timestamp with millisecond precision
                         this.messages.get(storageKey).push(message);
-                        this.messages.get(storageKey).sort((a, b) => a.timestamp - b.timestamp);
+                        this.messages.get(storageKey).sort((a, b) => {
+                            return a.timestamp.getTime() - b.timestamp.getTime();
+                        });
 
                         // Prune messages if exceeding limit (1000 max)
                         const messages = this.messages.get(storageKey);
@@ -8040,7 +8051,6 @@
                 let formatted = content;
 
                 // First, detect if this looks like ASCII art
-                // ASCII art typically has multiple lines with special characters and consistent spacing
                 const lines = content.split('\n');
                 const looksLikeAsciiArt = lines.length > 2 && lines.some(line => {
                     // Check for common ASCII art patterns
@@ -8051,14 +8061,14 @@
 
                 // If it looks like ASCII art, preserve it with minimal formatting
                 if (looksLikeAsciiArt) {
-                    // Only escape HTML entities and wrap in pre tag
+                    // Only escape HTML entities
                     formatted = formatted.replace(/&/g, '&amp;')
                         .replace(/</g, '&lt;')
                         .replace(/>/g, '&gt;')
                         .replace(/"/g, '&quot;');
 
-                    // Wrap in pre tag to preserve formatting
-                    return `<pre style="font-family: var(--font-mono); line-height: 1.2;">${formatted}</pre>`;
+                    // Wrap in pre tag with specific styling to ensure proper display
+                    return `<pre style="font-family: monospace; line-height: 1; white-space: pre; overflow-x: auto; font-size: 12px;">${formatted}</pre>`;
                 }
 
                 // First, escape HTML entities
@@ -8112,20 +8122,25 @@
                     '<a href="$1" target="_blank" rel="noopener">$1</a>'
                 );
 
-                // Highlight mentions
+                // Process mentions and channels together in one pass
                 formatted = formatted.replace(
-                    /@(\w+(?:#\w+)?)/g,
-                    '<span style="color: var(--secondary)">@$1</span>'
-                );
-
-                // Channel references
-                formatted = formatted.replace(
-                    /(?:^|\s)#(\w+)(?=\s|$)/g,
-                    (match, channel, offset) => {
-                        const type = this.getChannelType(channel);
-                        const badge = type === 'geo' ? ' [GEO]' : ' [STD]';
-                        const space = match.startsWith(' ') ? ' ' : '';
-                        return `${space}<span class="channel-link" onclick="nym.quickJoinChannel('${channel}')">#${channel}${badge}</span>`;
+                    /(@[^@\s][^@\n]*?#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(?:^|\s)(#\w+)(?=\s|$)/gi,
+                    (match, mentionWithSuffix, simpleMention, channel, offset) => {
+                        if (mentionWithSuffix) {
+                            // This is a mention with a pubkey suffix (e.g., @SMOKESTACK LIGHTNING #0311)
+                            return `<span style="color: var(--secondary)">${mentionWithSuffix}</span>`;
+                        } else if (simpleMention) {
+                            // This is a simple mention without spaces or suffix
+                            return `<span style="color: var(--secondary)">${simpleMention}</span>`;
+                        } else if (channel) {
+                            // This is a channel reference
+                            const channelName = channel.substring(1); // Remove the #
+                            const type = this.getChannelType(channelName);
+                            const badge = type === 'geo' ? ' [GEO]' : ' [STD]';
+                            const space = match.startsWith(' ') ? ' ' : '';
+                            return `${space}<span class="channel-link" onclick="nym.quickJoinChannel('${channelName}')">#${channelName}${badge}</span>`;
+                        }
+                        return match;
                     }
                 );
 
@@ -8299,25 +8314,14 @@
                 const term = searchTerm.toLowerCase();
                 const list = document.getElementById('channelList');
 
-                // Temporarily expand list if searching
-                if (term) {
-                    list.classList.remove('list-collapsed');
-                    list.classList.add('search-active');
-                } else {
-                    list.classList.remove('search-active');
-                    // Restore previous state
-                    const isExpanded = this.listExpansionStates.get('channelList');
-                    if (!isExpanded && items.length > 20) {
-                        list.classList.add('list-collapsed');
-                    }
-                }
-
                 items.forEach(item => {
                     const channelName = item.querySelector('.channel-name').textContent.toLowerCase();
-                    if (channelName.includes(term)) {
+                    if (term.length === 0 || channelName.includes(term)) {
                         item.style.display = 'flex';
+                        item.classList.remove('search-hidden');
                     } else {
                         item.style.display = 'none';
+                        item.classList.add('search-hidden');
                     }
                 });
 
@@ -8333,25 +8337,14 @@
                 const term = searchTerm.toLowerCase();
                 const list = document.getElementById('pmList');
 
-                // Temporarily expand list if searching
-                if (term) {
-                    list.classList.remove('list-collapsed');
-                    list.classList.add('search-active');
-                } else {
-                    list.classList.remove('search-active');
-                    // Restore previous state
-                    const isExpanded = this.listExpansionStates.get('pmList');
-                    if (!isExpanded && items.length > 20) {
-                        list.classList.add('list-collapsed');
-                    }
-                }
-
                 items.forEach(item => {
                     const pmName = item.querySelector('.pm-name').textContent.toLowerCase();
-                    if (pmName.includes(term)) {
+                    if (term.length === 0 || pmName.includes(term)) {
                         item.style.display = 'flex';
+                        item.classList.remove('search-hidden');
                     } else {
                         item.style.display = 'none';
+                        item.classList.add('search-hidden');
                     }
                 });
 
@@ -8364,25 +8357,15 @@
 
             filterUsers(searchTerm) {
                 this.userSearchTerm = searchTerm;
+                this.updateUserList();
+
                 const list = document.getElementById('userListContent');
 
-                // Temporarily expand list if searching
-                if (searchTerm) {
-                    list.classList.remove('list-collapsed');
-                    list.classList.add('search-active');
-                } else {
-                    list.classList.remove('search-active');
-                    // Restore previous state after clearing search
-                    const isExpanded = this.listExpansionStates.get('userListContent');
-                    if (!isExpanded) {
-                        const items = list.querySelectorAll('.list-item');
-                        if (items.length > 20) {
-                            list.classList.add('list-collapsed');
-                        }
-                    }
+                // Hide view more button during search
+                const viewMoreBtn = list.querySelector('.view-more-btn');
+                if (viewMoreBtn) {
+                    viewMoreBtn.style.display = searchTerm ? 'none' : 'block';
                 }
-
-                this.updateUserList();
             }
 
             togglePin(channel, geohash) {
@@ -9128,7 +9111,11 @@
                     .map(pubkey => this.users.get(pubkey))
                     .filter(u => u && Date.now() - u.lastSeen < 300000)
                     .filter(u => !this.blockedUsers.has(u.nym))
-                    .map(u => this.formatNymWithPubkey(u.nym, u.pubkey))
+                    .map(u => {
+                        const baseNym = u.nym.split('#')[0] || u.nym;
+                        const suffix = this.getPubkeySuffix(u.pubkey);
+                        return `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+                    })
                     .join(', ');
 
                 this.displaySystemMessage(`Online nyms in this channel: ${users || 'none'}`);
@@ -9229,7 +9216,39 @@
 
             async cmdBlock(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /block nym, /block nym#xxxx, or /block #channel');
+                    // If no args, check if in a channel that can be blocked
+                    if (this.inPMMode) {
+                        this.displaySystemMessage('Usage: /block nym, /block nym#xxxx, or /block #channel');
+                        return;
+                    }
+
+                    // Check current channel
+                    const currentChannelName = this.currentGeohash || this.currentChannel;
+                    if (currentChannelName === 'bar' && !this.currentGeohash) {
+                        this.displaySystemMessage('Cannot block the default #bar channel');
+                        return;
+                    }
+
+                    // Block current channel
+                    if (confirm(`Block channel #${currentChannelName}?`)) {
+                        if (this.currentGeohash) {
+                            this.blockChannel(this.currentGeohash, this.currentGeohash);
+                            this.displaySystemMessage(`Blocked geohash channel #${this.currentGeohash}`);
+                        } else {
+                            this.blockChannel(this.currentChannel, '');
+                            this.displaySystemMessage(`Blocked channel #${this.currentChannel}`);
+                        }
+
+                        // Switch to #bar
+                        this.switchChannel('bar', '');
+
+                        this.updateBlockedChannelsList();
+
+                        // Sync to Nostr
+                        if (this.connectionMode !== 'ephemeral') {
+                            await this.saveSyncedSettings();
+                        }
+                    }
                     return;
                 }
 
@@ -9242,7 +9261,26 @@
                     // Check if it's current channel
                     if ((this.currentChannel === channelName && !this.currentGeohash) ||
                         (this.currentGeohash === channelName)) {
-                        this.displaySystemMessage("Leave the channel first before blocking it");
+                        // Block current channel and switch to bar
+                        if (confirm(`Block and leave channel #${channelName}?`)) {
+                            if (this.isValidGeohash(channelName)) {
+                                this.blockChannel(channelName, channelName);
+                                this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
+                            } else {
+                                this.blockChannel(channelName, '');
+                                this.displaySystemMessage(`Blocked channel #${channelName}`);
+                            }
+
+                            // Switch to #bar
+                            this.switchChannel('bar', '');
+
+                            this.updateBlockedChannelsList();
+
+                            // Sync to Nostr
+                            if (this.connectionMode !== 'ephemeral') {
+                                await this.saveSyncedSettings();
+                            }
+                        }
                         return;
                     }
 
@@ -9362,11 +9400,38 @@
 
             async cmdUnblock(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /unblock nym or /unblock nym#xxxx');
+                    this.displaySystemMessage('Usage: /unblock nym, /unblock nym#xxxx, or /unblock #channel');
                     return;
                 }
 
                 const target = args.trim();
+
+                // Check if it's a channel unblock
+                if (target.startsWith('#')) {
+                    const channelName = target.substring(1);
+
+                    if (this.blockedChannels.has(channelName)) {
+                        if (this.isValidGeohash(channelName)) {
+                            this.unblockChannel(channelName, channelName);
+                            this.displaySystemMessage(`Unblocked geohash channel #${channelName}`);
+                        } else {
+                            this.unblockChannel(channelName, '');
+                            this.displaySystemMessage(`Unblocked channel #${channelName}`);
+                        }
+
+                        this.updateBlockedChannelsList();
+
+                        // Sync to Nostr
+                        if (this.connectionMode !== 'ephemeral') {
+                            await this.saveSyncedSettings();
+                        }
+                    } else {
+                        this.displaySystemMessage(`Channel #${channelName} is not blocked`);
+                    }
+                    return;
+                }
+
+                // User unblock logic
                 const hashIndex = target.indexOf('#');
                 let searchNym = target;
                 let searchSuffix = null;
@@ -9707,13 +9772,13 @@
                 this.blockedChannels.add(key);
                 this.saveBlockedChannels();
 
-                // Remove from DOM if present
+                // Remove from DOM immediately
                 const selector = geohash ?
                     `[data-geohash="${geohash}"]` :
                     `[data-channel="${channel}"][data-geohash=""]`;
                 const element = document.querySelector(selector);
                 if (element) {
-                    element.style.display = 'none';
+                    element.remove();
                 }
 
                 // Remove from channels map
@@ -9724,6 +9789,9 @@
                     (geohash && this.currentGeohash === geohash)) {
                     this.switchChannel('bar', '');
                 }
+
+                // Update view more button after removing
+                this.updateViewMoreButton('channelList');
             }
 
             unblockChannel(channel, geohash) {
@@ -9731,14 +9799,15 @@
                 this.blockedChannels.delete(key);
                 this.saveBlockedChannels();
 
-                // Re-show in DOM if it was hidden
-                const selector = geohash ?
-                    `[data-geohash="${geohash}"]` :
-                    `[data-channel="${channel}"][data-geohash=""]`;
-                const element = document.querySelector(selector);
-                if (element) {
-                    element.style.display = '';
+                // Re-add the channel to the sidebar
+                if (geohash) {
+                    this.addChannel(geohash, geohash);
+                } else {
+                    this.addChannel(channel, '');
                 }
+
+                // Update view more button after adding
+                this.updateViewMoreButton('channelList');
             }
 
             updateBlockedChannelsList() {
@@ -9922,7 +9991,13 @@
                         }
                     }
 
-                    list.appendChild(item);
+                    // Insert before the view more button if it exists
+                    const viewMoreBtn = list.querySelector('.view-more-btn');
+                    if (viewMoreBtn) {
+                        list.insertBefore(item, viewMoreBtn);
+                    } else {
+                        list.appendChild(item);
+                    }
 
                     this.channels.set(key, { channel, geohash });
                     this.updateChannelPins();
@@ -9936,7 +10011,13 @@
                 const list = document.getElementById(listId);
                 if (!list) return;
 
-                const items = list.querySelectorAll('.list-item');
+                // Don't manage view more button if search is active
+                const searchInput = list.parentElement?.querySelector('.search-input.active');
+                if (searchInput && searchInput.value.trim().length > 0) {
+                    return;
+                }
+
+                const items = list.querySelectorAll('.list-item:not(.search-hidden)');
                 let existingBtn = list.querySelector('.view-more-btn');
 
                 // Get current expansion state
@@ -9980,7 +10061,7 @@
                 const list = document.getElementById(listId);
                 if (!list) return;
 
-                const btn = list.querySelector('.view-more-btn');
+                let btn = list.querySelector('.view-more-btn');
                 const items = list.querySelectorAll('.list-item');
 
                 // Toggle the state
@@ -9992,15 +10073,35 @@
                     // Expanding
                     list.classList.remove('list-collapsed');
                     list.classList.add('list-expanded');
+
+                    // Move button to the end of the list
                     if (btn) {
+                        btn.remove();
+                        btn = document.createElement('div');
+                        btn.className = 'view-more-btn';
                         btn.textContent = 'Show less';
+                        btn.onclick = () => this.toggleListExpansion(listId);
+                        list.appendChild(btn);
                     }
                 } else {
                     // Collapsing
                     list.classList.add('list-collapsed');
                     list.classList.remove('list-expanded');
+
+                    // Move button back to after the 20th item
                     if (btn) {
+                        btn.remove();
+                        btn = document.createElement('div');
+                        btn.className = 'view-more-btn';
                         btn.textContent = `View ${items.length - 20} more...`;
+                        btn.onclick = () => this.toggleListExpansion(listId);
+
+                        // Insert after the 20th visible item
+                        if (items.length > 20 && items[19]) {
+                            items[19].insertAdjacentElement('afterend', btn);
+                        } else {
+                            list.appendChild(btn);
+                        }
                     }
                 }
             }
@@ -10783,7 +10884,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.8.9 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.8.10 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -11191,6 +11292,11 @@
             if (window.pendingChannel) {
                 const channel = window.pendingChannel;
                 delete window.pendingChannel;
+
+                // Small delay for persistent connections to ensure relays are ready
+                if (nym.connectionMode !== 'ephemeral') {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
 
                 // Determine if it's a geohash or standard channel
                 if (nym.isValidGeohash(channel)) {
