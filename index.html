@@ -1567,6 +1567,16 @@
             display: block;
         }
 
+        .autocomplete-item .nym-suffix {
+            opacity: 0.7;
+            font-size: 0.9em;
+            font-weight: 100;
+        }
+
+        .autocomplete-item strong {
+            color: var(--primary);
+        }
+
         .autocomplete-item,
         .emoji-item {
             padding: 8px 10px;
@@ -3570,10 +3580,12 @@
                 // Context menu actions
                 document.getElementById('ctxMention').addEventListener('click', () => {
                     if (this.contextMenuData) {
+                        // Use the full nym as is (it will include the #xxxx suffix)
                         this.insertMention(this.contextMenuData.nym);
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
+
 
                 document.getElementById('ctxPM').addEventListener('click', () => {
                     if (this.contextMenuData) {
@@ -3683,8 +3695,8 @@
 
                 const menu = document.getElementById('contextMenu');
                 // Parse base nym from display format
-                const baseNym = this.parseNymFromDisplay(nym);
-                this.contextMenuData = { nym: baseNym, pubkey, content, messageId };
+                const parsedNym = this.parseNymFromDisplay(nym);
+                this.contextMenuData = { nym: parsedNym, pubkey, content, messageId };
 
                 // Add slap option if it doesn't exist
                 let slapOption = document.getElementById('ctxSlap');
@@ -3933,12 +3945,7 @@
             }
 
             parseNymFromDisplay(displayNym) {
-                // Remove the #xxxx suffix if present
-                const hashIndex = displayNym.lastIndexOf('#');
-                if (hashIndex !== -1) {
-                    return displayNym.substring(0, hashIndex);
-                }
-                return displayNym;
+                return displayNym.replace(/<span class="nym-suffix">.*?<\/span>/g, '');
             }
 
             async connectToRelays() {
@@ -7278,9 +7285,11 @@
                     item.className = 'pm-item list-item';
                     item.dataset.pubkey = pubkey;
                     item.dataset.lastMessageTime = timestamp;
+
                     const baseNym = nym.split('#')[0] || nym;
                     const suffix = this.getPubkeySuffix(pubkey);
                     const formattedNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+
                     const verifiedBadge = this.isVerifiedDeveloper(pubkey) ?
                         `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
 
@@ -7893,13 +7902,14 @@
                     // Build the initial HTML with quote detection
                     const formattedContent = this.formatMessageWithQuotes(message.content);
 
-                    const displayAuthor = this.formatNymWithPubkey(message.author, message.pubkey);
+                    const baseNym = message.author.split('#')[0] || message.author;
+                    const displayAuthor = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
                     const escapedAuthorBase = this.escapeHtml(message.author).split('#')[0] || this.escapeHtml(message.author);
                     const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
                     messageEl.innerHTML = `
     ${time ? `<span class="message-time">${time}</span>` : ''}
-    <span class="message-author ${authorClass}">${authorWithHtml}${verifiedBadge}:</span>
+    <span class="message-author ${authorClass}">${displayAuthor}${verifiedBadge}:</span>
     <span class="message-content">${formattedContent}</span>
     ${reactionButton}
 `;
@@ -7910,7 +7920,7 @@
                         authorSpan.addEventListener('click', (e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            this.showContextMenu(e, message.author, message.pubkey, message.content, message.id);
+                            this.showContextMenu(e, displayAuthor, message.pubkey, message.content, message.id);
                             return false;
                         });
                     }
@@ -8102,7 +8112,7 @@
 
                 // Highlight mentions
                 formatted = formatted.replace(
-                    /@(\w+)/g,
+                    /@(\w+(?:#\w+)?)/g,
                     '<span style="color: var(--secondary)">@$1</span>'
                 );
 
@@ -8152,6 +8162,8 @@
             insertMention(nym) {
                 const input = document.getElementById('messageInput');
                 const currentValue = input.value;
+
+                // The nym already includes the #xxxx suffix, use it as is
                 const mention = `@${nym} `;
 
                 // Insert at cursor position or append
@@ -8758,13 +8770,22 @@
                 const offlineUsers = [];
 
                 this.users.forEach((user, pubkey) => {
+                    // Create formatted nym for matching
+                    const baseNym = user.nym.split('#')[0] || user.nym;
+                    const suffix = this.getPubkeySuffix(pubkey);
+                    const searchableNym = `${baseNym}#${suffix}`;
+
                     if (!this.blockedUsers.has(user.nym) &&
-                        user.nym.toLowerCase().includes(search.toLowerCase())) {
+                        searchableNym.toLowerCase().includes(search.toLowerCase())) {
+
+                        // Create HTML version for display
+                        const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
 
                         const userEntry = {
                             nym: user.nym,
                             pubkey: pubkey,
-                            displayNym: this.formatNymWithPubkey(user.nym, pubkey),
+                            displayNym: displayNym,
+                            searchableNym: searchableNym,
                             lastSeen: user.lastSeen
                         };
 
@@ -8776,9 +8797,9 @@
                     }
                 });
 
-                // Sort each group alphabetically
-                onlineUsers.sort((a, b) => a.nym.localeCompare(b.nym));
-                offlineUsers.sort((a, b) => a.nym.localeCompare(b.nym));
+                // Sort each group alphabetically by searchable name
+                onlineUsers.sort((a, b) => a.searchableNym.localeCompare(b.searchableNym));
+                offlineUsers.sort((a, b) => a.searchableNym.localeCompare(b.searchableNym));
 
                 // Combine with online users first
                 const allUsers = [...onlineUsers, ...offlineUsers].slice(0, 8);
@@ -8795,12 +8816,24 @@
                      data-nym="${user.nym}"
                      data-pubkey="${user.pubkey}"
                      onclick="nym.selectSpecificAutocomplete('${user.nym}', '${user.pubkey}')">
-                    ${statusIndicator}<strong>@${this.escapeHtml(user.displayNym)}</strong>
+                    ${statusIndicator}<strong>@${user.displayNym}</strong>
                 </div>
             `;
                     }).join('');
                     dropdown.classList.add('active');
                     this.autocompleteIndex = 0;
+
+                    // Add click handlers
+                    dropdown.querySelectorAll('.autocomplete-item').forEach((item, index) => {
+                        item.onclick = (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            this.autocompleteIndex = index;
+                            dropdown.querySelectorAll('.autocomplete-item').forEach(i => i.classList.remove('selected'));
+                            item.classList.add('selected');
+                            this.selectAutocomplete();
+                        };
+                    });
                 } else {
                     this.hideAutocomplete();
                 }
@@ -8845,8 +8878,9 @@
                     const value = input.value;
                     const lastAtIndex = value.lastIndexOf('@');
 
-                    // Use just the base nym without suffix in the message
-                    input.value = value.substring(0, lastAtIndex) + '@' + nym + ' ';
+                    // Use just the base nym without suffix
+                    const baseNym = nym.split('#')[0] || nym;
+                    input.value = value.substring(0, lastAtIndex) + '@' + baseNym + ' ';
                     input.focus();
                     this.hideAutocomplete();
                 }
@@ -9005,11 +9039,11 @@
 
                 const targetInput = args.trim();
 
-                // Check if input has #xxxx suffix
-                const hashIndex = targetInput.indexOf('#');
+                // Handle both nym and nym#xxxx formats
                 let searchNym = targetInput;
                 let searchSuffix = null;
 
+                const hashIndex = targetInput.indexOf('#');
                 if (hashIndex !== -1) {
                     searchNym = targetInput.substring(0, hashIndex);
                     searchSuffix = targetInput.substring(hashIndex + 1);
@@ -9018,7 +9052,8 @@
                 // Find user by nym, considering suffix if provided
                 const matches = [];
                 this.users.forEach((user, pubkey) => {
-                    if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+                    const baseNym = user.nym.split('#')[0] || user.nym;
+                    if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                         if (searchSuffix) {
                             // If suffix provided, only match exact pubkey suffix
                             if (pubkey.endsWith(searchSuffix)) {
@@ -9235,7 +9270,7 @@
                     return;
                 }
 
-                // Handle user blocking with optional #xxxx suffix
+                // For user blocking, handle suffix
                 const hashIndex = target.indexOf('#');
                 let searchNym = target;
                 let searchSuffix = null;
@@ -9248,7 +9283,8 @@
                 // Find matching users
                 const matches = [];
                 this.users.forEach((user, pubkey) => {
-                    if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+                    const baseNym = user.nym.split('#')[0] || user.nym;
+                    if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                         if (searchSuffix) {
                             if (pubkey.endsWith(searchSuffix)) {
                                 matches.push({ nym: user.nym, pubkey: pubkey });
@@ -9423,7 +9459,8 @@
                 // Find matching users
                 const matches = [];
                 this.users.forEach((user, pubkey) => {
-                    if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+                    const baseNym = user.nym.split('#')[0] || user.nym;
+                    if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                         if (searchSuffix) {
                             if (pubkey.endsWith(searchSuffix)) {
                                 matches.push({ nym: user.nym, pubkey: pubkey });
