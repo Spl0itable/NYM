@@ -3580,8 +3580,10 @@
                 // Context menu actions
                 document.getElementById('ctxMention').addEventListener('click', () => {
                     if (this.contextMenuData) {
-                        // Use the full nym as is (it will include the #xxxx suffix)
-                        this.insertMention(this.contextMenuData.nym);
+                        const formattedNym = this.contextMenuData.nym;
+                        const pubkey = this.contextMenuData.pubkey;
+                        const fullNym = `${formattedNym}#${this.getPubkeySuffix(pubkey)}`;
+                        this.insertMention(fullNym);
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
@@ -3923,8 +3925,8 @@
                 const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
                 const noun = nouns[Math.floor(Math.random() * nouns.length)];
 
-                // Get last 4 chars of pubkey if available
-                const suffix = this.pubkey ? this.pubkey.slice(-4) : Math.floor(Math.random() * 9999).toString().padStart(4, '0');
+                // Use the last 4 chars of pubkey
+                const suffix = this.getPubkeySuffix(this.pubkey);
 
                 return `${adj}_${noun}#${suffix}`;
             }
@@ -8162,8 +8164,6 @@
             insertMention(nym) {
                 const input = document.getElementById('messageInput');
                 const currentValue = input.value;
-
-                // The nym already includes the #xxxx suffix, use it as is
                 const mention = `@${nym} `;
 
                 // Insert at cursor position or append
@@ -8878,9 +8878,10 @@
                     const value = input.value;
                     const lastAtIndex = value.lastIndexOf('@');
 
-                    // Use just the base nym without suffix
+                    // Use base nym with suffix
                     const baseNym = nym.split('#')[0] || nym;
-                    input.value = value.substring(0, lastAtIndex) + '@' + baseNym + ' ';
+                    const suffix = this.getPubkeySuffix(pubkey);
+                    input.value = value.substring(0, lastAtIndex) + '@' + baseNym + '#' + suffix + ' ';
                     input.focus();
                     this.hideAutocomplete();
                 }
@@ -10943,14 +10944,12 @@
 
                 // Handle different connection modes
                 if (mode === 'ephemeral') {
+                    await nym.generateKeypair();
                     nym.nym = nymInput || nym.generateRandomNym();
                     document.getElementById('currentNym').textContent = nym.nym;
-                    await nym.generateKeypair();
                     localStorage.removeItem('nym_connection_mode');
 
                 } else if (mode === 'extension') {
-                    nym.nym = nymInput || 'Loading profile...';
-                    document.getElementById('currentNym').textContent = nym.nym;
                     await nym.useExtension();
 
                     if (nym.nym === 'Loading profile...' && !nymInput) {
@@ -10980,11 +10979,17 @@
                     nym.privkey = nym.decodeNsec(nsecValue);
                     nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
 
-                    nym.nym = nymInput || 'Loading profile...';
+                    nym.nym = nymInput || nym.generateRandomNym();
                     document.getElementById('currentNym').textContent = nym.nym;
 
                     // Store NSEC securely (consider encryption in production)
                     localStorage.setItem('nym_nsec', nsecValue);
+                }
+
+                // If nym is still not generated, generate it now
+                if (!nym.nym) {
+                    nym.nym = nym.generateRandomNym();
+                    document.getElementById('currentNym').textContent = nym.nym;
                 }
 
                 // Save connection preferences
