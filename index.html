@@ -525,6 +525,22 @@
             overflow-wrap: break-word;
         }
 
+        .user-item .nym-suffix,
+        .pm-name .nym-suffix {
+            opacity: 0.7;
+            font-size: 0.9em;
+            font-weight: 100;
+        }
+
+        .user-item span:last-child,
+        .pm-name {
+            color: var(--text-dim);
+        }
+
+        .user-item:hover span:last-child {
+            color: var(--text);
+        }
+
         .user-item span:last-child {
             word-break: break-word;
             overflow-wrap: break-word;
@@ -7262,12 +7278,14 @@
                     item.className = 'pm-item list-item';
                     item.dataset.pubkey = pubkey;
                     item.dataset.lastMessageTime = timestamp;
-
+                    const baseNym = nym.split('#')[0] || nym;
+                    const suffix = this.getPubkeySuffix(pubkey);
+                    const formattedNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
                     const verifiedBadge = this.isVerifiedDeveloper(pubkey) ?
                         `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
 
                     item.innerHTML = `
-            <span class="pm-name">@${this.escapeHtml(nym)} ${verifiedBadge}</span>
+            <span class="pm-name">@${formattedNym} ${verifiedBadge}</span>
             <div class="channel-badges">
                 <span class="pm-badge">PM</span>
                 <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
@@ -8232,7 +8250,9 @@
 
                 // Display deduplicated users in sidebar with click to open PM and right-click for context menu
                 userListContent.innerHTML = displayUsers.map((user, index) => {
-                    const displayNym = this.formatNymWithPubkey(user.nym, user.pubkey);
+                    const baseNym = user.nym.split('#')[0] || user.nym;
+                    const suffix = this.getPubkeySuffix(user.pubkey);
+                    const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
                     const verifiedBadge = this.isVerifiedDeveloper(user.pubkey) ?
                         `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>` : '';
 
@@ -8242,7 +8262,7 @@
              oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
              data-nym="${this.escapeHtml(displayNym)}">
             <span class="user-status ${user.status}"></span>
-            <span>${this.escapeHtml(displayNym)} ${verifiedBadge}</span>
+            <span>${displayNym} ${verifiedBadge}</span>
         </div>
     `;
                 }).join('');
