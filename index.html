@@ -4818,20 +4818,28 @@
                 try {
                     let profileToSave;
 
-                    // For persistent connections, update the existing profile
+                    // For persistent connections, preserve existing profile data
                     if (this.connectionMode !== 'ephemeral') {
                         // Fetch current profile if we don't have it
                         if (!this.originalProfile) {
                             await this.fetchProfileFromRelay(this.pubkey);
                         }
 
-                        profileToSave = {
-                            ...this.originalProfile,
-                            name: this.nym,  // Update the name with current nym
-                            display_name: this.nym,
-                            lud16: this.lightningAddress || this.originalProfile?.lud16,
-                            about: this.originalProfile?.about || `NYM user - ${this.nym}`
-                        };
+                        // Start with existing profile or empty object
+                        profileToSave = { ...(this.originalProfile || {}) };
+
+                        // Update only the fields we manage
+                        profileToSave.name = this.nym;
+                        profileToSave.display_name = this.nym;
+
+                        // Update lightning address if we have one, otherwise preserve existing
+                        if (this.lightningAddress) {
+                            profileToSave.lud16 = this.lightningAddress;
+                        } else if (!profileToSave.lud16) {
+                            // Only remove if there wasn't one before
+                            delete profileToSave.lud16;
+                        }
+
                     } else {
                         // Ephemeral mode - minimal profile
                         profileToSave = {
@@ -4860,7 +4868,7 @@
 
                     if (signedEvent) {
                         this.sendToRelay(["EVENT", signedEvent]);
-                        console.log('Profile saved to Nostr');
+                        console.log('Profile saved to Nostr, preserved fields:', Object.keys(profileToSave));
                     }
                 } catch (error) {
                     console.error('Failed to save profile:', error);
@@ -7633,9 +7641,10 @@
                                 try {
                                     const profile = JSON.parse(event.content);
 
-                                    // Store original profile for non-ephemeral connections
+                                    // Store complete original profile for non-ephemeral connections
                                     if (this.connectionMode !== 'ephemeral') {
                                         this.originalProfile = profile;
+                                        console.log('Stored complete profile with fields:', Object.keys(profile));
                                     }
 
                                     // Get name
@@ -11035,7 +11044,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.9.11 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.9.12 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -11215,7 +11224,6 @@
                 } else if (mode === 'nsec') {
                     let nsecValue = document.getElementById('nsecInput').value.trim();
 
-                    // Check if we have a saved nsec
                     if (!nsecValue) {
                         const savedNsec = localStorage.getItem('nym_nsec');
                         if (savedNsec) {
@@ -11231,10 +11239,19 @@
                     nym.privkey = nym.decodeNsec(nsecValue);
                     nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
 
-                    nym.nym = nymInput || nym.generateRandomNym();
+                    // Fetch existing profile BEFORE setting nym
+                    await nym.fetchProfileFromRelay(nym.pubkey);
+
+                    // Only use input nym if provided, otherwise use profile name or generate
+                    if (nymInput) {
+                        nym.nym = nymInput;
+                    } else if (!nym.nym || nym.nym === 'Loading profile...') {
+                        nym.nym = nym.generateRandomNym();
+                    }
+
                     document.getElementById('currentNym').textContent = nym.nym;
 
-                    // Store NSEC securely (consider encryption in production)
+                    // Store NSEC securely
                     localStorage.setItem('nym_nsec', nsecValue);
                 }
 

@@ -1,3 +1,7 @@
+## v1.9.12 - 2025-09-06
+
+Hotfix: case where changing nym nick or lightning address could overwrite/remove profile data
+
 ## v1.9.11 - 2025-09-06
 
 Hotfix: your own messages are highlighted
