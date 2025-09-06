@@ -8054,14 +8054,6 @@
                     return `<pre><code>${formattedCode}</code></pre>`;
                 });
 
-                // Inline code - protect from further formatting
-                const codeBlocks = [];
-                formatted = formatted.replace(/`([^`]+)`/g, (match, code) => {
-                    const placeholder = `__CODE_BLOCK_${codeBlocks.length}__`;
-                    codeBlocks.push(`<code>${code}</code>`);
-                    return placeholder;
-                });
-
                 // Bold **text** or __text__
                 formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
                 formatted = formatted.replace(/__(.+?)__/g, '<strong>$1</strong>');
@@ -8113,11 +8105,6 @@
                         return match;
                     }
                 );
-
-                // Restore code blocks
-                codeBlocks.forEach((code, index) => {
-                    formatted = formatted.replace(`__CODE_BLOCK_${index}__`, code);
-                });
 
                 return formatted;
             }
