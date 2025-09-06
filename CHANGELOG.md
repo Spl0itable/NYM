@@ -1,3 +1,7 @@
+## v1.8.11 - 2025-09-06
+
+Hotfix: message formatting bug and GPS coordinate link
+
 ## v1.8.10 - 2025-09-05
 
 Hotfix: various minor bug fixes

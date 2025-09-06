@@ -1161,16 +1161,7 @@
             white-space: pre-wrap;
             word-wrap: break-word;
             max-width: 100%;
-        }
-
-        pre {
-            font-family: monospace !important;
-            line-height: 1 !important;
-            overflow-x: auto;
-            white-space: pre !important;
-            word-wrap: normal !important;
-            max-width: 100%;
-            font-size: 12px;
+            word-wrap: break-word;
         }
 
         .message-content blockquote {
@@ -8050,27 +8041,6 @@
             formatMessage(content) {
                 let formatted = content;
 
-                // First, detect if this looks like ASCII art
-                const lines = content.split('\n');
-                const looksLikeAsciiArt = lines.length > 2 && lines.some(line => {
-                    // Check for common ASCII art patterns
-                    const specialCharCount = (line.match(/[^\w\s]/g) || []).length;
-                    const spaceCount = (line.match(/\s{2,}/g) || []).length;
-                    return (specialCharCount > 5 || spaceCount > 2) && line.length > 10;
-                });
-
-                // If it looks like ASCII art, preserve it with minimal formatting
-                if (looksLikeAsciiArt) {
-                    // Only escape HTML entities
-                    formatted = formatted.replace(/&/g, '&amp;')
-                        .replace(/</g, '&lt;')
-                        .replace(/>/g, '&gt;')
-                        .replace(/"/g, '&quot;');
-
-                    // Wrap in pre tag with specific styling to ensure proper display
-                    return `<pre style="font-family: monospace; line-height: 1; white-space: pre; overflow-x: auto; font-size: 12px;">${formatted}</pre>`;
-                }
-
                 // First, escape HTML entities
                 formatted = formatted.replace(/&/g, '&amp;')
                     .replace(/</g, '&lt;')
@@ -9858,7 +9828,7 @@
                     console.log(`Getting location for geohash ${geohash}: ${location}`);
 
                     if (location) {
-                        fullTitle = `${displayName} <br/><font size="2" style="color: var(--text-dim);text-shadow:none;">${location}</font>`;
+                        fullTitle = `${displayName} <br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a></font>`;
 
                         if (this.userLocation && this.settings.sortByProximity) {
                             try {
@@ -9867,7 +9837,7 @@
                                     this.userLocation.lat, this.userLocation.lng,
                                     coords.lat, coords.lng
                                 );
-                                fullTitle = `${displayName} <br/><font size="2" style="color: var(--text-dim);text-shadow:none;">${location} (${distance.toFixed(1)}km)</font>`;
+                                fullTitle = `${displayName} <br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a> (${distance.toFixed(1)}km)</font>`;
                             } catch (e) {
                                 console.error('Distance calculation error:', e);
                             }
@@ -10884,7 +10854,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.8.10 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.8.11 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -11321,6 +11291,72 @@
                 history.replaceState(null, null, window.location.pathname);
             }
         }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            // Override the existing search functions to handle collapsed lists properly
+            const originalHandleChannelSearch = nym.handleChannelSearch;
+            nym.handleChannelSearch = function (searchTerm) {
+                // First expand the list to make all items searchable
+                const channelList = document.getElementById('channelList');
+                const wasCollapsed = channelList.classList.contains('list-collapsed');
+
+                if (wasCollapsed && searchTerm.length > 0) {
+                    channelList.classList.remove('list-collapsed');
+                    channelList.classList.add('list-expanded');
+                }
+
+                // Call original search function
+                originalHandleChannelSearch.call(this, searchTerm);
+
+                // Restore collapsed state if search is cleared
+                if (wasCollapsed && searchTerm.length === 0) {
+                    channelList.classList.add('list-collapsed');
+                    channelList.classList.remove('list-expanded');
+                }
+            };
+
+            const originalFilterPMs = nym.filterPMs;
+            nym.filterPMs = function (searchTerm) {
+                // First expand the list to make all items searchable
+                const pmList = document.getElementById('pmList');
+                const wasCollapsed = pmList.classList.contains('list-collapsed');
+
+                if (wasCollapsed && searchTerm.length > 0) {
+                    pmList.classList.remove('list-collapsed');
+                    pmList.classList.add('list-expanded');
+                }
+
+                // Call original filter function
+                originalFilterPMs.call(this, searchTerm);
+
+                // Restore collapsed state if search is cleared
+                if (wasCollapsed && searchTerm.length === 0) {
+                    pmList.classList.add('list-collapsed');
+                    pmList.classList.remove('list-expanded');
+                }
+            };
+
+            const originalFilterUsers = nym.filterUsers;
+            nym.filterUsers = function (searchTerm) {
+                // First expand the list to make all items searchable
+                const userList = document.getElementById('userListContent');
+                const wasCollapsed = userList.classList.contains('list-collapsed');
+
+                if (wasCollapsed && searchTerm.length > 0) {
+                    userList.classList.remove('list-collapsed');
+                    userList.classList.add('list-expanded');
+                }
+
+                // Call original filter function
+                originalFilterUsers.call(this, searchTerm);
+
+                // Restore collapsed state if search is cleared
+                if (wasCollapsed && searchTerm.length === 0) {
+                    userList.classList.add('list-collapsed');
+                    userList.classList.remove('list-expanded');
+                }
+            };
+        });
     </script>
 </body>
 
