@@ -708,6 +708,11 @@
             border-left-color: var(--secondary);
         }
 
+        .message.self {
+            background: rgba(0, 255, 255, 0.08);
+            border-left-color: #FFFFFF;
+        }
+
         .message.pm {
             border-left-color: transparent;
             background: transparent;
@@ -1060,7 +1065,6 @@
             color: var(--secondary);
             min-width: 120px;
             font-weight: bold;
-            text-shadow: 0 0 3px var(--secondary);
             cursor: pointer;
         }
 
@@ -1076,7 +1080,6 @@
 
         .message-author.self {
             color: var(--primary);
-            text-shadow: 0 0 3px var(--primary);
         }
 
         .message-author.self .nym-suffix {
@@ -2214,6 +2217,70 @@
             background: var(--primary);
         }
 
+        .bitchat-user-0 {
+            color: #FF6B35;
+        }
+
+        .bitchat-user-1 {
+            color: #F7931A;
+        }
+
+        .bitchat-user-2 {
+            color: #FFD200;
+        }
+
+        .bitchat-user-3 {
+            color: #cccccc;
+        }
+
+        .bitchat-user-4 {
+            color: #1E90FF;
+        }
+
+        .bitchat-user-5 {
+            color: #8A2BE2;
+        }
+
+        .bitchat-user-6 {
+            color: #C40233;
+        }
+
+        .bitchat-user-7 {
+            color: #FF1493;
+        }
+
+        .bitchat-user-8 {
+            color: #7285b2;
+        }
+
+        .bitchat-user-9 {
+            color: #9370DB;
+        }
+
+        .bitchat-user-10 {
+            color: #FF4500;
+        }
+
+        .bitchat-user-11 {
+            color: #20B2AA;
+        }
+
+        .bitchat-user-12 {
+            color: #FF69B4;
+        }
+
+        .bitchat-user-13 {
+            color: #006f6f;
+        }
+
+        .bitchat-user-14 {
+            color: #FF8C00;
+        }
+
+        .bitchat-user-15 {
+            color: #4169E1;
+        }
+
         body.theme-ghost {
             --primary: #ffffff;
             --secondary: #cccccc;
@@ -2513,6 +2580,7 @@
                         <option value="cyber">Cyberpunk</option>
                         <option value="hacker">Hacker Blue</option>
                         <option value="ghost">Ghost (B&W)</option>
+                        <option value="bitchat">Bitchat</option>
                     </select>
                 </div>
 
@@ -3164,12 +3232,66 @@
                 this.zapInvoiceData = null;
                 this.listExpansionStates = new Map();
                 this.userLocation = null;
+                this.userColors = new Map();
                 this.sortByProximity = localStorage.getItem('nym_sort_proximity') === 'true';
                 this.verifiedDeveloper = {
                     npub: 'npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv',
                     pubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
                     title: 'NYM Developer'
                 };
+            }
+
+            getUserColorClass(pubkey) {
+                if (this.settings.theme !== 'bitchat') return '';
+
+                // Your own messages are always orange
+                if (pubkey === this.pubkey) {
+                    return 'bitchat-theme';
+                }
+
+                // Return cached color if exists
+                if (this.userColors.has(pubkey)) {
+                    return this.userColors.get(pubkey);
+                }
+
+                // Generate unique color based on pubkey hash
+                const colorClass = this.generateUniqueColor(pubkey);
+                this.userColors.set(pubkey, colorClass);
+                return colorClass;
+            }
+
+            // Generate a unique color based on pubkey
+            generateUniqueColor(pubkey) {
+                // Simple hash function for pubkey
+                let hash = 0;
+                for (let i = 0; i < pubkey.length; i++) {
+                    hash = pubkey.charCodeAt(i) + ((hash << 5) - hash);
+                }
+
+                // Generate HSL color (ensures good visibility)
+                const hue = Math.abs(hash) % 360;
+                const saturation = 70 + (Math.abs(hash) % 30); // 70-100%
+                const lightness = 40 + (Math.abs(hash) % 30);  // 40-70%
+
+                // Create unique class name
+                const uniqueClass = `bitchat-user-${Math.abs(hash) % 1000}`;  // Changed prefix
+
+                // Add dynamic style if not exists
+                if (!document.getElementById(uniqueClass)) {
+                    const style = document.createElement('style');
+                    style.id = uniqueClass;
+                    style.textContent = `
+                .${uniqueClass} {
+                    color: hsl(${hue}, ${saturation}%, ${lightness}%) !important;
+                }
+                .${uniqueClass} .nym-suffix {
+                    color: hsl(${hue}, ${saturation}%, ${lightness}%) !important;
+                }
+            `;
+                    document.head.appendChild(style);
+                }
+
+                return uniqueClass;
             }
 
             shareChannel() {
@@ -7875,13 +7997,24 @@
                     messageEl.className = 'action-message';
                     messageEl.innerHTML = `* ${this.escapeHtml(message.author)} ${this.formatMessage(message.content.substring(4))}`;
                 } else {
-                    messageEl.className = message.isPM ? 'message pm' : (isMentioned ? 'message mentioned' : 'message');
+                    const classes = ['message'];
+
+                    if (message.isOwn) {
+                        classes.push('self');
+                    } else if (message.isPM) {
+                        classes.push('pm');
+                    } else if (isMentioned) {
+                        classes.push('mentioned');
+                    }
+
+                    messageEl.className = classes.join(' ');
                     messageEl.dataset.messageId = message.id;
                     messageEl.dataset.author = message.author;
                     messageEl.dataset.pubkey = message.pubkey;
                     messageEl.dataset.timestamp = message.timestamp.getTime();
 
                     const authorClass = message.isOwn ? 'self' : '';
+                    const userColorClass = this.getUserColorClass(message.pubkey);
 
                     // Add verified badge if this is the developer
                     const verifiedBadge = this.isVerifiedDeveloper(message.pubkey) ?
@@ -7912,11 +8045,11 @@
                     const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
                     messageEl.innerHTML = `
-    ${time ? `<span class="message-time">${time}</span>` : ''}
-    <span class="message-author ${authorClass}">${displayAuthor}${verifiedBadge}:</span>
-    <span class="message-content">${formattedContent}</span>
-    ${reactionButton}
-`;
+            ${time ? `<span class="message-time">${time}</span>` : ''}
+            <span class="message-author ${authorClass} ${userColorClass}">${displayAuthor}${verifiedBadge}:</span>
+            <span class="message-content ${userColorClass}">${formattedContent}</span>
+            ${reactionButton}
+        `;
 
                     const authorSpan = messageEl.querySelector('.message-author');
                     if (authorSpan) {
@@ -8240,15 +8373,18 @@
                     const verifiedBadge = this.isVerifiedDeveloper(user.pubkey) ?
                         `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>` : '';
 
+                    // Apply color to user list items in Bitchat theme
+                    const userColorClass = this.settings.theme === 'bitchat' ? this.getUserColorClass(user.pubkey) : '';
+
                     return `
-        <div class="user-item list-item" 
-             onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
-             oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
-             data-nym="${this.escapeHtml(displayNym)}">
-            <span class="user-status ${user.status}"></span>
-            <span>${displayNym} ${verifiedBadge}</span>
-        </div>
-    `;
+                <div class="user-item list-item ${userColorClass}" 
+                     onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
+                     oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
+                     data-nym="${this.escapeHtml(displayNym)}">
+                    <span class="user-status ${user.status}"></span>
+                    <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
+                </div>
+            `;
                 }).join('');
 
                 // Add view more button for users
@@ -10561,7 +10697,13 @@
 
             applyTheme(theme) {
                 const root = document.documentElement;
-                document.body.classList.remove('theme-ghost');
+                document.body.classList.remove('theme-ghost', 'theme-bitchat');
+
+                if (theme === 'ghost') {
+                    document.body.classList.add('theme-ghost');
+                } else if (theme === 'bitchat') {
+                    document.body.classList.add('theme-bitchat');
+                }
 
                 const themes = {
                     matrix: {
@@ -10603,6 +10745,14 @@
                         textDim: '#666666',
                         textBright: '#ffffff',
                         lightning: '#dddddd'
+                    },
+                    bitchat: {
+                        primary: '#00ff00',
+                        secondary: '#00ffff',
+                        text: '#00ff00',
+                        textDim: '#008800',
+                        textBright: '#00ffaa',
+                        lightning: '#f7931a'
                     }
                 };
 
@@ -10617,6 +10767,48 @@
                         root.style.setProperty(cssVar, value);
                     });
                 }
+                this.refreshMessages();
+            }
+
+            refreshMessages() {
+                // Clear user colors cache when theme changes
+                this.userColors.clear();
+
+                // Re-display all messages to apply new colors
+                const container = document.getElementById('messagesContainer');
+                const messages = container.querySelectorAll('.message');
+
+                messages.forEach(msg => {
+                    const pubkey = msg.dataset.pubkey;
+                    const authorElement = msg.querySelector('.message-author');
+                    if (authorElement) {
+                        // Remove existing bitchat classes
+                        const classesToRemove = [];
+                        authorElement.classList.forEach(cls => {
+                            if (cls.startsWith('bitchat-user-') || cls === 'bitchat-theme') {
+                                classesToRemove.push(cls);
+                            }
+                        });
+
+                        classesToRemove.forEach(cls => authorElement.classList.remove(cls));
+
+                        // Add new color class
+                        const colorClass = this.getUserColorClass(pubkey);
+                        if (colorClass) {
+                            authorElement.classList.add(colorClass);
+                        }
+                    }
+                });
+
+                // Also refresh user list
+                this.updateUserList();
+            }
+
+            cleanupBitchatStyles() {
+                // Remove all dynamically created bitchat styles
+                document.querySelectorAll('style[id^="bitchat-user-"]').forEach(style => {
+                    style.remove();
+                });
             }
 
             loadSettings() {
@@ -10841,7 +11033,7 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.8.11 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v1.9.11 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>

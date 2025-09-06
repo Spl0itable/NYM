@@ -1,3 +1,8 @@
+## v1.9.11 - 2025-09-06
+
+Hotfix: your own messages are highlighted
+New: bitchat style theme (multi-colored users)
+
 ## v1.8.11 - 2025-09-06
 
 Hotfix: message formatting bug and GPS coordinate link
