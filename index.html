@@ -8094,10 +8094,10 @@
 
                 // Process mentions and channels together in one pass
                 formatted = formatted.replace(
-                    /(@[^@\s][^@\n]*?#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(?:^|\s)(#\w+)(?=\s|$)/gi,
+                    /(@[^@#\n]*?#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(?:^|\s)(#\w+)(?=\s|$)/gi,
                     (match, mentionWithSuffix, simpleMention, channel, offset) => {
                         if (mentionWithSuffix) {
-                            // This is a mention with a pubkey suffix (e.g., @SMOKESTACK LIGHTNING #0311)
+                            // This is a mention with a pubkey suffix
                             return `<span style="color: var(--secondary)">${mentionWithSuffix}</span>`;
                         } else if (simpleMention) {
                             // This is a simple mention without spaces or suffix
