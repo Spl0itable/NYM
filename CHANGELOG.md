@@ -1,3 +1,7 @@
+## v1.9.13 - 2025-09-17
+
+Hotfix: corrected background message pruning
+
 ## v1.9.12 - 2025-09-06
 
 Hotfix: case where changing nym nick or lightning address could overwrite/remove profile data
