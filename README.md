@@ -9,18 +9,19 @@
 
 # Nostr Ynstant Messenger
 
-A lightweight ephemeral chat client built on Nostr protocol, bridging with [Bitchat](https://bitchat.free) for anonymous, temporary messaging.
+A lightweight ephemeral and persistent chat client built on Nostr protocol, bridging with [Bitchat](https://bitchat.free) for anonymous, temporary messaging.
 
 ## Overview
 
-NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kinds 20000 and 23333) for public channels and NIP-04 encrypted events (kind 4) for private messages. No registration, no accounts, no persistence - just pick a nym and start chatting. Or, connect using Nostr Extension for persistent identity.
+NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kinds 20000 and 23333) and persistent communities (kinds 4550 and 34550) for public/private channels and NIP-04 encrypted events (kind 4) for private messages. No registration, no accounts, no persistence - just pick a nym and start chatting. Or, connect using Nostr Extension for persistent identity.
 
 ![NYM Screenshot](https://nym.bar/images/NYM.png)
 
 ## Features
 
 - **Ephemeral Identity** - Generate temporary keypairs and pseudonym per session or use Nostr extension
-- **Multiple Channels** - Standard channels and geohash-based location channels
+- **Ephemeral Channels** - Standard channels and geohash-based location channels
+- **Community Channels** - Public channels and private channels, with moderation tools
 - **Reactions** - React to messages
 - **Themes** - Pick a desired theme from settings
 - **Private Messaging** - Encrypted DMs using NIP-04
