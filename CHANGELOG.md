@@ -1,3 +1,8 @@
+## v2.9.13 - 2025-10-11
+
+New: default blurs images, but can unblur by clicking or always unblur from settings
+New: support for NIP-72 communities with moderation capabilities
+
 ## v1.9.13 - 2025-09-17
 
 Hotfix: corrected background message pruning

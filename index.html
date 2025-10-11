@@ -640,7 +640,6 @@
         .channel-title {
             font-size: 18px;
             color: var(--primary);
-            text-shadow: 0 0 5px var(--primary);
         }
 
         .channel-meta {
@@ -1970,6 +1969,57 @@
             display: none !important;
         }
 
+        .message-content img.blurred {
+            filter: blur(20px);
+            transition: filter 0.3s ease;
+        }
+
+        .message-content img.blurred:hover {
+            filter: blur(10px);
+        }
+
+        .message-time {
+            cursor: help;
+            position: relative;
+        }
+
+        .message-time:hover::after {
+            content: attr(data-full-time);
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--primary);
+            padding: 4px 8px;
+            font-size: 11px;
+            white-space: nowrap;
+            margin-bottom: 4px;
+            z-index: 1000;
+            pointer-events: none;
+        }
+
+        .context-menu-item.moderation {
+            border-top: 1px solid rgba(0, 255, 0, 0.1);
+        }
+
+        .context-menu-item.moderation:first-of-type {
+            border-top: 1px solid var(--border);
+            margin-top: 5px;
+            padding-top: 5px;
+        }
+
+        .context-menu-item[style*="COMMUNITY MODERATION"] {
+            font-size: 10px !important;
+            color: var(--text-dim) !important;
+            padding: 5px 15px !important;
+            cursor: default !important;
+        }
+
+        .context-menu-item[style*="COMMUNITY MODERATION"]:hover {
+            background: none !important;
+            padding-left: 15px !important;
+        }
+
         @media (max-width: 768px) {
             pre {
                 font-size: 10px;
@@ -2372,7 +2422,7 @@
                                     <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" />
                                 </svg>
                             </span>
-                            <span class="std-badge">STD</span>
+                            <span class="std-badge">EPH</span>
                             <span class="unread-badge" style="display:none">0</span>
                         </div>
                     </div>
@@ -2581,12 +2631,12 @@
                 <div class="form-group">
                     <label class="form-label">Theme</label>
                     <select class="form-select" id="themeSelect">
+                        <option value="bitchat">Bitchat (Multicolor)</option>
                         <option value="matrix">Matrix Green</option>
                         <option value="amber">Amber Terminal</option>
                         <option value="cyber">Cyberpunk</option>
                         <option value="hacker">Hacker Blue</option>
                         <option value="ghost">Ghost (B&W)</option>
-                        <option value="bitchat">Bitchat (Multicolor)</option>
                     </select>
                 </div>
 
@@ -2614,6 +2664,16 @@
                         <option value="true">Show</option>
                         <option value="false">Hide</option>
                     </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Blur Images from Others</label>
+                    <select class="form-select" id="blurImagesSelect">
+                        <option value="true">Enabled (blur by default)</option>
+                        <option value="false">Disabled (show all images)</option>
+                    </select>
+                    <div class="form-hint">Blur images shared by others until clicked. Your own images are never
+                        blurred.</div>
                 </div>
 
                 <div class="form-group">
@@ -2656,8 +2716,9 @@
                 <div class="form-group">
                     <label class="form-label">Channel Type</label>
                     <select class="form-select" id="channelTypeSelect">
-                        <option value="standard">Standard Channel</option>
+                        <option value="standard">Standard Channel (Ephemeral)</option>
                         <option value="geohash">Location-based (Geohash)</option>
+                        <option value="community">Community Channel (Requires Login)</option>
                     </select>
                 </div>
 
@@ -2674,10 +2735,149 @@
                         oninput="this.value = this.value.toLowerCase().replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '')">
                     <div class="form-hint">Enter a geohash code (valid chars: 0-9, b-z except a,i,l,o)</div>
                 </div>
+
+                <div id="communityChannelGroup" style="display:none">
+                    <div class="form-group">
+                        <label class="form-label">Community Name</label>
+                        <input type="text" class="form-input" id="communityNameInput" placeholder="bitcoin">
+                        <div class="form-hint">A unique name for your community</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-textarea" id="communityDescInput"
+                            placeholder="Describe your community (optional)"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Community Image URL (optional)</label>
+                        <input type="text" class="form-input" id="communityImageInput"
+                            placeholder="https://example.com/image.png">
+                        <div class="form-hint">URL to an image representing your community</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Privacy</label>
+                        <select class="form-select" id="communityPrivacySelect">
+                            <option value="public">Public (anyone can join)</option>
+                            <option value="private">Private (invite only)</option>
+                        </select>
+                    </div>
+
+                    <div
+                        style="color: var(--warning); font-size: 11px; margin-top: 10px; padding: 8px; border: 1px solid var(--warning);">
+                        NOTE: Community channels are persistent and tied to your Nostr identity. You will be the admin.
+                    </div>
+                </div>
             </div>
             <div class="modal-actions">
                 <button class="icon-btn" onclick="closeModal('channelModal')">Cancel</button>
-                <button class="send-btn" onclick="joinChannel()">Join</button>
+                <button class="send-btn" onclick="joinOrCreateChannel()">Join/Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Community Settings Modal -->
+    <div class="modal" id="communitySettingsModal">
+        <div class="modal-content">
+            <div class="modal-header">Community Settings</div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Community Name</label>
+                    <div id="communityNameDisplay" style="font-size: 16px; color: var(--primary); padding: 8px 0;">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Community Image</label>
+                    <div id="communityImagePreview" style="margin-bottom: 10px; display: none;">
+                        <img id="communityImagePreviewImg" src="" alt="Community image"
+                            style="max-width: 200px; max-height: 200px; border: 1px solid var(--border);">
+                    </div>
+                    <input type="text" class="form-input" id="communityImageEdit"
+                        placeholder="https://example.com/image.png">
+                    <div class="form-hint">URL to an image representing your community</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-textarea" id="communityDescEdit"
+                        placeholder="Community description"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Privacy</label>
+                    <select class="form-select" id="communityPrivacyEdit">
+                        <option value="public">Public (anyone can join)</option>
+                        <option value="private">Private (invite only)</option>
+                    </select>
+                    <div class="form-hint">Changing privacy will take effect immediately</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Blocked Keywords/Phrases</label>
+                    <input type="text" class="form-input" id="newCommunityKeywordInput"
+                        placeholder="Add keyword or phrase to block">
+                    <button class="icon-btn" onclick="nym.addCommunityKeyword()"
+                        style="margin-top: 10px; width: 100%;">Add Keyword</button>
+                    <div class="keyword-list" id="communityKeywordList"
+                        style="margin-top: 10px; max-height: 150px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; background: var(--bg);">
+                        <div style="color: var(--text-dim); font-size: 12px;">No blocked keywords</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Moderators</label>
+                    <div id="communityModsList"
+                        style="max-height: 150px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; background: var(--bg);">
+                        <div style="color: var(--text-dim); font-size: 12px;">Loading moderators...</div>
+                    </div>
+                    <div style="display: flex; gap: 10px; margin-top: 10px;">
+                        <input type="text" class="form-input" id="addModInput" placeholder="Enter nym or nym#xxxx"
+                            style="flex: 1;">
+                        <button class="icon-btn" onclick="nym.addModFromSettings()">Add Mod</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Banned Users</label>
+                    <div id="communityBansList"
+                        style="max-height: 150px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; background: var(--bg);">
+                        <div style="color: var(--text-dim); font-size: 12px;">No banned users</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Statistics</label>
+                    <div
+                        style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border);">
+                        <div style="text-align: center;">
+                            <div style="font-size: 20px; color: var(--primary);" id="statMembers">0</div>
+                            <div style="font-size: 11px; color: var(--text-dim);">Members</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 20px; color: var(--secondary);" id="statMods">0</div>
+                            <div style="font-size: 11px; color: var(--text-dim);">Moderators</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 20px; color: var(--danger);" id="statBanned">0</div>
+                            <div style="font-size: 11px; color: var(--text-dim);">Banned</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" style="color: var(--danger);">Danger Zone</label>
+                    <button class="icon-btn" onclick="nym.deleteCommunity()"
+                        style="width: 100%; background: var(--bg); border-color: var(--danger); color: var(--danger);">
+                        Delete Community
+                    </button>
+                    <div class="form-hint" style="color: var(--danger);">This action cannot be undone</div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" onclick="closeModal('communitySettingsModal')">Close</button>
+                <button class="send-btn" onclick="nym.saveCommunitySettings()">Save Changes</button>
             </div>
         </div>
     </div>
@@ -3092,6 +3292,15 @@
                 this.blockedUsers = new Set();
                 this.blockedKeywords = new Set();
                 this.blockedChannels = new Set();
+                this.communityChannels = new Map();
+                this.ownedCommunities = new Set();
+                this.moderatedCommunities = new Set();
+                this.communityBans = new Map();
+                this.communityInvites = new Map();
+                this.communityMembers = new Map();
+                this.communityModerators = new Map();
+                this.currentCommunity = null;
+                this.processedModerationEvents = new Set();
                 this.settings = this.loadSettings();
                 this.commandHistory = [];
                 this.historyIndex = -1;
@@ -3129,7 +3338,6 @@
                     'nature': ['🐵', '🐒', '🦍', '🦧', '🐶', '🐕', '🦮', '🐕‍🦺', '🐩', '🐺', '🦊', '🦝', '🐱', '🐈', '🐈‍⬛', '🦁', '🐯', '🐅', '🐆', '🐴', '🐎', '🦄', '🦓', '🦌', '🦬', '🐮', '🐂', '🐃', '🐄', '🐷', '🐖', '🐗', '🐽', '🐏', '🐑', '🐐', '🐪', '🐫', '🦙', '🦒', '🐘', '🦣', '🦏', '🦛', '🐭', '🐁', '🐀', '🐹', '🐰', '🐇', '🐿️', '🦫', '🦔', '🦇', '🐻', '🐻‍❄️', '🐨', '🐼', '🦥', '🦦', '🦨', '🦘', '🦡', '🐾', '🦃', '🐔', '🐓', '🐣', '🐤', '🐥', '🐦', '🐧', '🕊️', '🦅', '🦆', '🦢', '🦉', '🦤', '🪶', '🦩', '🦚', '🦜', '🐸', '🐊', '🐢', '🦎', '🐍', '🐲', '🐉', '🦕', '🦖', '🐳', '🐋', '🐬', '🦭', '🐟', '🐠', '🐡', '🦈', '🐙', '🐚', '🐌', '🦋', '🐛', '🐜', '🐝', '🪲', '🐞', '🦗', '🪳', '🕷️', '🕸️', '🦂', '🦟', '🪰', '🪱', '🦠', '💐', '🌸', '💮', '🏵️', '🌹', '🥀', '🌺', '🌻', '🌼', '🌷', '🌱', '🪴', '🌲', '🌳', '🌴', '🌵', '🌾', '🌿', '☘️', '🍀', '🍁', '🍂', '🍃']
                 };
                 this.emojiMap = {
-                    // Smileys & Emotion
                     'smile': '😊', 'laugh': '😂', 'rofl': '🤣', 'love': '😍', 'heart_eyes': '🥰',
                     'kiss': '😘', 'cool': '😎', 'thinking': '🤔', 'cry': '😢', 'sob': '😭',
                     'angry': '😡', 'rage': '🤬', 'scream': '😱', 'fearful': '😨', 'anxious': '😰',
@@ -3143,28 +3351,20 @@
                     'poop': '💩', 'ghost': '👻', 'skull': '💀', 'alien': '👽', 'robot': '🤖',
                     'jack': '🎃', 'cat_smile': '😺', 'cat_grin': '😸', 'cat_joy': '😹', 'cat_love': '😻',
                     'cat_smirk': '😼', 'cat_kiss': '😽', 'cat_scream': '🙀', 'cat_cry': '😿', 'cat_angry': '😾',
-
-                    // Gestures & Body
                     'thumbsup': '👍', 'thumbsdown': '👎', 'ok': '👌', 'peace': '✌️', 'crossed': '🤞',
                     'rock': '🤟', 'metal': '🤘', 'call': '🤙', 'left': '👈', 'right': '👉',
                     'up': '👆', 'down': '👇', 'point': '☝️', 'hand': '✋', 'backhand': '🤚',
                     'vulcan': '🖖', 'wave': '👋', 'pinch': '🤏', 'writing': '✍️', 'clap': '👏',
                     'raised': '🙌', 'open': '👐', 'palms': '🤲', 'handshake': '🤝', 'pray': '🙏',
                     'muscle': '💪', 'ear': '👂', 'nose': '👃', 'brain': '🧠', 'eyes': '👀',
-
-                    // Hearts & Symbols
                     'heart': '❤️', 'orange_heart': '🧡', 'yellow_heart': '💛', 'green_heart': '💚',
                     'blue_heart': '💙', 'purple_heart': '💜', 'black_heart': '🖤', 'white_heart': '🤍',
                     'brown_heart': '🤎', 'broken': '💔', 'exclamation_heart': '❣️', 'hearts': '💕',
                     'revolving': '💞', 'heartbeat': '💓', 'growing': '💗', 'sparkling': '💖',
                     'cupid': '💘', 'gift_heart': '💝', 'heart_decoration': '💟',
-
-                    // Common symbols
                     '100': '💯', 'boom': '💥', 'fire': '🔥', 'star': '⭐', 'sparkles': '✨',
                     'lightning': '⚡', 'warning': '⚠️', 'check': '✅', 'x': '❌', 'question': '❓',
                     'exclamation': '❗', 'bangbang': '‼️', 'interrobang': '⁉️', 'zzz': '💤',
-
-                    // Activities & Objects
                     'party': '🎉', 'tada': '🎊', 'gift': '🎁', 'trophy': '🏆', 'medal': '🥇',
                     'soccer': '⚽', 'baseball': '⚾', 'basketball': '🏀', 'football': '🏈', 'tennis': '🎾',
                     'volleyball': '🏐', 'rugby': '🏉', 'pool': '🎱', 'ping_pong': '🏓', 'badminton': '🏸',
@@ -3173,8 +3373,6 @@
                     'beach': '🏖️', 'sunrise': '🌅', 'sunset': '🌆', 'night': '🌃', 'stars': '🌟',
                     'rainbow': '🌈', 'sun': '☀️', 'moon': '🌙', 'cloud': '☁️', 'rain': '🌧️',
                     'snow': '❄️', 'snowman': '⛄', 'thunder': '⛈️', 'tornado': '🌪️', 'fog': '🌫️',
-
-                    // Food & Drink
                     'apple': '🍎', 'banana': '🍌', 'strawberry': '🍓', 'cherry': '🍒', 'peach': '🍑',
                     'watermelon': '🍉', 'grapes': '🍇', 'lemon': '🍋', 'orange': '🍊', 'pineapple': '🍍',
                     'mango': '🥭', 'avocado': '🥑', 'broccoli': '🥦', 'corn': '🌽', 'carrot': '🥕',
@@ -3185,8 +3383,6 @@
                     'cookie': '🍪', 'chocolate': '🍫', 'candy': '🍬', 'lollipop': '🍭', 'honey': '🍯',
                     'coffee': '☕', 'tea': '🍵', 'beer': '🍺', 'beers': '🍻', 'wine': '🍷',
                     'cocktail': '🍸', 'tropical': '🍹', 'champagne': '🍾', 'sake': '🍶', 'milk': '🥛',
-
-                    // Tech & Gaming
                     'computer': '💻', 'desktop': '🖥️', 'printer': '🖨️', 'keyboard': '⌨️', 'mouse': '🖱️',
                     'trackball': '🖲️', 'joystick': '🕹️', 'cd': '💿', 'dvd': '📀', 'vhs': '📼',
                     'camera': '📷', 'video': '📹', 'movie': '🎥', 'phone': '📱', 'telephone': '☎️',
@@ -3202,20 +3398,14 @@
                     'telescope': '🔭', 'satellite': '📡', 'syringe': '💉', 'pill': '💊', 'adhesive': '🩹',
                     'stethoscope': '🩺', 'thermometer_face': '🌡️', 'broom': '🧹', 'basket': '🧺', 'roll': '🧻',
                     'soap': '🧼', 'sponge': '🧽', 'bucket': '🪣', 'toothbrush': '🪥',
-
-                    // Gaming specific
                     'gaming': '🎮', 'dice': '🎲', 'dart': '🎯', 'bowling': '🎳', 'slot': '🎰',
                     'puzzle': '🧩', 'teddy': '🧸', 'spades': '♠️', 'hearts_suit': '♥️', 'diamonds': '♦️',
                     'clubs': '♣️', 'chess': '♟️', 'mahjong': '🀄',
-
-                    // Transportation
                     'car': '🚗', 'taxi': '🚕', 'bus': '🚌', 'truck': '🚚', 'racing': '🏎️',
                     'ambulance': '🚑', 'firetruck': '🚒', 'police': '🚓', 'motorcycle': '🏍️', 'bike': '🚲',
                     'scooter': '🛴', 'skateboard': '🛹', 'train': '🚆', 'metro': '🚇', 'tram': '🚊',
                     'monorail': '🚝', 'railway': '🚞', 'helicopter': '🚁', 'airplane': '✈️', 'rocket': '🚀',
                     'ufo': '🛸', 'ship': '🚢', 'boat': '⛵', 'speedboat': '🚤', 'anchor': '⚓',
-
-                    // Misc popular
                     'shrug': '🤷', 'facepalm': '🤦', 'celebrate': '🙌', 'mind_blown': '🤯',
                     'money_face': '🤑', 'nerd': '🤓', 'sunglasses': '😎', 'upside_down': '🙃',
                     'wink': '😉', 'stuck_out': '😛', 'zany': '🤪', 'raised_eyebrow': '🤨',
@@ -3239,6 +3429,8 @@
                 this.listExpansionStates = new Map();
                 this.userLocation = null;
                 this.userColors = new Map();
+                this.blurOthersImages = true;
+                this.imageBlurSettings = this.loadImageBlurSettings();
                 this.sortByProximity = localStorage.getItem('nym_sort_proximity') === 'true';
                 this.verifiedDeveloper = {
                     npub: 'npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv',
@@ -3685,7 +3877,7 @@
                 // Context menu actions
                 document.getElementById('ctxMention').addEventListener('click', () => {
                     if (this.contextMenuData) {
-                        const baseNym = this.contextMenuData.nym.split('#')[0] || this.contextMenuData.nym;
+                        const baseNym = this.contextMenuData.nym;
                         const pubkey = this.contextMenuData.pubkey;
                         const suffix = this.getPubkeySuffix(pubkey);
                         const fullNym = `${baseNym}#${suffix}`;
@@ -3694,11 +3886,9 @@
                     document.getElementById('contextMenu').classList.remove('active');
                 });
 
-
                 document.getElementById('ctxPM').addEventListener('click', () => {
                     if (this.contextMenuData) {
-                        // Include suffix when opening PM
-                        const baseNym = this.contextMenuData.nym.split('#')[0] || this.contextMenuData.nym;
+                        const baseNym = this.contextMenuData.nym;
                         const suffix = this.getPubkeySuffix(this.contextMenuData.pubkey);
                         const fullNym = `${baseNym}#${suffix}`;
                         this.openUserPM(fullNym, this.contextMenuData.pubkey);
@@ -3787,8 +3977,7 @@
                 document.getElementById('ctxQuote').addEventListener('click', () => {
                     if (this.contextMenuData && this.contextMenuData.content) {
                         const input = document.getElementById('messageInput');
-                        // Include the pubkey suffix in the quote
-                        const baseNym = this.contextMenuData.nym.split('#')[0] || this.contextMenuData.nym;
+                        const baseNym = this.contextMenuData.nym;
                         const suffix = this.getPubkeySuffix(this.contextMenuData.pubkey);
                         const fullNym = `${baseNym}#${suffix}`;
                         input.value = `> @${fullNym}: ${this.contextMenuData.content}\n\n`;
@@ -3810,9 +3999,18 @@
                 e.stopPropagation();
 
                 const menu = document.getElementById('contextMenu');
-                // Parse base nym from display format
+                // Parse base nym from display format - this removes HTML tags
                 const parsedNym = this.parseNymFromDisplay(nym);
-                this.contextMenuData = { nym: parsedNym, pubkey, content, messageId };
+                // Get just the base nym without any suffix
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(pubkey);
+                const fullNym = `${baseNym}#${suffix}`;
+
+                this.contextMenuData = { nym: baseNym, pubkey, content, messageId };
+
+                // First, clear any existing dynamic menu items (community moderation options)
+                const existingModItems = menu.querySelectorAll('.context-menu-item.moderation');
+                existingModItems.forEach(item => item.remove());
 
                 // Add slap option if it doesn't exist
                 let slapOption = document.getElementById('ctxSlap');
@@ -3835,6 +4033,86 @@
                 // Show slap option only if not yourself
                 slapOption.style.display = pubkey === this.pubkey ? 'none' : 'block';
 
+                // Add community moderation options if in a community and user is admin/mod
+                if (this.currentCommunity && pubkey !== this.pubkey) {
+                    const isAdmin = this.ownedCommunities.has(this.currentCommunity);
+                    const isMod = this.communityModerators.has(this.currentCommunity) &&
+                        this.communityModerators.get(this.currentCommunity).has(this.pubkey);
+
+                    if (isAdmin || isMod) {
+                        const community = this.communityChannels.get(this.currentCommunity);
+                        const isTargetAdmin = community && community.admin === pubkey;
+                        const isTargetMod = this.communityModerators.has(this.currentCommunity) &&
+                            this.communityModerators.get(this.currentCommunity).has(pubkey);
+                        const isTargetBanned = this.communityBans.has(this.currentCommunity) &&
+                            this.communityBans.get(this.currentCommunity).has(pubkey);
+
+                        // Add separator
+                        const separator = document.createElement('div');
+                        separator.className = 'context-menu-item moderation';
+                        separator.style.borderTop = '1px solid var(--border)';
+                        separator.style.pointerEvents = 'none';
+                        separator.style.padding = '0';
+                        separator.style.margin = '5px 0';
+                        menu.appendChild(separator);
+
+                        // Add moderation label
+                        const modLabel = document.createElement('div');
+                        modLabel.className = 'context-menu-item moderation';
+                        modLabel.style.fontSize = '10px';
+                        modLabel.style.color = 'var(--text-dim)';
+                        modLabel.style.pointerEvents = 'none';
+                        modLabel.textContent = 'COMMUNITY MODERATION';
+                        menu.appendChild(modLabel);
+
+                        // Kick option (can't kick admin or other mods if you're a mod)
+                        if (!isTargetAdmin && !(isMod && isTargetMod) && !isTargetBanned) {
+                            const kickOption = document.createElement('div');
+                            kickOption.className = 'context-menu-item moderation';
+                            kickOption.textContent = 'Kick';
+                            kickOption.onclick = () => {
+                                this.cmdKick(fullNym);
+                                menu.classList.remove('active');
+                            };
+                            menu.appendChild(kickOption);
+                        }
+
+                        // Ban/Unban option
+                        if (!isTargetAdmin && !(isMod && isTargetMod)) {
+                            const banOption = document.createElement('div');
+                            banOption.className = 'context-menu-item moderation danger';
+                            banOption.textContent = isTargetBanned ? 'Unban' : 'Ban';
+                            banOption.onclick = () => {
+                                if (isTargetBanned) {
+                                    this.cmdUnban(fullNym);
+                                } else {
+                                    this.cmdBan(fullNym);
+                                }
+                                menu.classList.remove('active');
+                            };
+                            menu.appendChild(banOption);
+                        }
+
+                        // Admin-only options
+                        if (isAdmin && !isTargetAdmin) {
+                            // Add/Remove moderator
+                            const modOption = document.createElement('div');
+                            modOption.className = 'context-menu-item moderation';
+                            modOption.style.color = 'var(--secondary)';
+                            modOption.textContent = isTargetMod ? 'Remove Moderator' : 'Make Moderator';
+                            modOption.onclick = () => {
+                                if (isTargetMod) {
+                                    this.cmdRemoveMod(fullNym);
+                                } else {
+                                    this.cmdAddMod(fullNym);
+                                }
+                                menu.classList.remove('active');
+                            };
+                            menu.appendChild(modOption);
+                        }
+                    }
+                }
+
                 // Add zap option handling
                 const zapOption = document.getElementById('ctxZap');
                 if (zapOption) {
@@ -3854,7 +4132,7 @@
                     blockOption.style.display = 'none';
                 } else {
                     blockOption.style.display = 'block';
-                    blockOption.textContent = this.blockedUsers.has(nym) ? 'Unblock User' : 'Block User';
+                    blockOption.textContent = this.blockedUsers.has(baseNym) ? 'Unblock User' : 'Block User';
                 }
 
                 // Hide PM option if it's yourself
@@ -4235,26 +4513,38 @@
 
                 const ws = relay.ws;
 
-                // Subscribe to messages
+                // Subscribe to messages (channels + communities)
                 const messagesSub = [
                     "REQ",
                     "nym-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [20000, 23333],
+                        kinds: [20000, 23333, 4550], // Geohash, standard channels, and community posts
                         limit: 200
                     }
                 ];
                 ws.send(JSON.stringify(messagesSub));
 
-                // Subscribe to reactions with k tag filter
+                // Subscribe to moderation events (NIP-56)
+                const moderationSub = [
+                    "REQ",
+                    "moderation-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [1984, 5], // NIP-56 moderation and deletion events
+                        limit: 500,
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                    }
+                ];
+                ws.send(JSON.stringify(moderationSub));
+
+                // Subscribe to reactions with k tag filter for all supported kinds
                 const reactionsSub = [
                     "REQ",
                     "reactions-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [7],
-                        "#k": ["20000", "23333", "4"], // Only reactions for our kinds
+                        "#k": ["20000", "23333", "4", "4550"], // Reactions for channels, PMs, and community posts
                         limit: 1000,
-                        since: Math.floor(Date.now() / 1000) - 7200
+                        since: Math.floor(Date.now() / 1000) - 7200 // Last 2 hours
                     }
                 ];
                 ws.send(JSON.stringify(reactionsSub));
@@ -4283,6 +4573,32 @@
                         }
                     ];
                     ws.send(JSON.stringify(pmSub));
+                }
+
+                // Subscribe to ALL public community definitions (kind 34550)
+                const allCommunitiesSub = [
+                    "REQ",
+                    "all-communities-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [34550], // NIP-72 community definitions
+                        limit: 200, // Get more communities
+                        since: Math.floor(Date.now() / 1000) - 2592000 // Last 30 days
+                    }
+                ];
+                ws.send(JSON.stringify(allCommunitiesSub));
+
+                // If we have a pubkey, also subscribe to communities YOU created
+                if (this.pubkey) {
+                    const myCommunitiesSub = [
+                        "REQ",
+                        "my-communities-" + Math.random().toString(36).substring(7),
+                        {
+                            kinds: [34550], // NIP-72 community definitions
+                            authors: [this.pubkey], // Communities you created
+                            limit: 100
+                        }
+                    ];
+                    ws.send(JSON.stringify(myCommunitiesSub));
                 }
             }
 
@@ -5006,6 +5322,16 @@
                     // Add event tag only if this is a message zap (not profile zap)
                     if (this.currentZapTarget.messageId) {
                         zapRequest.tags.unshift(['e', this.currentZapTarget.messageId]); // Event being zapped
+
+                        let originalKind = '23333'; // Default
+                        if (this.inPMMode) {
+                            originalKind = '4';
+                        } else if (this.currentCommunity) {
+                            originalKind = '4550'; // Community post
+                        } else if (this.currentGeohash) {
+                            originalKind = '20000';
+                        }
+                        zapRequest.tags.push(['k', originalKind]);
                     }
 
                     // Sign the request
@@ -5228,13 +5554,20 @@
 
                 if (amount) {
                     // Get zapper pubkey from description if available
-                    let zapperPubkey = event.pubkey; // This is usually the zap service pubkey
+                    let zapperPubkey = event.pubkey;
 
                     if (descriptionTag) {
                         try {
                             const zapRequest = JSON.parse(descriptionTag[1]);
                             if (zapRequest.pubkey) {
-                                zapperPubkey = zapRequest.pubkey; // This is the actual zapper
+                                zapperPubkey = zapRequest.pubkey;
+                            }
+
+                            // Optional: Verify the k tag to ensure it's for supported kinds
+                            const kTag = zapRequest.tags?.find(t => t[0] === 'k');
+                            if (kTag && !['20000', '23333', '4', '4550'].includes(kTag[1])) {
+                                console.log('Ignoring zap for unsupported kind:', kTag[1]);
+                                return;
                             }
                         } catch (e) {
                             // Ignore parse errors
@@ -5578,12 +5911,12 @@
             }
 
             subscribeToMessages() {
-                // Subscribe to both ephemeral and channel messages
+                // Subscribe to ephemeral, channel, and community messages
                 const subscription = [
                     "REQ",
                     "nym-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [20000, 23333], // Geohash and standard channels
+                        kinds: [20000, 23333, 4550],
                         limit: 200
                     }
                 ];
@@ -5690,6 +6023,7 @@
                         autoscroll: this.settings.autoscroll,
                         showTimestamps: this.settings.showTimestamps,
                         sortByProximity: this.settings.sortByProximity,
+                        blurOthersImages: this.blurOthersImages,  // Add this line
                         pinnedChannels: Array.from(this.pinnedChannels),
                         blockedUsers: Array.from(this.blockedUsers),
                         blockedKeywords: Array.from(this.blockedKeywords),
@@ -5986,6 +6320,142 @@
                 const messageAge = Date.now() - (event.created_at * 1000);
                 const isHistorical = messageAge > 10000; // Older than 10 seconds
 
+                // Handle NIP-72 moderation events FIRST (before processing messages)
+                if (event.kind === 5 && event.tags.some(t => t[0] === 'a' && t[1]?.includes('34550:'))) {
+                    // Community deletion event
+                    const aTag = event.tags.find(t => t[0] === 'a');
+                    if (aTag) {
+                        const [kind, adminPubkey, communityId] = aTag[1].split(':');
+
+                        // Verify the deletion is from the community admin
+                        const community = this.communityChannels.get(communityId);
+                        if (community && community.admin === event.pubkey && event.pubkey === adminPubkey) {
+                            // Remove the community
+                            this.communityChannels.delete(communityId);
+                            this.ownedCommunities.delete(communityId);
+                            this.moderatedCommunities.delete(communityId);
+
+                            // Remove from UI
+                            const item = document.querySelector(`[data-community="${communityId}"]`);
+                            if (item) item.remove();
+
+                            this.displaySystemMessage(`Community "${community.name}" has been deleted by admin`);
+
+                            // If currently viewing this community, switch to bar
+                            if (this.currentCommunity === communityId) {
+                                this.switchChannel('bar', '');
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // Handle community moderation events (bans, kicks, mod changes)
+                if (event.kind === 1984) { // NIP-56 reporting/moderation events
+                    // Check if we've already processed this exact moderation event
+                    if (this.processedModerationEvents.has(event.id)) {
+                        return; // Already processed, skip
+                    }
+
+                    const pTag = event.tags.find(t => t[0] === 'p');
+                    const aTag = event.tags.find(t => t[0] === 'a');
+                    const actionTag = event.tags.find(t => t[0] === 'action');
+
+                    if (pTag && aTag && actionTag) {
+                        const targetPubkey = pTag[1];
+                        const [kind, adminPubkey, communityId] = aTag[1].split(':');
+                        const action = actionTag[1];
+
+                        // Verify the moderation event is from admin or mod
+                        const community = this.communityChannels.get(communityId);
+                        if (!community) return;
+
+                        const isFromAdmin = event.pubkey === community.admin;
+                        const isFromMod = this.communityModerators.has(communityId) &&
+                            this.communityModerators.get(communityId).has(event.pubkey);
+
+                        if (!isFromAdmin && !isFromMod) {
+                            console.log('Ignoring moderation event from non-admin/mod');
+                            return;
+                        }
+
+                        // Mark this moderation event as processed
+                        this.processedModerationEvents.add(event.id);
+
+                        // Clean up old processed events (keep last 1000)
+                        if (this.processedModerationEvents.size > 1000) {
+                            const toDelete = Array.from(this.processedModerationEvents).slice(0, -1000);
+                            toDelete.forEach(id => this.processedModerationEvents.delete(id));
+                        }
+
+                        // Process the moderation action
+                        switch (action) {
+                            case 'ban':
+                                if (!this.communityBans.has(communityId)) {
+                                    this.communityBans.set(communityId, new Set());
+                                }
+                                this.communityBans.get(communityId).add(targetPubkey);
+
+                                // Hide messages from banned user if viewing this community
+                                if (this.currentCommunity === communityId) {
+                                    document.querySelectorAll('.message').forEach(msg => {
+                                        if (msg.dataset.pubkey === targetPubkey) {
+                                            msg.style.display = 'none';
+                                            msg.classList.add('blocked');
+                                        }
+                                    });
+                                }
+
+                                // Show notification if not from us
+                                if (event.pubkey !== this.pubkey) {
+                                    const targetNym = this.getNymFromPubkey(targetPubkey);
+                                    const modNym = this.getNymFromPubkey(event.pubkey);
+                                    this.displaySystemMessage(`${targetNym} was banned by ${modNym}`);
+                                }
+                                break;
+
+                            case 'unban':
+                                if (this.communityBans.has(communityId)) {
+                                    this.communityBans.get(communityId).delete(targetPubkey);
+                                }
+
+                                // Show messages from unbanned user if viewing this community
+                                if (this.currentCommunity === communityId) {
+                                    document.querySelectorAll('.message.blocked').forEach(msg => {
+                                        if (msg.dataset.pubkey === targetPubkey) {
+                                            msg.style.display = '';
+                                            msg.classList.remove('blocked');
+                                        }
+                                    });
+                                }
+
+                                // Show notification if not from us
+                                if (event.pubkey !== this.pubkey) {
+                                    const targetNym = this.getNymFromPubkey(targetPubkey);
+                                    const modNym = this.getNymFromPubkey(event.pubkey);
+                                    this.displaySystemMessage(`${targetNym} was unbanned by ${modNym}`);
+                                }
+                                break;
+
+                            case 'kick':
+                                // Kicks are temporary - just show notification
+                                if (targetPubkey === this.pubkey) {
+                                    this.displaySystemMessage(`You have been kicked from ${community.name}`);
+                                    // Switch to bar if we're kicked
+                                    if (this.currentCommunity === communityId) {
+                                        this.switchChannel('bar', '');
+                                    }
+                                } else if (event.pubkey !== this.pubkey) {
+                                    const targetNym = this.getNymFromPubkey(targetPubkey);
+                                    const modNym = this.getNymFromPubkey(event.pubkey);
+                                    this.displaySystemMessage(`${targetNym} was kicked by ${modNym}`);
+                                }
+                                break;
+                        }
+                    }
+                    return;
+                }
+
                 if (event.kind === 20000) {
                     // Handle geohash channel messages
                     const nymTag = event.tags.find(t => t[0] === 'n');
@@ -6000,7 +6470,6 @@
                     }
 
                     if (this.isSpamMessage(event.content)) {
-                        console.log('Blocked spam message from', nym);
                         return;
                     }
 
@@ -6068,7 +6537,6 @@
                     }
 
                     if (this.isSpamMessage(event.content)) {
-                        console.log('Blocked spam message from', nym);
                         return;
                     }
 
@@ -6122,6 +6590,193 @@
                             this.showNotification(nym, message.content);
                         }
                     }
+                } else if (event.kind === 34550) {
+                    // Handle COMMUNITY DEFINITIONS
+                    const dTag = event.tags.find(t => t[0] === 'd');
+
+                    if (dTag) {
+                        const nameTag = event.tags.find(t => t[0] === 'name');
+                        const descTag = event.tags.find(t => t[0] === 'description');
+                        const imageTag = event.tags.find(t => t[0] === 'image');
+                        const privacyTag = event.tags.find(t => t[0] === 'private' || t[0] === 'public');
+
+                        if (!nameTag) {
+                            return;
+                        }
+
+                        const communityId = dTag[1];
+                        const name = nameTag[1];
+                        const description = descTag ? descTag[1] : '';
+                        const imageUrl = imageTag ? imageTag[1] : '';
+                        const isPrivate = privacyTag ? privacyTag[0] === 'private' : false;
+
+                        // Store or update community
+                        this.communityChannels.set(communityId, {
+                            name: name,
+                            description: description,
+                            imageUrl: imageUrl,
+                            isPrivate: isPrivate,
+                            admin: event.pubkey,
+                            createdAt: event.created_at * 1000
+                        });
+
+                        // IMPORTANT: Don't show communities to ephemeral users
+                        if (this.connectionMode === 'ephemeral') {
+                            return; // Skip adding to UI for ephemeral users
+                        }
+
+                        // Check if this is the official NYM community
+                        const isNYMCommunity = event.pubkey === this.verifiedDeveloper.pubkey &&
+                            name.toLowerCase() === 'nym';
+
+                        // For private communities, only show if user is a member, mod, or admin
+                        if (isPrivate && !isNYMCommunity) {
+                            const isAdmin = event.pubkey === this.pubkey;
+                            const isMod = this.communityModerators.has(communityId) &&
+                                this.communityModerators.get(communityId).has(this.pubkey);
+                            const isMember = this.communityMembers.has(communityId) &&
+                                this.communityMembers.get(communityId).has(this.pubkey);
+
+                            if (!isAdmin && !isMod && !isMember) {
+                                return; // Don't show private communities unless member
+                            }
+                        }
+
+                        // Track if user owns this community
+                        if (event.pubkey === this.pubkey) {
+                            this.ownedCommunities.add(communityId);
+                        }
+
+                        // Add to UI if not already present AND (user has access OR it's NYM community)
+                        if (!document.querySelector(`[data-community="${communityId}"]`)) {
+                            // For NYM community, always add for persistent users
+                            if (isNYMCommunity || event.pubkey === this.pubkey) {
+                                this.addCommunityChannel(name, communityId, isPrivate);
+                                this.userJoinedChannels.add(communityId);
+
+                                // AUTO-PIN THE NYM COMMUNITY
+                                if (isNYMCommunity) {
+                                    this.pinnedChannels.add(communityId);
+                                    this.savePinnedChannels();
+                                }
+
+                                this.saveUserChannels();
+                            }
+                        }
+
+                        // Parse moderators
+                        const modTags = event.tags.filter(t => t[0] === 'p' && t[3] === 'moderator');
+                        if (modTags.length > 0) {
+                            if (!this.communityModerators.has(communityId)) {
+                                this.communityModerators.set(communityId, new Set());
+                            }
+                            modTags.forEach(tag => {
+                                const modPubkey = tag[1];
+                                this.communityModerators.get(communityId).add(modPubkey);
+
+                                if (modPubkey === this.pubkey) {
+                                    this.moderatedCommunities.add(communityId);
+
+                                    if (!document.querySelector(`[data-community="${communityId}"]`)) {
+                                        this.addCommunityChannel(name, communityId, isPrivate);
+                                        this.userJoinedChannels.add(communityId);
+                                        this.saveUserChannels();
+                                    }
+                                }
+                            });
+                        }
+                    }
+                } else if (event.kind === 4550) {
+                    // Handle COMMUNITY POSTS
+                    const aTag = event.tags.find(t => t[0] === 'a');
+
+                    if (aTag) {
+                        const nymTag = event.tags.find(t => t[0] === 'n');
+
+                        // Parse a tag: "34550:adminPubkey:communityId"
+                        const [kind, adminPubkey, communityId] = aTag[1].split(':');
+
+                        // CHECK IF USER IS BANNED BEFORE PROCESSING
+                        if (this.communityBans.has(communityId) &&
+                            this.communityBans.get(communityId).has(event.pubkey)) {
+                            console.log(`Blocked message from banned user ${event.pubkey} in community ${communityId}`);
+                            return; // Don't process messages from banned users AT ALL
+                        }
+
+                        const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
+
+                        // Check if user is blocked globally
+                        if (this.blockedUsers.has(nym) || this.hasBlockedKeyword(event.content)) {
+                            return;
+                        }
+
+                        if (this.isSpamMessage(event.content)) {
+                            return;
+                        }
+
+                        // Check if message is from this community
+                        if (!this.communityChannels.has(communityId)) {
+                            // Store community info if we don't have it
+                            this.communityChannels.set(communityId, {
+                                name: communityId.split('-')[0],
+                                admin: adminPubkey,
+                                createdAt: Date.now()
+                            });
+                        }
+
+                        const messageAge = Date.now() - (event.created_at * 1000);
+                        const isHistorical = messageAge > 10000;
+
+                        // Check flooding
+                        if (!isHistorical && this.isFlooding(event.pubkey, communityId)) {
+                            return;
+                        }
+
+                        if (!isHistorical) {
+                            this.trackMessage(event.pubkey, communityId, isHistorical);
+                        }
+
+                        const message = {
+                            id: event.id,
+                            author: nym,
+                            pubkey: event.pubkey,
+                            content: event.content,
+                            timestamp: new Date(event.created_at * 1000),
+                            channel: communityId,
+                            geohash: '',
+                            isCommunity: true,
+                            communityId: communityId,
+                            isOwn: event.pubkey === this.pubkey,
+                            isHistorical: isHistorical
+                        };
+
+                        // Store message - Only store if not from banned user
+                        if (!this.messages.has(communityId)) {
+                            this.messages.set(communityId, []);
+                        }
+
+                        const exists = this.messages.get(communityId).some(m => m.id === event.id);
+                        if (!exists) {
+                            this.messages.get(communityId).push(message);
+                            this.messages.get(communityId).sort((a, b) => a.timestamp - b.timestamp);
+                        }
+
+                        // Display if in this community - will be filtered by loadCommunityMessages
+                        if (this.currentCommunity === communityId) {
+                            if (!exists) {
+                                this.displayMessage(message);
+                                this.updateUserPresence(nym, event.pubkey, communityId, '');
+
+                                // Show notification if mentioned
+                                if (!message.isOwn && document.hidden && this.isMentioned(message.content) && !this.blockedUsers.has(nym)) {
+                                    this.showNotification(nym, message.content);
+                                }
+                            }
+                        } else if (!message.isOwn && !isHistorical && !exists) {
+                            // Update unread count for other communities
+                            this.updateUnreadCount(communityId);
+                        }
+                    }
                 } else if (event.kind === 7) {
                     // Handle reactions (NIP-25)
                     this.handleReaction(event);
@@ -6134,6 +6789,34 @@
                 } else if (event.kind === 30078) {
                     // Handle synced settings
                     this.handleSyncedSettings(event);
+                } else if (event.kind === 0) {
+                    // Handle profile events (kind 0) for lightning addresses
+                    try {
+                        const profile = JSON.parse(event.content);
+                        const pubkey = event.pubkey;
+
+                        // Store lightning address if present
+                        if (profile.lud16 || profile.lud06) {
+                            const lnAddress = profile.lud16 || profile.lud06;
+                            this.userLightningAddresses.set(pubkey, lnAddress);
+                        }
+
+                        // Update nym if we don't have one for this user
+                        if (profile.name || profile.username || profile.display_name) {
+                            const profileName = profile.name || profile.username || profile.display_name;
+                            if (!this.users.has(pubkey) || this.users.get(pubkey).nym.startsWith('anon-')) {
+                                this.users.set(pubkey, {
+                                    nym: profileName.substring(0, 20),
+                                    pubkey: pubkey,
+                                    lastSeen: Date.now(),
+                                    status: 'online',
+                                    channels: new Set()
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        // Ignore profile parse errors
+                    }
                 }
             }
 
@@ -6213,6 +6896,12 @@
 
                 try {
                     const settings = JSON.parse(event.content);
+
+                    // Restore image blur settings
+                    if (settings.blurOthersImages !== undefined) {
+                        this.blurOthersImages = settings.blurOthersImages;
+                        localStorage.setItem(`nym_image_blur_${this.pubkey}`, settings.blurOthersImages.toString());
+                    }
 
                     // Restore proximity sorting preference
                     if (settings.sortByProximity !== undefined) {
@@ -6339,6 +7028,12 @@
                         document.getElementById('soundSelect').value = this.settings.sound;
                         document.getElementById('autoscrollSelect').value = String(this.settings.autoscroll);
                         document.getElementById('timestampSelect').value = String(this.settings.showTimestamps);
+
+                        // Update blur settings in modal
+                        const blurSelect = document.getElementById('blurImagesSelect');
+                        if (blurSelect) {
+                            blurSelect.value = String(this.blurOthersImages);
+                        }
                     }
 
                     //this.displaySystemMessage('Settings synced from Nostr');
@@ -6356,7 +7051,7 @@
                 if (!eTag) return;
 
                 // Only process reactions for our supported kinds
-                if (kTag && !['20000', '23333', '4'].includes(kTag[1])) {
+                if (kTag && !['20000', '23333', '4', '4550'].includes(kTag[1])) {
                     return;
                 }
 
@@ -6370,7 +7065,7 @@
 
                 const messageReactions = this.reactions.get(messageId);
                 if (!messageReactions.has(reactionContent)) {
-                    messageReactions.set(reactionContent, new Map()); // Map of pubkey -> nym
+                    messageReactions.set(reactionContent, new Map());
                 }
 
                 // Store pubkey with nym
@@ -6814,6 +7509,8 @@
                     let originalKind = '23333'; // Default to standard channel
                     if (this.inPMMode) {
                         originalKind = '4'; // PM
+                    } else if (this.currentCommunity) {
+                        originalKind = '4550'; // Community post
                     } else if (this.currentGeohash) {
                         originalKind = '20000'; // Geohash channel
                     }
@@ -7782,6 +8479,71 @@
                 }
             }
 
+            async publishCommunityMessage(content, communityId) {
+                try {
+                    console.log('Publishing community message:', { communityId, content });
+
+                    if (!this.connected) {
+                        throw new Error('Not connected to relay');
+                    }
+
+                    const community = this.communityChannels.get(communityId);
+                    if (!community) {
+                        console.error('Community not found:', communityId);
+                        console.log('Available communities:', Array.from(this.communityChannels.keys()));
+                        throw new Error('Community not found');
+                    }
+
+                    console.log('Community found:', community);
+
+                    // CHECK IF USER IS BANNED
+                    if (this.communityBans.has(communityId) &&
+                        this.communityBans.get(communityId).has(this.pubkey)) {
+                        throw new Error('You are banned from this community');
+                    }
+
+                    // Check if message contains blocked keywords
+                    if (this.hasCommunityBlockedKeyword(content, communityId)) {
+                        throw new Error('Message contains blocked keywords');
+                    }
+
+                    const event = {
+                        kind: 4550,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [
+                            ['a', `34550:${community.admin}:${communityId}`],
+                            ['n', this.nym],
+                            ['client', 'NYM']
+                        ],
+                        content: content,
+                        pubkey: this.pubkey
+                    };
+
+                    console.log('Community event to publish:', event);
+
+                    let signedEvent;
+                    if (window.nostr && !this.privkey) {
+                        signedEvent = await window.nostr.signEvent(event);
+                    } else if (this.privkey) {
+                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                    } else {
+                        throw new Error('No signing method available');
+                    }
+
+                    console.log('Signed community event:', signedEvent);
+
+                    this.sendToRelay(["EVENT", signedEvent]);
+
+                    console.log('Community message sent successfully');
+
+                    return true;
+                } catch (error) {
+                    console.error('Failed to publish community message:', error);
+                    this.displaySystemMessage('Failed to send message: ' + error.message);
+                    return false;
+                }
+            }
+
             async createChannel(channelName) {
                 try {
                     if (!this.connected) {
@@ -7823,6 +8585,170 @@
                     console.error('Failed to create channel:', error);
                     return false;
                 }
+            }
+
+            async createCommunityChannel(name, description, isPrivate = false, imageUrl = '') {
+                try {
+                    if (!this.connected) {
+                        throw new Error('Not connected to relay');
+                    }
+
+                    if (this.connectionMode === 'ephemeral') {
+                        throw new Error('Community channels require a persistent identity (extension or nsec)');
+                    }
+
+                    // Generate unique community identifier with pubkey suffix
+                    const suffix = this.getPubkeySuffix(this.pubkey);
+                    const communityId = `${name}-${suffix}`;
+
+                    const event = {
+                        kind: 34550, // NIP-72 community definition
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [
+                            ['d', communityId], // Unique identifier
+                            ['name', name],
+                            ['description', description || `Community ${name}`],
+                            ['image', imageUrl || ''], // Community image
+                            ['p', this.pubkey, '', 'admin'], // Creator is admin
+                        ],
+                        content: description || '',
+                        pubkey: this.pubkey
+                    };
+
+                    // Add privacy tag
+                    if (isPrivate) {
+                        event.tags.push(['private']);
+                    } else {
+                        event.tags.push(['public']);
+                    }
+
+                    // Sign event
+                    let signedEvent;
+                    if (window.nostr && !this.privkey) {
+                        signedEvent = await window.nostr.signEvent(event);
+                    } else if (this.privkey) {
+                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                    } else {
+                        throw new Error('No signing method available');
+                    }
+
+                    // Send to relay
+                    this.sendToRelay(["EVENT", signedEvent]);
+
+                    // Store locally
+                    this.communityChannels.set(communityId, {
+                        name: name,
+                        description: description,
+                        imageUrl: imageUrl,
+                        isPrivate: isPrivate,
+                        admin: this.pubkey,
+                        createdAt: Date.now()
+                    });
+
+                    // Initialize collections
+                    if (!this.communityMembers.has(communityId)) {
+                        this.communityMembers.set(communityId, new Set([this.pubkey]));
+                    }
+                    if (!this.communityModerators.has(communityId)) {
+                        this.communityModerators.set(communityId, new Set());
+                    }
+
+                    this.ownedCommunities.add(communityId);
+
+                    // Add to UI as a COMMUNITY channel (not standard)
+                    this.addCommunityChannel(name, communityId, isPrivate);
+
+                    this.displaySystemMessage(`Created ${isPrivate ? 'private' : 'public'} community: ${name}`);
+                    this.displaySystemMessage(`Community ID: ${communityId}`);
+                    this.displaySystemMessage(`Use /communityinfo to see community details`);
+                    this.displaySystemMessage(`Use /addmod to add moderators`);
+
+                    return communityId;
+                } catch (error) {
+                    console.error('Failed to create community channel:', error);
+                    this.displaySystemMessage('Failed to create community: ' + error.message);
+                    return null;
+                }
+            }
+
+            addCommunityChannel(name, communityId, isPrivate) {
+                const list = document.getElementById('channelList');
+
+                // Check if already exists
+                if (document.querySelector(`[data-community="${communityId}"]`)) {
+                    console.log('Community channel already exists:', communityId);
+                    return;
+                }
+
+                const item = document.createElement('div');
+                item.className = 'channel-item list-item';
+                item.dataset.community = communityId;
+                item.dataset.channel = name; // Just the display name
+                item.dataset.geohash = ''; // Not a geohash
+                item.dataset.isCommunity = 'true'; // Mark as community
+
+                const badge = isPrivate ?
+                    '<span class="std-badge" style="border-color: var(--purple); color: var(--purple);">PRV</span>' :
+                    '<span class="std-badge" style="border-color: var(--primary); color: var(--primary);">PUB</span>';
+
+                const isPinned = this.pinnedChannels.has(communityId);
+                if (isPinned) {
+                    item.classList.add('pinned');
+                }
+
+                const pinButton = `
+        <span class="pin-btn ${isPinned ? 'pinned' : ''}" data-community="${communityId}">
+            <svg viewBox="0 0 24 24">
+                <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/>
+            </svg>
+        </span>
+    `;
+
+                item.innerHTML = `
+        <span class="channel-name">#${this.escapeHtml(name)}</span>
+        <div class="channel-badges">
+            ${pinButton}
+            ${badge}
+            <span class="unread-badge" style="display:none">0</span>
+        </div>
+    `;
+
+                // Add click handler for the entire item
+                item.addEventListener('click', (e) => {
+                    // Don't trigger if clicking on pin button
+                    if (!e.target.closest('.pin-btn')) {
+                        this.switchToCommunity(communityId);
+                    }
+                });
+
+                // Add pin handler
+                const pinBtn = item.querySelector('.pin-btn');
+                if (pinBtn) {
+                    pinBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        this.togglePin(communityId, '', true); // community flag
+                    });
+                }
+
+                const viewMoreBtn = list.querySelector('.view-more-btn');
+                if (viewMoreBtn) {
+                    list.insertBefore(item, viewMoreBtn);
+                } else {
+                    list.appendChild(item);
+                }
+
+                // Store in channels map with community flag
+                this.channels.set(communityId, {
+                    channel: name,
+                    community: communityId,
+                    isCommunity: true,
+                    isPrivate: isPrivate
+                });
+
+                this.userJoinedChannels.add(communityId);
+                this.updateChannelPins();
+                this.updateViewMoreButton('channelList');
             }
 
             async uploadImage(file) {
@@ -7954,10 +8880,43 @@
                     if (message.conversationKey !== currentConversationKey) {
                         return;
                     }
+                } else if (message.isCommunity) {
+                    // Handle COMMUNITY messages
+                    if (this.inPMMode) {
+                        // In PM mode, don't display community messages
+                        return;
+                    }
+
+                    // Only display if we're viewing this community
+                    if (this.currentCommunity !== message.communityId) {
+                        return;
+                    }
+
+                    const storageKey = message.communityId;
+
+                    // Store message if not already exists
+                    if (!this.messages.has(storageKey)) {
+                        this.messages.set(storageKey, []);
+                    }
+
+                    // Check if message already exists
+                    const exists = this.messages.get(storageKey).some(m => m.id === message.id);
+                    if (!exists) {
+                        // Add message and sort by timestamp with millisecond precision
+                        this.messages.get(storageKey).push(message);
+                        this.messages.get(storageKey).sort((a, b) => {
+                            return a.timestamp.getTime() - b.timestamp.getTime();
+                        });
+                    }
                 } else {
                     // Regular channel message
                     if (this.inPMMode) {
                         // In PM mode, don't display channel messages
+                        return;
+                    }
+
+                    // Don't display if we're in a community
+                    if (this.currentCommunity) {
                         return;
                     }
 
@@ -7998,8 +8957,6 @@
                                     }
                                 }
                             }
-
-                            console.log(`Pruned ${messages.length - 1000} messages from ${storageKey}`);
                         }
                     }
 
@@ -8041,7 +8998,7 @@
                 }
 
                 // Check if nym is flooding in THIS CHANNEL (but not for PMs and not for historical messages)
-                const channelToCheck = message.geohash || message.channel;
+                const channelToCheck = message.communityId || message.geohash || message.channel;
                 if (!message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
                     messageEl.className = 'message flooded';
                 }
@@ -8081,17 +9038,17 @@
                     const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
                     const isMobile = window.innerWidth <= 768;
 
-                    // Show reaction button for all messages with valid IDs (including PMs)
+                    // Show reaction button for all messages with valid IDs (including PMs and community posts)
                     const reactionButton = isValidEventId && !isMobile ? `
-        <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
-            <svg viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="10"></circle>
-                <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-                <circle cx="9" cy="9" r="1"></circle>
-                <circle cx="15" cy="9" r="1"></circle>
-            </svg>
-        </button>
-    ` : '';
+            <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
+                <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                    <circle cx="9" cy="9" r="1"></circle>
+                    <circle cx="15" cy="9" r="1"></circle>
+                </svg>
+            </button>
+        ` : '';
 
                     // Build the initial HTML with quote detection
                     const formattedContent = this.formatMessageWithQuotes(message.content);
@@ -8101,8 +9058,19 @@
                     const escapedAuthorBase = this.escapeHtml(message.author).split('#')[0] || this.escapeHtml(message.author);
                     const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
+                    // Prepare full timestamp for tooltip
+                    const fullTimestamp = message.timestamp.toLocaleString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false
+                    });
+
                     messageEl.innerHTML = `
-            ${time ? `<span class="message-time">${time}</span>` : ''}
+            ${time ? `<span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
             <span class="message-author ${authorClass} ${userColorClass}">${displayAuthor}${verifiedBadge}:</span>
             <span class="message-content ${userColorClass}">${formattedContent}</span>
             ${reactionButton}
@@ -8118,6 +9086,14 @@
                             return false;
                         });
                     }
+                }
+
+                // Apply blur to images if settings enabled and not own message
+                if (!message.isOwn && this.blurOthersImages) {
+                    const images = messageEl.querySelectorAll('img');
+                    images.forEach(img => {
+                        img.classList.add('blurred');
+                    });
                 }
 
                 // Find the correct position to insert the message based on timestamp
@@ -8144,7 +9120,7 @@
                     }
                 }
 
-                // Add existing reactions if any (for both channel messages and PMs)
+                // Add existing reactions if any (for both channel messages, PMs, and community posts)
                 if (message.id && this.reactions.has(message.id)) {
                     this.updateMessageReactions(message.id);
                 }
@@ -8265,7 +9241,11 @@
                 // Convert image URLs to images
                 formatted = formatted.replace(
                     /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
-                    '<img src="$1" alt="Image" onclick="nym.expandImage(\'$1\')" />'
+                    (match, url) => {
+                        // Check if this message is from the current user
+                        const blurClass = '';  // Will be set dynamically when displayed
+                        return `<img src="${url}" alt="Image" onclick="nym.expandImage('${url}')" />`;
+                    }
                 );
 
                 // Convert other URLs to links (but not placeholders)
@@ -8288,7 +9268,7 @@
                             // This is a channel reference
                             const channelName = channel.substring(1); // Remove the #
                             const type = this.getChannelType(channelName);
-                            const badge = type === 'geo' ? ' [GEO]' : ' [STD]';
+                            const badge = type === 'geo' ? ' [GEO]' : ' [EPH]';
                             const space = match.startsWith(' ') ? ' ' : '';
                             return `${space}<span class="channel-link" onclick="nym.quickJoinChannel('${channelName}')">#${channelName}${badge}</span>`;
                         }
@@ -8385,13 +9365,12 @@
 
             updateUserList() {
                 const userListContent = document.getElementById('userListContent');
-                const currentChannelKey = this.currentGeohash || this.currentChannel;
+                const currentChannelKey = this.currentCommunity || this.currentGeohash || this.currentChannel;
 
                 // Get deduplicated active users (one entry per pubkey)
                 const uniqueUsers = new Map();
                 this.users.forEach((user, pubkey) => {
                     if (Date.now() - user.lastSeen < 300000 && !this.blockedUsers.has(user.nym)) {
-                        // Only add if not already there (deduplication by pubkey)
                         if (!uniqueUsers.has(pubkey)) {
                             uniqueUsers.set(pubkey, user);
                         }
@@ -8399,7 +9378,7 @@
                 });
 
                 const allUsers = Array.from(uniqueUsers.values())
-                    .filter(user => user && user.nym) // Ensure user and nym exist
+                    .filter(user => user && user.nym)
                     .sort((a, b) => {
                         const nymA = String(a.nym || '');
                         const nymB = String(b.nym || '');
@@ -8416,13 +9395,18 @@
 
                 // Get users in current channel for the count
                 const channelUserSet = this.channelUsers.get(currentChannelKey) || new Set();
-                const channelUserCount = Array.from(channelUserSet)
-                    .filter(pubkey => {
-                        const user = this.users.get(pubkey);
-                        return user && Date.now() - user.lastSeen < 300000 && !this.blockedUsers.has(user.nym);
-                    }).length;
 
-                // Display deduplicated users in sidebar with click to open PM and right-click for context menu
+                // Count ALL active users in this channel (including those in user tracking)
+                let channelUserCount = 0;
+                this.users.forEach((user, pubkey) => {
+                    if (Date.now() - user.lastSeen < 300000 &&
+                        !this.blockedUsers.has(user.nym) &&
+                        user.channels.has(currentChannelKey)) {
+                        channelUserCount++;
+                    }
+                });
+
+                // Display deduplicated users in sidebar
                 userListContent.innerHTML = displayUsers.map((user, index) => {
                     const baseNym = user.nym.split('#')[0] || user.nym;
                     const suffix = this.getPubkeySuffix(user.pubkey);
@@ -8430,30 +9414,27 @@
                     const verifiedBadge = this.isVerifiedDeveloper(user.pubkey) ?
                         `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>` : '';
 
-                    // Apply color to user list items in Bitchat theme
                     const userColorClass = this.settings.theme === 'bitchat' ? this.getUserColorClass(user.pubkey) : '';
 
                     return `
-                <div class="user-item list-item ${userColorClass}" 
-                     onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
-                     oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
-                     data-nym="${this.escapeHtml(displayNym)}">
-                    <span class="user-status ${user.status}"></span>
-                    <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
-                </div>
-            `;
+            <div class="user-item list-item ${userColorClass}" 
+                 onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
+                 oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
+                 data-nym="${this.escapeHtml(displayNym)}">
+                <span class="user-status ${user.status}"></span>
+                <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
+            </div>
+        `;
                 }).join('');
 
-                // Add view more button for users
                 this.updateViewMoreButton('userListContent');
 
-                // Update active nyms count in title
                 const userListTitle = document.querySelector('#userList .nav-title-text');
                 if (userListTitle) {
                     userListTitle.textContent = `Active Nyms (${allUsers.length})`;
                 }
 
-                // Update channel meta with channel-specific count
+                // Update channel meta with correct count
                 if (!this.inPMMode) {
                     document.getElementById('channelMeta').textContent = `${channelUserCount} online nyms`;
                 }
@@ -8518,15 +9499,28 @@
                 }
             }
 
-            togglePin(channel, geohash) {
+            togglePin(channel, geohash, isCommunity = false) {
                 // Don't allow pinning/unpinning #bar since it's always at top
-                if (channel === 'bar' && !geohash) {
+                if (channel === 'bar' && !geohash && !isCommunity) {
                     this.displaySystemMessage('#bar is always at the top');
                     return;
                 }
 
-                const key = geohash || channel;
+                // Check if this is the NYM community
+                const key = isCommunity ? channel : (geohash || channel);
 
+                if (isCommunity && this.communityChannels.has(key)) {
+                    const community = this.communityChannels.get(key);
+                    const isNYMCommunity = community.admin === this.verifiedDeveloper.pubkey &&
+                        community.name.toLowerCase() === 'nym';
+
+                    if (isNYMCommunity) {
+                        this.displaySystemMessage('#NYM community is always pinned');
+                        return;
+                    }
+                }
+
+                // For other channels, toggle pin status
                 if (this.pinnedChannels.has(key)) {
                     this.pinnedChannels.delete(key);
                 } else {
@@ -8536,7 +9530,6 @@
                 this.savePinnedChannels();
                 this.updateChannelPins();
 
-                // Save to synced settings for persistent connections
                 if (this.connectionMode !== 'ephemeral') {
                     this.saveSyncedSettings();
                 }
@@ -8544,9 +9537,17 @@
 
             updateChannelPins() {
                 document.querySelectorAll('.channel-item').forEach(item => {
-                    const channel = item.dataset.channel;
-                    const geohash = item.dataset.geohash;
-                    const key = geohash || channel;
+                    let key;
+
+                    // Check if this is a community channel
+                    if (item.dataset.isCommunity === 'true') {
+                        key = item.dataset.community;
+                    } else {
+                        const channel = item.dataset.channel;
+                        const geohash = item.dataset.geohash;
+                        key = geohash || channel;
+                    }
+
                     const pinBtn = item.querySelector('.pin-btn');
 
                     if (this.pinnedChannels.has(key)) {
@@ -8648,24 +9649,50 @@
                         e.preventDefault();
                         e.stopPropagation();
 
-                        const channel = channelItem.dataset.channel;
-                        const geohash = channelItem.dataset.geohash || '';
+                        // Check if it's a community channel FIRST
+                        if (channelItem.dataset.isCommunity === 'true' && channelItem.dataset.community) {
+                            // It's a community channel - switch to community
+                            const communityId = channelItem.dataset.community;
 
-                        // Don't reload if already in channel
-                        if (!this.inPMMode && channel === this.currentChannel && geohash === this.currentGeohash) {
-                            return;
+                            // Don't reload if already in this community
+                            if (!nym.inPMMode && nym.currentCommunity === communityId) {
+                                return;
+                            }
+
+                            // Add debounce to prevent double-clicks
+                            if (channelItem.dataset.clicking === 'true') return;
+                            channelItem.dataset.clicking = 'true';
+
+                            nym.switchToCommunity(communityId);
+
+                            // Reset click flag after a short delay
+                            setTimeout(() => {
+                                delete channelItem.dataset.clicking;
+                            }, 1000);
+                        } else {
+                            // Regular channel handling
+                            const channel = channelItem.dataset.channel;
+                            const geohash = channelItem.dataset.geohash || '';
+
+                            // Don't reload if already in channel
+                            if (!nym.inPMMode &&
+                                !nym.currentCommunity &&
+                                channel === nym.currentChannel &&
+                                geohash === nym.currentGeohash) {
+                                return;
+                            }
+
+                            // Add debounce to prevent double-clicks
+                            if (channelItem.dataset.clicking === 'true') return;
+                            channelItem.dataset.clicking = 'true';
+
+                            nym.switchChannel(channel, geohash);
+
+                            // Reset click flag after a short delay
+                            setTimeout(() => {
+                                delete channelItem.dataset.clicking;
+                            }, 1000);
                         }
-
-                        // Add debounce to prevent double-clicks
-                        if (channelItem.dataset.clicking === 'true') return;
-                        channelItem.dataset.clicking = 'true';
-
-                        this.switchChannel(channel, geohash);
-
-                        // Reset click flag after a short delay
-                        setTimeout(() => {
-                            delete channelItem.dataset.clicking;
-                        }, 1000);
                     }
                 });
 
@@ -8710,10 +9737,13 @@
 
                 // Modal controls
                 document.getElementById('channelTypeSelect').addEventListener('change', (e) => {
+                    const type = e.target.value;
                     document.getElementById('standardChannelGroup').style.display =
-                        e.target.value === 'standard' ? 'block' : 'none';
+                        type === 'standard' ? 'block' : 'none';
                     document.getElementById('geohashGroup').style.display =
-                        e.target.value === 'geohash' ? 'block' : 'none';
+                        type === 'geohash' ? 'block' : 'none';
+                    document.getElementById('communityChannelGroup').style.display =
+                        type === 'community' ? 'block' : 'none';
                 });
             }
 
@@ -8748,7 +9778,23 @@
                     '/invite': { desc: 'Invite a user to current channel', fn: (args) => this.cmdInvite(args) },
                     '/share': { desc: 'Share current channel URL', fn: () => this.cmdShare() },
                     '/leave': { desc: 'Leave current channel', fn: () => this.cmdLeave() },
-                    '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() }
+                    '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() },
+
+                    // Community channel commands
+                    '/createcommunity': { desc: 'Create a community channel', fn: (args) => this.cmdCreateCommunity(args) },
+                    '/cc': { desc: 'Shortcut for /createcommunity', fn: (args) => this.cmdCreateCommunity(args) },
+                    '/addmod': { desc: 'Add moderator to community', fn: (args) => this.cmdAddMod(args) },
+                    '/removemod': { desc: 'Remove moderator', fn: (args) => this.cmdRemoveMod(args) },
+                    '/kick': { desc: 'Kick user from community', fn: (args) => this.cmdKick(args) },
+                    '/ban': { desc: 'Ban user from community', fn: (args) => this.cmdBan(args) },
+                    '/unban': { desc: 'Unban user from community', fn: (args) => this.cmdUnban(args) },
+                    '/invitecommunity': { desc: 'Invite user to private community', fn: (args) => this.cmdInviteToCommunity(args) },
+                    '/communityinfo': { desc: 'Show community info', fn: () => this.cmdCommunityInfo() },
+                    '/ci': { desc: 'Shortcut for /communityinfo', fn: () => this.cmdCommunityInfo() },
+                    '/members': { desc: 'List community members', fn: () => this.cmdListMembers() },
+                    '/mods': { desc: 'List community moderators', fn: () => this.cmdListMods() },
+                    '/communitysettings': { desc: 'Manage community settings', fn: () => this.cmdCommunitySettings() },
+                    '/cs': { desc: 'Shortcut for /communitysettings', fn: () => this.cmdCommunitySettings() }
                 };
             }
 
@@ -9088,11 +10134,18 @@
                     this.handleCommand(content);
                 } else {
                     if (this.inPMMode && this.currentPM) {
-                        // Send PM and let sendPM handle the display
+                        // Send PM
                         await this.sendPM(content, this.currentPM);
+                    } else if (this.currentCommunity) {
+                        // Send to community (kind 4550)
+                        console.log('Sending to community:', this.currentCommunity);
+                        await this.publishCommunityMessage(content, this.currentCommunity);
+                    } else if (this.currentGeohash) {
+                        // Send to geohash channel (kind 20000)
+                        await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
                     } else {
-                        // Send regular message
-                        await this.publishMessage(content, this.currentChannel, this.currentGeohash);
+                        // Send to standard channel (kind 23333)
+                        await this.publishMessage(content, this.currentChannel, '');
                     }
                 }
 
@@ -9126,27 +10179,107 @@
 
             async cmdJoin(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /join channel or /join #geohash');
+                    this.displaySystemMessage('Usage: /join channel, /join #geohash, or /join communityname');
                     return;
                 }
 
                 let channel = args.trim().toLowerCase();
 
-                // Check if it's a geohash
+                // Check if it's a geohash (starts with #)
                 if (channel.startsWith('#')) {
                     const geohash = channel.substring(1);
+
+                    // Validate geohash
+                    if (!this.isValidGeohash(geohash)) {
+                        this.displaySystemMessage('Invalid geohash format');
+                        return;
+                    }
+
                     this.addChannel(geohash, geohash);
                     this.switchChannel(geohash, geohash);
-                    this.userJoinedChannels.add(geohash); // Mark as user-joined
-                } else {
-                    this.addChannel(channel, '');
-                    this.switchChannel(channel, '');
-                    // Create channel with kind 23333
-                    await this.createChannel(channel);
-                    this.userJoinedChannels.add(channel); // Mark as user-joined
+                    this.userJoinedChannels.add(geohash);
+                    this.saveUserChannels();
+                    return;
                 }
 
-                // Save after joining
+                // Check if this might be a community channel
+                let matchedCommunity = null;
+                let matchedCommunityId = null;
+
+                // Search through known communities
+                this.communityChannels.forEach((community, id) => {
+                    if (community.name.toLowerCase() === channel ||
+                        id.toLowerCase() === channel ||
+                        id.toLowerCase().startsWith(channel + '-')) {
+                        matchedCommunity = community;
+                        matchedCommunityId = id;
+                    }
+                });
+
+                if (matchedCommunity) {
+                    // This is a community channel
+                    if (this.connectionMode === 'ephemeral') {
+                        this.displaySystemMessage('═══ ERROR: Cannot Join Community ═══');
+                        this.displaySystemMessage('Community channels require a persistent identity.');
+                        this.displaySystemMessage('Please reconnect using a Nostr extension or NSEC to join communities.');
+                        this.displaySystemMessage('Ephemeral users can only join standard (EPH) and geohash (GEO) channels.');
+                        return;
+                    }
+
+                    // Check if it's a private community and user has access
+                    if (matchedCommunity.isPrivate) {
+                        const isAdmin = matchedCommunity.admin === this.pubkey;
+                        const isMod = this.communityModerators.has(matchedCommunityId) &&
+                            this.communityModerators.get(matchedCommunityId).has(this.pubkey);
+                        const isMember = this.communityMembers.has(matchedCommunityId) &&
+                            this.communityMembers.get(matchedCommunityId).has(this.pubkey);
+                        const isInvited = this.communityInvites.has(matchedCommunityId) &&
+                            this.communityInvites.get(matchedCommunityId).has(this.pubkey);
+
+                        if (!isAdmin && !isMod && !isMember && !isInvited) {
+                            this.displaySystemMessage('This is a private community. You need an invitation to join.');
+                            return;
+                        }
+
+                        // If invited, add to members
+                        if (isInvited) {
+                            if (!this.communityMembers.has(matchedCommunityId)) {
+                                this.communityMembers.set(matchedCommunityId, new Set());
+                            }
+                            this.communityMembers.get(matchedCommunityId).add(this.pubkey);
+
+                            // Remove from invites
+                            this.communityInvites.get(matchedCommunityId).delete(this.pubkey);
+                        }
+                    } else {
+                        // Public community - add user as member
+                        if (!this.communityMembers.has(matchedCommunityId)) {
+                            this.communityMembers.set(matchedCommunityId, new Set());
+                        }
+                        this.communityMembers.get(matchedCommunityId).add(this.pubkey);
+                    }
+
+                    // Add to UI if not already present
+                    if (!document.querySelector(`[data-community="${matchedCommunityId}"]`)) {
+                        this.addCommunityChannel(matchedCommunity.name, matchedCommunityId, matchedCommunity.isPrivate);
+                    }
+
+                    // Switch to the community
+                    this.switchToCommunity(matchedCommunityId);
+                    this.userJoinedChannels.add(matchedCommunityId);
+                    this.saveUserChannels();
+
+                    this.displaySystemMessage(`Joined ${matchedCommunity.isPrivate ? 'private' : 'public'} community: ${matchedCommunity.name}`);
+                    return;
+                }
+
+                // Standard channel
+                this.addChannel(channel, '');
+                this.switchChannel(channel, '');
+
+                // Create channel with kind 23333
+                await this.createChannel(channel);
+                this.userJoinedChannels.add(channel);
                 this.saveUserChannels();
             }
 
@@ -9304,7 +10437,8 @@
                 // Find user by nym, considering suffix if provided
                 const matches = [];
                 this.users.forEach((user, pubkey) => {
-                    if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+                    const baseNym = user.nym.split('#')[0] || user.nym;
+                    if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                         if (searchSuffix) {
                             // If suffix provided, only match exact pubkey suffix
                             if (pubkey.endsWith(searchSuffix)) {
@@ -9341,27 +10475,613 @@
                     return;
                 }
 
-                // Create channel info
-                const channelInfo = this.currentGeohash ?
-                    `#${this.currentGeohash} [GEO]` :
-                    `#${this.currentChannel} [STD]`;
+                // Determine if target is ephemeral (check if they have a persistent identity)
+                const targetIsEphemeral = await this.isUserEphemeral(targetPubkey);
+
+                // Create channel info with proper type detection
+                let channelInfo;
+                let joinCommand;
+                let canJoin = true;
+
+                if (this.currentCommunity) {
+                    // Community channel
+                    const community = this.communityChannels.get(this.currentCommunity);
+                    const privacyType = community?.isPrivate ? 'private' : 'public';
+                    channelInfo = `#${community?.name || this.currentCommunity} [${privacyType.toUpperCase()} COMMUNITY]`;
+                    joinCommand = `/join ${community?.name || this.currentCommunity}`;
+
+                    // Check if target is ephemeral - they can't join communities
+                    if (targetIsEphemeral) {
+                        canJoin = false;
+                    }
+                } else if (this.currentGeohash) {
+                    // Geohash channel
+                    channelInfo = `#${this.currentGeohash} [GEO]`;
+                    joinCommand = `/join #${this.currentGeohash}`;
+                } else {
+                    // Standard channel
+                    channelInfo = `#${this.currentChannel} [EPH]`;
+                    joinCommand = `/join ${this.currentChannel}`;
+                }
 
                 // Send an invitation as a PM
-                const inviteMessage = `📨 Channel Invitation: You've been invited to join ${channelInfo}. Use /join ${this.currentGeohash || this.currentChannel} to join!`;
+                let inviteMessage;
+                if (canJoin) {
+                    inviteMessage = `📨 Channel Invitation: You've been invited to join ${channelInfo}. Use ${joinCommand} to join!`;
+                } else {
+                    inviteMessage = `📨 Channel Invitation: You've been invited to join ${channelInfo}. However, community channels require a persistent identity (extension or nsec login). Ephemeral users cannot join communities.`;
+                }
 
                 // Send as PM
                 const sent = await this.sendPM(inviteMessage, targetPubkey);
 
                 if (sent) {
                     const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
-                    this.displaySystemMessage(`Invitation sent to ${displayNym} for ${channelInfo}`);
+                    if (canJoin) {
+                        this.displaySystemMessage(`Invitation sent to ${displayNym} for ${channelInfo}`);
+                    } else {
+                        this.displaySystemMessage(`Invitation sent to ${displayNym} for ${channelInfo} (Note: They cannot join as an ephemeral user)`);
+                    }
 
-                    // Also send a mention in the current channel
-                    const publicNotice = `@${matchedNym} you've been invited to this channel! Check your PMs for details.`;
-                    await this.publishMessage(publicNotice, this.currentChannel, this.currentGeohash);
+                    // Also send a mention in the current channel (only if they can join)
+                    if (canJoin) {
+                        const publicNotice = `@${matchedNym} you've been invited to this channel! Check your PMs for details.`;
+
+                        if (this.currentCommunity) {
+                            await this.publishCommunityMessage(publicNotice, this.currentCommunity);
+                        } else {
+                            await this.publishMessage(publicNotice, this.currentChannel, this.currentGeohash);
+                        }
+                    }
                 } else {
                     this.displaySystemMessage(`Failed to send invitation to ${this.formatNymWithPubkey(matchedNym, targetPubkey)}`);
                 }
+            }
+
+            // Helper function to check if user is ephemeral
+            async isUserEphemeral(pubkey) {
+                // A user is ephemeral if they don't have a profile (kind 0 event)
+                // We can check if we have their profile data
+                return new Promise((resolve) => {
+                    const subId = "check-ephemeral-" + Math.random().toString(36).substring(7);
+                    let found = false;
+
+                    const timeout = setTimeout(() => {
+                        this.sendToRelay(["CLOSE", subId]);
+                        resolve(true); // No profile found, likely ephemeral
+                    }, 2000);
+
+                    // Temporary handler for this check
+                    const originalHandler = this.handleRelayMessage.bind(this);
+                    this.handleRelayMessage = (msg, relayUrl) => {
+                        if (Array.isArray(msg) && msg[0] === 'EVENT' && msg[1] === subId) {
+                            const event = msg[2];
+                            if (event && event.kind === 0 && event.pubkey === pubkey) {
+                                found = true;
+                                clearTimeout(timeout);
+                                this.handleRelayMessage = originalHandler;
+                                this.sendToRelay(["CLOSE", subId]);
+                                resolve(false); // Has profile, not ephemeral
+                            }
+                        } else if (Array.isArray(msg) && msg[0] === 'EOSE' && msg[1] === subId) {
+                            clearTimeout(timeout);
+                            this.handleRelayMessage = originalHandler;
+                            this.sendToRelay(["CLOSE", subId]);
+                            resolve(!found); // If no profile found, they're ephemeral
+                        }
+                        originalHandler(msg, relayUrl);
+                    };
+
+                    // Request user's profile
+                    const subscription = [
+                        "REQ",
+                        subId,
+                        {
+                            kinds: [0],
+                            authors: [pubkey],
+                            limit: 1
+                        }
+                    ];
+
+                    this.sendToRelay(subscription);
+                });
+            }
+
+            async cmdCreateCommunity(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /createcommunity name [description] [--private]');
+                    this.displaySystemMessage('Example: /createcommunity bitcoin "Bitcoin discussion" --private');
+                    return;
+                }
+
+                if (this.connectionMode === 'ephemeral') {
+                    this.displaySystemMessage('Community channels require a persistent identity. Please use extension or nsec login.');
+                    return;
+                }
+
+                const parts = args.split('"');
+                const name = parts[0].trim().replace('--private', '').trim();
+                const description = parts[1] || '';
+                const isPrivate = args.includes('--private');
+
+                if (!name) {
+                    this.displaySystemMessage('Please provide a community name');
+                    return;
+                }
+
+                const communityId = await this.createCommunityChannel(name, description, isPrivate);
+
+                if (communityId) {
+                    this.switchToCommunity(communityId);
+                }
+            }
+
+            async cmdAddMod(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /addmod nym or /addmod nym#xxxx');
+                    return;
+                }
+
+                if (!this.currentCommunity) {
+                    this.displaySystemMessage('This command only works in community channels');
+                    return;
+                }
+
+                const communityId = this.currentCommunity;
+
+                // ONLY admins can add moderators
+                if (!this.ownedCommunities.has(communityId)) {
+                    this.displaySystemMessage('Only the community admin can add moderators');
+                    return;
+                }
+
+                const targetPubkey = await this.findUserPubkey(args);
+                if (!targetPubkey) return;
+
+                if (targetPubkey === this.pubkey) {
+                    this.displaySystemMessage('You are already the admin');
+                    return;
+                }
+
+                // Check if already a moderator
+                if (this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(targetPubkey)) {
+                    const nym = this.getNymFromPubkey(targetPubkey);
+                    this.displaySystemMessage(`${nym} is already a moderator`);
+                    return;
+                }
+
+                // Add to moderators set
+                if (!this.communityModerators.has(communityId)) {
+                    this.communityModerators.set(communityId, new Set());
+                }
+                this.communityModerators.get(communityId).add(targetPubkey);
+
+                // Update community definition via NIP-72 event
+                await this.updateCommunityRole(communityId, targetPubkey, 'moderator');
+
+                const nym = this.getNymFromPubkey(targetPubkey);
+                this.displaySystemMessage(`Added ${nym} as moderator`);
+
+                // Send a PM notification to the person being made a moderator
+                const community = this.communityChannels.get(communityId);
+                if (community) {
+                    const notificationMessage = `🎖️ You've been made a moderator of the community "${community.name}". You can now use moderation commands like /kick and /ban.`;
+                    await this.sendPM(notificationMessage, targetPubkey);
+                }
+            }
+
+            async cmdRemoveMod(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /removemod nym or /removemod nym#xxxx');
+                    return;
+                }
+
+                if (!this.currentCommunity) {
+                    this.displaySystemMessage('This command only works in community channels');
+                    return;
+                }
+
+                const communityId = this.currentCommunity;
+
+                // ONLY admins can remove moderators
+                if (!this.ownedCommunities.has(communityId)) {
+                    this.displaySystemMessage('Only the community admin can remove moderators');
+                    return;
+                }
+
+                const targetPubkey = await this.findUserPubkey(args);
+                if (!targetPubkey) return;
+
+                // Check if user is actually a moderator
+                if (!this.communityModerators.has(communityId) ||
+                    !this.communityModerators.get(communityId).has(targetPubkey)) {
+                    const nym = this.getNymFromPubkey(targetPubkey);
+                    this.displaySystemMessage(`${nym} is not a moderator`);
+                    return;
+                }
+
+                // Remove from moderators set
+                this.communityModerators.get(communityId).delete(targetPubkey);
+
+                await this.updateCommunityRole(communityId, targetPubkey, 'remove');
+
+                const nym = this.getNymFromPubkey(targetPubkey);
+                this.displaySystemMessage(`Removed ${nym} from moderators`);
+            }
+
+            async cmdKick(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /kick nym or /kick nym#xxxx');
+                    return;
+                }
+
+                if (!this.currentCommunity) {
+                    this.displaySystemMessage('This command only works in community channels');
+                    return;
+                }
+
+                const communityId = this.currentCommunity;
+
+                // Check if user has moderation privileges (admin OR mod)
+                const isAdmin = this.ownedCommunities.has(communityId);
+                const isMod = this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(this.pubkey);
+
+                if (!isAdmin && !isMod) {
+                    this.displaySystemMessage('You need admin or moderator privileges to kick users');
+                    return;
+                }
+
+                const targetPubkey = await this.findUserPubkey(args);
+                if (!targetPubkey) return;
+
+                if (targetPubkey === this.pubkey) {
+                    this.displaySystemMessage("You can't kick yourself");
+                    return;
+                }
+
+                // Check if target is the admin
+                const community = this.communityChannels.get(communityId);
+                if (community && community.admin === targetPubkey) {
+                    this.displaySystemMessage("You can't kick the community admin");
+                    return;
+                }
+
+                // Moderators cannot kick other moderators
+                if (!isAdmin && this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(targetPubkey)) {
+                    this.displaySystemMessage("Moderators cannot kick other moderators. Contact the admin.");
+                    return;
+                }
+
+                // Admins can kick mods, but should remove their mod status first
+                if (isAdmin && this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(targetPubkey)) {
+                    this.displaySystemMessage("Remove moderator status first before kicking");
+                    return;
+                }
+
+                const nym = this.getNymFromPubkey(targetPubkey);
+                this.displaySystemMessage(`Kicked ${nym} from community`);
+
+                // Publish kick action
+                await this.publishCommunityModeration(communityId, targetPubkey, 'kick');
+            }
+
+            async cmdBan(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /ban nym or /ban nym#xxxx');
+                    return;
+                }
+
+                if (!this.currentCommunity) {
+                    this.displaySystemMessage('This command only works in community channels');
+                    return;
+                }
+
+                const communityId = this.currentCommunity;
+
+                // Check if user has moderation privileges (admin OR mod)
+                const isAdmin = this.ownedCommunities.has(communityId);
+                const isMod = this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(this.pubkey);
+
+                if (!isAdmin && !isMod) {
+                    this.displaySystemMessage('You need admin or moderator privileges to ban users');
+                    return;
+                }
+
+                const targetPubkey = await this.findUserPubkey(args);
+                if (!targetPubkey) return;
+
+                if (targetPubkey === this.pubkey) {
+                    this.displaySystemMessage("You can't ban yourself");
+                    return;
+                }
+
+                // Check if target is the admin
+                const community = this.communityChannels.get(communityId);
+                if (community && community.admin === targetPubkey) {
+                    this.displaySystemMessage("You can't ban the community admin");
+                    return;
+                }
+
+                // Moderators cannot ban other moderators
+                if (!isAdmin && this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(targetPubkey)) {
+                    this.displaySystemMessage("Moderators cannot ban other moderators. Contact the admin.");
+                    return;
+                }
+
+                // Admins can ban mods, but should remove their mod status first
+                if (isAdmin && this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(targetPubkey)) {
+                    this.displaySystemMessage("Remove moderator status first before banning");
+                    return;
+                }
+
+                // Check if already banned
+                if (this.communityBans.has(communityId) &&
+                    this.communityBans.get(communityId).has(targetPubkey)) {
+                    const nym = this.getNymFromPubkey(targetPubkey);
+                    this.displaySystemMessage(`${nym} is already banned`);
+                    return;
+                }
+
+                // Add to ban list
+                if (!this.communityBans.has(communityId)) {
+                    this.communityBans.set(communityId, new Set());
+                }
+                this.communityBans.get(communityId).add(targetPubkey);
+
+                const nym = this.getNymFromPubkey(targetPubkey);
+                this.displaySystemMessage(`Banned ${nym} from community`);
+
+                // Publish ban via NIP-72 moderation
+                await this.publishCommunityModeration(communityId, targetPubkey, 'ban');
+
+                // NEW: Clean up stored messages from banned user
+                this.cleanupBannedMessages(communityId, targetPubkey);
+
+                // Hide all messages from banned user in current view
+                document.querySelectorAll('.message').forEach(msg => {
+                    if (msg.dataset.pubkey === targetPubkey) {
+                        msg.style.display = 'none';
+                        msg.classList.add('blocked');
+                    }
+                });
+            }
+
+            async cmdUnban(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /unban nym or /unban nym#xxxx');
+                    return;
+                }
+
+                if (!this.currentCommunity) {
+                    this.displaySystemMessage('This command only works in community channels');
+                    return;
+                }
+
+                const communityId = this.currentCommunity;
+
+                // Check if user has moderation privileges (admin OR mod)
+                const isAdmin = this.ownedCommunities.has(communityId);
+                const isMod = this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(this.pubkey);
+
+                if (!isAdmin && !isMod) {
+                    this.displaySystemMessage('You need admin or moderator privileges to unban users');
+                    return;
+                }
+
+                const targetPubkey = await this.findUserPubkey(args);
+                if (!targetPubkey) return;
+
+                // Check if user is actually banned
+                if (!this.communityBans.has(communityId) ||
+                    !this.communityBans.get(communityId).has(targetPubkey)) {
+                    const nym = this.getNymFromPubkey(targetPubkey);
+                    this.displaySystemMessage(`${nym} is not banned`);
+                    return;
+                }
+
+                // Remove from ban list
+                this.communityBans.get(communityId).delete(targetPubkey);
+
+                const nym = this.getNymFromPubkey(targetPubkey);
+                this.displaySystemMessage(`Unbanned ${nym} from community`);
+
+                // Publish unban action
+                await this.publishCommunityModeration(communityId, targetPubkey, 'unban');
+
+                // Show previously hidden messages from this user
+                document.querySelectorAll('.message.blocked').forEach(msg => {
+                    if (msg.dataset.pubkey === targetPubkey) {
+                        msg.style.display = '';
+                        msg.classList.remove('blocked');
+                    }
+                });
+            }
+
+            async cmdInviteToCommunity(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /invitecommunity nym or /invitecommunity nym#xxxx');
+                    return;
+                }
+
+                if (!this.isCurrentChannelCommunity()) {
+                    this.displaySystemMessage('This command only works in community channels');
+                    return;
+                }
+
+                const communityId = this.getCurrentCommunityId();
+                const community = this.communityChannels.get(communityId);
+
+                if (!community) {
+                    this.displaySystemMessage('Community not found');
+                    return;
+                }
+
+                // For private communities, only members can invite
+                // For public communities, anyone can invite
+                if (community.isPrivate) {
+                    const members = this.communityMembers.get(communityId) || new Set();
+                    const isMember = members.has(this.pubkey) ||
+                        this.ownedCommunities.has(communityId) ||
+                        this.moderatedCommunities.has(communityId);
+
+                    if (!isMember) {
+                        this.displaySystemMessage('Only members can invite to private communities');
+                        return;
+                    }
+                }
+
+                const targetPubkey = await this.findUserPubkey(args);
+                if (!targetPubkey) return;
+
+                // For private communities, add to invite list
+                if (community.isPrivate) {
+                    if (!this.communityInvites.has(communityId)) {
+                        this.communityInvites.set(communityId, new Set());
+                    }
+                    this.communityInvites.get(communityId).add(targetPubkey);
+                }
+
+                // Send PM invitation (for both public and private)
+                const privacyType = community.isPrivate ? 'private' : 'public';
+                const inviteMessage = `📨 You've been invited to join the ${privacyType} community: #${community.name}. Use /join ${community.name} to accept.`;
+                await this.sendPM(inviteMessage, targetPubkey);
+
+                const nym = this.getNymFromPubkey(targetPubkey);
+                this.displaySystemMessage(`Sent invitation to ${nym}`);
+            }
+
+            cmdCommunityInfo() {
+                if (!this.isCurrentChannelCommunity()) {
+                    this.displaySystemMessage('This is not a community channel');
+                    return;
+                }
+
+                const communityId = this.getCurrentCommunityId();
+                const community = this.communityChannels.get(communityId);
+
+                if (!community) {
+                    this.displaySystemMessage('Community info not available');
+                    return;
+                }
+
+                const isAdmin = this.ownedCommunities.has(communityId);
+                const isMod = this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(this.pubkey);
+                const type = community.isPrivate ? 'Private' : 'Public';
+
+                const mods = this.communityModerators.get(communityId) || new Set();
+                const members = this.communityMembers.get(communityId) || new Set();
+                const banned = this.communityBans.get(communityId) || new Set();
+
+                let info = `
+═══ Community Info ═══
+Name: ${community.name}
+Type: ${type}
+Description: ${community.description || 'None'}
+Your Role: ${isAdmin ? 'Admin' : isMod ? 'Moderator' : 'Member'}
+Moderators: ${mods.size}
+Members: ${members.size}
+Banned: ${banned.size}
+Created: ${new Date(community.createdAt).toLocaleDateString()}
+    `;
+
+                this.displaySystemMessage(info);
+
+                if (isAdmin || isMod) {
+                    this.displaySystemMessage('Use /members to see all members');
+                    this.displaySystemMessage('Use /mods to see all moderators');
+                    this.displaySystemMessage('Use /communitysettings for more options');
+                }
+            }
+
+            cmdListMembers() {
+                if (!this.isCurrentChannelCommunity()) {
+                    this.displaySystemMessage('This is not a community channel');
+                    return;
+                }
+
+                const communityId = this.getCurrentCommunityId();
+
+                if (!this.canModerate(communityId)) {
+                    this.displaySystemMessage('Only admins and moderators can view member list');
+                    return;
+                }
+
+                const members = this.communityMembers.get(communityId) || new Set();
+                const community = this.communityChannels.get(communityId);
+
+                if (members.size === 0) {
+                    this.displaySystemMessage('No members found');
+                    return;
+                }
+
+                let memberList = `═══ Community Members (${members.size}) ═══\n`;
+
+                members.forEach(pubkey => {
+                    const nym = this.getNymFromPubkey(pubkey);
+                    const isAdmin = community.admin === pubkey;
+                    const isMod = this.communityModerators.has(communityId) &&
+                        this.communityModerators.get(communityId).has(pubkey);
+
+                    let role = '';
+                    if (isAdmin) role = ' [ADMIN]';
+                    else if (isMod) role = ' [MOD]';
+
+                    memberList += `${nym}${role}\n`;
+                });
+
+                this.displaySystemMessage(memberList);
+            }
+
+            cmdListMods() {
+                if (!this.isCurrentChannelCommunity()) {
+                    this.displaySystemMessage('This is not a community channel');
+                    return;
+                }
+
+                const communityId = this.getCurrentCommunityId();
+                const mods = this.communityModerators.get(communityId) || new Set();
+                const community = this.communityChannels.get(communityId);
+
+                let modList = `═══ Community Moderators ═══\n`;
+                modList += `Admin: ${this.getNymFromPubkey(community.admin)}\n`;
+
+                if (mods.size > 0) {
+                    modList += `\nModerators (${mods.size}):\n`;
+                    mods.forEach(pubkey => {
+                        const nym = this.getNymFromPubkey(pubkey);
+                        modList += `${nym}\n`;
+                    });
+                } else {
+                    modList += '\nNo additional moderators';
+                }
+
+                this.displaySystemMessage(modList);
+            }
+
+            cmdCommunitySettings() {
+                if (!this.isCurrentChannelCommunity()) {
+                    this.displaySystemMessage('This is not a community channel');
+                    return;
+                }
+
+                const communityId = this.getCurrentCommunityId();
+
+                if (!this.ownedCommunities.has(communityId)) {
+                    this.displaySystemMessage('Only community admins can access settings');
+                    return;
+                }
+
+                // Show community settings modal
+                this.showCommunitySettingsModal(communityId);
             }
 
             async cmdBlock(args) {
@@ -9968,7 +11688,7 @@
                     container.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked channels</div>';
                 } else {
                     container.innerHTML = Array.from(this.blockedChannels).map(key => {
-                        const displayName = this.isValidGeohash(key) ? `#${key} [GEO]` : `#${key} [STD]`;
+                        const displayName = this.isValidGeohash(key) ? `#${key} [GEO]` : `#${key} [EPH]`;
                         return `
                 <div class="blocked-item">
                     <span>${this.escapeHtml(displayName)}</span>
@@ -9994,10 +11714,26 @@
             }
 
             switchChannel(channel, geohash = '') {
+                // Store previous state
+                const previousChannel = this.currentChannel;
+                const previousGeohash = this.currentGeohash;
+                const previousCommunity = this.currentCommunity;
+
+                // Check if we're actually switching to a different channel
+                const isSameChannel = !this.inPMMode &&
+                    channel === previousChannel &&
+                    geohash === previousGeohash &&
+                    !previousCommunity;
+
+                if (isSameChannel) {
+                    return; // Don't reload the same channel
+                }
+
                 this.inPMMode = false;
                 this.currentPM = null;
                 this.currentChannel = channel;
                 this.currentGeohash = geohash;
+                this.currentCommunity = null; // Clear community mode
 
                 const displayName = geohash ? `#${geohash}` : `#${channel}`;
                 let fullTitle = displayName;
@@ -10031,7 +11767,8 @@
                 // Update active state
                 document.querySelectorAll('.channel-item').forEach(item => {
                     const isActive = item.dataset.channel === channel &&
-                        item.dataset.geohash === geohash;
+                        item.dataset.geohash === geohash &&
+                        !item.dataset.community; // Make sure it's not a community item
                     item.classList.toggle('active', isActive);
                 });
 
@@ -10043,8 +11780,13 @@
                 const unreadKey = geohash ? `#${geohash}` : channel;
                 this.clearUnreadCount(unreadKey);
 
-                // Load channel messages
-                this.loadChannelMessages(displayName);
+                // Load channel messages only if switching to different channel
+                const storageKey = geohash ? `#${geohash}` : channel;
+                const previousKey = previousGeohash ? `#${previousGeohash}` : previousChannel;
+
+                if (storageKey !== previousKey || previousCommunity) {
+                    this.loadChannelMessages(displayName);
+                }
 
                 // Update user list for this channel
                 this.updateUserList();
@@ -10055,11 +11797,138 @@
                 }
             }
 
+            switchToCommunity(communityId) {
+                const community = this.communityChannels.get(communityId);
+                if (!community) {
+                    this.displaySystemMessage('Community not found');
+                    return;
+                }
+
+                // Check if we're already in this community
+                if (!this.inPMMode && this.currentCommunity === communityId) {
+                    return; // Don't reload the same community
+                }
+
+                console.log('Switching to community:', communityId);
+
+                // Set community mode - clear ALL other modes
+                this.inPMMode = false;
+                this.currentPM = null;
+                this.currentChannel = null; // Clear standard channel
+                this.currentGeohash = ''; // Clear geohash
+                this.currentCommunity = communityId; // Set community
+
+                document.getElementById('currentChannel').innerHTML = `#${this.escapeHtml(community.name)} <span style="font-size: 12px; color: var(--text-dim);">(Community)</span>`;
+
+                // Update active state - only activate community items
+                document.querySelectorAll('.channel-item').forEach(item => {
+                    const itemCommunity = item.dataset.community || '';
+                    const isCommunityItem = item.dataset.isCommunity === 'true';
+
+                    if (isCommunityItem) {
+                        item.classList.toggle('active', itemCommunity === communityId);
+                    } else {
+                        item.classList.remove('active');
+                    }
+                });
+
+                document.querySelectorAll('.pm-item').forEach(item => {
+                    item.classList.remove('active');
+                });
+
+                // Clear unread count
+                this.clearUnreadCount(communityId);
+
+                // Load community messages (will check internally if already loaded)
+                this.loadCommunityMessages(communityId);
+
+                // Update user list
+                this.updateUserList();
+
+                // Close mobile sidebar
+                if (window.innerWidth <= 768) {
+                    this.closeSidebar();
+                }
+
+                console.log('Switched to community. Current state:', {
+                    currentCommunity: this.currentCommunity,
+                    currentChannel: this.currentChannel,
+                    currentGeohash: this.currentGeohash,
+                    inPMMode: this.inPMMode
+                });
+            }
+
+            loadCommunityMessages(communityId) {
+                const container = document.getElementById('messagesContainer');
+
+                // Check if we're loading the same community
+                if (container.dataset.lastCommunity === communityId) {
+                    console.log('Same community, not clearing messages');
+                    return;
+                }
+
+                // Clear and mark new community
+                container.innerHTML = '';
+                container.dataset.lastCommunity = communityId;
+
+                // Clear channel marker since we're in a community
+                delete container.dataset.lastChannel;
+
+                const community = this.communityChannels.get(communityId);
+                if (!community) return;
+
+                // Get the ban list for this community BEFORE displaying messages
+                const bannedUsers = this.communityBans.get(communityId) || new Set();
+
+                // Community messages would be stored under the community ID
+                const communityMessages = this.messages.get(communityId) || [];
+
+                // Filter out messages from banned users BEFORE displaying
+                const filteredMessages = communityMessages.filter(msg => {
+                    // Check if author is banned
+                    if (bannedUsers.has(msg.pubkey)) {
+                        return false;
+                    }
+                    // Check if author is blocked
+                    if (this.blockedUsers.has(msg.author) || msg.blocked) {
+                        return false;
+                    }
+                    return true;
+                });
+
+                filteredMessages.forEach(msg => {
+                    this.displayMessage(msg);
+                });
+
+                if (filteredMessages.length === 0) {
+                    this.displaySystemMessage(`Welcome to #${community.name}`);
+                    this.displaySystemMessage(`This is a ${community.isPrivate ? 'private' : 'public'} community`);
+                }
+
+                if (this.settings.autoscroll) {
+                    setTimeout(() => {
+                        container.scrollTop = container.scrollHeight;
+                    }, 0);
+                }
+            }
+
             loadChannelMessages(displayName) {
                 const container = document.getElementById('messagesContainer');
-                container.innerHTML = '';
-
                 const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+
+                // Check if we're loading the same channel
+                if (container.dataset.lastChannel === storageKey) {
+                    console.log('Same channel, not clearing messages');
+                    return;
+                }
+
+                // Clear and mark new channel
+                container.innerHTML = '';
+                container.dataset.lastChannel = storageKey;
+
+                // Clear community marker since we're in a regular channel
+                delete container.dataset.lastCommunity;
+
                 let channelMessages = this.messages.get(storageKey) || [];
 
                 // Limit display to prevent freezing
@@ -10166,7 +12035,7 @@
                     item.dataset.geohash = geohash;
 
                     const displayName = geohash ? `#${geohash}` : `#${channel}`;
-                    const badge = geohash ? '<span class="geohash-badge">GEO</span>' : '<span class="std-badge">STD</span>';
+                    const badge = geohash ? '<span class="geohash-badge">GEO</span>' : '<span class="std-badge">EPH</span>';
 
                     // Get location information for geohash channels
                     let locationHint = '';
@@ -10555,13 +12424,25 @@
 
                 channels.sort((a, b) => {
                     // #bar is always first
-                    const aIsBar = a.dataset.channel === 'bar' && !a.dataset.geohash;
-                    const bIsBar = b.dataset.channel === 'bar' && !b.dataset.geohash;
+                    const aIsBar = a.dataset.channel === 'bar' && !a.dataset.geohash && !a.dataset.isCommunity;
+                    const bIsBar = b.dataset.channel === 'bar' && !b.dataset.geohash && !b.dataset.isCommunity;
 
                     if (aIsBar) return -1;
                     if (bIsBar) return 1;
 
-                    // Active channel is second
+                    // Check if either is the NYM community (special pin that can't be unpinned)
+                    const aIsNYM = a.dataset.community &&
+                        this.communityChannels.get(a.dataset.community)?.name?.toLowerCase() === 'nym' &&
+                        this.communityChannels.get(a.dataset.community)?.admin === this.verifiedDeveloper.pubkey;
+                    const bIsNYM = b.dataset.community &&
+                        this.communityChannels.get(b.dataset.community)?.name?.toLowerCase() === 'nym' &&
+                        this.communityChannels.get(b.dataset.community)?.admin === this.verifiedDeveloper.pubkey;
+
+                    // NYM community comes right after #bar
+                    if (aIsNYM && !bIsBar) return -1;
+                    if (bIsNYM && !aIsBar) return 1;
+
+                    // Active channel is third
                     const aIsActive = a.classList.contains('active');
                     const bIsActive = b.classList.contains('active');
 
@@ -10610,8 +12491,8 @@
                     }
 
                     // Default: sort by unread count for non-geo or when proximity is off
-                    const aChannel = a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel;
-                    const bChannel = b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel;
+                    const aChannel = a.dataset.community || (a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel);
+                    const bChannel = b.dataset.community || (b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel);
 
                     const aUnread = this.unreadCounts.get(aChannel) || 0;
                     const bUnread = this.unreadCounts.get(bChannel) || 0;
@@ -10940,14 +12821,56 @@
                 });
             }
 
+            cleanupBannedMessages(communityId, bannedPubkey) {
+                // Remove messages from banned user in stored messages
+                if (this.messages.has(communityId)) {
+                    const filtered = this.messages.get(communityId).filter(msg => msg.pubkey !== bannedPubkey);
+                    this.messages.set(communityId, filtered);
+                }
+            }
+
             loadSettings() {
                 return {
-                    theme: localStorage.getItem('nym_theme') || 'matrix',
+                    theme: localStorage.getItem('nym_theme') || 'bitchat',
                     sound: localStorage.getItem('nym_sound') || 'beep',
                     autoscroll: localStorage.getItem('nym_autoscroll') !== 'false',
                     showTimestamps: localStorage.getItem('nym_timestamps') !== 'false',
                     sortByProximity: localStorage.getItem('nym_sort_proximity') === 'true'
                 };
+            }
+
+            loadImageBlurSettings() {
+                const saved = localStorage.getItem(`nym_image_blur_${this.pubkey}`);
+                if (saved !== null) {
+                    return saved === 'true';
+                }
+                return true; // Default to blur
+            }
+
+            saveImageBlurSettings() {
+                localStorage.setItem(`nym_image_blur_${this.pubkey}`, this.blurOthersImages.toString());
+
+                // Sync to Nostr for persistent connections
+                if (this.connectionMode !== 'ephemeral') {
+                    this.saveSyncedSettings();
+                }
+            }
+
+            toggleImageBlur() {
+                this.blurOthersImages = !this.blurOthersImages;
+                this.saveImageBlurSettings();
+
+                // Update all existing images
+                document.querySelectorAll('.message img').forEach(img => {
+                    const messageEl = img.closest('.message');
+                    if (messageEl && !messageEl.classList.contains('self')) {
+                        if (this.blurOthersImages) {
+                            img.classList.add('blurred');
+                        } else {
+                            img.classList.remove('blurred');
+                        }
+                    }
+                });
             }
 
             saveSettings() {
@@ -10992,6 +12915,578 @@
                     '"': '&quot;',
                 };
                 return String(text).replace(/[&<>"]/g, m => map[m]);
+            }
+
+            isCurrentChannelCommunity() {
+                return this.currentCommunity !== null;
+            }
+
+            getCurrentCommunityId() {
+                return this.currentCommunity;
+            }
+
+            canModerate(communityId) {
+                const isAdmin = this.ownedCommunities.has(communityId);
+                const isMod = this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(this.pubkey);
+                return isAdmin || isMod;
+            }
+
+            async findUserPubkey(input) {
+                const hashIndex = input.indexOf('#');
+                let searchNym = input;
+                let searchSuffix = null;
+
+                if (hashIndex !== -1) {
+                    searchNym = input.substring(0, hashIndex);
+                    searchSuffix = input.substring(hashIndex + 1);
+                }
+
+                const matches = [];
+                this.users.forEach((user, pubkey) => {
+                    const baseNym = user.nym.split('#')[0] || user.nym;
+                    if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
+                        if (searchSuffix) {
+                            if (pubkey.endsWith(searchSuffix)) {
+                                matches.push({ nym: user.nym, pubkey: pubkey });
+                            }
+                        } else {
+                            matches.push({ nym: user.nym, pubkey: pubkey });
+                        }
+                    }
+                });
+
+                if (matches.length === 0) {
+                    this.displaySystemMessage(`User ${input} not found`);
+                    return null;
+                }
+
+                if (matches.length > 1 && !searchSuffix) {
+                    const matchList = matches.map(m =>
+                        `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                    ).join(', ');
+                    this.displaySystemMessage(`Multiple users found: ${matchList}`);
+                    this.displaySystemMessage('Please specify using the #xxxx suffix');
+                    return null;
+                }
+
+                return matches[0].pubkey;
+            }
+
+            async updateCommunityRole(communityId, targetPubkey, role) {
+                const community = this.communityChannels.get(communityId);
+                if (!community) return;
+
+                // Get current moderators
+                const mods = this.communityModerators.get(communityId) || new Set();
+
+                // Update community definition with new moderator list
+                const event = {
+                    kind: 34550,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [
+                        ['d', communityId],
+                        ['name', community.name],
+                        ['description', community.description || ''],
+                        ['p', this.pubkey, '', 'admin'],
+                    ],
+                    content: community.description || '',
+                    pubkey: this.pubkey
+                };
+
+                // Add all moderators
+                if (role === 'moderator') {
+                    mods.add(targetPubkey);
+                } else if (role === 'remove') {
+                    mods.delete(targetPubkey);
+                }
+
+                mods.forEach(modPubkey => {
+                    event.tags.push(['p', modPubkey, '', 'moderator']);
+                });
+
+                // Add privacy tag
+                if (community.isPrivate) {
+                    event.tags.push(['private']);
+                } else {
+                    event.tags.push(['public']);
+                }
+
+                // Sign and send
+                let signedEvent;
+                if (window.nostr && !this.privkey) {
+                    signedEvent = await window.nostr.signEvent(event);
+                } else if (this.privkey) {
+                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                }
+
+                if (signedEvent) {
+                    this.sendToRelay(["EVENT", signedEvent]);
+                }
+            }
+
+            async publishCommunityModeration(communityId, targetPubkey, action) {
+                const community = this.communityChannels.get(communityId);
+                if (!community) return;
+
+                // Use NIP-56 reporting event (kind 1984) for moderation
+                const event = {
+                    kind: 1984, // NIP-56 report/moderation
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [
+                        ['a', `34550:${community.admin}:${communityId}`], // Reference to community
+                        ['p', targetPubkey], // Target user
+                        ['action', action], // ban, unban, kick
+                        ['reason', `${action} by moderator`]
+                    ],
+                    content: `User ${action} in community ${community.name}`,
+                    pubkey: this.pubkey
+                };
+
+                let signedEvent;
+                if (window.nostr && !this.privkey) {
+                    signedEvent = await window.nostr.signEvent(event);
+                } else if (this.privkey) {
+                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                }
+
+                if (signedEvent) {
+                    this.sendToRelay(["EVENT", signedEvent]);
+                    console.log(`Published ${action} event for user ${targetPubkey} in community ${communityId}`);
+                }
+            }
+
+            showCommunitySettingsModal(communityId) {
+                const community = this.communityChannels.get(communityId);
+                if (!community) return;
+
+                const modal = document.getElementById('communitySettingsModal');
+                if (!modal) {
+                    this.displaySystemMessage('Community settings UI not available');
+                    return;
+                }
+
+                // Populate modal with community data
+                document.getElementById('communityNameDisplay').textContent = community.name;
+                document.getElementById('communityDescEdit').value = community.description || '';
+                document.getElementById('communityPrivacyEdit').value = community.isPrivate ? 'private' : 'public';
+
+                // Load dynamic content
+                this.loadCommunitySettingsUI(communityId);
+
+                modal.classList.add('active');
+            }
+
+            async loadCommunitySettingsUI(communityId) {
+                const community = this.communityChannels.get(communityId);
+                if (!community) return;
+
+                // Load community image
+                const imageEdit = document.getElementById('communityImageEdit');
+                const imagePreview = document.getElementById('communityImagePreview');
+                const imagePreviewImg = document.getElementById('communityImagePreviewImg');
+
+                if (imageEdit) {
+                    imageEdit.value = community.imageUrl || '';
+                }
+
+                if (community.imageUrl && imagePreviewImg && imagePreview) {
+                    imagePreviewImg.src = community.imageUrl;
+                    imagePreview.style.display = 'block';
+
+                    imagePreviewImg.onerror = () => {
+                        imagePreview.style.display = 'none';
+                    };
+                } else if (imagePreview) {
+                    imagePreview.style.display = 'none';
+                }
+
+                // Add live preview on image URL change
+                if (imageEdit) {
+                    imageEdit.addEventListener('input', (e) => {
+                        const url = e.target.value.trim();
+                        if (url && imagePreviewImg && imagePreview) {
+                            imagePreviewImg.src = url;
+                            imagePreview.style.display = 'block';
+
+                            imagePreviewImg.onerror = () => {
+                                imagePreview.style.display = 'none';
+                            };
+                        } else if (imagePreview) {
+                            imagePreview.style.display = 'none';
+                        }
+                    });
+                }
+
+                // Load blocked keywords for this community
+                const keywordList = document.getElementById('communityKeywordList');
+                if (keywordList) {
+                    const communityKeywords = this.communityBlockedKeywords?.get(communityId) || new Set();
+
+                    if (communityKeywords.size === 0) {
+                        keywordList.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked keywords</div>';
+                    } else {
+                        keywordList.innerHTML = '';
+                        communityKeywords.forEach(keyword => {
+                            const item = document.createElement('div');
+                            item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 5px; margin: 2px 0;';
+                            item.innerHTML = `
+                    <span>${this.escapeHtml(keyword)}</span>
+                    <button class="unblock-btn" onclick="nym.removeCommunityKeyword('${this.escapeHtml(keyword).replace(/'/g, "\\'")}')">Remove</button>
+                `;
+                            keywordList.appendChild(item);
+                        });
+                    }
+                }
+
+                // Load moderators list
+                const mods = this.communityModerators.get(communityId) || new Set();
+                const modsList = document.getElementById('communityModsList');
+
+                if (mods.size === 0) {
+                    modsList.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No moderators assigned</div>';
+                } else {
+                    modsList.innerHTML = '';
+                    mods.forEach(pubkey => {
+                        const nym = this.getNymFromPubkey(pubkey);
+                        const item = document.createElement('div');
+                        item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 5px; margin: 2px 0;';
+                        item.innerHTML = `
+                <span>${nym}</span>
+                <button class="unblock-btn" onclick="nym.removeModFromSettings('${pubkey}')">Remove</button>
+            `;
+                        modsList.appendChild(item);
+                    });
+                }
+
+                // Load banned users list
+                const banned = this.communityBans.get(communityId) || new Set();
+                const bansList = document.getElementById('communityBansList');
+
+                if (banned.size === 0) {
+                    bansList.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No banned users</div>';
+                } else {
+                    bansList.innerHTML = '';
+                    banned.forEach(pubkey => {
+                        const nym = this.getNymFromPubkey(pubkey);
+                        const item = document.createElement('div');
+                        item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 5px; margin: 2px 0;';
+                        item.innerHTML = `
+                <span>${nym}</span>
+                <button class="unblock-btn" onclick="nym.unbanFromSettings('${pubkey}')">Unban</button>
+            `;
+                        bansList.appendChild(item);
+                    });
+                }
+
+                // Update statistics
+                const members = this.communityMembers.get(communityId) || new Set();
+                const totalMembers = members.size + mods.size + 1; // +1 for admin
+                document.getElementById('statMembers').textContent = totalMembers;
+                document.getElementById('statMods').textContent = mods.size;
+                document.getElementById('statBanned').textContent = banned.size;
+            }
+
+            addCommunityKeyword() {
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
+
+                const input = document.getElementById('newCommunityKeywordInput');
+                const keyword = input.value.trim().toLowerCase();
+
+                if (keyword) {
+                    if (!this.communityBlockedKeywords) {
+                        this.communityBlockedKeywords = new Map();
+                    }
+                    if (!this.communityBlockedKeywords.has(communityId)) {
+                        this.communityBlockedKeywords.set(communityId, new Set());
+                    }
+
+                    this.communityBlockedKeywords.get(communityId).add(keyword);
+                    this.saveCommunityKeywords(communityId);
+                    this.loadCommunitySettingsUI(communityId);
+                    input.value = '';
+
+                    // Hide messages containing this keyword in this community
+                    if (this.currentCommunity === communityId) {
+                        document.querySelectorAll('.message').forEach(msg => {
+                            const content = msg.querySelector('.message-content');
+                            if (content && content.textContent.toLowerCase().includes(keyword)) {
+                                msg.classList.add('blocked');
+                                msg.style.display = 'none';
+                            }
+                        });
+                    }
+
+                    this.displaySystemMessage(`Blocked keyword in community: "${keyword}"`);
+                }
+            }
+
+            removeCommunityKeyword(keyword) {
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
+
+                if (this.communityBlockedKeywords?.has(communityId)) {
+                    this.communityBlockedKeywords.get(communityId).delete(keyword);
+                    this.saveCommunityKeywords(communityId);
+                    this.loadCommunitySettingsUI(communityId);
+
+                    // Re-check all messages in this community
+                    if (this.currentCommunity === communityId) {
+                        document.querySelectorAll('.message.blocked').forEach(msg => {
+                            const content = msg.querySelector('.message-content');
+                            if (content) {
+                                const hasOtherBlockedKeyword = Array.from(
+                                    this.communityBlockedKeywords.get(communityId) || []
+                                ).some(kw => content.textContent.toLowerCase().includes(kw));
+
+                                if (!hasOtherBlockedKeyword) {
+                                    msg.classList.remove('blocked');
+                                    msg.style.display = '';
+                                }
+                            }
+                        });
+                    }
+
+                    this.displaySystemMessage(`Unblocked keyword in community: "${keyword}"`);
+                }
+            }
+
+            saveCommunityKeywords(communityId) {
+                if (!this.communityBlockedKeywords?.has(communityId)) return;
+
+                const keywords = Array.from(this.communityBlockedKeywords.get(communityId));
+                localStorage.setItem(`nym_community_keywords_${communityId}`, JSON.stringify(keywords));
+            }
+
+            loadCommunityKeywords(communityId) {
+                const saved = localStorage.getItem(`nym_community_keywords_${communityId}`);
+                if (saved) {
+                    if (!this.communityBlockedKeywords) {
+                        this.communityBlockedKeywords = new Map();
+                    }
+                    this.communityBlockedKeywords.set(communityId, new Set(JSON.parse(saved)));
+                }
+            }
+
+            hasCommunityBlockedKeyword(text, communityId) {
+                if (!this.communityBlockedKeywords?.has(communityId)) return false;
+
+                const lowerText = text.toLowerCase();
+                return Array.from(this.communityBlockedKeywords.get(communityId)).some(
+                    keyword => lowerText.includes(keyword)
+                );
+            }
+
+            async addModFromSettings() {
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
+
+                const input = document.getElementById('addModInput').value.trim();
+                if (!input) {
+                    this.displaySystemMessage('Please enter a nym');
+                    return;
+                }
+
+                const targetPubkey = await this.findUserPubkey(input);
+                if (!targetPubkey) return;
+
+                if (targetPubkey === this.pubkey) {
+                    this.displaySystemMessage('You are already the admin');
+                    return;
+                }
+
+                // Add to moderators
+                if (!this.communityModerators.has(communityId)) {
+                    this.communityModerators.set(communityId, new Set());
+                }
+                this.communityModerators.get(communityId).add(targetPubkey);
+
+                await this.updateCommunityRole(communityId, targetPubkey, 'moderator');
+
+                const nym = this.getNymFromPubkey(targetPubkey);
+                this.displaySystemMessage(`Added ${nym} as moderator`);
+
+                // Clear input and reload UI
+                document.getElementById('addModInput').value = '';
+                this.loadCommunitySettingsUI(communityId);
+            }
+
+            async removeModFromSettings(pubkey) {
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
+
+                if (this.communityModerators.has(communityId)) {
+                    this.communityModerators.get(communityId).delete(pubkey);
+                }
+
+                await this.updateCommunityRole(communityId, pubkey, 'remove');
+
+                const nym = this.getNymFromPubkey(pubkey);
+                this.displaySystemMessage(`Removed ${nym} from moderators`);
+
+                // Reload UI
+                this.loadCommunitySettingsUI(communityId);
+            }
+
+            async unbanFromSettings(pubkey) {
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
+
+                if (this.communityBans.has(communityId)) {
+                    this.communityBans.get(communityId).delete(pubkey);
+                }
+
+                await this.publishCommunityModeration(communityId, pubkey, 'unban');
+
+                const nym = this.getNymFromPubkey(pubkey);
+                this.displaySystemMessage(`Unbanned ${nym}`);
+
+                // Reload UI
+                this.loadCommunitySettingsUI(communityId);
+            }
+
+            async saveCommunitySettings() {
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
+
+                const community = this.communityChannels.get(communityId);
+                if (!community) return;
+
+                // Get updated values
+                const newDesc = document.getElementById('communityDescEdit').value.trim();
+                const newImageUrl = document.getElementById('communityImageEdit').value.trim();
+                const newPrivacy = document.getElementById('communityPrivacyEdit').value === 'private';
+
+                // Update local state
+                community.description = newDesc;
+                community.imageUrl = newImageUrl;
+                community.isPrivate = newPrivacy;
+
+                // Update the community definition event
+                const mods = this.communityModerators.get(communityId) || new Set();
+
+                const event = {
+                    kind: 34550,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [
+                        ['d', communityId],
+                        ['name', community.name],
+                        ['description', newDesc],
+                        ['image', newImageUrl],
+                        ['p', this.pubkey, '', 'admin'],
+                    ],
+                    content: newDesc,
+                    pubkey: this.pubkey
+                };
+
+                // Add moderators
+                mods.forEach(modPubkey => {
+                    event.tags.push(['p', modPubkey, '', 'moderator']);
+                });
+
+                // Add privacy tag
+                if (newPrivacy) {
+                    event.tags.push(['private']);
+                } else {
+                    event.tags.push(['public']);
+                }
+
+                // Sign and send
+                let signedEvent;
+                if (window.nostr && !this.privkey) {
+                    signedEvent = await window.nostr.signEvent(event);
+                } else if (this.privkey) {
+                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                }
+
+                if (signedEvent) {
+                    this.sendToRelay(["EVENT", signedEvent]);
+                    this.displaySystemMessage('Community settings updated');
+
+                    // Update channel badge if privacy changed
+                    this.updateCommunityBadge(communityId, newPrivacy);
+
+                    closeModal('communitySettingsModal');
+                }
+            }
+
+            updateCommunityBadge(communityId, isPrivate) {
+                const item = document.querySelector(`[data-community="${communityId}"]`);
+                if (!item) return;
+
+                const badgeContainer = item.querySelector('.channel-badges');
+                const existingBadge = badgeContainer.querySelector('.std-badge');
+
+                if (existingBadge) {
+                    if (isPrivate) {
+                        existingBadge.style.borderColor = 'var(--purple)';
+                        existingBadge.style.color = 'var(--purple)';
+                        existingBadge.textContent = 'PRV';
+                    } else {
+                        existingBadge.style.borderColor = 'var(--primary)';
+                        existingBadge.style.color = 'var(--primary)';
+                        existingBadge.textContent = 'PUB';
+                    }
+                }
+            }
+
+            async deleteCommunity() {
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
+
+                const community = this.communityChannels.get(communityId);
+                if (!community) return;
+
+                if (!confirm(`Are you sure you want to delete the community "${community.name}"? This cannot be undone.`)) {
+                    return;
+                }
+
+                // Publish deletion event (kind 5 - deletion)
+                const event = {
+                    kind: 5,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [
+                        ['a', `34550:${this.pubkey}:${communityId}`]
+                    ],
+                    content: 'Community deleted by admin',
+                    pubkey: this.pubkey
+                };
+
+                let signedEvent;
+                if (window.nostr && !this.privkey) {
+                    signedEvent = await window.nostr.signEvent(event);
+                } else if (this.privkey) {
+                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                }
+
+                if (signedEvent) {
+                    this.sendToRelay(["EVENT", signedEvent]);
+                }
+
+                // Remove locally
+                this.communityChannels.delete(communityId);
+                this.ownedCommunities.delete(communityId);
+                this.communityMembers.delete(communityId);
+                this.communityModerators.delete(communityId);
+                this.communityBans.delete(communityId);
+                this.communityInvites.delete(communityId);
+
+                // Remove from UI
+                const item = document.querySelector(`[data-community="${communityId}"]`);
+                if (item) {
+                    item.remove();
+                }
+
+                this.channels.delete(communityId);
+                this.userJoinedChannels.delete(communityId);
+
+                this.displaySystemMessage(`Community "${community.name}" has been deleted`);
+
+                closeModal('communitySettingsModal');
+
+                // Switch to bar
+                this.switchChannel('bar', '');
             }
         }
 
@@ -11070,6 +13565,12 @@
                 proximitySelect.value = nym.settings.sortByProximity ? 'true' : 'false';
             }
 
+            // Load blur settings
+            const blurSelect = document.getElementById('blurImagesSelect');
+            if (blurSelect) {
+                blurSelect.value = nym.blurOthersImages ? 'true' : 'false';
+            }
+
             document.getElementById('themeSelect').value = nym.settings.theme;
             document.getElementById('soundSelect').value = nym.settings.sound;
             document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
@@ -11088,12 +13589,17 @@
             const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
             const showTimestamps = document.getElementById('timestampSelect').value === 'true';
             const sortByProximity = document.getElementById('proximitySelect').value === 'true';
+            const blurImages = document.getElementById('blurImagesSelect').value === 'true';
 
             // Apply all settings
             nym.settings.theme = theme;
             nym.settings.sound = sound;
             nym.settings.autoscroll = autoscroll;
             nym.settings.showTimestamps = showTimestamps;
+
+            // Apply blur settings
+            nym.blurOthersImages = blurImages;
+            nym.saveImageBlurSettings();
 
             // Handle proximity sorting
             if (sortByProximity) {
@@ -11162,8 +13668,8 @@
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v1.9.13 ═══<br>
-        Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000 and 23333 channels)<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.9.13 ═══<br>
+        Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 20000, 23333, 34550, 4550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
         <br>
@@ -11182,7 +13688,7 @@
             document.getElementById('channelModal').classList.add('active');
         }
 
-        async function joinChannel() {
+        async function joinOrCreateChannel() {
             const channelType = document.getElementById('channelTypeSelect').value;
 
             if (channelType === 'standard') {
@@ -11190,12 +13696,9 @@
                 if (name) {
                     await nym.cmdJoin(name);
                 }
-            } else {
+            } else if (channelType === 'geohash') {
                 let geohash = document.getElementById('geohashInput').value.trim().toLowerCase();
-
-                // Remove invalid characters
                 geohash = geohash.replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
-
                 if (geohash) {
                     if (!nym.isValidGeohash(geohash)) {
                         alert('Invalid geohash. Valid characters are: 0-9, b-z (except a, i, l, o)');
@@ -11206,13 +13709,38 @@
                     alert('Please enter a valid geohash');
                     return;
                 }
+            } else if (channelType === 'community') {
+                // Check if ephemeral user
+                if (nym.connectionMode === 'ephemeral') {
+                    alert('Community channels require a persistent identity. Please use extension or nsec login.');
+                    closeModal('channelModal');
+                    return;
+                }
+
+                const name = document.getElementById('communityNameInput').value.trim();
+                const description = document.getElementById('communityDescInput').value.trim();
+                const imageUrl = document.getElementById('communityImageInput').value.trim();
+                const isPrivate = document.getElementById('communityPrivacySelect').value === 'private';
+
+                if (!name) {
+                    alert('Please enter a community name');
+                    return;
+                }
+
+                const communityId = await nym.createCommunityChannel(name, description, isPrivate, imageUrl);
+                if (communityId) {
+                    nym.switchToCommunity(communityId);
+                }
             }
 
             closeModal('channelModal');
             document.getElementById('channelNameInput').value = '';
             document.getElementById('geohashInput').value = '';
+            document.getElementById('communityNameInput').value = '';
+            document.getElementById('communityDescInput').value = '';
+            document.getElementById('communityImageInput').value = '';
+            document.getElementById('communityPrivacySelect').value = 'public';
         }
-
 
         // Function to check for saved connection on page load
         async function checkSavedConnection() {
