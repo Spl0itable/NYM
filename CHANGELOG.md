@@ -1,3 +1,10 @@
+## v2.9.14 - 2025-10-12
+
+Hotfix: corrected share URL and routing
+Hotfix: properly track banned users
+Hotfix: show discovered public community channels in sidebar
+Other minor quality of life and improvements
+
 ## v2.9.13 - 2025-10-11
 
 New: default blurs images, but can unblur by clicking or always unblur from settings

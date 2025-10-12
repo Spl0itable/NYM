@@ -8,22 +8,26 @@
     <meta name="description" content="Ephemeral anonymous messaging over Nostr. Bridged with Bitchat geohash channels.">
     <link rel="manifest"
         href="data:application/json;base64,eyJuYW1lIjoiTllNIC0gTm9zdHIgWW5zdGFudCBNZXNzZW5nZXIiLCJzaG9ydF9uYW1lIjoiTllNIiwic3RhcnRfdXJsIjoiaHR0cHM6Ly9ueW0uYmFyLyIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwidGhlbWVfY29sb3IiOiIjMDAwMDAwIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDAwMDAiLCJpY29ucyI6W3sic3JjIjoiaHR0cHM6Ly9ueW0uYmFyL2ltYWdlcy9OWU0taWNvbi5wbmciLCJzaXplcyI6IjE5MngxOTIiLCJ0eXBlIjoiaW1hZ2UvcG5nIn0seyJzcmMiOiJodHRwczovL255bS5iYXIvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiNTEyeDUxMiIsInR5cGUiOiJpbWFnZS9wbmcifV19">
+    <link rel="icon" type="image/x-icon" href="https://nym.bar/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nym.bar/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nym.bar/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nym.bar/images/android-chrome-192x192.png">
 
     <!-- Open Graph Meta Tags -->
     <meta property="og:title" content="Anonymously Chat with NYM">
     <meta property="og:description"
         content="Ephemeral anonymous messaging over Nostr. Bridged with Bitchat geohash channels.">
-    <meta property="og:image" content="https://nym.bar/images/NYM-icon.png">
+    <meta property="og:image" content="https://nym.bar/images/NYM-favicon.png">
     <meta property="og:url" content="https://nym.bar">
     <meta property="og:type" content="website">
-    <link rel="icon" href="./images/NYM-icon.png" type="image/png">
-    <link rel="canonical" href="https://nym.bar/">
+    <link rel="icon" href="https://nym.bar/images/NYM-favicon.png" type="image/png">
+    <link rel="canonical" href="https://app.nym.bar/">
     <meta name="theme-color" content="#000000">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="NYM">
-    <link rel="apple-touch-icon" href="./images/NYM-icon.png">
+    <link rel="apple-touch-icon" href="https://nym.bar/images/NYM-favicon.png">
 
     <!-- Import nostr-tools -->
     <script src="https://unpkg.com/nostr-tools/lib/nostr.bundle.js"></script>
@@ -3495,7 +3499,20 @@
             shareChannel() {
                 // Generate the share URL
                 const baseUrl = window.location.origin + window.location.pathname;
-                const channelPart = this.currentGeohash || this.currentChannel;
+                let channelPart;
+
+                // Determine what to share based on current mode with prefixes to avoid conflicts
+                if (this.currentCommunity) {
+                    // For communities, use 'c:' prefix with community ID
+                    channelPart = `c:${this.currentCommunity}`;
+                } else if (this.currentGeohash) {
+                    // For geohash channels, use 'g:' prefix
+                    channelPart = `g:${this.currentGeohash}`;
+                } else {
+                    // For standard channels, use 'e:' prefix (ephemeral)
+                    channelPart = `e:${this.currentChannel}`;
+                }
+
                 const shareUrl = `${baseUrl}#${channelPart}`;
 
                 // Set the URL in the input
@@ -4392,6 +4409,9 @@
                     document.getElementById('sendBtn').disabled = false;
                     this.connected = true;
 
+                    // Set initial channel label for #bar
+                    document.getElementById('currentChannel').innerHTML = '#bar <span style="font-size: 12px; color: var(--text-dim);">(Ephemeral)</span>';
+
                     // Start subscriptions on all connected relays
                     this.subscribeToAllRelays();
 
@@ -4513,24 +4533,36 @@
 
                 const ws = relay.ws;
 
-                // Subscribe to messages (channels + communities)
+                // Subscribe to messages (channels only - communities handled separately)
                 const messagesSub = [
                     "REQ",
                     "nym-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [20000, 23333, 4550], // Geohash, standard channels, and community posts
+                        kinds: [20000, 23333], // Geohash and standard channels only
                         limit: 200
                     }
                 ];
                 ws.send(JSON.stringify(messagesSub));
+
+                // Subscribe to community posts (only from NYM client)
+                const communityPostsSub = [
+                    "REQ",
+                    "nym-community-posts-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [4550], // Community posts
+                        "#client": ["NYM"], // Only posts from NYM client
+                        limit: 200
+                    }
+                ];
+                ws.send(JSON.stringify(communityPostsSub));
 
                 // Subscribe to moderation events (NIP-56)
                 const moderationSub = [
                     "REQ",
                     "moderation-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [1984, 5], // NIP-56 moderation and deletion events
-                        limit: 500,
+                        kinds: [1984], // NIP-56 moderation events
+                        limit: 1000,
                         since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     }
                 ];
@@ -4576,12 +4608,14 @@
                 }
 
                 // Subscribe to ALL public community definitions (kind 34550)
+                // Subscribe to public communities created with NYM (kind 34550)
                 const allCommunitiesSub = [
                     "REQ",
                     "all-communities-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [34550], // NIP-72 community definitions
-                        limit: 200, // Get more communities
+                        "#client": ["NYM"], // Only communities created with NYM
+                        limit: 200,
                         since: Math.floor(Date.now() / 1000) - 2592000 // Last 30 days
                     }
                 ];
@@ -5911,17 +5945,30 @@
             }
 
             subscribeToMessages() {
-                // Subscribe to ephemeral, channel, and community messages
-                const subscription = [
+                // Subscribe to ephemeral and channel messages
+                const channelSubscription = [
                     "REQ",
-                    "nym-" + Math.random().toString(36).substring(7),
+                    "nym-channels-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [20000, 23333, 4550],
+                        kinds: [20000, 23333],
                         limit: 200
                     }
                 ];
 
-                this.sendToRelay(subscription);
+                this.sendToRelay(channelSubscription);
+
+                // Subscribe to community messages (only from NYM client)
+                const communitySubscription = [
+                    "REQ",
+                    "nym-community-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [4550],
+                        "#client": ["NYM"],
+                        limit: 200
+                    }
+                ];
+
+                this.sendToRelay(communitySubscription);
             }
 
             subscribeToReactions() {
@@ -6109,13 +6156,32 @@
                     "REQ",
                     "channel-discovery-" + Math.random().toString(36).substring(7),
                     {
-                        kinds: [23333, 20000], // Both standard and geohash channels
-                        limit: 500, // Get more events to discover more channels
+                        kinds: [23333, 20000, 34550], // Add kind 34550 for community definitions
+                        limit: 500,
                         since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     }
                 ];
 
                 this.sendToRelay(discoverySubscription);
+            }
+
+            async discoverPublicCommunities() {
+                // Subscribe to public community definitions created with NYM
+                const publicCommunitySub = [
+                    "REQ",
+                    "public-communities-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [34550], // Community definitions
+                        "#client": ["NYM"], // Only communities created with NYM
+                        "#public": [""], // Filter for public communities
+                        limit: 200,
+                        since: Math.floor(Date.now() / 1000) - 2592000 // Last 30 days
+                    }
+                ];
+
+                this.sendToRelay(publicCommunitySub);
+
+                console.log('Discovering public communities created with NYM...');
             }
 
 
@@ -6182,9 +6248,12 @@
                     this.subscribeToSingleRelay(url);
                 });
 
-                // Also do channel discovery
+                // Also do channel discovery (includes communities now)
                 this.discoverChannels();
                 this.discoverExistingChannels();
+
+                // Explicitly discover public communities
+                this.discoverPublicCommunities();
             }
 
             handleRelayMessage(msg, relayUrl) {
@@ -6350,13 +6419,8 @@
                     return;
                 }
 
-                // Handle community moderation events (bans, kicks, mod changes)
+                // Handle NIP-72 moderation events FIRST (before processing messages)
                 if (event.kind === 1984) { // NIP-56 reporting/moderation events
-                    // Check if we've already processed this exact moderation event
-                    if (this.processedModerationEvents.has(event.id)) {
-                        return; // Already processed, skip
-                    }
-
                     const pTag = event.tags.find(t => t[0] === 'p');
                     const aTag = event.tags.find(t => t[0] === 'a');
                     const actionTag = event.tags.find(t => t[0] === 'action');
@@ -6380,6 +6444,9 @@
                         }
 
                         // Mark this moderation event as processed
+                        if (this.processedModerationEvents.has(event.id)) {
+                            return; // Already processed
+                        }
                         this.processedModerationEvents.add(event.id);
 
                         // Clean up old processed events (keep last 1000)
@@ -6400,14 +6467,16 @@
                                 if (this.currentCommunity === communityId) {
                                     document.querySelectorAll('.message').forEach(msg => {
                                         if (msg.dataset.pubkey === targetPubkey) {
-                                            msg.style.display = 'none';
-                                            msg.classList.add('blocked');
+                                            msg.remove();
                                         }
                                     });
                                 }
 
-                                // Show notification if not from us
-                                if (event.pubkey !== this.pubkey) {
+                                // Clean up stored messages
+                                this.cleanupBannedMessages(communityId, targetPubkey);
+
+                                // Show notification ONLY if in this community AND not from current user
+                                if (this.currentCommunity === communityId && event.pubkey !== this.pubkey) {
                                     const targetNym = this.getNymFromPubkey(targetPubkey);
                                     const modNym = this.getNymFromPubkey(event.pubkey);
                                     this.displaySystemMessage(`${targetNym} was banned by ${modNym}`);
@@ -6419,18 +6488,8 @@
                                     this.communityBans.get(communityId).delete(targetPubkey);
                                 }
 
-                                // Show messages from unbanned user if viewing this community
-                                if (this.currentCommunity === communityId) {
-                                    document.querySelectorAll('.message.blocked').forEach(msg => {
-                                        if (msg.dataset.pubkey === targetPubkey) {
-                                            msg.style.display = '';
-                                            msg.classList.remove('blocked');
-                                        }
-                                    });
-                                }
-
-                                // Show notification if not from us
-                                if (event.pubkey !== this.pubkey) {
+                                // Show notification ONLY if in this community AND not from current user
+                                if (this.currentCommunity === communityId && event.pubkey !== this.pubkey) {
                                     const targetNym = this.getNymFromPubkey(targetPubkey);
                                     const modNym = this.getNymFromPubkey(event.pubkey);
                                     this.displaySystemMessage(`${targetNym} was unbanned by ${modNym}`);
@@ -6438,14 +6497,12 @@
                                 break;
 
                             case 'kick':
-                                // Kicks are temporary - just show notification
-                                if (targetPubkey === this.pubkey) {
+                                // Kicks are temporary - show notification if it affects the current user
+                                if (targetPubkey === this.pubkey && this.currentCommunity === communityId) {
                                     this.displaySystemMessage(`You have been kicked from ${community.name}`);
-                                    // Switch to bar if we're kicked
-                                    if (this.currentCommunity === communityId) {
-                                        this.switchChannel('bar', '');
-                                    }
-                                } else if (event.pubkey !== this.pubkey) {
+                                    // Switch to bar if we're kicked from current community
+                                    this.switchChannel('bar', '');
+                                } else if (this.currentCommunity === communityId && event.pubkey !== this.pubkey) {
                                     const targetNym = this.getNymFromPubkey(targetPubkey);
                                     const modNym = this.getNymFromPubkey(event.pubkey);
                                     this.displaySystemMessage(`${targetNym} was kicked by ${modNym}`);
@@ -6647,29 +6704,14 @@
                             this.ownedCommunities.add(communityId);
                         }
 
-                        // Add to UI if not already present AND (user has access OR it's NYM community)
-                        if (!document.querySelector(`[data-community="${communityId}"]`)) {
-                            // For NYM community, always add for persistent users
-                            if (isNYMCommunity || event.pubkey === this.pubkey) {
-                                this.addCommunityChannel(name, communityId, isPrivate);
-                                this.userJoinedChannels.add(communityId);
-
-                                // AUTO-PIN THE NYM COMMUNITY
-                                if (isNYMCommunity) {
-                                    this.pinnedChannels.add(communityId);
-                                    this.savePinnedChannels();
-                                }
-
-                                this.saveUserChannels();
-                            }
-                        }
-
                         // Parse moderators
                         const modTags = event.tags.filter(t => t[0] === 'p' && t[3] === 'moderator');
                         if (modTags.length > 0) {
                             if (!this.communityModerators.has(communityId)) {
                                 this.communityModerators.set(communityId, new Set());
                             }
+                            // Clear existing mods and repopulate from latest definition
+                            this.communityModerators.get(communityId).clear();
                             modTags.forEach(tag => {
                                 const modPubkey = tag[1];
                                 this.communityModerators.get(communityId).add(modPubkey);
@@ -6677,6 +6719,7 @@
                                 if (modPubkey === this.pubkey) {
                                     this.moderatedCommunities.add(communityId);
 
+                                    // Add to UI if we're a moderator
                                     if (!document.querySelector(`[data-community="${communityId}"]`)) {
                                         this.addCommunityChannel(name, communityId, isPrivate);
                                         this.userJoinedChannels.add(communityId);
@@ -6684,6 +6727,68 @@
                                     }
                                 }
                             });
+                        } else {
+                            // No moderator tags - clear moderators for this community
+                            if (this.communityModerators.has(communityId)) {
+                                this.communityModerators.get(communityId).clear();
+                            }
+                        }
+
+                        // **CRITICAL: Parse banned users from community definition**
+                        const bannedTags = event.tags.filter(t => t[0] === 'p' && t[3] === 'banned');
+                        if (bannedTags.length > 0) {
+                            if (!this.communityBans.has(communityId)) {
+                                this.communityBans.set(communityId, new Set());
+                            }
+                            // Clear existing bans and repopulate from latest definition
+                            this.communityBans.get(communityId).clear();
+                            bannedTags.forEach(tag => {
+                                const bannedPubkey = tag[1];
+                                this.communityBans.get(communityId).add(bannedPubkey);
+                            });
+
+                            console.log(`Loaded ${bannedTags.length} banned users for community ${communityId}`);
+
+                            // If we're currently viewing this community, remove banned users' messages
+                            if (this.currentCommunity === communityId) {
+                                bannedTags.forEach(tag => {
+                                    const bannedPubkey = tag[1];
+                                    // Remove from DOM
+                                    document.querySelectorAll(`.message[data-pubkey="${bannedPubkey}"]`).forEach(msg => {
+                                        msg.remove();
+                                    });
+                                    // Clean up stored messages
+                                    this.cleanupBannedMessages(communityId, bannedPubkey);
+                                });
+                            }
+                        } else {
+                            // No banned tags means no bans - clear any local bans for this community
+                            if (this.communityBans.has(communityId)) {
+                                this.communityBans.get(communityId).clear();
+                            }
+                        }
+
+                        // Add to UI if not already present
+                        if (!document.querySelector(`[data-community="${communityId}"]`)) {
+
+                            if (isNYMCommunity || event.pubkey === this.pubkey || !isPrivate) {
+                                this.addCommunityChannel(name, communityId, isPrivate);
+
+                                // Only mark as user-joined if owned or NYM community
+                                if (isNYMCommunity || event.pubkey === this.pubkey) {
+                                    this.userJoinedChannels.add(communityId);
+                                }
+
+                                // AUTO-PIN THE NYM COMMUNITY
+                                if (isNYMCommunity) {
+                                    this.pinnedChannels.add(communityId);
+                                    this.savePinnedChannels();
+                                }
+
+                                if (event.pubkey === this.pubkey) {
+                                    this.saveUserChannels();
+                                }
+                            }
                         }
                     }
                 } else if (event.kind === 4550) {
@@ -6692,6 +6797,13 @@
 
                     if (aTag) {
                         const nymTag = event.tags.find(t => t[0] === 'n');
+                        const clientTag = event.tags.find(t => t[0] === 'client');
+
+                        // Only process messages sent by NYM client
+                        if (!clientTag || clientTag[1] !== 'NYM') {
+                            console.log(`Ignoring non-NYM community message from ${event.pubkey}`);
+                            return;
+                        }
 
                         // Parse a tag: "34550:adminPubkey:communityId"
                         const [kind, adminPubkey, communityId] = aTag[1].split(':');
@@ -8190,11 +8302,17 @@
                 // Format the nym with pubkey suffix for display
                 const baseNym = nym.split('#')[0] || nym;
                 const suffix = this.getPubkeySuffix(pubkey);
-                const displayNym = `${baseNym}#${suffix}`;
+                const displayNym = `${baseNym}<span class="nym-suffix">#${suffix}</span>`;
 
                 // Update UI with formatted nym
-                document.getElementById('currentChannel').textContent = `@${displayNym} (PM)`;
+                document.getElementById('currentChannel').innerHTML = `@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
                 document.getElementById('channelMeta').textContent = 'Private message';
+
+                // Hide share button in PM mode
+                const shareBtn = document.getElementById('shareChannelBtn');
+                if (shareBtn) {
+                    shareBtn.style.display = 'none';
+                }
 
                 // Update active states
                 document.querySelectorAll('.channel-item').forEach(item => {
@@ -8610,6 +8728,7 @@
                             ['description', description || `Community ${name}`],
                             ['image', imageUrl || ''], // Community image
                             ['p', this.pubkey, '', 'admin'], // Creator is admin
+                            ['client', 'NYM'] // Add this line if not present
                         ],
                         content: description || '',
                         pubkey: this.pubkey
@@ -8731,11 +8850,41 @@
                     });
                 }
 
+                // Get all existing items (excluding view more button)
+                const existingItems = Array.from(list.querySelectorAll('.channel-item'));
                 const viewMoreBtn = list.querySelector('.view-more-btn');
-                if (viewMoreBtn) {
-                    list.insertBefore(item, viewMoreBtn);
+
+                // Find a random position among existing items
+                // Exclude #bar (first item) and NYM community if it exists
+                let insertableItems = existingItems.filter(existingItem => {
+                    const isBar = existingItem.dataset.channel === 'bar' && !existingItem.dataset.geohash && !existingItem.dataset.isCommunity;
+                    const isNYM = existingItem.dataset.community &&
+                        this.communityChannels.get(existingItem.dataset.community)?.name?.toLowerCase() === 'nym' &&
+                        this.communityChannels.get(existingItem.dataset.community)?.admin === this.verifiedDeveloper.pubkey;
+                    return !isBar && !isNYM;
+                });
+
+                if (insertableItems.length > 0) {
+                    // Insert at random position
+                    const randomIndex = Math.floor(Math.random() * (insertableItems.length + 1));
+                    if (randomIndex === insertableItems.length) {
+                        // Insert at the end (before view more button)
+                        if (viewMoreBtn) {
+                            list.insertBefore(item, viewMoreBtn);
+                        } else {
+                            list.appendChild(item);
+                        }
+                    } else {
+                        // Insert before the randomly selected item
+                        list.insertBefore(item, insertableItems[randomIndex]);
+                    }
                 } else {
-                    list.appendChild(item);
+                    // No insertable items, just add before view more or at end
+                    if (viewMoreBtn) {
+                        list.insertBefore(item, viewMoreBtn);
+                    } else {
+                        list.appendChild(item);
+                    }
                 }
 
                 // Store in channels map with community flag
@@ -10289,9 +10438,43 @@
                     return;
                 }
 
-                if (this.currentChannel === 'bar' && !this.currentGeohash) {
+                if (this.currentChannel === 'bar' && !this.currentGeohash && !this.currentCommunity) {
                     this.displaySystemMessage('Cannot leave the default #bar channel');
                     return;
+                }
+
+                if (this.currentCommunity) {
+                    const community = this.communityChannels.get(this.currentCommunity);
+
+                    // Check if this is a public community (just discovered, not owned/moderated/member)
+                    const isOwned = this.ownedCommunities.has(this.currentCommunity);
+                    const isModerated = this.moderatedCommunities.has(this.currentCommunity);
+                    const isMember = this.communityMembers.has(this.currentCommunity) &&
+                        this.communityMembers.get(this.currentCommunity).has(this.pubkey);
+
+                    if (community && !community.isPrivate && !isOwned && !isModerated && !isMember) {
+                        // Public community - just remove from sidebar (will be re-discovered)
+                        const element = document.querySelector(`[data-community="${this.currentCommunity}"]`);
+                        if (element) {
+                            element.remove();
+                        }
+                        this.channels.delete(this.currentCommunity);
+                        this.userJoinedChannels.delete(this.currentCommunity);
+                        this.displaySystemMessage(`Left public community: ${community.name}`);
+                        this.switchChannel('bar', '');
+                        return;
+                    }
+
+                    // For owned/moderated/member communities, can't leave
+                    if (isOwned) {
+                        this.displaySystemMessage('You cannot leave a community you created. Use /communitysettings to delete it.');
+                        return;
+                    }
+
+                    if (isModerated || isMember) {
+                        this.displaySystemMessage('Use community settings or contact admin to leave this community');
+                        return;
+                    }
                 }
 
                 this.removeChannel(this.currentChannel, this.currentGeohash);
@@ -10829,7 +11012,7 @@
                     return;
                 }
 
-                // Add to ban list
+                // Add to ban list locally
                 if (!this.communityBans.has(communityId)) {
                     this.communityBans.set(communityId, new Set());
                 }
@@ -10838,18 +11021,19 @@
                 const nym = this.getNymFromPubkey(targetPubkey);
                 this.displaySystemMessage(`Banned ${nym} from community`);
 
-                // Publish ban via NIP-72 moderation
+                // IMPORTANT: Update community definition to include ban list
+                // This ensures bans persist and are visible to all users
+                await this.updateCommunityDefinitionWithBans(communityId);
+
+                // Also publish a moderation event for real-time notification
                 await this.publishCommunityModeration(communityId, targetPubkey, 'ban');
 
-                // NEW: Clean up stored messages from banned user
+                // Clean up stored messages from banned user
                 this.cleanupBannedMessages(communityId, targetPubkey);
 
-                // Hide all messages from banned user in current view
-                document.querySelectorAll('.message').forEach(msg => {
-                    if (msg.dataset.pubkey === targetPubkey) {
-                        msg.style.display = 'none';
-                        msg.classList.add('blocked');
-                    }
+                // Remove messages from DOM
+                document.querySelectorAll(`.message[data-pubkey="${targetPubkey}"]`).forEach(msg => {
+                    msg.remove();
                 });
             }
 
@@ -10893,16 +11077,14 @@
                 const nym = this.getNymFromPubkey(targetPubkey);
                 this.displaySystemMessage(`Unbanned ${nym} from community`);
 
-                // Publish unban action
+                // Update community definition to remove from ban list
+                await this.updateCommunityDefinitionWithBans(communityId);
+
+                // Publish unban action for real-time notification
                 await this.publishCommunityModeration(communityId, targetPubkey, 'unban');
 
-                // Show previously hidden messages from this user
-                document.querySelectorAll('.message.blocked').forEach(msg => {
-                    if (msg.dataset.pubkey === targetPubkey) {
-                        msg.style.display = '';
-                        msg.classList.remove('blocked');
-                    }
-                });
+                // Note: Old messages won't be restored, only new messages will appear
+                this.displaySystemMessage(`New messages from ${nym} will now appear`);
             }
 
             async cmdInviteToCommunity(args) {
@@ -11735,16 +11917,23 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 this.currentGeohash = geohash;
                 this.currentCommunity = null; // Clear community mode
 
+                // Show share button in channel mode
+                const shareBtn = document.getElementById('shareChannelBtn');
+                if (shareBtn) {
+                    shareBtn.style.display = 'block';
+                }
+
                 const displayName = geohash ? `#${geohash}` : `#${channel}`;
                 let fullTitle = displayName;
 
-                // Add location for geohash channels
-                if (geohash && geohash !== '') {
+                // Add channel type label
+                if (geohash) {
+                    // Geohash channel - add location info and label
                     const location = this.getGeohashLocation(geohash);
                     console.log(`Getting location for geohash ${geohash}: ${location}`);
 
                     if (location) {
-                        fullTitle = `${displayName} <br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a></font>`;
+                        fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a></font>`;
 
                         if (this.userLocation && this.settings.sortByProximity) {
                             try {
@@ -11753,12 +11942,18 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                                     this.userLocation.lat, this.userLocation.lng,
                                     coords.lat, coords.lng
                                 );
-                                fullTitle = `${displayName} <br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a> (${distance.toFixed(1)}km)</font>`;
+                                fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a> (${distance.toFixed(1)}km)</font>`;
                             } catch (e) {
                                 console.error('Distance calculation error:', e);
                             }
                         }
+                    } else {
+                        // No location info available, just add label
+                        fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span>`;
                     }
+                } else {
+                    // Standard ephemeral channel
+                    fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Ephemeral)</span>`;
                 }
 
                 console.log('Setting channel title to:', fullTitle);
@@ -11817,6 +12012,12 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 this.currentChannel = null; // Clear standard channel
                 this.currentGeohash = ''; // Clear geohash
                 this.currentCommunity = communityId; // Set community
+
+                // Show share button in community mode
+                const shareBtn = document.getElementById('shareChannelBtn');
+                if (shareBtn) {
+                    shareBtn.style.display = 'block';
+                }
 
                 document.getElementById('currentChannel').innerHTML = `#${this.escapeHtml(community.name)} <span style="font-size: 12px; color: var(--text-dim);">(Community)</span>`;
 
@@ -12293,12 +12494,18 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             saveUserChannels() {
                 const userChannels = [];
                 this.channels.forEach((value, key) => {
-                    // Only save channels that were explicitly joined by the user
-                    if (this.userJoinedChannels.has(key)) {
+                    const isCommunity = value.isCommunity;
+                    const isOwnedCommunity = isCommunity && this.ownedCommunities.has(key);
+                    const isModeratedCommunity = isCommunity && this.moderatedCommunities.has(key);
+                    const isMemberCommunity = isCommunity && this.communityMembers.has(key) &&
+                        this.communityMembers.get(key).has(this.pubkey);
+                    if (this.userJoinedChannels.has(key) || isOwnedCommunity || isModeratedCommunity || isMemberCommunity) {
                         userChannels.push({
                             key: key,
                             channel: value.channel,
-                            geohash: value.geohash
+                            geohash: value.geohash,
+                            isCommunity: value.isCommunity,
+                            community: value.community
                         });
                     }
                 });
@@ -12329,20 +12536,35 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     try {
                         const userChannels = JSON.parse(saved);
 
-                        userChannels.forEach(({ key, channel, geohash }) => {
-                            // Add the channel to the list if not already present
-                            if (!this.channels.has(key)) {
-                                this.addChannel(channel, geohash);
+                        userChannels.forEach(({ key, channel, geohash, isCommunity, community }) => {
+                            if (isCommunity) {
+                                // For communities, only restore if owned/moderated/member
+                                // Public communities will be re-discovered automatically
+                                const isOwned = this.ownedCommunities.has(key);
+                                const isModerated = this.moderatedCommunities.has(key);
+                                const isMember = this.communityMembers.has(key) &&
+                                    this.communityMembers.get(key).has(this.pubkey);
+
+                                if (isOwned || isModerated || isMember) {
+                                    // Will be added when community definition is received
+                                    this.userJoinedChannels.add(key);
+                                }
+                            } else {
+                                // Regular channels - add the channel to the list if not already present
+                                if (!this.channels.has(key)) {
+                                    this.addChannel(channel, geohash);
+                                }
+                                // Make sure it's marked as user-joined
+                                this.userJoinedChannels.add(key);
                             }
-                            // Make sure it's marked as user-joined
-                            this.userJoinedChannels.add(key);
                         });
 
                         // Sort channels after loading
                         this.sortChannelsByActivity();
 
-                        if (userChannels.length > 0) {
-                            this.displaySystemMessage(`Restored ${userChannels.length} previously joined channels`);
+                        const regularChannelCount = userChannels.filter(c => !c.isCommunity).length;
+                        if (regularChannelCount > 0) {
+                            this.displaySystemMessage(`Restored ${regularChannelCount} previously joined channels`);
                         }
                     } catch (error) {
                         console.error('Failed to load user channels:', error);
@@ -12943,6 +13165,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
 
                 const matches = [];
+
+                // First, search in active users
                 this.users.forEach((user, pubkey) => {
                     const baseNym = user.nym.split('#')[0] || user.nym;
                     if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
@@ -12956,8 +13180,102 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     }
                 });
 
+                // If no matches in active users, search in stored messages
                 if (matches.length === 0) {
-                    this.displaySystemMessage(`User ${input} not found`);
+                    // Search through all stored messages
+                    this.messages.forEach((channelMessages, channel) => {
+                        channelMessages.forEach(msg => {
+                            if (msg.pubkey && msg.author) {
+                                const baseNym = msg.author.split('#')[0] || msg.author;
+                                if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
+                                    if (searchSuffix) {
+                                        if (msg.pubkey.endsWith(searchSuffix)) {
+                                            // Check if not already in matches
+                                            if (!matches.find(m => m.pubkey === msg.pubkey)) {
+                                                matches.push({ nym: msg.author, pubkey: msg.pubkey });
+                                            }
+                                        }
+                                    } else {
+                                        // Check if not already in matches
+                                        if (!matches.find(m => m.pubkey === msg.pubkey)) {
+                                            matches.push({ nym: msg.author, pubkey: msg.pubkey });
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    });
+
+                    // Also search in PM messages
+                    this.pmMessages.forEach((conversationMessages, conversationKey) => {
+                        conversationMessages.forEach(msg => {
+                            if (msg.pubkey && msg.author) {
+                                const baseNym = msg.author.split('#')[0] || msg.author;
+                                if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
+                                    if (searchSuffix) {
+                                        if (msg.pubkey.endsWith(searchSuffix)) {
+                                            // Check if not already in matches
+                                            if (!matches.find(m => m.pubkey === msg.pubkey)) {
+                                                matches.push({ nym: msg.author, pubkey: msg.pubkey });
+                                            }
+                                        }
+                                    } else {
+                                        // Check if not already in matches
+                                        if (!matches.find(m => m.pubkey === msg.pubkey)) {
+                                            matches.push({ nym: msg.author, pubkey: msg.pubkey });
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    });
+
+                    // Also search in community members if in a community
+                    if (this.currentCommunity && this.communityMembers.has(this.currentCommunity)) {
+                        this.communityMembers.get(this.currentCommunity).forEach(pubkey => {
+                            // Try to get nym from cache
+                            const cachedNym = this.getNymFromPubkey(pubkey);
+                            if (cachedNym) {
+                                const baseNym = cachedNym.split('#')[0] || cachedNym;
+                                if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
+                                    if (searchSuffix) {
+                                        if (pubkey.endsWith(searchSuffix)) {
+                                            if (!matches.find(m => m.pubkey === pubkey)) {
+                                                matches.push({ nym: cachedNym, pubkey: pubkey });
+                                            }
+                                        }
+                                    } else {
+                                        if (!matches.find(m => m.pubkey === pubkey)) {
+                                            matches.push({ nym: cachedNym, pubkey: pubkey });
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+
+                // If still no matches and we have a suffix, we can construct a pubkey
+                // This is useful for moderators who might have the full nym#suffix
+                if (matches.length === 0 && searchSuffix && searchSuffix.length === 4) {
+                    // If we're in a community, search through all messages to find a pubkey ending with this suffix
+                    if (this.currentCommunity) {
+                        const communityMessages = this.messages.get(this.currentCommunity) || [];
+                        communityMessages.forEach(msg => {
+                            if (msg.pubkey && msg.pubkey.endsWith(searchSuffix)) {
+                                const baseNym = msg.author.split('#')[0] || msg.author;
+                                if (baseNym.toLowerCase() === searchNym.toLowerCase()) {
+                                    if (!matches.find(m => m.pubkey === msg.pubkey)) {
+                                        matches.push({ nym: msg.author, pubkey: msg.pubkey });
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+
+                if (matches.length === 0) {
+                    this.displaySystemMessage(`User ${input} not found. Try using the full nym#xxxx format if you know their pubkey suffix.`);
                     return null;
                 }
 
@@ -13022,6 +13340,68 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
                 if (signedEvent) {
                     this.sendToRelay(["EVENT", signedEvent]);
+                }
+            }
+
+            async updateCommunityDefinitionWithBans(communityId) {
+                const community = this.communityChannels.get(communityId);
+                if (!community) return;
+
+                // Only admin can update community definition
+                if (community.admin !== this.pubkey) {
+                    console.log('Only admin can update community definition');
+                    return;
+                }
+
+                // Get current moderators
+                const mods = this.communityModerators.get(communityId) || new Set();
+
+                // Get current banned users
+                const banned = this.communityBans.get(communityId) || new Set();
+
+                // Create updated community definition
+                const event = {
+                    kind: 34550,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [
+                        ['d', communityId],
+                        ['name', community.name],
+                        ['description', community.description || ''],
+                        ['image', community.imageUrl || ''],
+                        ['p', this.pubkey, '', 'admin'],
+                    ],
+                    content: community.description || '',
+                    pubkey: this.pubkey
+                };
+
+                // Add moderators
+                mods.forEach(modPubkey => {
+                    event.tags.push(['p', modPubkey, '', 'moderator']);
+                });
+
+                // Add banned users - THIS IS KEY FOR PERSISTENCE
+                banned.forEach(bannedPubkey => {
+                    event.tags.push(['p', bannedPubkey, '', 'banned']);
+                });
+
+                // Add privacy tag
+                if (community.isPrivate) {
+                    event.tags.push(['private']);
+                } else {
+                    event.tags.push(['public']);
+                }
+
+                // Sign and send
+                let signedEvent;
+                if (window.nostr && !this.privkey) {
+                    signedEvent = await window.nostr.signEvent(event);
+                } else if (this.privkey) {
+                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
+                }
+
+                if (signedEvent) {
+                    this.sendToRelay(["EVENT", signedEvent]);
+                    console.log('Updated community definition with ban list');
                 }
             }
 
@@ -13668,7 +14048,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.9.13 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.9.14 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -14104,32 +14484,91 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         // Handle channel routing after initialization
         async function routeToUrlChannel() {
             if (window.pendingChannel) {
-                const channel = window.pendingChannel;
+                const channelInput = window.pendingChannel;
                 delete window.pendingChannel;
 
                 // Small delay for persistent connections to ensure relays are ready
                 if (nym.connectionMode !== 'ephemeral') {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    await new Promise(resolve => setTimeout(resolve, 2000));
                 }
 
-                // Determine if it's a geohash or standard channel
-                if (nym.isValidGeohash(channel)) {
-                    // It's a geohash channel
-                    nym.addChannel(channel, channel);
-                    nym.switchChannel(channel, channel);
-                    nym.userJoinedChannels.add(channel);
-                    nym.displaySystemMessage(`Joined geohash channel #${channel} from URL`);
+                // Parse channel type from prefix
+                let channelType = 'auto'; // auto-detect if no prefix
+                let channelName = channelInput;
+
+                if (channelInput.startsWith('c:')) {
+                    channelType = 'community';
+                    channelName = channelInput.substring(2);
+                } else if (channelInput.startsWith('g:')) {
+                    channelType = 'geohash';
+                    channelName = channelInput.substring(2);
+                } else if (channelInput.startsWith('e:')) {
+                    channelType = 'ephemeral';
+                    channelName = channelInput.substring(2);
+                }
+
+                // Handle based on type
+                if (channelType === 'community') {
+                    // Handle community routing
+                    const communityId = channelName;
+
+                    // Function to check for community
+                    const checkForCommunity = () => {
+                        if (nym.communityChannels.has(communityId)) {
+                            const community = nym.communityChannels.get(communityId);
+
+                            if (nym.connectionMode === 'ephemeral') {
+                                nym.displaySystemMessage(`Community "${community.name}" requires a persistent identity (extension or nsec login)`);
+                                return false;
+                            }
+
+                            if (!document.querySelector(`[data-community="${communityId}"]`)) {
+                                nym.addCommunityChannel(community.name, communityId, community.isPrivate);
+                            }
+
+                            nym.switchToCommunity(communityId);
+                            nym.userJoinedChannels.add(communityId);
+                            nym.saveUserChannels();
+                            nym.displaySystemMessage(`Joined community #${community.name} from URL`);
+                            return true;
+                        }
+                        return false;
+                    };
+
+                    // Try to find community immediately
+                    let foundCommunity = checkForCommunity();
+
+                    // If not found and user is persistent, wait for discovery
+                    if (!foundCommunity && nym.connectionMode !== 'ephemeral') {
+                        nym.displaySystemMessage(`Looking for community...`);
+
+                        // Wait up to 5 seconds for community to be discovered
+                        for (let i = 0; i < 10; i++) {
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                            foundCommunity = checkForCommunity();
+                            if (foundCommunity) break;
+                        }
+
+                        if (!foundCommunity) {
+                            nym.displaySystemMessage(`Community not found. It may be private or no longer exist.`);
+                        }
+                    }
+                } else if (channelType === 'geohash' || (channelType === 'auto' && nym.isValidGeohash(channelName))) {
+                    // Geohash channel
+                    nym.addChannel(channelName, channelName);
+                    nym.switchChannel(channelName, channelName);
+                    nym.userJoinedChannels.add(channelName);
+                    nym.saveUserChannels();
+                    nym.displaySystemMessage(`Joined geohash channel #${channelName} from URL`);
                 } else {
-                    // It's a standard channel
-                    nym.addChannel(channel, '');
-                    nym.switchChannel(channel, '');
-                    await nym.createChannel(channel);
-                    nym.userJoinedChannels.add(channel);
-                    nym.displaySystemMessage(`Joined channel #${channel} from URL`);
+                    // Standard ephemeral channel
+                    nym.addChannel(channelName, '');
+                    nym.switchChannel(channelName, '');
+                    await nym.createChannel(channelName);
+                    nym.userJoinedChannels.add(channelName);
+                    nym.saveUserChannels();
+                    nym.displaySystemMessage(`Joined channel #${channelName} from URL`);
                 }
-
-                // Save the joined channel
-                nym.saveUserChannels();
 
                 // Clear the URL hash to clean up
                 history.replaceState(null, null, window.location.pathname);
