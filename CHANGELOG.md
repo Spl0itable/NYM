@@ -1,3 +1,7 @@
+## v2.9.15 - 2025-10-12
+
+Hotfix: public/private communities not showing unread message count
+
 ## v2.9.14 - 2025-10-12
 
 Hotfix: corrected share URL and routing

@@ -4,8 +4,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>NYM App - Nostr Ynstant Messenger</title>
-    <meta name="description" content="Ephemeral anonymous messaging over Nostr. Bridged with Bitchat geohash channels.">
+    <title>NYM</title>
+    <meta name="description"
+        content="NYM App - Nostr Ynstant Messenger. Ephemeral anonymous messaging. Bridged with Bitchat geohash channels.">
     <link rel="manifest"
         href="data:application/json;base64,eyJuYW1lIjoiTllNIC0gTm9zdHIgWW5zdGFudCBNZXNzZW5nZXIiLCJzaG9ydF9uYW1lIjoiTllNIiwic3RhcnRfdXJsIjoiaHR0cHM6Ly9ueW0uYmFyLyIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwidGhlbWVfY29sb3IiOiIjMDAwMDAwIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDAwMDAiLCJpY29ucyI6W3sic3JjIjoiaHR0cHM6Ly9ueW0uYmFyL2ltYWdlcy9OWU0taWNvbi5wbmciLCJzaXplcyI6IjE5MngxOTIiLCJ0eXBlIjoiaW1hZ2UvcG5nIn0seyJzcmMiOiJodHRwczovL255bS5iYXIvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiNTEyeDUxMiIsInR5cGUiOiJpbWFnZS9wbmcifV19">
     <link rel="icon" type="image/x-icon" href="https://nym.bar/images/favicon.ico">
@@ -684,6 +685,7 @@
             flex-direction: column;
             gap: 2px;
             font-size: 14px;
+            padding-bottom: 20px;
         }
 
         .message {
@@ -2059,6 +2061,7 @@
                 width: 280px;
                 overflow-y: auto;
                 -webkit-overflow-scrolling: touch;
+                padding-bottom: 20px;
             }
 
             .sidebar-header {
@@ -2096,7 +2099,7 @@
             }
 
             .messages-container {
-                padding-bottom: 120px;
+                padding-bottom: 160px;
                 padding-left: 5px;
                 padding-right: 5px;
             }
@@ -12620,7 +12623,15 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         // Geohash channel
                         selector = `[data-geohash="${channel.substring(1)}"]`;
                     } else {
-                        selector = `[data-channel="${channel}"][data-geohash=""]`;
+                        // Check if it's a community channel by ID
+                        const communityElement = document.querySelector(`[data-community="${channel}"]`);
+                        if (communityElement) {
+                            // It's a community channel
+                            selector = `[data-community="${channel}"]`;
+                        } else {
+                            // Standard channel
+                            selector = `[data-channel="${channel}"][data-geohash=""]`;
+                        }
                     }
 
                     const badge = document.querySelector(`${selector} .unread-badge`);
@@ -12765,8 +12776,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                             selector = `[data-channel="${channelName}"][data-geohash=""]`;
                         }
                     } else {
-                        // Standard channel without # prefix
-                        selector = `[data-channel="${channel}"][data-geohash=""]`;
+                        // Check if it's a community channel
+                        const communityElement = document.querySelector(`[data-community="${channel}"]`);
+                        if (communityElement) {
+                            selector = `[data-community="${channel}"]`;
+                        } else {
+                            // Standard channel without # prefix
+                            selector = `[data-channel="${channel}"][data-geohash=""]`;
+                        }
                     }
 
                     const badge = document.querySelector(`${selector} .unread-badge`);
@@ -14048,7 +14065,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.9.14 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.9.15 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
