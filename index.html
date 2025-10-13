@@ -6596,7 +6596,13 @@
 
                         // Show notification only if mentioned and not blocked
                         if (!message.isOwn && document.hidden && this.isMentioned(message.content) && !this.blockedUsers.has(nym)) {
-                            this.showNotification(nym, message.content);
+                            const channelInfo = {
+                                type: 'geohash',
+                                channel: geohash,
+                                geohash: geohash,
+                                id: event.id
+                            };
+                            this.showNotification(nym, message.content, channelInfo);
                         }
                     }
                 } else if (event.kind === 23333) {
@@ -6663,7 +6669,13 @@
 
                         // Show notification only if mentioned and not blocked
                         if (!message.isOwn && document.hidden && this.isMentioned(message.content) && !this.blockedUsers.has(nym)) {
-                            this.showNotification(nym, message.content);
+                            const channelInfo = {
+                                type: 'standard',
+                                channel: channel,
+                                geohash: '',
+                                id: event.id
+                            };
+                            this.showNotification(nym, message.content, channelInfo);
                         }
                     }
                 } else if (event.kind === 34550) {
@@ -6900,7 +6912,13 @@
 
                                 // Show notification if mentioned
                                 if (!message.isOwn && document.hidden && this.isMentioned(message.content) && !this.blockedUsers.has(nym)) {
-                                    this.showNotification(nym, message.content);
+                                    const channelInfo = {
+                                        type: 'community',
+                                        communityId: communityId,
+                                        channel: communityId,
+                                        id: event.id
+                                    };
+                                    this.showNotification(nym, message.content, channelInfo);
                                 }
                             }
                         } else if (!message.isOwn && !isHistorical && !exists) {
@@ -7816,21 +7834,26 @@
 
                     if (!decryptedContent) return;
 
-                    // Extract nym from the decrypted content if it contains a nym tag
+                    // Handle both legacy JSON format (from old NYM) and standard plain text
                     let senderNym;
                     let actualContent = decryptedContent;
+
+                    // Try to parse as JSON first (for backward compatibility with old NYM messages)
                     try {
-                        // Check if the decrypted content has embedded nym info
                         const contentData = JSON.parse(decryptedContent);
-                        if (contentData.nym) {
+                        if (contentData.nym && contentData.content) {
+                            // This is the old NYM JSON format
                             senderNym = contentData.nym;
                             actualContent = contentData.content;
                         } else {
+                            // JSON but not our format, treat as plain text
                             senderNym = this.getNymFromPubkey(event.pubkey);
+                            actualContent = decryptedContent;
                         }
                     } catch {
-                        // If not JSON, use the content as-is
+                        // Not JSON, use as plain text (standard NIP-04)
                         senderNym = this.getNymFromPubkey(event.pubkey);
+                        actualContent = decryptedContent;
                     }
 
                     // Update user tracking with the nym
@@ -7908,7 +7931,13 @@
                         this.updateUnreadCount(conversationKey);
                         // Show notification only for new messages
                         if (document.hidden || !this.inPMMode || this.currentPM !== conversationPubkey) {
-                            this.showNotification(`PM from ${senderNym}`, actualContent);
+                            const channelInfo = {
+                                type: 'pm',
+                                nym: senderNym,
+                                pubkey: conversationPubkey,
+                                id: conversationKey
+                            };
+                            this.showNotification(`PM from ${senderNym}`, actualContent, channelInfo);
                         }
                     }
 
@@ -8137,20 +8166,14 @@
 
             async sendNIP04PM(content, recipientPubkey) {
                 try {
-                    // Create message payload with nym
-                    const messagePayload = JSON.stringify({
-                        nym: this.nym,
-                        content: content
-                    });
-
-                    // Encrypt the message
+                    // Encrypt the message directly (no JSON wrapper)
                     let encryptedContent;
                     if (window.nostr && !this.privkey) {
                         // Use extension to encrypt
-                        encryptedContent = await window.nostr.nip04.encrypt(recipientPubkey, messagePayload);
+                        encryptedContent = await window.nostr.nip04.encrypt(recipientPubkey, content);
                     } else if (this.privkey) {
                         // Use local keys to encrypt
-                        encryptedContent = await this.encryptNIP04(messagePayload, recipientPubkey, this.privkey);
+                        encryptedContent = await this.encryptNIP04(content, recipientPubkey, this.privkey);
                     } else {
                         throw new Error('No encryption method available');
                     }
@@ -13137,27 +13160,70 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
             }
 
-            showNotification(title, body) {
+            showNotification(title, body, channelInfo = null) {
                 if (this.settings.sound !== 'none') {
                     this.playSound(this.settings.sound);
                 }
 
                 // Check if Notification API is available
                 if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-                    new Notification(title, {
+                    const notification = new Notification(title, {
                         body: body,
-                        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="40" fill="%230ff" text-anchor="middle" font-family="monospace">NYM</text></svg>'
+                        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="40" fill="%230ff" text-anchor="middle" font-family="monospace">NYM</text></svg>',
+                        tag: channelInfo ? channelInfo.id : 'nym-notification', // Prevent duplicate notifications
+                        requireInteraction: false,
+                        data: channelInfo // Store channel info in notification data
                     });
+
+                    // Add click handler for deep linking
+                    notification.onclick = (event) => {
+                        event.preventDefault();
+                        window.focus(); // Focus the window
+
+                        if (channelInfo) {
+                            // Route to the appropriate channel/PM
+                            if (channelInfo.type === 'pm') {
+                                this.openUserPM(channelInfo.nym, channelInfo.pubkey);
+                            } else if (channelInfo.type === 'community') {
+                                this.switchToCommunity(channelInfo.communityId);
+                            } else if (channelInfo.type === 'geohash') {
+                                this.switchChannel(channelInfo.channel, channelInfo.geohash);
+                            } else {
+                                // Standard channel
+                                this.switchChannel(channelInfo.channel, '');
+                            }
+                        }
+
+                        notification.close();
+                    };
                 }
 
                 // In-app notification (always show this as fallback)
                 const notifEl = document.createElement('div');
                 notifEl.className = 'notification';
                 notifEl.innerHTML = `
-                    <div class="notification-title">${this.escapeHtml(title)}</div>
-                    <div class="notification-body">${this.escapeHtml(body)}</div>
-                    <div class="notification-time">${new Date().toLocaleTimeString()}</div>
-                `;
+        <div class="notification-title">${this.escapeHtml(title)}</div>
+        <div class="notification-body">${this.escapeHtml(body)}</div>
+        <div class="notification-time">${new Date().toLocaleTimeString()}</div>
+    `;
+
+                // Add click handler for in-app notification too
+                if (channelInfo) {
+                    notifEl.style.cursor = 'pointer';
+                    notifEl.onclick = () => {
+                        if (channelInfo.type === 'pm') {
+                            this.openUserPM(channelInfo.nym, channelInfo.pubkey);
+                        } else if (channelInfo.type === 'community') {
+                            this.switchToCommunity(channelInfo.communityId);
+                        } else if (channelInfo.type === 'geohash') {
+                            this.switchChannel(channelInfo.channel, channelInfo.geohash);
+                        } else {
+                            this.switchChannel(channelInfo.channel, '');
+                        }
+                        notifEl.remove();
+                    };
+                }
+
                 document.body.appendChild(notifEl);
 
                 setTimeout(() => {
@@ -14331,7 +14397,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.9.16 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.9.17 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>

@@ -1,3 +1,8 @@
+## v2.9.17 - 2025-10-13
+
+Hotfix: added deeplinking to notifications
+Hotfix: no longer shows as json for NIP-04 PMs on other nostr clients
+
 ## v2.9.16 - 2025-10-13
 
 Hotfix: possible channel name collision with hashtag links
