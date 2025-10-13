@@ -1,3 +1,8 @@
+## v2.9.16 - 2025-10-13
+
+Hotfix: possible channel name collision with hashtag links
+Hotfix: incorrect member count in public/private communities
+
 ## v2.9.15 - 2025-10-12
 
 Hotfix: public/private communities not showing unread message count
