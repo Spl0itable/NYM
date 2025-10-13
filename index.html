@@ -6559,6 +6559,16 @@
                         this.trackMessage(event.pubkey, geohash, isHistorical);
                     }
 
+                    // Track notification state for this channel
+                    const channelKey = geohash;
+                    if (!this.channelNotificationTracking) {
+                        this.channelNotificationTracking = new Map();
+                    }
+                    if (!this.channelNotificationTracking.has(channelKey)) {
+                        this.channelNotificationTracking.set(channelKey, new Set());
+                    }
+                    const alreadyNotified = this.channelNotificationTracking.get(channelKey).has(event.id);
+
                     // Check for BRB auto-response (UNIVERSAL) - only for NEW messages
                     if (!isHistorical && this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
                         // Check if we haven't already responded to this user in this session
@@ -6598,9 +6608,14 @@
                         const shouldNotify = !message.isOwn &&
                             this.isMentioned(message.content) &&
                             !this.blockedUsers.has(nym) &&
+                            !isHistorical &&
+                            !alreadyNotified &&
                             (document.hidden || this.currentChannel !== geohash || this.currentGeohash !== geohash);
 
                         if (shouldNotify) {
+                            // Mark as notified
+                            this.channelNotificationTracking.get(channelKey).add(event.id);
+
                             const channelInfo = {
                                 type: 'geohash',
                                 channel: geohash,
@@ -6636,6 +6651,16 @@
                     if (!isHistorical) {
                         this.trackMessage(event.pubkey, channel, isHistorical);
                     }
+
+                    // Track notification state for this channel
+                    const channelKey = channel;
+                    if (!this.channelNotificationTracking) {
+                        this.channelNotificationTracking = new Map();
+                    }
+                    if (!this.channelNotificationTracking.has(channelKey)) {
+                        this.channelNotificationTracking.set(channelKey, new Set());
+                    }
+                    const alreadyNotified = this.channelNotificationTracking.get(channelKey).has(event.id);
 
                     // Check for BRB auto-response (UNIVERSAL) - only for NEW messages
                     if (!isHistorical && this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
@@ -6676,9 +6701,14 @@
                         const shouldNotify = !message.isOwn &&
                             this.isMentioned(message.content) &&
                             !this.blockedUsers.has(nym) &&
+                            !isHistorical &&
+                            !alreadyNotified &&
                             (document.hidden || this.currentChannel !== channel || this.currentGeohash !== '');
 
                         if (shouldNotify) {
+                            // Mark as notified
+                            this.channelNotificationTracking.get(channelKey).add(event.id);
+
                             const channelInfo = {
                                 type: 'standard',
                                 channel: channel,
@@ -6920,13 +6950,27 @@
                                 this.displayMessage(message);
                                 this.updateUserPresence(nym, event.pubkey, communityId, '');
 
+                                // Track notification state for this community
+                                if (!this.channelNotificationTracking) {
+                                    this.channelNotificationTracking = new Map();
+                                }
+                                if (!this.channelNotificationTracking.has(communityId)) {
+                                    this.channelNotificationTracking.set(communityId, new Set());
+                                }
+                                const alreadyNotified = this.channelNotificationTracking.get(communityId).has(event.id);
+
                                 // Show notification if mentioned and not blocked
                                 const shouldNotify = !message.isOwn &&
                                     this.isMentioned(message.content) &&
                                     !this.blockedUsers.has(nym) &&
+                                    !isHistorical &&
+                                    !alreadyNotified &&
                                     (document.hidden || this.currentCommunity !== communityId);
 
                                 if (shouldNotify) {
+                                    // Mark as notified
+                                    this.channelNotificationTracking.get(communityId).add(event.id);
+
                                     const channelInfo = {
                                         type: 'community',
                                         communityId: communityId,
