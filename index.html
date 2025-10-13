@@ -6594,8 +6594,13 @@
                         this.displayMessage(message);
                         this.updateUserPresence(nym, event.pubkey, message.channel, geohash);
 
-                        // Show notification only if mentioned and not blocked
-                        if (!message.isOwn && document.hidden && this.isMentioned(message.content) && !this.blockedUsers.has(nym)) {
+                        // Show notification if mentioned and not blocked
+                        const shouldNotify = !message.isOwn &&
+                            this.isMentioned(message.content) &&
+                            !this.blockedUsers.has(nym) &&
+                            (document.hidden || this.currentChannel !== geohash || this.currentGeohash !== geohash);
+
+                        if (shouldNotify) {
                             const channelInfo = {
                                 type: 'geohash',
                                 channel: geohash,
@@ -6667,8 +6672,13 @@
                         this.displayMessage(message);
                         this.updateUserPresence(nym, event.pubkey, channel, '');
 
-                        // Show notification only if mentioned and not blocked
-                        if (!message.isOwn && document.hidden && this.isMentioned(message.content) && !this.blockedUsers.has(nym)) {
+                        // Show notification if mentioned and not blocked
+                        const shouldNotify = !message.isOwn &&
+                            this.isMentioned(message.content) &&
+                            !this.blockedUsers.has(nym) &&
+                            (document.hidden || this.currentChannel !== channel || this.currentGeohash !== '');
+
+                        if (shouldNotify) {
                             const channelInfo = {
                                 type: 'standard',
                                 channel: channel,
@@ -6910,8 +6920,13 @@
                                 this.displayMessage(message);
                                 this.updateUserPresence(nym, event.pubkey, communityId, '');
 
-                                // Show notification if mentioned
-                                if (!message.isOwn && document.hidden && this.isMentioned(message.content) && !this.blockedUsers.has(nym)) {
+                                // Show notification if mentioned and not blocked
+                                const shouldNotify = !message.isOwn &&
+                                    this.isMentioned(message.content) &&
+                                    !this.blockedUsers.has(nym) &&
+                                    (document.hidden || this.currentCommunity !== communityId);
+
+                                if (shouldNotify) {
                                     const channelInfo = {
                                         type: 'community',
                                         communityId: communityId,
@@ -7929,8 +7944,11 @@
                     } else if (isIncoming && !isHistorical) {
                         // Only update unread count and show notification for NEW incoming messages
                         this.updateUnreadCount(conversationKey);
-                        // Show notification only for new messages
-                        if (document.hidden || !this.inPMMode || this.currentPM !== conversationPubkey) {
+
+                        // Show notification
+                        const shouldNotify = document.hidden || !this.inPMMode || this.currentPM !== conversationPubkey;
+
+                        if (shouldNotify) {
                             const channelInfo = {
                                 type: 'pm',
                                 nym: senderNym,
@@ -13167,35 +13185,39 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
                 // Check if Notification API is available
                 if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-                    const notification = new Notification(title, {
-                        body: body,
-                        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="40" fill="%230ff" text-anchor="middle" font-family="monospace">NYM</text></svg>',
-                        tag: channelInfo ? channelInfo.id : 'nym-notification', // Prevent duplicate notifications
-                        requireInteraction: false,
-                        data: channelInfo // Store channel info in notification data
-                    });
+                    try {
+                        const notification = new Notification(title, {
+                            body: body,
+                            icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="40" fill="%230ff" text-anchor="middle" font-family="monospace">NYM</text></svg>',
+                            tag: channelInfo ? (channelInfo.id || 'nym-notification') : 'nym-notification',
+                            requireInteraction: false
+                        });
 
-                    // Add click handler for deep linking
-                    notification.onclick = (event) => {
-                        event.preventDefault();
-                        window.focus(); // Focus the window
+                        console.log('Browser notification created');
 
+                        // Add click handler for deep linking
                         if (channelInfo) {
-                            // Route to the appropriate channel/PM
-                            if (channelInfo.type === 'pm') {
-                                this.openUserPM(channelInfo.nym, channelInfo.pubkey);
-                            } else if (channelInfo.type === 'community') {
-                                this.switchToCommunity(channelInfo.communityId);
-                            } else if (channelInfo.type === 'geohash') {
-                                this.switchChannel(channelInfo.channel, channelInfo.geohash);
-                            } else {
-                                // Standard channel
-                                this.switchChannel(channelInfo.channel, '');
-                            }
-                        }
+                            notification.onclick = (event) => {
+                                console.log('Notification clicked, channelInfo:', channelInfo);
+                                event.preventDefault();
+                                window.focus();
 
-                        notification.close();
-                    };
+                                if (channelInfo.type === 'pm') {
+                                    this.openUserPM(channelInfo.nym, channelInfo.pubkey);
+                                } else if (channelInfo.type === 'community') {
+                                    this.switchToCommunity(channelInfo.communityId);
+                                } else if (channelInfo.type === 'geohash') {
+                                    this.switchChannel(channelInfo.channel, channelInfo.geohash);
+                                } else {
+                                    this.switchChannel(channelInfo.channel, '');
+                                }
+
+                                notification.close();
+                            };
+                        }
+                    } catch (error) {
+                        console.error('Failed to create browser notification:', error);
+                    }
                 }
 
                 // In-app notification (always show this as fallback)
@@ -13207,10 +13229,13 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         <div class="notification-time">${new Date().toLocaleTimeString()}</div>
     `;
 
+                console.log('In-app notification element created');
+
                 // Add click handler for in-app notification too
                 if (channelInfo) {
                     notifEl.style.cursor = 'pointer';
                     notifEl.onclick = () => {
+                        console.log('In-app notification clicked');
                         if (channelInfo.type === 'pm') {
                             this.openUserPM(channelInfo.nym, channelInfo.pubkey);
                         } else if (channelInfo.type === 'community') {
@@ -13225,6 +13250,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
 
                 document.body.appendChild(notifEl);
+                console.log('In-app notification added to DOM');
 
                 setTimeout(() => {
                     notifEl.style.animation = 'slideIn 0.3s reverse';
