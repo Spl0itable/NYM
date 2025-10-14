@@ -1,3 +1,7 @@
+## v2.10.22 - 2025-10-14
+
+Hotfix: case where not all relays are reconnected on app resume
+
 ## v2.10.21 - 2025-10-14
 
 Hotfix: enhanced support for flutter app to reconnnect relays

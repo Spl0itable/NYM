@@ -4061,6 +4061,7 @@
                 // If we have no actual connections, force reconnect
                 if (actuallyConnected === 0) {
                     console.log('No active connections detected, forcing reconnect...');
+                    this.displaySystemMessage('Connection lost while app was inactive, reconnecting...');
                     this.connected = false;
                     this.updateConnectionStatus('Disconnected');
 
@@ -4071,6 +4072,12 @@
 
                     // Try to reconnect to broadcast relays
                     await this.reconnectToBroadcastRelays();
+
+                    // ALSO reconnect to discovered relays after a short delay
+                    setTimeout(() => {
+                        this.retryDiscoveredRelays();
+                    }, 2000);
+
                 } else {
                     // We have some connections, but update status to reflect actual count
                     this.updateConnectionStatus();
@@ -4081,11 +4088,27 @@
                         console.log(`Missing ${missingBroadcast.length} broadcast relays, attempting to reconnect...`);
                         this.reconnectToBroadcastRelays();
                     }
+
+                    // ALSO check for missing discovered relays
+                    const missingDiscovered = Array.from(this.discoveredRelays).filter(url =>
+                        !this.relayPool.has(url) &&
+                        !this.broadcastRelays.includes(url) &&
+                        url !== this.nosflareRelay
+                    );
+
+                    if (missingDiscovered.length > 0) {
+                        console.log(`Missing ${missingDiscovered.length} discovered relays, attempting to reconnect...`);
+                        setTimeout(() => {
+                            this.retryDiscoveredRelays();
+                        }, 1000);
+                    }
                 }
             }
 
             async reconnectToBroadcastRelays() {
                 console.log('Reconnecting to broadcast relays...');
+
+                let connectedCount = 0;
 
                 for (const relayUrl of this.broadcastRelays) {
                     if (!this.relayPool.has(relayUrl) ||
@@ -4097,18 +4120,23 @@
                         try {
                             await this.connectToRelay(relayUrl, 'broadcast');
                             this.subscribeToSingleRelay(relayUrl);
-                            this.connected = true;
-                            this.updateConnectionStatus();
-                            console.log(`Successfully reconnected to ${relayUrl}`);
+                            connectedCount++;
 
-                            // After first successful connection, continue with others in background
-                            if (!this.connected) {
+                            if (connectedCount === 1) {
+                                // After first successful connection
                                 this.connected = true;
+                                this.updateConnectionStatus();
+                                this.displaySystemMessage('Reconnected to relays');
                             }
+
+                            console.log(`Successfully reconnected to ${relayUrl} (${connectedCount} total)`);
                         } catch (err) {
                             console.log(`Failed to reconnect to ${relayUrl}:`, err);
                             this.trackRelayFailure(relayUrl);
                         }
+
+                        // Small delay between connections to avoid overwhelming
+                        await new Promise(resolve => setTimeout(resolve, 50));
                     }
                 }
 
@@ -4119,6 +4147,7 @@
                 }
 
                 this.updateConnectionStatus();
+                console.log(`Finished reconnecting to broadcast relays. Connected to ${connectedCount} relays.`);
             }
 
             setupNetworkMonitoring() {
@@ -15165,7 +15194,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.10.21 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.10.22 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
