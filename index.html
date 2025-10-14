@@ -6374,8 +6374,15 @@
                 const invoiceToOpen = invoice.toLowerCase().startsWith('lightning:') ?
                     invoice : `lightning:${invoice}`;
 
-                // Try opening with lightning: URI scheme
-                window.open(invoiceToOpen, '_blank');
+                // Try Flutter bridge first (for NYM native app)
+                if (window.nymOpenExternal) {
+                    console.log('Using nymOpenExternal for:', invoiceToOpen);
+                    window.nymOpenExternal(invoiceToOpen);
+                } else {
+                    // Fallback to standard window.open (for regular browsers)
+                    console.log('Fallback to window.open for:', invoiceToOpen);
+                    window.open(invoiceToOpen, '_blank');
+                }
 
                 // Also copy to clipboard as fallback (just the raw invoice)
                 navigator.clipboard.writeText(invoice).then(() => {
@@ -6385,6 +6392,7 @@
                     this.displaySystemMessage('Failed to copy invoice');
                 });
             }
+
 
             // Discovering relays via NIP-66
             async discoverRelays() {
@@ -15191,7 +15199,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.10.23 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.10.24 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>

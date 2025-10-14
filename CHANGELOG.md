@@ -1,3 +1,7 @@
+## v2.10.24 - 2025-10-14
+
+Hotfix: external wallet support in app
+
 ## v2.10.23 - 2025-10-14
 
 Hotfix: cleaned up redundant messages
