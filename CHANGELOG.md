@@ -1,3 +1,9 @@
+## v2.9.18 - 2025-10-14
+
+Hotfix: case where sidebar could get cut off
+Hotfix: case where channel name is identical to another channel and isn't routed correctly
+Hotfix: only support channels without spaces in name
+
 ## v2.9.17 - 2025-10-13
 
 Hotfix: added deeplinking to notifications

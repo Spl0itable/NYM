@@ -131,6 +131,7 @@
             position: relative;
             z-index: 2;
             overflow-y: auto;
+            height: 100vh;
         }
 
         .sidebar-header {
@@ -2025,6 +2026,15 @@
             padding-left: 15px !important;
         }
 
+        .channel-option-btn:hover {
+            background: var(--secondary) !important;
+            color: var(--bg) !important;
+        }
+
+        .channel-option-btn:hover span {
+            color: var(--bg) !important;
+        }
+
         @media (max-width: 768px) {
             pre {
                 font-size: 10px;
@@ -2060,6 +2070,7 @@
                 width: 280px;
                 overflow-y: auto;
                 -webkit-overflow-scrolling: touch;
+                height: 100vh;
             }
 
             .sidebar-header {
@@ -2416,6 +2427,7 @@
                     </span>
                 </div>
                 <input type="text" class="search-input" id="channelSearch" placeholder="Search channels..."
+                    oninput="this.value = this.value.toLowerCase(); nym.handleChannelSearch(this.value)"
                     onkeyup="nym.handleChannelSearch(this.value)">
                 <div id="channelSearchResults"></div>
                 <div class="channel-list" id="channelList">
@@ -2729,8 +2741,10 @@
 
                 <div class="form-group" id="standardChannelGroup">
                     <label class="form-label">Channel Name</label>
-                    <input type="text" class="form-input" id="channelNameInput" placeholder="random">
-                    <div class="form-hint">Enter channel name without # (e.g., "random" for #random)</div>
+                    <input type="text" class="form-input" id="channelNameInput" placeholder="random"
+                        oninput="this.value = this.value.toLowerCase().replace(/[^a-z0-9-]/g, '')">
+                    <div class="form-hint">Enter channel name without # (e.g., "random" for #random). No spaces allowed
+                        - use hyphens.</div>
                 </div>
 
                 <div class="form-group" id="geohashGroup" style="display:none">
@@ -2744,8 +2758,9 @@
                 <div id="communityChannelGroup" style="display:none">
                     <div class="form-group">
                         <label class="form-label">Community Name</label>
-                        <input type="text" class="form-input" id="communityNameInput" placeholder="bitcoin">
-                        <div class="form-hint">A unique name for your community</div>
+                        <input type="text" class="form-input" id="communityNameInput" placeholder="bitcoin"
+                            oninput="this.value = this.value.toLowerCase().replace(/[^a-z0-9-]/g, '')">
+                        <div class="form-hint">A unique name for your community. No spaces allowed - use hyphens.</div>
                     </div>
 
                     <div class="form-group">
@@ -3747,57 +3762,134 @@
 
                 // Show create/join prompt if search term exists
                 if (term.length > 0) {
-                    const isGeohash = this.isValidGeohash(term);
+                    // Sanitize the search term (remove spaces and invalid characters)
+                    const sanitized = term.replace(/[^a-z0-9-]/g, '');
+
+                    if (!sanitized) {
+                        resultsDiv.innerHTML = '<div class="search-create-prompt" style="color: var(--danger);">Invalid name. Use only letters, numbers, and hyphens.</div>';
+                        return;
+                    }
+
+                    const isGeohash = this.isValidGeohash(sanitized);
 
                     // Check if it's a community channel
                     let matchedCommunity = null;
                     this.communityChannels.forEach((community, id) => {
-                        if (community.name.toLowerCase() === term || id.toLowerCase().includes(term)) {
+                        if (community.name.toLowerCase() === sanitized || id.toLowerCase().includes(sanitized)) {
                             matchedCommunity = { id, community };
                         }
                     });
 
-                    const exists = Array.from(this.channels.keys()).some(k => k.toLowerCase() === term);
+                    const exists = Array.from(this.channels.keys()).some(k => k.toLowerCase() === sanitized);
 
-                    if (!exists && !matchedCommunity) {
-                        const type = isGeohash ? 'geohash' : 'channel';
+                    // Clear previous results
+                    resultsDiv.innerHTML = '';
+
+                    // Show matched community if found
+                    if (matchedCommunity) {
+                        const { id, community } = matchedCommunity;
+
+                        // Check if user can access this community
+                        const isOwned = this.ownedCommunities.has(id);
+                        const isModerated = this.moderatedCommunities.has(id);
+                        const isMember = this.communityMembers.has(id) &&
+                            this.communityMembers.get(id).has(this.pubkey);
+                        const canAccess = !community.isPrivate || isOwned || isModerated || isMember;
+
+                        if (canAccess) {
+                            const privacyBadge = community.isPrivate ? 'PRV' : 'PUB';
+                            const privacyColor = community.isPrivate ? 'var(--purple)' : 'var(--primary)';
+
+                            const prompt = document.createElement('div');
+                            prompt.className = 'search-create-prompt';
+                            prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
+                            prompt.innerHTML = `
+                    <span>Join community "${community.name}"</span>
+                    <span style="color: ${privacyColor}; border: 1px solid ${privacyColor}; padding: 2px 8px; border-radius: 3px; font-size: 10px;">${privacyBadge}</span>
+                `;
+                            prompt.onclick = () => {
+                                this.switchToCommunity(id);
+                                document.getElementById('channelSearch').value = '';
+                                resultsDiv.innerHTML = '';
+                                this.filterChannels('');
+                            };
+                            resultsDiv.appendChild(prompt);
+                        }
+                    }
+
+                    // Show geohash option if valid
+                    if (isGeohash && !exists) {
+                        const location = this.getGeohashLocation(sanitized) || 'Unknown location';
                         const prompt = document.createElement('div');
                         prompt.className = 'search-create-prompt';
-                        prompt.innerHTML = `Create or Join ${type} "${term}"`;
+                        prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
+                        prompt.innerHTML = `
+                <span>Join geohash "${sanitized}" (${location})</span>
+                <span style="color: var(--warning); border: 1px solid var(--warning); padding: 2px 8px; border-radius: 3px; font-size: 10px;">GEO</span>
+            `;
                         prompt.onclick = async () => {
-                            if (isGeohash) {
-                                this.addChannel(term, term);
-                                this.switchChannel(term, term);
-                                this.userJoinedChannels.add(term);
-                            } else {
-                                this.addChannel(term, '');
-                                this.switchChannel(term, '');
-                                await this.createChannel(term);
-                                this.userJoinedChannels.add(term);
-                            }
+                            this.addChannel(sanitized, sanitized);
+                            this.switchChannel(sanitized, sanitized);
+                            this.userJoinedChannels.add(sanitized);
                             document.getElementById('channelSearch').value = '';
                             resultsDiv.innerHTML = '';
                             this.filterChannels('');
                             this.saveUserChannels();
                         };
-                        resultsDiv.innerHTML = '';
                         resultsDiv.appendChild(prompt);
-                    } else if (matchedCommunity) {
-                        // Show community join prompt
+                    }
+
+                    // Show standard channel option if doesn't exist
+                    if (!exists && !matchedCommunity) {
                         const prompt = document.createElement('div');
                         prompt.className = 'search-create-prompt';
-                        const privacy = matchedCommunity.community.isPrivate ? 'PRV' : 'PUB';
-                        prompt.innerHTML = `Join community "${matchedCommunity.community.name}" [${privacy}]`;
-                        prompt.onclick = () => {
-                            this.switchToCommunity(matchedCommunity.id);
+                        prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
+                        prompt.innerHTML = `
+                <span>Create/Join channel "${sanitized}"</span>
+                <span style="color: var(--blue); border: 1px solid var(--blue); padding: 2px 8px; border-radius: 3px; font-size: 10px;">EPH</span>
+            `;
+                        prompt.onclick = async () => {
+                            this.addChannel(sanitized, '');
+                            this.switchChannel(sanitized, '');
+                            await this.createChannel(sanitized);
+                            this.userJoinedChannels.add(sanitized);
+                            document.getElementById('channelSearch').value = '';
+                            resultsDiv.innerHTML = '';
+                            this.filterChannels('');
+                            this.saveUserChannels();
+                        };
+                        resultsDiv.appendChild(prompt);
+                    }
+
+                    // Show create community option if logged in and name doesn't match existing
+                    if (this.connectionMode !== 'ephemeral' && !matchedCommunity && !isGeohash) {
+                        const prompt = document.createElement('div');
+                        prompt.className = 'search-create-prompt';
+                        prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-top: 5px;';
+                        prompt.innerHTML = `
+                <span>Create public community "${sanitized}"</span>
+                <span style="color: var(--primary); border: 1px solid var(--primary); padding: 2px 8px; border-radius: 3px; font-size: 10px;">PUB</span>
+            `;
+                        prompt.onclick = async () => {
+                            const communityId = await this.createCommunityChannel(sanitized, `Public community for ${sanitized}`, false);
+                            if (communityId) {
+                                this.switchToCommunity(communityId);
+                            }
                             document.getElementById('channelSearch').value = '';
                             resultsDiv.innerHTML = '';
                             this.filterChannels('');
                         };
-                        resultsDiv.innerHTML = '';
                         resultsDiv.appendChild(prompt);
-                    } else {
-                        resultsDiv.innerHTML = '';
+                    }
+
+                    // Show warning if original term had invalid characters
+                    if (term !== sanitized) {
+                        const warning = document.createElement('div');
+                        warning.className = 'search-create-prompt';
+                        warning.style.cssText = 'color: var(--text-dim); font-size: 11px; margin-top: 5px; cursor: default;';
+                        warning.innerHTML = `Note: Spaces and special characters removed. Using "${sanitized}"`;
+                        warning.onclick = null;
+                        resultsDiv.appendChild(warning);
                     }
                 } else {
                     resultsDiv.innerHTML = '';
@@ -6753,6 +6845,12 @@
                             return; // Skip adding to UI for ephemeral users
                         }
 
+                        // Filter out communities with spaces - don't add to UI
+                        if (name.includes(' ')) {
+                            console.log(`Discovered community "${name}" has spaces, not adding to sidebar`);
+                            return; // Don't add to UI, just store in map
+                        }
+
                         // Check if this is the official NYM community
                         const isNYMCommunity = event.pubkey === this.verifiedDeveloper.pubkey &&
                             name.toLowerCase() === 'nym';
@@ -8816,12 +8914,18 @@
                     }
 
                     if (this.connectionMode === 'ephemeral') {
-                        throw new Error('Community channels require a persistent identity (extension or nsec)');
+                        throw new Error('Community channels require a persistent identity (extension or nsec login)');
+                    }
+
+                    // Validate name - no spaces allowed
+                    if (name.includes(' ')) {
+                        throw new Error('Community names cannot contain spaces. Use hyphens instead (e.g., "my-community")');
                     }
 
                     // Generate unique community identifier with pubkey suffix
                     const suffix = this.getPubkeySuffix(this.pubkey);
-                    const communityId = `${name}-${suffix}`;
+                    const sanitizedName = this.sanitizeCommunityName(name);
+                    const communityId = `${sanitizedName}-${suffix}`;
 
                     const event = {
                         kind: 34550, // NIP-72 community definition
@@ -8894,8 +8998,26 @@
                 }
             }
 
+            sanitizeCommunityName(name) {
+                // Replace spaces with hyphens for URL/ID compatibility
+                return name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+            }
+
             addCommunityChannel(name, communityId, isPrivate) {
                 const list = document.getElementById('channelList');
+
+                // Filter out communities with spaces in the name
+                if (name.includes(' ')) {
+                    console.log(`Community "${name}" has spaces in name, not adding to sidebar`);
+                    // Still store it in communityChannels map but don't display
+                    if (!this.communityChannels.has(communityId)) {
+                        this.communityChannels.set(communityId, {
+                            name: name,
+                            isPrivate: isPrivate
+                        });
+                    }
+                    return;
+                }
 
                 // Check if already exists
                 if (document.querySelector(`[data-community="${communityId}"]`)) {
@@ -9509,7 +9631,7 @@
 
                 // Process mentions and channels together in one pass
                 formatted = formatted.replace(
-                    /(@[^@#\n]*?#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(?:^|\s)(#\w+)(?=\s|$)/gi,
+                    /(@[^@#\n]*?#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(?:^|\s)(#[\w\s-]+?)(?=\s|$|[.,!?])/gi,
                     (match, mentionWithSuffix, simpleMention, channel, offset) => {
                         if (mentionWithSuffix) {
                             // This is a mention with a pubkey suffix
@@ -9519,12 +9641,25 @@
                             return `<span style="color: var(--secondary)">${simpleMention}</span>`;
                         } else if (channel) {
                             // This is a channel reference - check all types
-                            const channelName = channel.substring(1); // Remove the #
+                            const channelName = channel.substring(1).trim(); // Remove the # and trim
+
+                            // Sanitize channel name (remove spaces and invalid chars)
+                            const sanitized = channelName.toLowerCase().replace(/[^a-z0-9-]/g, '');
+
+                            if (!sanitized) {
+                                // Invalid channel name, just return as text
+                                return match;
+                            }
 
                             // Check for community channels that user has access to
                             let communityMatches = [];
                             this.communityChannels.forEach((community, id) => {
-                                if (community.name.toLowerCase() === channelName.toLowerCase()) {
+                                if (community.name.toLowerCase() === sanitized) {
+                                    // Filter out communities with spaces
+                                    if (community.name.includes(' ')) {
+                                        return;
+                                    }
+
                                     // Filter out private communities user doesn't have access to
                                     if (community.isPrivate) {
                                         const hasAccess = this.ownedCommunities.has(id) ||
@@ -9546,7 +9681,7 @@
                             });
 
                             // Check if it's a valid geohash
-                            const isGeohash = this.isValidGeohash(channelName);
+                            const isGeohash = this.isValidGeohash(sanitized);
 
                             // Check if it exists as a standard channel
                             const isStandard = true; // Standard channels can always be created
@@ -9554,10 +9689,11 @@
                             // Count how many types exist
                             const typesCount = communityMatches.length + (isGeohash ? 1 : 0) + (isStandard ? 1 : 0);
 
+                            const space = match.startsWith(' ') ? ' ' : '';
+
                             // If multiple types exist, show disambiguation
                             if (typesCount > 1 || communityMatches.length > 1) {
-                                const space = match.startsWith(' ') ? ' ' : '';
-                                return `${space}<span class="channel-link" onclick="nym.showChannelOptions('${this.escapeHtml(channelName)}')">#${channelName} [MULTIPLE]</span>`;
+                                return `${space}<span class="channel-link" onclick="nym.showChannelOptions('${this.escapeHtml(sanitized)}')">#${sanitized} [MULTIPLE]</span>`;
                             }
 
                             // If only community exists
@@ -9565,22 +9701,18 @@
                                 const communityId = communityMatches[0].id;
                                 const community = communityMatches[0].community;
                                 const badge = community.isPrivate ? ' [PRV]' : ' [PUB]';
-                                const space = match.startsWith(' ') ? ' ' : '';
-                                return `${space}<span class="channel-link" onclick="nym.quickJoinCommunity('${communityId}')">#${channelName}${badge}</span>`;
+                                return `${space}<span class="channel-link" onclick="nym.quickJoinCommunity('${communityId}')">#${sanitized}${badge}</span>`;
                             }
 
                             // If only geohash exists (and no community with same name)
                             if (isGeohash && communityMatches.length === 0) {
                                 const badge = ' [GEO]';
-                                const space = match.startsWith(' ') ? ' ' : '';
-                                return `${space}<span class="channel-link" onclick="nym.quickJoinChannel('${channelName}')">#${channelName}${badge}</span>`;
+                                return `${space}<span class="channel-link" onclick="nym.joinChannelOption('geohash', '${this.escapeHtml(sanitized)}')">#${sanitized}${badge}</span>`;
                             }
 
                             // Default to standard channel
-                            const type = this.getChannelType(channelName);
-                            const badge = type === 'geo' ? ' [GEO]' : ' [EPH]';
-                            const space = match.startsWith(' ') ? ' ' : '';
-                            return `${space}<span class="channel-link" onclick="nym.quickJoinChannel('${channelName}')">#${channelName}${badge}</span>`;
+                            const badge = ' [EPH]';
+                            return `${space}<span class="channel-link" onclick="nym.joinChannelOption('standard', '${this.escapeHtml(sanitized)}')">#${sanitized}${badge}</span>`;
                         }
                         return match;
                     }
@@ -9595,18 +9727,26 @@
             }
 
             quickJoinChannel(channel) {
-                const type = this.getChannelType(channel);
+                // Sanitize channel name
+                const sanitized = channel.toLowerCase().replace(/[^a-z0-9-]/g, '');
+
+                if (!sanitized) {
+                    this.displaySystemMessage('Invalid channel name. Use only letters, numbers, and hyphens.');
+                    return;
+                }
+
+                const type = this.getChannelType(sanitized);
 
                 if (type === 'geo') {
-                    this.addChannel(channel, channel);
-                    this.switchChannel(channel, channel);
-                    this.userJoinedChannels.add(channel); // Mark as user-joined
+                    this.addChannel(sanitized, sanitized);
+                    this.switchChannel(sanitized, sanitized);
+                    this.userJoinedChannels.add(sanitized);
                 } else {
-                    this.addChannel(channel, '');
-                    this.switchChannel(channel, '');
+                    this.addChannel(sanitized, '');
+                    this.switchChannel(sanitized, '');
                     // Also create the channel with kind 23333
-                    this.createChannel(channel);
-                    this.userJoinedChannels.add(channel); // Mark as user-joined
+                    this.createChannel(sanitized);
+                    this.userJoinedChannels.add(sanitized);
                 }
 
                 // Save after quick join
@@ -9620,12 +9760,18 @@
                     return;
                 }
 
+                // Check if community has spaces (shouldn't happen, but safety check)
+                if (community.name.includes(' ')) {
+                    this.displaySystemMessage('This community has an invalid name (contains spaces)');
+                    return;
+                }
+
                 if (this.connectionMode === 'ephemeral') {
                     this.displaySystemMessage('Community channels require a persistent identity (extension or nsec)');
                     return;
                 }
 
-                // Check if private and user has access
+                // Check if it's a private community and user has access
                 if (community.isPrivate) {
                     const hasAccess = this.ownedCommunities.has(communityId) ||
                         (this.communityModerators.has(communityId) &&
@@ -9652,6 +9798,14 @@
             }
 
             showChannelOptions(channelName) {
+                // Sanitize the channel name
+                const sanitized = channelName.toLowerCase().replace(/[^a-z0-9-]/g, '');
+
+                if (!sanitized) {
+                    this.displaySystemMessage('Invalid channel name');
+                    return;
+                }
+
                 // Close any existing channel options modal
                 const existingModal = document.getElementById('channelOptionsModal');
                 if (existingModal) {
@@ -9664,11 +9818,17 @@
                 modal.className = 'modal active';
 
                 let optionsHtml = '';
+                let optionCount = 0;
 
                 // Check for community channels that user has access to
                 const communityMatches = [];
                 this.communityChannels.forEach((community, id) => {
-                    if (community.name.toLowerCase() === channelName.toLowerCase()) {
+                    if (community.name.toLowerCase() === sanitized) {
+                        // Filter out communities with spaces
+                        if (community.name.includes(' ')) {
+                            return;
+                        }
+
                         // Filter out private communities user doesn't have access to
                         if (community.isPrivate) {
                             const hasAccess = this.ownedCommunities.has(id) ||
@@ -9691,6 +9851,7 @@
 
                 // Add community options
                 communityMatches.forEach(({ id, community }) => {
+                    optionCount++;
                     const privacyBadge = community.isPrivate ? 'PRV' : 'PUB';
                     const privacyColor = community.isPrivate ? 'var(--purple)' : 'var(--primary)';
 
@@ -9713,7 +9874,7 @@
                     }
 
                     optionsHtml += `
-            <button class="icon-btn" onclick="nym.joinChannelOption('community', '${id}'); nym.closeChannelOptions();" style="width: 100%; margin-bottom: 10px; text-align: left; display: flex; justify-content: space-between; align-items: center;">
+            <button class="icon-btn channel-option-btn" onclick="nym.joinChannelOption('community', '${id}'); nym.closeChannelOptions();" style="width: 100%; margin-bottom: 10px; text-align: left; display: flex; justify-content: space-between; align-items: center;">
                 <span>#${this.escapeHtml(community.name)}${accessInfo}</span>
                 <span style="color: ${privacyColor}; border: 1px solid ${privacyColor}; padding: 2px 8px; border-radius: 3px; font-size: 10px;">${privacyBadge}</span>
             </button>
@@ -9721,49 +9882,64 @@
                 });
 
                 // Check if it's a valid geohash
-                if (this.isValidGeohash(channelName)) {
-                    const location = this.getGeohashLocation(channelName) || 'Unknown location';
+                const isGeohash = this.isValidGeohash(sanitized);
+                if (isGeohash) {
+                    optionCount++;
+                    const location = this.getGeohashLocation(sanitized) || 'Unknown location';
                     optionsHtml += `
-            <button class="icon-btn" onclick="nym.joinChannelOption('geohash', '${this.escapeHtml(channelName)}'); nym.closeChannelOptions();" style="width: 100%; margin-bottom: 10px; text-align: left; display: flex; justify-content: space-between; align-items: center;">
-                <span>#${this.escapeHtml(channelName)} (${location})</span>
+            <button class="icon-btn channel-option-btn" onclick="nym.joinChannelOption('geohash', '${this.escapeHtml(sanitized)}'); nym.closeChannelOptions();" style="width: 100%; margin-bottom: 10px; text-align: left; display: flex; justify-content: space-between; align-items: center;">
+                <span>#${this.escapeHtml(sanitized)} (${location})</span>
                 <span style="color: var(--warning); border: 1px solid var(--warning); padding: 2px 8px; border-radius: 3px; font-size: 10px;">GEO</span>
             </button>
         `;
                 }
 
                 // Always show standard channel option
+                optionCount++;
                 optionsHtml += `
-        <button class="icon-btn" onclick="nym.joinChannelOption('standard', '${this.escapeHtml(channelName)}'); nym.closeChannelOptions();" style="width: 100%; margin-bottom: 10px; text-align: left; display: flex; justify-content: space-between; align-items: center;">
-            <span>#${this.escapeHtml(channelName)} (Ephemeral)</span>
+        <button class="icon-btn channel-option-btn" onclick="nym.joinChannelOption('standard', '${this.escapeHtml(sanitized)}'); nym.closeChannelOptions();" style="width: 100%; margin-bottom: 10px; text-align: left; display: flex; justify-content: space-between; align-items: center;">
+            <span>#${this.escapeHtml(sanitized)} (Ephemeral)</span>
             <span style="color: var(--blue); border: 1px solid var(--blue); padding: 2px 8px; border-radius: 3px; font-size: 10px;">EPH</span>
         </button>
     `;
 
-                modal.innerHTML = `
-        <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">Choose Channel Type for #${this.escapeHtml(channelName)}</div>
-            <div class="modal-body">
-                <div style="margin-bottom: 15px; color: var(--text-dim); font-size: 12px;">
-                    Multiple channels with this name exist. Select which one to join:
+                // Only show modal if there are multiple options
+                if (optionCount > 1) {
+                    modal.innerHTML = `
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">Choose Channel Type for #${this.escapeHtml(sanitized)}</div>
+                <div class="modal-body">
+                    <div style="margin-bottom: 15px; color: var(--text-dim); font-size: 12px;">
+                        Multiple channels with this name exist. Select which one to join:
+                    </div>
+                    ${optionsHtml}
                 </div>
-                ${optionsHtml}
+                <div class="modal-actions">
+                    <button class="icon-btn" onclick="nym.closeChannelOptions()">Cancel</button>
+                </div>
             </div>
-            <div class="modal-actions">
-                <button class="icon-btn" onclick="nym.closeChannelOptions()">Cancel</button>
-            </div>
-        </div>
-    `;
+        `;
 
-                document.body.appendChild(modal);
+                    document.body.appendChild(modal);
 
-                // Close on click outside
-                setTimeout(() => {
-                    modal.addEventListener('click', (e) => {
-                        if (e.target === modal) {
-                            this.closeChannelOptions();
-                        }
-                    });
-                }, 100);
+                    // Close on click outside
+                    setTimeout(() => {
+                        modal.addEventListener('click', (e) => {
+                            if (e.target === modal) {
+                                this.closeChannelOptions();
+                            }
+                        });
+                    }, 100);
+                } else {
+                    // Only one option, join directly
+                    if (communityMatches.length > 0) {
+                        this.joinChannelOption('community', communityMatches[0].id);
+                    } else if (isGeohash) {
+                        this.joinChannelOption('geohash', sanitized);
+                    } else {
+                        this.joinChannelOption('standard', sanitized);
+                    }
+                }
             }
 
             closeChannelOptions() {
@@ -9775,11 +9951,37 @@
 
             async joinChannelOption(type, identifier) {
                 if (type === 'community') {
+                    // Community IDs are already validated, use as-is
                     this.quickJoinCommunity(identifier);
                 } else if (type === 'geohash') {
-                    this.quickJoinChannel(identifier);
+                    // Sanitize geohash identifier
+                    const sanitized = identifier.toLowerCase().replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
+
+                    if (!sanitized || !this.isValidGeohash(sanitized)) {
+                        this.displaySystemMessage('Invalid geohash');
+                        return;
+                    }
+
+                    // Join as geohash channel
+                    this.addChannel(sanitized, sanitized);
+                    this.switchChannel(sanitized, sanitized);
+                    this.userJoinedChannels.add(sanitized);
+                    this.saveUserChannels();
                 } else if (type === 'standard') {
-                    this.quickJoinChannel(identifier);
+                    // Sanitize standard channel name
+                    const sanitized = identifier.toLowerCase().replace(/[^a-z0-9-]/g, '');
+
+                    if (!sanitized) {
+                        this.displaySystemMessage('Invalid channel name');
+                        return;
+                    }
+
+                    // Join as standard ephemeral channel
+                    this.addChannel(sanitized, '');
+                    this.switchChannel(sanitized, '');
+                    await this.createChannel(sanitized);
+                    this.userJoinedChannels.add(sanitized);
+                    this.saveUserChannels();
                 }
             }
 
@@ -10753,6 +10955,20 @@
                     return;
                 }
 
+                // Validate standard channel name - no spaces allowed
+                if (channel.includes(' ')) {
+                    this.displaySystemMessage('Channel names cannot contain spaces. Use hyphens instead (e.g., "my-channel")');
+                    return;
+                }
+
+                // Sanitize channel name
+                channel = channel.toLowerCase().replace(/[^a-z0-9-]/g, '');
+
+                if (!channel) {
+                    this.displaySystemMessage('Invalid channel name. Use only letters, numbers, and hyphens.');
+                    return;
+                }
+
                 // Standard channel
                 this.addChannel(channel, '');
                 this.switchChannel(channel, '');
@@ -11105,6 +11321,7 @@
                 if (!args) {
                     this.displaySystemMessage('Usage: /createcommunity name [description] [--private]');
                     this.displaySystemMessage('Example: /createcommunity bitcoin "Bitcoin discussion" --private');
+                    this.displaySystemMessage('Note: Community names cannot contain spaces. Use hyphens instead.');
                     return;
                 }
 
@@ -11120,6 +11337,12 @@
 
                 if (!name) {
                     this.displaySystemMessage('Please provide a community name');
+                    return;
+                }
+
+                // Validate name - no spaces allowed
+                if (name.includes(' ')) {
+                    this.displaySystemMessage('Community names cannot contain spaces. Use hyphens instead (e.g., "my-community")');
                     return;
                 }
 
@@ -12914,22 +13137,28 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             addChannelToList(channel, geohash) {
-                const key = geohash || channel;
+                // For geohash channels, ALWAYS use the geohash as the key
+                const key = geohash ? geohash : channel;
 
                 // Check if this channel was previously user-joined
                 const wasUserJoined = this.userJoinedChannels.has(key);
 
-                if (geohash && !this.channels.has(geohash)) {
-                    this.addChannel(geohash, geohash);
-                    // If it was user-joined, re-add it to the set
-                    if (wasUserJoined) {
-                        this.userJoinedChannels.add(geohash);
+                // Only add if not already in channels map
+                if (geohash) {
+                    // This is a geohash channel
+                    if (!this.channels.has(geohash)) {
+                        this.addChannel(geohash, geohash);
+                        if (wasUserJoined) {
+                            this.userJoinedChannels.add(geohash);
+                        }
                     }
-                } else if (!geohash && !this.channels.has(channel)) {
-                    this.addChannel(channel, '');
-                    // If it was user-joined, re-add it to the set
-                    if (wasUserJoined) {
-                        this.userJoinedChannels.add(channel);
+                } else {
+                    // This is a standard channel
+                    if (!this.channels.has(channel)) {
+                        this.addChannel(channel, '');
+                        if (wasUserJoined) {
+                            this.userJoinedChannels.add(channel);
+                        }
                     }
                 }
             }
@@ -14467,7 +14696,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.9.17 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.9.18 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -14491,23 +14720,45 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             const channelType = document.getElementById('channelTypeSelect').value;
 
             if (channelType === 'standard') {
-                const name = document.getElementById('channelNameInput').value.trim();
-                if (name) {
-                    await nym.cmdJoin(name);
+                let name = document.getElementById('channelNameInput').value.trim();
+
+                // Validate and sanitize
+                if (!name) {
+                    alert('Please enter a channel name');
+                    return;
                 }
+
+                // Remove spaces and invalid characters
+                name = name.toLowerCase().replace(/[^a-z0-9-]/g, '');
+
+                if (!name) {
+                    alert('Invalid channel name. Use only letters, numbers, and hyphens.');
+                    return;
+                }
+
+                if (name.includes(' ')) {
+                    alert('Channel names cannot contain spaces. Use hyphens instead (e.g., "my-channel")');
+                    return;
+                }
+
+                await nym.cmdJoin(name);
+
             } else if (channelType === 'geohash') {
                 let geohash = document.getElementById('geohashInput').value.trim().toLowerCase();
                 geohash = geohash.replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
-                if (geohash) {
-                    if (!nym.isValidGeohash(geohash)) {
-                        alert('Invalid geohash. Valid characters are: 0-9, b-z (except a, i, l, o)');
-                        return;
-                    }
-                    await nym.cmdJoin('#' + geohash);
-                } else {
+
+                if (!geohash) {
                     alert('Please enter a valid geohash');
                     return;
                 }
+
+                if (!nym.isValidGeohash(geohash)) {
+                    alert('Invalid geohash. Valid characters are: 0-9, b-z (except a, i, l, o)');
+                    return;
+                }
+
+                await nym.cmdJoin('#' + geohash);
+
             } else if (channelType === 'community') {
                 // Check if ephemeral user
                 if (nym.connectionMode === 'ephemeral') {
@@ -14516,13 +14767,27 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     return;
                 }
 
-                const name = document.getElementById('communityNameInput').value.trim();
+                let name = document.getElementById('communityNameInput').value.trim();
                 const description = document.getElementById('communityDescInput').value.trim();
                 const imageUrl = document.getElementById('communityImageInput').value.trim();
                 const isPrivate = document.getElementById('communityPrivacySelect').value === 'private';
 
                 if (!name) {
                     alert('Please enter a community name');
+                    return;
+                }
+
+                // Remove spaces and invalid characters
+                name = name.toLowerCase().replace(/[^a-z0-9-]/g, '');
+
+                if (!name) {
+                    alert('Invalid community name. Use only letters, numbers, and hyphens.');
+                    return;
+                }
+
+                // Double-check for spaces (should be caught by oninput, but just in case)
+                if (name.includes(' ')) {
+                    alert('Community names cannot contain spaces. Use hyphens instead (e.g., "my-community")');
                     return;
                 }
 
@@ -14642,6 +14907,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         async function initializeNym() {
             try {
+                // Check if running in NYMApp shell
+                const isNYMApp = navigator.userAgent.includes('NYMApp');
+
                 const mode = document.getElementById('connectionMode').value;
                 nym.connectionMode = mode; // Store connection mode
 
@@ -14774,6 +15042,21 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         document.addEventListener('DOMContentLoaded', () => {
             // Parse URL for channel routing BEFORE initialization
             parseUrlChannel();
+
+            // Check if running in NYMApp shell and hide extension option
+            const isNYMApp = navigator.userAgent.includes('NYMApp');
+            if (isNYMApp) {
+                const connectionMode = document.getElementById('connectionMode');
+                const extensionOption = connectionMode.querySelector('option[value="extension"]');
+                if (extensionOption) {
+                    extensionOption.remove();
+                }
+
+                // If extension was the default selected, switch to ephemeral
+                if (connectionMode.value === 'extension') {
+                    connectionMode.value = 'ephemeral';
+                }
+            }
 
             nym.initialize();
 
