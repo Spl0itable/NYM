@@ -4061,7 +4061,6 @@
                 // If we have no actual connections, force reconnect
                 if (actuallyConnected === 0) {
                     console.log('No active connections detected, forcing reconnect...');
-                    this.displaySystemMessage('Connection lost while app was inactive, reconnecting...');
                     this.connected = false;
                     this.updateConnectionStatus('Disconnected');
 
@@ -4105,7 +4104,6 @@
                             // After first successful connection, continue with others in background
                             if (!this.connected) {
                                 this.connected = true;
-                                this.displaySystemMessage('Reconnected to relays');
                             }
                         } catch (err) {
                             console.log(`Failed to reconnect to ${relayUrl}:`, err);
@@ -4327,7 +4325,6 @@
                     if (connected) {
                         this.connected = true;
                         this.reconnectionAttempts = 0; // Reset on success
-                        this.displaySystemMessage('Reconnected to relays');
                         this.updateConnectionStatus();
 
                         // Reconnect to other relays in background
