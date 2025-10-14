@@ -1,3 +1,7 @@
+## v2.10.23 - 2025-10-14
+
+Hotfix: cleaned up redundant messages
+
 ## v2.10.22 - 2025-10-14
 
 Hotfix: case where not all relays are reconnected on app resume

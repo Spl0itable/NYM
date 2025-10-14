@@ -8363,7 +8363,6 @@
                         tracking.blockedUntil = now + 900000; // 15 minutes
 
                         const nym = this.getNymFromPubkey(pubkey);
-                        this.displaySystemMessage(`${nym} has been temporarily muted for flooding in #${channel} (15 minutes)`);
                     }
                 }
             }
@@ -15192,7 +15191,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.10.22 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.10.23 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
