@@ -4061,7 +4061,6 @@
                 // If we have no actual connections, force reconnect
                 if (actuallyConnected === 0) {
                     console.log('No active connections detected, forcing reconnect...');
-                    this.displaySystemMessage('Connection lost while app was inactive, reconnecting...');
                     this.connected = false;
                     this.updateConnectionStatus('Disconnected');
 
@@ -4126,7 +4125,6 @@
                                 // After first successful connection
                                 this.connected = true;
                                 this.updateConnectionStatus();
-                                this.displaySystemMessage('Reconnected to relays');
                             }
 
                             console.log(`Successfully reconnected to ${relayUrl} (${connectedCount} total)`);
