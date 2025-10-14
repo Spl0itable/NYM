@@ -3963,11 +3963,92 @@
                     // Clean up old localStorage format
                     this.cleanupOldLightningAddress();
 
+                    // Network change detection
+                    this.setupNetworkMonitoring();
+
                     console.log('NYM initialized successfully');
                 } catch (error) {
                     console.error('Failed to initialize NYM:', error);
                     this.showNotification('Error', 'Failed to initialize: ' + error.message);
                 }
+            }
+
+
+            setupNetworkMonitoring() {
+                // Listen for online/offline events
+                window.addEventListener('online', () => {
+                    console.log('Network connection restored');
+                    this.displaySystemMessage('Network connection restored, reconnecting...');
+
+                    // Force update connection status
+                    this.updateConnectionStatus('Reconnecting...');
+
+                    // Clear all reconnecting flags to allow fresh attempts
+                    if (this.reconnectingRelays) {
+                        this.reconnectingRelays.clear();
+                    }
+
+                    // Clear relay pool of dead connections
+                    this.relayPool.forEach((relay, url) => {
+                        if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) {
+                            this.relayPool.delete(url);
+                            this.relayKinds.delete(url);
+                        }
+                    });
+
+                    // Clear blacklist temporarily to allow retry
+                    const tempBlacklist = new Set(this.blacklistedRelays);
+                    this.blacklistedRelays.clear();
+
+                    // Attempt to reconnect to all broadcast relays
+                    this.broadcastRelays.forEach(relayUrl => {
+                        if (!this.relayPool.has(relayUrl)) {
+                            this.connectToRelay(relayUrl, 'broadcast')
+                                .then(() => {
+                                    this.subscribeToSingleRelay(relayUrl);
+                                    this.updateConnectionStatus();
+                                })
+                                .catch(err => {
+                                    console.log(`Failed to reconnect to ${relayUrl}:`, err);
+                                    // Restore to blacklist if it fails again
+                                    if (tempBlacklist.has(relayUrl)) {
+                                        this.blacklistedRelays.add(relayUrl);
+                                    }
+                                    this.updateConnectionStatus();
+                                });
+                        }
+                    });
+
+                    // Also try nosflare
+                    if (!this.relayPool.has(this.nosflareRelay)) {
+                        this.connectToRelay(this.nosflareRelay, 'nosflare')
+                            .catch(err => {
+                                console.log('Nosflare reconnect failed:', err);
+                                this.updateConnectionStatus();
+                            });
+                    }
+                });
+
+                window.addEventListener('offline', () => {
+                    console.log('Network connection lost');
+
+                    // Force cleanup of relay pool
+                    this.relayPool.forEach((relay, url) => {
+                        if (relay.ws) {
+                            try {
+                                relay.ws.close();
+                            } catch (e) {
+                                // Ignore close errors
+                            }
+                        }
+                        this.relayPool.delete(url);
+                        this.relayKinds.delete(url);
+                    });
+
+                    this.connected = false;
+                    this.displaySystemMessage('Network connection lost');
+                    this.updateConnectionStatus('Disconnected');
+                });
             }
 
             setupMobileGestures() {
@@ -4882,9 +4963,15 @@
 
                         ws.onclose = () => {
                             clearTimeout(verificationTimeout);
+
+                            // Immediately remove from pool and update status
                             this.relayPool.delete(relayUrl);
                             this.relayKinds.delete(relayUrl);
+
                             console.log(`Disconnected from ${relayUrl}`);
+
+                            // Force status update after disconnect
+                            this.updateConnectionStatus();
 
                             // Only reconnect broadcast/nosflare relays, not failed read relays
                             if ((type === 'broadcast' || type === 'nosflare') && this.connected && !this.blacklistedRelays.has(relayUrl)) {
@@ -4895,36 +4982,74 @@
 
                                 this.reconnectingRelays.add(relayUrl);
 
-                                setTimeout(() => {
-                                    this.connectToRelay(relayUrl, type)
-                                        .then(() => {
-                                            // Re-subscribe after reconnection
-                                            if (type === 'broadcast') {
-                                                this.subscribeToSingleRelay(relayUrl);
-                                            }
-                                            console.log(`Reconnected to ${relayUrl}`);
-                                            this.updateConnectionStatus();
+                                // Implement exponential backoff for reconnection
+                                const attemptReconnect = (attempt = 0) => {
+                                    const maxAttempts = 10;
+                                    const baseDelay = 5000;
+                                    const maxDelay = 60000;
 
-                                            // Remove from reconnecting set
+                                    // Calculate exponential backoff delay
+                                    const delay = Math.min(baseDelay * Math.pow(1.5, attempt), maxDelay);
+
+                                    setTimeout(() => {
+                                        // Check WebSocket state and network connectivity
+                                        if (!navigator.onLine) {
+                                            console.log(`Skipping reconnection attempt for ${relayUrl} - offline`);
                                             this.reconnectingRelays.delete(relayUrl);
+                                            this.updateConnectionStatus();
+                                            return;
+                                        }
 
-                                            // Show reconnected message only when all relays are back
-                                            if (this.reconnectingRelays.size === 0) {
+                                        // Check if we're still supposed to be connected
+                                        if (!this.connected) {
+                                            this.reconnectingRelays.delete(relayUrl);
+                                            this.updateConnectionStatus();
+                                            return;
+                                        }
 
-                                                // After broadcast relays reconnect, also retry discovered relays
+                                        console.log(`Reconnection attempt ${attempt + 1}/${maxAttempts} for ${relayUrl}`);
+
+                                        this.connectToRelay(relayUrl, type)
+                                            .then(() => {
+                                                // Re-subscribe after reconnection
                                                 if (type === 'broadcast') {
-                                                    setTimeout(() => {
-                                                        this.retryDiscoveredRelays();
-                                                    }, 2000); // Wait 2 seconds before retrying discovered relays
+                                                    this.subscribeToSingleRelay(relayUrl);
                                                 }
-                                            }
-                                        })
-                                        .catch(err => {
-                                            console.error(`Failed to reconnect to ${relayUrl}:`, err);
-                                            this.trackRelayFailure(relayUrl);
-                                            // Keep trying, but don't spam messages
-                                        });
-                                }, 5000);
+                                                console.log(`Reconnected to ${relayUrl}`);
+                                                this.updateConnectionStatus();
+
+                                                // Remove from reconnecting set
+                                                this.reconnectingRelays.delete(relayUrl);
+
+                                                if (this.reconnectingRelays.size === 0) {
+
+                                                    // After broadcast relays reconnect, also retry discovered relays
+                                                    if (type === 'broadcast') {
+                                                        setTimeout(() => {
+                                                            this.retryDiscoveredRelays();
+                                                        }, 2000);
+                                                    }
+                                                }
+                                            })
+                                            .catch(err => {
+                                                console.error(`Reconnection attempt ${attempt + 1} failed for ${relayUrl}:`, err);
+                                                this.trackRelayFailure(relayUrl);
+                                                this.updateConnectionStatus();
+
+                                                // Try again if we haven't exceeded max attempts
+                                                if (attempt < maxAttempts - 1) {
+                                                    attemptReconnect(attempt + 1);
+                                                } else {
+                                                    console.error(`Max reconnection attempts reached for ${relayUrl}`);
+                                                    this.reconnectingRelays.delete(relayUrl);
+                                                    this.updateConnectionStatus();
+                                                }
+                                            });
+                                    }, delay);
+                                };
+
+                                // Start reconnection attempts
+                                attemptReconnect(0);
                             }
                         };
 
@@ -4944,7 +5069,10 @@
                 const blacklistedAt = this.blacklistTimestamps.get(relayUrl);
                 const now = Date.now();
 
-                if (now - blacklistedAt > this.blacklistDuration) {
+                // Reduce blacklist duration from 5 minutes to 2 minutes
+                const blacklistDuration = 120000; // 2 minutes instead of 5
+
+                if (now - blacklistedAt > blacklistDuration) {
                     // Expired, remove from blacklist
                     this.blacklistedRelays.delete(relayUrl);
                     this.blacklistTimestamps.delete(relayUrl);
@@ -13414,15 +13542,27 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         dot.style.background = 'var(--danger)';
                     }
                 } else {
-                    // Show actual connected relay count
-                    const connectedRelays = this.relayPool.size;
+                    // Check actual WebSocket connection states, not just pool size
+                    let actuallyConnected = 0;
 
-                    if (connectedRelays > 0) {
-                        statusEl.textContent = `Connected (${connectedRelays} relays)`;
+                    this.relayPool.forEach((relay, url) => {
+                        if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                            actuallyConnected++;
+                        } else {
+                            // Clean up dead connections from pool
+                            this.relayPool.delete(url);
+                            this.relayKinds.delete(url);
+                        }
+                    });
+
+                    if (actuallyConnected > 0) {
+                        statusEl.textContent = `Connected (${actuallyConnected} relays)`;
                         dot.style.background = 'var(--primary)';
+                        this.connected = true;
                     } else {
                         statusEl.textContent = 'Disconnected';
                         dot.style.background = 'var(--danger)';
+                        this.connected = false;
                     }
                 }
             }
@@ -14739,7 +14879,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.10.18 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.10.19 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -15265,6 +15405,121 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     nym.updateUserList();
                 }
             }, 30000);
+
+            // Override the existing search functions to handle collapsed lists properly
+            const originalHandleChannelSearch = nym.handleChannelSearch;
+            nym.handleChannelSearch = function (searchTerm) {
+                // First expand the list to make all items searchable
+                const channelList = document.getElementById('channelList');
+                const wasCollapsed = channelList.classList.contains('list-collapsed');
+
+                if (wasCollapsed && searchTerm.length > 0) {
+                    channelList.classList.remove('list-collapsed');
+                    channelList.classList.add('list-expanded');
+                }
+
+                // Call original search function
+                originalHandleChannelSearch.call(this, searchTerm);
+
+                // Restore collapsed state if search is cleared
+                if (wasCollapsed && searchTerm.length === 0) {
+                    channelList.classList.add('list-collapsed');
+                    channelList.classList.remove('list-expanded');
+                }
+            };
+
+            const originalFilterPMs = nym.filterPMs;
+            nym.filterPMs = function (searchTerm) {
+                // First expand the list to make all items searchable
+                const pmList = document.getElementById('pmList');
+                const wasCollapsed = pmList.classList.contains('list-collapsed');
+
+                if (wasCollapsed && searchTerm.length > 0) {
+                    pmList.classList.remove('list-collapsed');
+                    pmList.classList.add('list-expanded');
+                }
+
+                // Call original filter function
+                originalFilterPMs.call(this, searchTerm);
+
+                // Restore collapsed state if search is cleared
+                if (wasCollapsed && searchTerm.length === 0) {
+                    pmList.classList.add('list-collapsed');
+                    pmList.classList.remove('list-expanded');
+                }
+            };
+
+            const originalFilterUsers = nym.filterUsers;
+            nym.filterUsers = function (searchTerm) {
+                // First expand the list to make all items searchable
+                const userList = document.getElementById('userListContent');
+                const wasCollapsed = userList.classList.contains('list-collapsed');
+
+                if (wasCollapsed && searchTerm.length > 0) {
+                    userList.classList.remove('list-collapsed');
+                    userList.classList.add('list-expanded');
+                }
+
+                // Call original filter function
+                originalFilterUsers.call(this, searchTerm);
+
+                // Restore collapsed state if search is cleared
+                if (wasCollapsed && searchTerm.length === 0) {
+                    userList.classList.add('list-collapsed');
+                    userList.classList.remove('list-expanded');
+                }
+            };
+
+            setInterval(() => {
+                // Clean up stored messages for inactive channels
+                const currentKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
+
+                nym.messages.forEach((messages, channel) => {
+                    // Skip current channel
+                    if (channel === currentKey) return;
+
+                    // Prune inactive channels to 500 messages max
+                    if (messages.length > 500) {
+                        nym.messages.set(channel, messages.slice(-500));
+                        console.log(`Background pruned ${channel} to 500 messages`);
+                    }
+                });
+
+                // Clear event deduplication if too large
+                if (nym.eventDeduplication.size > 5000) {
+                    nym.eventDeduplication.clear();
+                    console.log('Cleared event deduplication cache');
+                }
+            }, 60000);
+
+            // Periodically check and clear expired blacklists
+            setInterval(() => {
+                if (nym.connected) {
+                    // Check all blacklisted relays for expiration
+                    const expiredRelays = [];
+                    nym.blacklistedRelays.forEach(relayUrl => {
+                        if (nym.isBlacklistExpired(relayUrl)) {
+                            expiredRelays.push(relayUrl);
+                        }
+                    });
+
+                    // Try to reconnect to expired blacklisted relays
+                    expiredRelays.forEach(relayUrl => {
+                        if (nym.broadcastRelays.includes(relayUrl) && !nym.relayPool.has(relayUrl)) {
+                            console.log(`Retrying previously blacklisted relay: ${relayUrl}`);
+                            nym.connectToRelay(relayUrl, 'broadcast')
+                                .then(() => {
+                                    nym.subscribeToSingleRelay(relayUrl);
+                                    nym.updateConnectionStatus();
+                                })
+                                .catch(err => {
+                                    console.log(`Retry failed for ${relayUrl}:`, err);
+                                    nym.trackRelayFailure(relayUrl);
+                                });
+                        }
+                    });
+                }
+            }, 60000); // Check every minute
         });
 
         // Parse URL for channel routing

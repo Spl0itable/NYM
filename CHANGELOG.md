@@ -1,3 +1,7 @@
+## v2.10.19 - 2025-10-14
+
+Hotfix: case where network disconnection doesn't properly reconnnect relays
+
 ## v2.10.18 - 2025-10-14
 
 New: option to auto assign new ephemeral identity on each session restart
