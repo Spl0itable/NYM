@@ -1,3 +1,7 @@
+## v2.10.18 - 2025-10-14
+
+New: option to auto assign new ephemeral identity on each session restart
+
 ## v2.9.18 - 2025-10-14
 
 Hotfix: case where sidebar could get cut off

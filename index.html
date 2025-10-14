@@ -2599,6 +2599,15 @@
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nick"
                         maxlength="20">
                     <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
+
+                    <div id="autoEphemeralGroup" style="margin-top: 15px;">
+                        <label style="display: flex; align-items: center; cursor: pointer; font-size: 14px;">
+                            <input type="checkbox" id="autoEphemeralCheckbox"
+                                style="margin-right: 10px; width: auto; cursor: pointer;">
+                            <span style="color: var(--text-dim);">Automatically assign new ephemeral nym on each session
+                                restart to skip the welcome screen</span>
+                        </label>
+                    </div>
                 </div>
 
                 <div
@@ -2682,6 +2691,16 @@
                         <option value="false">Hide</option>
                     </select>
                 </div>
+
+                <div class="form-group" id="autoEphemeralSettingGroup" style="display: none;">
+                    <label class="form-label">Auto Ephemeral Mode on Restart</label>
+                    <select class="form-select" id="autoEphemeralSelect">
+                        <option value="false">Disabled</option>
+                        <option value="true">Enabled (auto sign-in)</option>
+                    </select>
+                    <div class="form-hint">Automatically sign in with ephemeral mode on app restart</div>
+                </div>
+
 
                 <div class="form-group">
                     <label class="form-label">Blur Images from Others</label>
@@ -14599,6 +14618,20 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 blurSelect.value = nym.blurOthersImages ? 'true' : 'false';
             }
 
+            // Show/hide and load auto-ephemeral setting ONLY for ephemeral mode
+            const autoEphemeralSettingGroup = document.getElementById('autoEphemeralSettingGroup');
+            const autoEphemeralSelect = document.getElementById('autoEphemeralSelect');
+
+            if (nym.connectionMode === 'ephemeral') {
+                autoEphemeralSettingGroup.style.display = 'block';
+                if (autoEphemeralSelect) {
+                    const autoEphemeral = localStorage.getItem('nym_auto_ephemeral') === 'true';
+                    autoEphemeralSelect.value = autoEphemeral ? 'true' : 'false';
+                }
+            } else {
+                autoEphemeralSettingGroup.style.display = 'none';
+            }
+
             document.getElementById('themeSelect').value = nym.settings.theme;
             document.getElementById('soundSelect').value = nym.settings.sound;
             document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
@@ -14628,6 +14661,16 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             // Apply blur settings
             nym.blurOthersImages = blurImages;
             nym.saveImageBlurSettings();
+
+            // Only handle auto-ephemeral if currently in ephemeral mode
+            if (nym.connectionMode === 'ephemeral') {
+                const autoEphemeral = document.getElementById('autoEphemeralSelect').value === 'true';
+                if (autoEphemeral) {
+                    localStorage.setItem('nym_auto_ephemeral', 'true');
+                } else {
+                    localStorage.removeItem('nym_auto_ephemeral');
+                }
+            }
 
             // Handle proximity sorting
             if (sortByProximity) {
@@ -14696,7 +14739,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.9.18 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.10.18 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -14808,6 +14851,48 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         // Function to check for saved connection on page load
         async function checkSavedConnection() {
+            // Check for auto-ephemeral preference FIRST (highest priority)
+            const autoEphemeral = localStorage.getItem('nym_auto_ephemeral');
+            if (autoEphemeral === 'true') {
+                try {
+                    // Hide setup modal
+                    const setupModal = document.getElementById('setupModal');
+                    setupModal.classList.remove('active');
+
+                    nym.displaySystemMessage('Auto-starting ephemeral session...');
+
+                    // Generate ephemeral keypair
+                    await nym.generateKeypair();
+                    nym.nym = nym.generateRandomNym();
+                    nym.connectionMode = 'ephemeral';
+                    document.getElementById('currentNym').textContent = nym.nym;
+
+                    // Connect to relays
+                    await nym.connectToRelays();
+
+                    // Request notification permission
+                    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+                        Notification.requestPermission();
+                    }
+
+                    // Show welcome message
+                    nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Type /help for available commands.`);
+                    nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
+                    nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
+
+                    // Route to channel from URL if present
+                    await routeToUrlChannel();
+
+                    return; // Exit early, don't check other saved connections
+                } catch (error) {
+                    console.error('Failed to auto-start ephemeral session:', error);
+                    // Clear the preference and show setup modal
+                    localStorage.removeItem('nym_auto_ephemeral');
+                    document.getElementById('setupModal').classList.add('active');
+                    return;
+                }
+            }
+
             const savedMode = localStorage.getItem('nym_connection_mode');
             const savedRelay = localStorage.getItem('nym_relay_url');
             const savedNsec = localStorage.getItem('nym_nsec');
@@ -14923,6 +15008,12 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     document.getElementById('currentNym').textContent = nym.nym;
                     localStorage.removeItem('nym_connection_mode');
 
+                    // Check if auto-ephemeral checkbox is checked
+                    const autoEphemeralCheckbox = document.getElementById('autoEphemeralCheckbox');
+                    if (autoEphemeralCheckbox && autoEphemeralCheckbox.checked) {
+                        localStorage.setItem('nym_auto_ephemeral', 'true');
+                    }
+
                 } else if (mode === 'extension') {
                     await nym.useExtension();
 
@@ -15034,6 +15125,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         // Sign-out button
         function signOut() {
             if (confirm('Sign out and disconnect from NYM?')) {
+                // Clear auto-ephemeral preference on logout
+                localStorage.removeItem('nym_auto_ephemeral');
                 nym.cmdQuit();
             }
         }
@@ -15094,14 +15187,17 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 const hint = document.getElementById('nymHint');
                 const nymInput = document.getElementById('nymInput');
                 const nsecInput = document.getElementById('nsecInput');
+                const autoEphemeralGroup = document.getElementById('autoEphemeralGroup');
 
                 // Hide all special groups first
                 nsecGroup.style.display = 'none';
+                autoEphemeralGroup.style.display = 'none'; // Hide auto-ephemeral by default
 
                 switch (mode) {
                     case 'ephemeral':
                         hint.textContent = 'Your ephemeral pseudonym for this session';
                         nymInput.placeholder = 'Leave empty for random nick';
+                        autoEphemeralGroup.style.display = 'block'; // Show only for ephemeral
                         break;
                     case 'extension':
                         hint.textContent = 'Will use your Nostr profile name if available';
