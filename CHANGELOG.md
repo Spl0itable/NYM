@@ -1,3 +1,7 @@
+## v2.10.21 - 2025-10-14
+
+Hotfix: enhanced support for flutter app to reconnnect relays
+
 ## v2.10.20 - 2025-10-14
 
 Hotfix: enhanced support for flutter app to reconnnect relays

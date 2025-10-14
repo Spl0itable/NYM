@@ -3989,13 +3989,18 @@
                         console.log('App became visible, checking connection health...');
 
                         // Wait a moment for network to stabilize
-                        // Shorter delay for Flutter WebView
                         const delay = this.isFlutterWebView ? 200 : 500;
                         setTimeout(() => {
                             this.checkConnectionHealth();
+
+                            // If disconnected, immediately start reconnection attempts
+                            if (!this.connected && navigator.onLine) {
+                                this.attemptReconnection();
+                            }
                         }, delay);
                     } else {
                         console.log('App hidden');
+                        this.stopReconnectionAttempts();
                     }
                 });
 
@@ -4005,6 +4010,11 @@
                     const delay = this.isFlutterWebView ? 200 : 500;
                     setTimeout(() => {
                         this.checkConnectionHealth();
+
+                        // If disconnected, immediately start reconnection attempts
+                        if (!this.connected && navigator.onLine) {
+                            this.attemptReconnection();
+                        }
                     }, delay);
                 });
 
@@ -4014,6 +4024,11 @@
                         console.log('App resumed (Flutter event), checking connection...');
                         setTimeout(() => {
                             this.checkConnectionHealth();
+
+                            // If disconnected, immediately start reconnection attempts
+                            if (!this.connected && navigator.onLine) {
+                                this.attemptReconnection();
+                            }
                         }, 200);
                     });
                 }
@@ -4109,13 +4124,25 @@
             }
 
             setupNetworkMonitoring() {
+                // Track reconnection attempts
+                this.reconnectionAttempts = 0;
+                this.maxReconnectionAttempts = 10;
+                this.reconnectionInterval = null;
+
                 // Listen for online/offline events
                 window.addEventListener('online', () => {
                     console.log('Network connection restored');
                     this.displaySystemMessage('Network connection restored, reconnecting...');
+                    this.reconnectionAttempts = 0; // Reset attempts on network restore
 
                     // Force update connection status
                     this.updateConnectionStatus('Reconnecting...');
+
+                    // Clear any existing reconnection interval
+                    if (this.reconnectionInterval) {
+                        clearInterval(this.reconnectionInterval);
+                        this.reconnectionInterval = null;
+                    }
 
                     // Clear all reconnecting flags to allow fresh attempts
                     if (this.reconnectingRelays) {
@@ -4183,6 +4210,134 @@
                     this.displaySystemMessage('Network connection lost');
                     this.updateConnectionStatus('Disconnected');
                 });
+
+                // Start automatic reconnection monitoring
+                this.startReconnectionMonitoring();
+            }
+
+            startReconnectionMonitoring() {
+                // Only monitor when app is visible/active
+                this.reconnectionInterval = null;
+
+                const startMonitoring = () => {
+                    // Clear any existing interval
+                    if (this.reconnectionInterval) {
+                        clearInterval(this.reconnectionInterval);
+                    }
+
+                    // Only start if disconnected and visible
+                    if (!this.connected && !document.hidden) {
+                        console.log('Starting active reconnection monitoring (app is visible)...');
+                        this.reconnectionInterval = setInterval(() => {
+                            // Only attempt if still visible
+                            if (!document.hidden && !this.connected && navigator.onLine) {
+                                this.attemptReconnection();
+                            } else if (document.hidden) {
+                                // Stop monitoring if app goes to background
+                                console.log('App backgrounded, pausing reconnection monitoring');
+                                clearInterval(this.reconnectionInterval);
+                                this.reconnectionInterval = null;
+                            }
+                        }, 5000);
+                    }
+                };
+
+                const stopMonitoring = () => {
+                    if (this.reconnectionInterval) {
+                        console.log('Stopping reconnection monitoring');
+                        clearInterval(this.reconnectionInterval);
+                        this.reconnectionInterval = null;
+                    }
+                };
+
+                // Listen for visibility changes
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'visible') {
+                        // App came to foreground - check immediately then start monitoring
+                        setTimeout(() => {
+                            this.checkConnectionHealth();
+                            if (!this.connected && navigator.onLine) {
+                                this.attemptReconnection();
+                                startMonitoring();
+                            }
+                        }, 200);
+                    } else {
+                        // App went to background - stop monitoring
+                        stopMonitoring();
+                    }
+                });
+
+                // Start monitoring if currently visible and needed
+                if (!document.hidden) {
+                    startMonitoring();
+                }
+            }
+
+            async attemptReconnection() {
+                // Prevent multiple simultaneous reconnection attempts
+                if (this.isReconnecting) {
+                    console.log('Reconnection already in progress, skipping...');
+                    return;
+                }
+
+                // Check if we've exceeded max attempts
+                if (this.reconnectionAttempts >= this.maxReconnectionAttempts) {
+                    console.log('Max reconnection attempts reached. Manual reconnection required.');
+                    this.updateConnectionStatus('Disconnected - Click to reconnect');
+                    return;
+                }
+
+                this.isReconnecting = true;
+                this.reconnectionAttempts++;
+
+                console.log(`Attempting automatic reconnection (attempt ${this.reconnectionAttempts}/${this.maxReconnectionAttempts})...`);
+                this.updateConnectionStatus(`Reconnecting (${this.reconnectionAttempts}/${this.maxReconnectionAttempts})...`);
+
+                try {
+                    // Clear dead connections first
+                    this.relayPool.forEach((relay, url) => {
+                        if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) {
+                            this.relayPool.delete(url);
+                            this.relayKinds.delete(url);
+                        }
+                    });
+
+                    // Try to connect to at least one broadcast relay
+                    let connected = false;
+                    for (const relayUrl of this.broadcastRelays) {
+                        if (this.relayPool.has(relayUrl)) {
+                            const relay = this.relayPool.get(relayUrl);
+                            if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                                connected = true;
+                                break;
+                            }
+                        }
+
+                        try {
+                            await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
+                            this.subscribeToSingleRelay(relayUrl);
+                            connected = true;
+                            console.log(`Reconnected to ${relayUrl}`);
+                            break;
+                        } catch (err) {
+                            console.log(`Failed to reconnect to ${relayUrl}:`, err);
+                        }
+                    }
+
+                    if (connected) {
+                        this.connected = true;
+                        this.reconnectionAttempts = 0; // Reset on success
+                        this.displaySystemMessage('Reconnected to relays');
+                        this.updateConnectionStatus();
+
+                        // Reconnect to other relays in background
+                        this.reconnectToBroadcastRelays();
+                    }
+                } catch (error) {
+                    console.error('Reconnection attempt failed:', error);
+                } finally {
+                    this.isReconnecting = false;
+                }
             }
 
             setupMobileGestures() {
@@ -15013,7 +15168,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.10.20 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.10.21 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
