@@ -3476,6 +3476,12 @@
                     pubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
                     title: 'NYM Developer'
                 };
+                this.isFlutterWebView = navigator.userAgent.includes('NYMApp') ||
+                    navigator.userAgent.includes('Flutter');
+
+                if (this.isFlutterWebView) {
+                    console.log('Running in Flutter WebView - using enhanced connection monitoring');
+                }
             }
 
             getUserColorClass(pubkey) {
@@ -3966,6 +3972,9 @@
                     // Network change detection
                     this.setupNetworkMonitoring();
 
+                    // Visibility change detection
+                    this.setupVisibilityMonitoring();
+
                     console.log('NYM initialized successfully');
                 } catch (error) {
                     console.error('Failed to initialize NYM:', error);
@@ -3973,6 +3982,131 @@
                 }
             }
 
+            setupVisibilityMonitoring() {
+                // Track when app becomes visible/hidden
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'visible') {
+                        console.log('App became visible, checking connection health...');
+
+                        // Wait a moment for network to stabilize
+                        // Shorter delay for Flutter WebView
+                        const delay = this.isFlutterWebView ? 200 : 500;
+                        setTimeout(() => {
+                            this.checkConnectionHealth();
+                        }, delay);
+                    } else {
+                        console.log('App hidden');
+                    }
+                });
+
+                // Also listen for page focus (for desktop)
+                window.addEventListener('focus', () => {
+                    console.log('Window focused, checking connection health...');
+                    const delay = this.isFlutterWebView ? 200 : 500;
+                    setTimeout(() => {
+                        this.checkConnectionHealth();
+                    }, delay);
+                });
+
+                // For Flutter WebView, also check on resume event
+                if (this.isFlutterWebView) {
+                    window.addEventListener('resume', () => {
+                        console.log('App resumed (Flutter event), checking connection...');
+                        setTimeout(() => {
+                            this.checkConnectionHealth();
+                        }, 200);
+                    });
+                }
+            }
+
+            async checkConnectionHealth() {
+                console.log('Checking connection health...');
+
+                // First, check if we think we're connected
+                let actuallyConnected = 0;
+                const deadRelays = [];
+
+                this.relayPool.forEach((relay, url) => {
+                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                        actuallyConnected++;
+                    } else {
+                        deadRelays.push(url);
+                    }
+                });
+
+                // Clean up dead relays
+                deadRelays.forEach(url => {
+                    console.log(`Removing dead relay from pool: ${url}`);
+                    this.relayPool.delete(url);
+                    this.relayKinds.delete(url);
+                });
+
+                console.log(`Connection health: ${actuallyConnected} relays actually connected out of ${this.relayPool.size} in pool`);
+
+                // If we have no actual connections, force reconnect
+                if (actuallyConnected === 0) {
+                    console.log('No active connections detected, forcing reconnect...');
+                    this.displaySystemMessage('Connection lost while app was inactive, reconnecting...');
+                    this.connected = false;
+                    this.updateConnectionStatus('Disconnected');
+
+                    // Clear reconnecting set to allow fresh attempts
+                    if (this.reconnectingRelays) {
+                        this.reconnectingRelays.clear();
+                    }
+
+                    // Try to reconnect to broadcast relays
+                    await this.reconnectToBroadcastRelays();
+                } else {
+                    // We have some connections, but update status to reflect actual count
+                    this.updateConnectionStatus();
+
+                    // If we're missing some broadcast relays, try to restore them
+                    const missingBroadcast = this.broadcastRelays.filter(url => !this.relayPool.has(url));
+                    if (missingBroadcast.length > 0) {
+                        console.log(`Missing ${missingBroadcast.length} broadcast relays, attempting to reconnect...`);
+                        this.reconnectToBroadcastRelays();
+                    }
+                }
+            }
+
+            async reconnectToBroadcastRelays() {
+                console.log('Reconnecting to broadcast relays...');
+
+                for (const relayUrl of this.broadcastRelays) {
+                    if (!this.relayPool.has(relayUrl) ||
+                        (this.relayPool.get(relayUrl).ws &&
+                            this.relayPool.get(relayUrl).ws.readyState !== WebSocket.OPEN)) {
+
+                        console.log(`Attempting to connect to ${relayUrl}...`);
+
+                        try {
+                            await this.connectToRelay(relayUrl, 'broadcast');
+                            this.subscribeToSingleRelay(relayUrl);
+                            this.connected = true;
+                            this.updateConnectionStatus();
+                            console.log(`Successfully reconnected to ${relayUrl}`);
+
+                            // After first successful connection, continue with others in background
+                            if (!this.connected) {
+                                this.connected = true;
+                                this.displaySystemMessage('Reconnected to relays');
+                            }
+                        } catch (err) {
+                            console.log(`Failed to reconnect to ${relayUrl}:`, err);
+                            this.trackRelayFailure(relayUrl);
+                        }
+                    }
+                }
+
+                // Also try nosflare
+                if (!this.relayPool.has(this.nosflareRelay)) {
+                    this.connectToRelay(this.nosflareRelay, 'nosflare')
+                        .catch(err => console.log('Nosflare reconnect failed:', err));
+                }
+
+                this.updateConnectionStatus();
+            }
 
             setupNetworkMonitoring() {
                 // Listen for online/offline events
@@ -4957,8 +5091,8 @@
 
                         ws.onerror = (error) => {
                             console.error(`WebSocket error for ${relayUrl}:`, error);
+                            console.log(`WebSocket readyState: ${ws.readyState}`); // Log the state
                             clearTimeout(verificationTimeout);
-                            reject(error);
                         };
 
                         ws.onclose = () => {
@@ -14879,7 +15013,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.10.19 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.10.20 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -15394,6 +15528,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
             }, 5000); // Update every 5 seconds
 
+            // NEW: Periodic connection health check (every 30 seconds)
+            setInterval(() => {
+                if (nym.connected || nym.relayPool.size > 0) {
+                    // Only log if we think we should be connected
+                    nym.checkConnectionHealth();
+                }
+            }, 30000); // Check every 30 seconds
+
             // Check for saved connection AFTER initialization is complete
             setTimeout(() => {
                 checkSavedConnection();
@@ -15470,6 +15612,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
             };
 
+            // Background message cleanup
             setInterval(() => {
                 // Clean up stored messages for inactive channels
                 const currentKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
@@ -15627,94 +15770,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 history.replaceState(null, null, window.location.pathname);
             }
         }
-
-        document.addEventListener('DOMContentLoaded', function () {
-            // Override the existing search functions to handle collapsed lists properly
-            const originalHandleChannelSearch = nym.handleChannelSearch;
-            nym.handleChannelSearch = function (searchTerm) {
-                // First expand the list to make all items searchable
-                const channelList = document.getElementById('channelList');
-                const wasCollapsed = channelList.classList.contains('list-collapsed');
-
-                if (wasCollapsed && searchTerm.length > 0) {
-                    channelList.classList.remove('list-collapsed');
-                    channelList.classList.add('list-expanded');
-                }
-
-                // Call original search function
-                originalHandleChannelSearch.call(this, searchTerm);
-
-                // Restore collapsed state if search is cleared
-                if (wasCollapsed && searchTerm.length === 0) {
-                    channelList.classList.add('list-collapsed');
-                    channelList.classList.remove('list-expanded');
-                }
-            };
-
-            const originalFilterPMs = nym.filterPMs;
-            nym.filterPMs = function (searchTerm) {
-                // First expand the list to make all items searchable
-                const pmList = document.getElementById('pmList');
-                const wasCollapsed = pmList.classList.contains('list-collapsed');
-
-                if (wasCollapsed && searchTerm.length > 0) {
-                    pmList.classList.remove('list-collapsed');
-                    pmList.classList.add('list-expanded');
-                }
-
-                // Call original filter function
-                originalFilterPMs.call(this, searchTerm);
-
-                // Restore collapsed state if search is cleared
-                if (wasCollapsed && searchTerm.length === 0) {
-                    pmList.classList.add('list-collapsed');
-                    pmList.classList.remove('list-expanded');
-                }
-            };
-
-            const originalFilterUsers = nym.filterUsers;
-            nym.filterUsers = function (searchTerm) {
-                // First expand the list to make all items searchable
-                const userList = document.getElementById('userListContent');
-                const wasCollapsed = userList.classList.contains('list-collapsed');
-
-                if (wasCollapsed && searchTerm.length > 0) {
-                    userList.classList.remove('list-collapsed');
-                    userList.classList.add('list-expanded');
-                }
-
-                // Call original filter function
-                originalFilterUsers.call(this, searchTerm);
-
-                // Restore collapsed state if search is cleared
-                if (wasCollapsed && searchTerm.length === 0) {
-                    userList.classList.add('list-collapsed');
-                    userList.classList.remove('list-expanded');
-                }
-            };
-
-            setInterval(() => {
-                // Clean up stored messages for inactive channels
-                const currentKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
-
-                nym.messages.forEach((messages, channel) => {
-                    // Skip current channel
-                    if (channel === currentKey) return;
-
-                    // Prune inactive channels to 500 messages max
-                    if (messages.length > 500) {
-                        nym.messages.set(channel, messages.slice(-500));
-                        console.log(`Background pruned ${channel} to 500 messages`);
-                    }
-                });
-
-                // Clear event deduplication if too large
-                if (nym.eventDeduplication.size > 5000) {
-                    nym.eventDeduplication.clear();
-                    console.log('Cleared event deduplication cache');
-                }
-            }, 60000);
-        });
     </script>
 </body>
 
