@@ -1,3 +1,8 @@
+## v2.11.24 - 2025-10-17
+
+New: optionally change timestamp format to 12hr from settings
+New: terms of service and privacy policy
+
 ## v2.10.24 - 2025-10-14
 
 Hotfix: external wallet support in app

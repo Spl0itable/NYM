@@ -1422,7 +1422,7 @@
         .modal-actions {
             display: flex;
             gap: 10px;
-            justify-content: flex-end;
+            justify-content: center;
         }
 
         .blocked-list,
@@ -2617,9 +2617,14 @@
                     only for this session and will be burned.
                 </div>
             </div>
-            <div class="modal-actions">
+            <div class="modal-actions" style="margin-bottom:20px;">
                 <button class="send-btn" onclick="initializeNym()">Enter NYM</button>
             </div>
+            <span style="color: var(--text-dim);">By entering, you agree to our <a
+                    href="https://github.com/Spl0itable/NYM/blob/main/TOS.md" target="_blank" rel="noopener"
+                    style="color: var(--secondary)">Terms of Service</a> and <a
+                    href="https://github.com/Spl0itable/NYM/blob/main/PP.md" target="_blank" rel="noopener"
+                    style="color: var(--secondary)">Privacy Policy</a>.</span>
         </div>
     </div>
 
@@ -2689,6 +2694,14 @@
                     <select class="form-select" id="timestampSelect">
                         <option value="true">Show</option>
                         <option value="false">Hide</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="timeFormatGroup">
+                    <label class="form-label">Time Format</label>
+                    <select class="form-select" id="timeFormatSelect">
+                        <option value="24hr" selected>24-hour (14:30)</option>
+                        <option value="12hr">12-hour (2:30 PM)</option>
                     </select>
                 </div>
 
@@ -6648,8 +6661,9 @@
                         sound: this.settings.sound,
                         autoscroll: this.settings.autoscroll,
                         showTimestamps: this.settings.showTimestamps,
+                        timeFormat: this.settings.timeFormat,
                         sortByProximity: this.settings.sortByProximity,
-                        blurOthersImages: this.blurOthersImages,  // Add this line
+                        blurOthersImages: this.blurOthersImages,
                         pinnedChannels: Array.from(this.pinnedChannels),
                         blockedUsers: Array.from(this.blockedUsers),
                         blockedKeywords: Array.from(this.blockedKeywords),
@@ -7727,6 +7741,16 @@
                         localStorage.setItem('nym_timestamps', settings.showTimestamps);
                     }
 
+                    // Apply time format settings
+                    if (settings.timeFormat !== undefined) {
+                        this.settings.timeFormat = settings.timeFormat;
+                        localStorage.setItem('nym_time_format', settings.timeFormat);
+                        // Refresh visible timestamps if messages are loaded
+                        if (document.querySelectorAll('.message-time').length > 0) {
+                            this.refreshMessageTimestamps();
+                        }
+                    }
+
                     // Restore pinned channels
                     if (settings.pinnedChannels) {
                         this.pinnedChannels = new Set(settings.pinnedChannels);
@@ -7802,15 +7826,20 @@
                         document.getElementById('soundSelect').value = this.settings.sound;
                         document.getElementById('autoscrollSelect').value = String(this.settings.autoscroll);
                         document.getElementById('timestampSelect').value = String(this.settings.showTimestamps);
+                        document.getElementById('timeFormatSelect').value = this.settings.timeFormat;
 
                         // Update blur settings in modal
                         const blurSelect = document.getElementById('blurImagesSelect');
                         if (blurSelect) {
                             blurSelect.value = String(this.blurOthersImages);
                         }
-                    }
 
-                    //this.displaySystemMessage('Settings synced from Nostr');
+                        // Show/hide time format option based on timestamp visibility
+                        const timeFormatGroup = document.getElementById('timeFormatGroup');
+                        if (timeFormatGroup) {
+                            timeFormatGroup.style.display = this.settings.showTimestamps ? 'block' : 'none';
+                        }
+                    }
                     console.log('Settings synced successfully:', Object.keys(settings));
                 } catch (error) {
                     console.error('Failed to parse synced settings:', error);
@@ -9826,7 +9855,7 @@
                     message.timestamp.toLocaleTimeString('en-US', {
                         hour: '2-digit',
                         minute: '2-digit',
-                        hour12: false
+                        hour12: this.settings.timeFormat === '12hr'
                     }) : '';
 
                 const messageEl = document.createElement('div');
@@ -9908,15 +9937,15 @@
                         hour: '2-digit',
                         minute: '2-digit',
                         second: '2-digit',
-                        hour12: false
+                        hour12: this.settings.timeFormat === '12hr'
                     });
 
                     messageEl.innerHTML = `
-            ${time ? `<span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-            <span class="message-author ${authorClass} ${userColorClass}">${displayAuthor}${verifiedBadge}:</span>
-            <span class="message-content ${userColorClass}">${formattedContent}</span>
-            ${reactionButton}
-        `;
+    ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
+    <span class="message-author ${authorClass} ${userColorClass}">${displayAuthor}${verifiedBadge}:</span>
+    <span class="message-content ${userColorClass}">${formattedContent}</span>
+    ${reactionButton}
+`;
 
                     const authorSpan = messageEl.querySelector('.message-author');
                     if (authorSpan) {
@@ -14146,6 +14175,29 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 this.updateUserList();
             }
 
+            refreshMessageTimestamps() {
+                // Update all visible timestamps to use new format
+                document.querySelectorAll('.message-time').forEach(timeEl => {
+                    const timestamp = parseInt(timeEl.closest('.message').dataset.timestamp);
+                    if (timestamp) {
+                        const date = new Date(timestamp);
+                        const newTime = date.toLocaleTimeString('en-US', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: this.settings.timeFormat === '12hr'
+                        });
+                        timeEl.textContent = newTime;
+
+                        // Update class for spacing
+                        if (this.settings.timeFormat === '12hr') {
+                            timeEl.classList.add('time-12hr');
+                        } else {
+                            timeEl.classList.remove('time-12hr');
+                        }
+                    }
+                });
+            }
+
             cleanupBitchatStyles() {
                 // Remove all dynamically created bitchat styles
                 document.querySelectorAll('style[id^="bitchat-user-"]').forEach(style => {
@@ -14167,7 +14219,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     sound: localStorage.getItem('nym_sound') || 'beep',
                     autoscroll: localStorage.getItem('nym_autoscroll') !== 'false',
                     showTimestamps: localStorage.getItem('nym_timestamps') !== 'false',
-                    sortByProximity: localStorage.getItem('nym_sort_proximity') === 'true'
+                    sortByProximity: localStorage.getItem('nym_sort_proximity') === 'true',
+                    timeFormat: localStorage.getItem('nym_time_format') || '24hr'
                 };
             }
 
@@ -15096,6 +15149,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             document.getElementById('soundSelect').value = nym.settings.sound;
             document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
             document.getElementById('timestampSelect').value = nym.settings.showTimestamps;
+            document.getElementById('timeFormatSelect').value = nym.settings.timeFormat;
+
+            // Show/hide time format option based on timestamp visibility
+            const timeFormatGroup = document.getElementById('timeFormatGroup');
+            if (timeFormatGroup) {
+                timeFormatGroup.style.display = nym.settings.showTimestamps ? 'block' : 'none';
+            }
+
             nym.updateBlockedList();
             nym.updateKeywordList();
             nym.updateBlockedChannelsList();
@@ -15109,6 +15170,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             const sound = document.getElementById('soundSelect').value;
             const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
             const showTimestamps = document.getElementById('timestampSelect').value === 'true';
+            const timeFormat = document.getElementById('timeFormatSelect').value;
             const sortByProximity = document.getElementById('proximitySelect').value === 'true';
             const blurImages = document.getElementById('blurImagesSelect').value === 'true';
 
@@ -15117,6 +15179,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             nym.settings.sound = sound;
             nym.settings.autoscroll = autoscroll;
             nym.settings.showTimestamps = showTimestamps;
+            nym.settings.timeFormat = timeFormat;
 
             // Apply blur settings
             nym.blurOthersImages = blurImages;
@@ -15179,6 +15242,10 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             // Save theme and other settings
             nym.applyTheme(theme);
             nym.saveSettings();
+            localStorage.setItem('nym_time_format', timeFormat);
+
+            // Refresh messages to apply new time format
+            nym.refreshMessageTimestamps();
 
             // Save lightning address
             if (lightningAddress !== nym.lightningAddress) {
@@ -15199,7 +15266,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.10.24 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.11.24 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -15211,7 +15278,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br>
         <br>
         NYM is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br>
-        Made with ♥ by <a href="https://nostr.band/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas</a>
+        Made with ♥ by 21 Million LLC
     `);
         }
 
@@ -15674,6 +15741,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                             nsecInput.value = savedNsec;
                         }
                         break;
+                }
+            });
+
+            // Add listener to show/hide time format option
+            document.getElementById('timestampSelect').addEventListener('change', (e) => {
+                const timeFormatGroup = document.getElementById('timeFormatGroup');
+                if (timeFormatGroup) {
+                    timeFormatGroup.style.display = e.target.value === 'true' ? 'block' : 'none';
                 }
             });
 
