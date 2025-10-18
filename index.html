@@ -2642,8 +2642,8 @@
             <div class="sidebar-actions">
                 <button class="icon-btn" onclick="showChannelModal(); nym.closeSidebar();">+ Channel</button>
                 <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();">Settings</button>
-                <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Logout">Logout</button>
                 <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();">About</button>
+                <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Logout">Logout</button>
             </div>
 
             <div class="nav-section">
@@ -2736,8 +2736,8 @@
                 <div class="header-actions">
                     <button class="icon-btn" onclick="showChannelModal()">+ Channel</button>
                     <button class="icon-btn" onclick="showSettings()">Settings</button>
-                    <button class="icon-btn" onclick="signOut()" title="Logout">Logout</button>
                     <button class="icon-btn" onclick="showAbout()">About</button>
+                    <button class="icon-btn" onclick="signOut()" title="Logout">Logout</button>
                 </div>
             </header>
 
@@ -3270,7 +3270,7 @@
     <div class="geohash-explorer-modal" id="geohashExplorerModal">
         <div class="geohash-explorer-content">
             <div class="geohash-explorer-header">
-                <div class="geohash-explorer-title">Global Geohash Channel Explorer</div>
+                <div class="geohash-explorer-title">Geohash Explorer</div>
                 <button class="geohash-explorer-close" onclick="nym.closeGeohashExplorer()">Close</button>
             </div>
             <div class="geohash-explorer-body">
@@ -3861,7 +3861,10 @@
                 globeViz.style.left = '0';
                 container.appendChild(globeViz);
 
-                // Re-add the controls and info panel HTML
+                // Determine if we should show "Your Location" in legend
+                const showYourLocation = this.settings.sortByProximity && this.userLocation;
+
+                // Re-add the controls and info panel HTML with conditional legend
                 container.insertAdjacentHTML('beforeend', `
         <div class="geohash-info-panel" id="geohashInfoPanel" style="display: none;">
             <div class="geohash-info-title" id="geohashInfoTitle">Channel Info</div>
@@ -3879,10 +3882,12 @@
                 <div class="geohash-legend-dot" style="background: var(--primary); box-shadow: 0 0 5px var(--primary);"></div>
                 <span>Active Channels</span>
             </div>
+            ${showYourLocation ? `
             <div class="geohash-legend-item">
                 <div class="geohash-legend-dot" style="background: var(--warning);"></div>
                 <span>Your Location</span>
             </div>
+            ` : ''}
         </div>
     `);
 
@@ -4189,6 +4194,50 @@
                     e.preventDefault();
                     camera.position.z += e.deltaY * 0.2;
                     camera.position.z = Math.max(150, Math.min(600, camera.position.z));
+                });
+
+                // Pinch-to-zoom support for mobile
+                let touchDistance = 0;
+                let initialCameraZ = camera.position.z;
+
+                renderer.domElement.addEventListener('touchstart', (e) => {
+                    if (e.touches.length === 2) {
+                        // Two-finger touch - start pinch
+                        const dx = e.touches[0].clientX - e.touches[1].clientX;
+                        const dy = e.touches[0].clientY - e.touches[1].clientY;
+                        touchDistance = Math.sqrt(dx * dx + dy * dy);
+                        initialCameraZ = camera.position.z;
+
+                        // Stop auto-rotation during pinch
+                        autoRotate = false;
+                    }
+                }, { passive: false });
+
+                renderer.domElement.addEventListener('touchmove', (e) => {
+                    if (e.touches.length === 2) {
+                        e.preventDefault();
+
+                        // Calculate new distance between touches
+                        const dx = e.touches[0].clientX - e.touches[1].clientX;
+                        const dy = e.touches[0].clientY - e.touches[1].clientY;
+                        const newDistance = Math.sqrt(dx * dx + dy * dy);
+
+                        if (touchDistance > 0) {
+                            // Calculate zoom factor based on pinch distance change
+                            const scale = touchDistance / newDistance;
+                            const newZ = initialCameraZ * scale;
+
+                            // Apply zoom with limits
+                            camera.position.z = Math.max(150, Math.min(600, newZ));
+                        }
+                    }
+                }, { passive: false });
+
+                renderer.domElement.addEventListener('touchend', (e) => {
+                    if (e.touches.length < 2) {
+                        // Reset pinch state when less than 2 fingers
+                        touchDistance = 0;
+                    }
                 });
 
                 // Animation loop
@@ -16232,7 +16281,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.12.24 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.12.25 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
@@ -16244,7 +16293,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br>
         <br>
         NYM is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br>
-        Made with ♥ by 21 Million LLC
+        Made with ♥ by 21 Million LLC<br/>
+        Lead developer: <a href="https://nostr.band/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas</a>
     `);
         }
 

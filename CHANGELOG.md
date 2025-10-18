@@ -1,3 +1,8 @@
+## v2.12.25 - 2025-10-18
+
+Hotfix: hide your location from legend if location not enabled
+Hotfix: add pinch to zoom support to globe for mobile
+
 ## v2.12.24 - 2025-10-18
 
 New: geohash channel explorer
