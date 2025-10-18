@@ -2035,7 +2035,234 @@
             color: var(--bg) !important;
         }
 
+        .geohash-explorer-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .geohash-explorer-modal.active {
+            display: flex;
+        }
+
+        .geohash-explorer-content {
+            width: 90%;
+            height: 90%;
+            max-width: 1200px;
+            max-height: 800px;
+            background: var(--bg-secondary);
+            border: 2px solid var(--primary);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .geohash-explorer-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-tertiary);
+        }
+
+        .geohash-explorer-title {
+            font-size: 18px;
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .geohash-explorer-close {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 5px 15px;
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .geohash-explorer-close:hover {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: var(--bg);
+            box-shadow: 0 0 10px var(--primary);
+        }
+
+        .geohash-explorer-body {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .geohash-globe-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            background: #000000;
+            overflow: hidden;
+        }
+
+        #globeViz {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .geohash-controls,
+        .geohash-legend,
+        .geohash-info-panel {
+            position: absolute;
+            z-index: 10;
+        }
+
+        .geohash-globe-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .geohash-globe-canvas:active {
+            cursor: grabbing;
+        }
+
+        .geohash-info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid var(--primary);
+            padding: 15px;
+            max-width: 300px;
+            font-size: 12px;
+            color: var(--text);
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+        }
+
+        .geohash-info-title {
+            color: var(--primary);
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .geohash-info-item {
+            margin: 5px 0;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(0, 255, 0, 0.2);
+        }
+
+        .geohash-info-item:last-child {
+            border-bottom: none;
+        }
+
+        .geohash-join-btn {
+            width: 100%;
+            margin-top: 10px;
+            padding: 8px;
+            background: var(--bg);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+        }
+
+        .geohash-join-btn:hover {
+            background: var(--primary);
+            color: var(--bg);
+            box-shadow: 0 0 10px var(--primary);
+        }
+
+        .geohash-controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .geohash-control-btn {
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 12px;
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+
+        .geohash-control-btn:hover {
+            border-color: var(--primary);
+            background: rgba(0, 255, 0, 0.1);
+        }
+
+        .geohash-legend {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid var(--border);
+            padding: 10px;
+            font-size: 10px;
+        }
+
+        .geohash-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 5px 0;
+        }
+
+        .geohash-legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
         @media (max-width: 768px) {
+            .geohash-explorer-content {
+                width: 100%;
+                height: 100%;
+                max-width: 100%;
+                max-height: 100%;
+            }
+
+            .geohash-info-panel {
+                position: fixed;
+                bottom: 60px;
+                top: auto;
+                right: 10px;
+                left: 10px;
+                max-width: none;
+            }
+
+            .geohash-controls {
+                bottom: 10px;
+                left: 10px;
+            }
+
+            .geohash-legend {
+                display: none;
+            }
+
             pre {
                 font-size: 10px;
             }
@@ -2378,6 +2605,9 @@
                     rgba(255, 255, 255, 0.02) 4px);
         }
     </style>
+    <!-- Three.js and Globe libraries -->
+    <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three-globe@2.31.0/dist/three-globe.min.js"></script>
 </head>
 
 <body>
@@ -2419,6 +2649,15 @@
             <div class="nav-section">
                 <div class="nav-title">
                     <span class="nav-title-text">Channels</span>
+                    <span class="discover-icon" onclick="nym.showGeohashExplorer()"
+                        title="Explore geohash channels globally">
+                        <svg viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="10" fill="none" stroke-width="2" />
+                            <path
+                                d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
+                                fill="none" stroke-width="2" />
+                        </svg>
+                    </span>
                     <span class="search-icon" onclick="toggleSearch('channelSearch')">
                         <svg viewBox="0 0 24 24">
                             <circle cx="11" cy="11" r="8"></circle>
@@ -3027,6 +3266,44 @@
         </div>
     </div>
 
+    <!-- Geohash Explorer Modal -->
+    <div class="geohash-explorer-modal" id="geohashExplorerModal">
+        <div class="geohash-explorer-content">
+            <div class="geohash-explorer-header">
+                <div class="geohash-explorer-title">Global Geohash Channel Explorer</div>
+                <button class="geohash-explorer-close" onclick="nym.closeGeohashExplorer()">Close</button>
+            </div>
+            <div class="geohash-explorer-body">
+                <div class="geohash-globe-container" id="geohashGlobeCanvas">
+                    <canvas class="geohash-globe-canvas" id="geohashGlobeCanvas"></canvas>
+
+                    <div class="geohash-info-panel" id="geohashInfoPanel" style="display: none;">
+                        <div class="geohash-info-title" id="geohashInfoTitle">Channel Info</div>
+                        <div id="geohashInfoContent"></div>
+                        <button class="geohash-join-btn" id="geohashJoinBtn">Join Channel</button>
+                    </div>
+
+                    <div class="geohash-controls">
+                        <button class="geohash-control-btn" onclick="nym.resetGlobeView()">Reset View</button>
+                        <button class="geohash-control-btn" onclick="nym.toggleAutoRotate()">Auto Rotate</button>
+                    </div>
+
+                    <div class="geohash-legend">
+                        <div class="geohash-legend-item">
+                            <div class="geohash-legend-dot"
+                                style="background: var(--primary); box-shadow: 0 0 5px var(--primary);"></div>
+                            <span>Active Channels</span>
+                        </div>
+                        <div class="geohash-legend-item">
+                            <div class="geohash-legend-dot" style="background: var(--warning);"></div>
+                            <span>Your Location</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // NYM - Ephemeral Nostr Chat
         class NYM {
@@ -3494,6 +3771,696 @@
 
                 if (this.isFlutterWebView) {
                     console.log('Running in Flutter WebView - using enhanced connection monitoring');
+                }
+            }
+
+            showGeohashExplorer() {
+                const modal = document.getElementById('geohashExplorerModal');
+                if (modal) {
+                    modal.style.display = 'flex';
+
+                    // Wait for modal to be visible before initializing globe
+                    setTimeout(() => {
+                        // Check if canvas container exists
+                        const canvasContainer = document.getElementById('geohashGlobeCanvas');
+                        if (!canvasContainer || !canvasContainer.parentElement) {
+                            console.error('Globe container not found');
+                            return;
+                        }
+
+                        // Always reinitialize globe when opening
+                        this.initializeGlobe();
+                    }, 100);
+                }
+            }
+
+            closeGeohashExplorer() {
+                const modal = document.getElementById('geohashExplorerModal');
+                if (modal) {
+                    modal.style.display = 'none';
+                }
+
+                // Stop animation
+                this.globeAnimationActive = false;
+
+                // Clean up globe resources
+                if (this.globe) {
+                    // Dispose of renderer
+                    if (this.globe.renderer) {
+                        this.globe.renderer.dispose();
+                        this.globe.renderer.forceContextLoss();
+                        this.globe.renderer.domElement = null;
+                    }
+
+                    // Clean up scene
+                    if (this.globe.scene) {
+                        this.globe.scene.traverse((object) => {
+                            if (object.geometry) {
+                                object.geometry.dispose();
+                            }
+                            if (object.material) {
+                                if (Array.isArray(object.material)) {
+                                    object.material.forEach(material => material.dispose());
+                                } else {
+                                    object.material.dispose();
+                                }
+                            }
+                        });
+                    }
+
+                    this.globe = null;
+                }
+
+                // Clean up resize handler
+                if (this.globeResizeHandler) {
+                    window.removeEventListener('resize', this.globeResizeHandler);
+                    this.globeResizeHandler = null;
+                }
+
+                console.log('Geohash explorer closed and resources cleaned up');
+            }
+
+            initializeGlobe() {
+                const container = document.getElementById('geohashGlobeCanvas');
+
+                if (!container) {
+                    console.error('Globe container not found');
+                    return;
+                }
+
+                // Clear any existing content
+                container.innerHTML = '';
+
+                // Create globe viz container
+                const globeViz = document.createElement('div');
+                globeViz.id = 'globeViz';
+                globeViz.style.width = '100%';
+                globeViz.style.height = '100%';
+                globeViz.style.position = 'absolute';
+                globeViz.style.top = '0';
+                globeViz.style.left = '0';
+                container.appendChild(globeViz);
+
+                // Re-add the controls and info panel HTML
+                container.insertAdjacentHTML('beforeend', `
+        <div class="geohash-info-panel" id="geohashInfoPanel" style="display: none;">
+            <div class="geohash-info-title" id="geohashInfoTitle">Channel Info</div>
+            <div id="geohashInfoContent"></div>
+            <button class="geohash-join-btn" id="geohashJoinBtn">Join Channel</button>
+        </div>
+
+        <div class="geohash-controls">
+            <button class="geohash-control-btn" onclick="nym.resetGlobeView()">Reset View</button>
+            <button class="geohash-control-btn" onclick="nym.toggleAutoRotate()">Auto Rotate</button>
+        </div>
+
+        <div class="geohash-legend">
+            <div class="geohash-legend-item">
+                <div class="geohash-legend-dot" style="background: var(--primary); box-shadow: 0 0 5px var(--primary);"></div>
+                <span>Active Channels</span>
+            </div>
+            <div class="geohash-legend-item">
+                <div class="geohash-legend-dot" style="background: var(--warning);"></div>
+                <span>Your Location</span>
+            </div>
+        </div>
+    `);
+
+                // Get geohash channels
+                this.updateGeohashChannels();
+
+                console.log('Geohash channels to plot:', this.geohashChannels.map(ch => ({
+                    geohash: ch.geohash,
+                    lat: ch.lat,
+                    lng: ch.lng
+                })));
+
+                // Calculate optimal distance based on screen size
+                const isMobile = window.innerWidth <= 768;
+                const initialDistance = isMobile ? 400 : 300;
+
+                // Create globe with dynamic sizing
+                const Globe = new ThreeGlobe()
+                    .globeImageUrl('https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg')
+                    .bumpImageUrl('https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png');
+
+                // Setup renderer first
+                const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                renderer.setPixelRatio(window.devicePixelRatio);
+                globeViz.appendChild(renderer.domElement);
+
+                // Setup camera
+                const camera = new THREE.PerspectiveCamera();
+                camera.position.z = initialDistance;
+
+                // Define updateSize function
+                const updateSize = () => {
+                    const width = container.clientWidth;
+                    const height = container.clientHeight;
+                    renderer.setSize(width, height);
+                    camera.aspect = width / height;
+                    camera.updateProjectionMatrix();
+                };
+
+                updateSize();
+
+                // Setup scene with brighter lighting
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x000011);
+                scene.add(Globe);
+                scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+
+                const directionalLight1 = new THREE.DirectionalLight(0xffffff, 1.2);
+                directionalLight1.position.set(5, 3, 5);
+                scene.add(directionalLight1);
+
+                const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight2.position.set(-5, -3, -5);
+                scene.add(directionalLight2);
+
+                // Create a container group for points that will rotate with the globe
+                const pointsGroup = new THREE.Group();
+                scene.add(pointsGroup);
+
+                const GLOBE_RADIUS = 100; // three-globe default radius
+
+                const polar2Cartesian = (lat, lng, relAltitude = 0) => {
+                    const phi = (90 - lat) * Math.PI / 180;
+                    const theta = (lng - 90) * Math.PI / 180;  // Subtract 90 instead of add
+                    const r = GLOBE_RADIUS * (1 + relAltitude);
+
+                    return {
+                        x: r * Math.sin(phi) * Math.cos(theta),
+                        y: r * Math.cos(phi),
+                        z: -r * Math.sin(phi) * Math.sin(theta)  // Negate the Z
+                    };
+                };
+
+                // Create clickable point meshes
+                const pointMeshes = [];
+                const POINT_ALTITUDE = 0.01; // Just above surface
+
+                // Create individual sphere meshes for each geohash channel
+                this.geohashChannels.forEach((channel, index) => {
+                    const geometry = new THREE.SphereGeometry(2.5, 16, 16);
+                    const material = new THREE.MeshBasicMaterial({
+                        color: channel.isJoined ? 0x00ff00 : 0x00ffff,
+                        transparent: true,
+                        opacity: 0.9
+                    });
+                    const sphere = new THREE.Mesh(geometry, material);
+
+                    // Convert lat/lng to 3D position using three-globe's coordinate system
+                    const pos = polar2Cartesian(channel.lat, channel.lng, POINT_ALTITUDE);
+                    sphere.position.set(pos.x, pos.y, pos.z);
+
+                    console.log(`Geohash ${channel.geohash}: lat=${channel.lat.toFixed(4)}, lng=${channel.lng.toFixed(4)} -> pos=(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
+
+                    // Store channel data on the mesh
+                    sphere.userData = {
+                        geohash: channel.geohash,
+                        lat: channel.lat,
+                        lng: channel.lng,
+                        channelIndex: index,
+                        isGeohashPoint: true
+                    };
+
+                    // Add to points group (not Globe) so we can control rotation separately
+                    pointsGroup.add(sphere);
+                    pointMeshes.push(sphere);
+                });
+
+                // Add user location if available (check both userLocation and proximity setting)
+                const hasLocation = this.userLocation || (this.settings.sortByProximity && navigator.geolocation);
+
+                if (this.userLocation) {
+                    const geometry = new THREE.SphereGeometry(3, 16, 16);
+                    const material = new THREE.MeshBasicMaterial({
+                        color: 0xffff00,
+                        transparent: true,
+                        opacity: 0.9
+                    });
+                    const sphere = new THREE.Mesh(geometry, material);
+
+                    const pos = polar2Cartesian(this.userLocation.lat, this.userLocation.lng, POINT_ALTITUDE);
+                    sphere.position.set(pos.x, pos.y, pos.z);
+
+                    sphere.userData = {
+                        isUserLocation: true
+                    };
+
+                    pointsGroup.add(sphere);
+
+                    console.log(`User location: lat=${this.userLocation.lat.toFixed(4)}, lng=${this.userLocation.lng.toFixed(4)} -> pos=(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
+                } else if (this.settings.sortByProximity && navigator.geolocation) {
+                    // If proximity sorting is enabled but location not yet loaded, try to get it now
+                    console.log('Proximity sorting enabled, attempting to get location for globe...');
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            this.userLocation = {
+                                lat: position.coords.latitude,
+                                lng: position.coords.longitude
+                            };
+                            console.log('Got location for globe, updating...');
+
+                            // Add the yellow dot now that we have location
+                            const geometry = new THREE.SphereGeometry(3, 16, 16);
+                            const material = new THREE.MeshBasicMaterial({
+                                color: 0xffff00,
+                                transparent: true,
+                                opacity: 0.9
+                            });
+                            const sphere = new THREE.Mesh(geometry, material);
+
+                            const pos = polar2Cartesian(this.userLocation.lat, this.userLocation.lng, POINT_ALTITUDE);
+                            sphere.position.set(pos.x, pos.y, pos.z);
+
+                            sphere.userData = {
+                                isUserLocation: true
+                            };
+
+                            pointsGroup.add(sphere);
+
+                            console.log(`User location added: lat=${this.userLocation.lat.toFixed(4)}, lng=${this.userLocation.lng.toFixed(4)}`);
+                        },
+                        (error) => {
+                            console.log('Could not get location for globe:', error);
+                        }
+                    );
+                }
+
+                // Interaction state
+                let autoRotate = true;
+                let mouseDownX = 0;
+                let mouseDownY = 0;
+                let mouseDownTime = 0;
+                let totalDragDistance = 0;
+                let isDragging = false;
+                let hoveredMesh = null;
+                const CLICK_THRESHOLD = 5;
+                const CLICK_TIME_THRESHOLD = 300;
+
+                // Raycaster for interaction detection
+                const raycaster = new THREE.Raycaster();
+                const mouse = new THREE.Vector2();
+
+                renderer.domElement.style.cursor = 'grab';
+
+                // Helper function to get mouse coordinates
+                const getMouseCoordinates = (clientX, clientY) => {
+                    const rect = renderer.domElement.getBoundingClientRect();
+                    mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+                    mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+                };
+
+                // Hover detection
+                const checkHover = (clientX, clientY) => {
+                    if (isDragging) return;
+
+                    getMouseCoordinates(clientX, clientY);
+                    raycaster.setFromCamera(mouse, camera);
+
+                    const intersects = raycaster.intersectObjects(pointMeshes, false);
+
+                    if (intersects.length > 0) {
+                        const intersectedMesh = intersects[0].object;
+
+                        if (intersectedMesh.userData.isGeohashPoint) {
+                            hoveredMesh = intersectedMesh;
+                            renderer.domElement.style.cursor = 'pointer';
+                            intersectedMesh.scale.set(1.2, 1.2, 1.2);
+                        }
+                    } else {
+                        if (hoveredMesh && hoveredMesh.userData.isGeohashPoint) {
+                            hoveredMesh.scale.set(1, 1, 1);
+                        }
+                        hoveredMesh = null;
+                        renderer.domElement.style.cursor = 'grab';
+                    }
+                };
+
+                // Mousemove for hover
+                renderer.domElement.addEventListener('mousemove', (e) => {
+                    if (!isDragging) {
+                        checkHover(e.clientX, e.clientY);
+                    }
+                });
+
+                // Pointer down - start tracking
+                renderer.domElement.addEventListener('pointerdown', (e) => {
+                    e.preventDefault();
+
+                    mouseDownX = e.clientX;
+                    mouseDownY = e.clientY;
+                    mouseDownTime = Date.now();
+                    totalDragDistance = 0;
+                    isDragging = false;
+                    autoRotate = false;
+                    renderer.domElement.style.cursor = 'grabbing';
+
+                    const onPointerMove = (moveEvent) => {
+                        const deltaX = moveEvent.clientX - mouseDownX;
+                        const deltaY = moveEvent.clientY - mouseDownY;
+
+                        totalDragDistance += Math.abs(deltaX) + Math.abs(deltaY);
+
+                        if (totalDragDistance > CLICK_THRESHOLD) {
+                            isDragging = true;
+                            if (hoveredMesh && hoveredMesh.userData.isGeohashPoint) {
+                                hoveredMesh.scale.set(1, 1, 1);
+                            }
+                            hoveredMesh = null;
+                        }
+
+                        // Apply rotation to both globe AND points group
+                        const rotationDeltaX = deltaX * 0.005;
+                        const rotationDeltaY = deltaY * 0.005;
+
+                        Globe.rotation.y += rotationDeltaX;
+                        Globe.rotation.x += rotationDeltaY;
+                        Globe.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, Globe.rotation.x));
+
+                        // Sync points group rotation with Globe
+                        pointsGroup.rotation.copy(Globe.rotation);
+
+                        mouseDownX = moveEvent.clientX;
+                        mouseDownY = moveEvent.clientY;
+                    };
+
+                    const onPointerUp = (upEvent) => {
+                        document.removeEventListener('pointermove', onPointerMove);
+                        document.removeEventListener('pointerup', onPointerUp);
+
+                        const clickDuration = Date.now() - mouseDownTime;
+                        renderer.domElement.style.cursor = 'grab';
+
+                        // Check if this was a click
+                        if (totalDragDistance <= CLICK_THRESHOLD && clickDuration <= CLICK_TIME_THRESHOLD) {
+                            getMouseCoordinates(upEvent.clientX, upEvent.clientY);
+                            raycaster.setFromCamera(mouse, camera);
+
+                            const intersects = raycaster.intersectObjects(pointMeshes, false);
+
+                            if (intersects.length > 0) {
+                                const clickedMesh = intersects[0].object;
+
+                                if (clickedMesh.userData.isGeohashPoint) {
+                                    const geohash = clickedMesh.userData.geohash;
+                                    const clickedChannel = this.geohashChannels.find(ch => ch.geohash === geohash);
+
+                                    if (clickedChannel) {
+                                        console.log('Clicked on channel:', clickedChannel.geohash, 'at', clickedChannel.lat, clickedChannel.lng);
+                                        this.selectGeohashChannel(clickedChannel);
+                                    }
+                                }
+                            }
+                        }
+
+                        isDragging = false;
+                        setTimeout(() => checkHover(upEvent.clientX, upEvent.clientY), 50);
+                    };
+
+                    document.addEventListener('pointermove', onPointerMove);
+                    document.addEventListener('pointerup', onPointerUp);
+                });
+
+                // Wheel zoom
+                renderer.domElement.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    camera.position.z += e.deltaY * 0.2;
+                    camera.position.z = Math.max(150, Math.min(600, camera.position.z));
+                });
+
+                // Animation loop
+                const animate = () => {
+                    if (!this.globeAnimationActive) return;
+
+                    if (autoRotate) {
+                        Globe.rotation.y += 0.002;
+                        // Sync points group rotation with Globe during auto-rotation
+                        pointsGroup.rotation.copy(Globe.rotation);
+                    }
+
+                    renderer.render(scene, camera);
+                    requestAnimationFrame(animate);
+                };
+
+                // Store references
+                this.globe = {
+                    scene: Globe,
+                    camera: camera,
+                    renderer: renderer,
+                    pointMeshes: pointMeshes,
+                    pointsGroup: pointsGroup,
+                    autoRotate: autoRotate,
+                    setAutoRotate: (value) => {
+                        autoRotate = value;
+                        this.globe.autoRotate = value;
+                    },
+                    updatePoints: () => {
+                        this.updateGeohashChannels();
+
+                        // Remove existing point meshes from points group
+                        pointMeshes.forEach(mesh => pointsGroup.remove(mesh));
+                        pointMeshes.length = 0;
+
+                        // Recreate point meshes
+                        this.geohashChannels.forEach((channel, index) => {
+                            const geometry = new THREE.SphereGeometry(2.5, 16, 16);
+                            const material = new THREE.MeshBasicMaterial({
+                                color: channel.isJoined ? 0x00ff00 : 0x00ffff,
+                                transparent: true,
+                                opacity: 0.9
+                            });
+                            const sphere = new THREE.Mesh(geometry, material);
+
+                            const pos = polar2Cartesian(channel.lat, channel.lng, POINT_ALTITUDE);
+                            sphere.position.set(pos.x, pos.y, pos.z);
+
+                            sphere.userData = {
+                                geohash: channel.geohash,
+                                lat: channel.lat,
+                                lng: channel.lng,
+                                channelIndex: index,
+                                isGeohashPoint: true
+                            };
+
+                            pointsGroup.add(sphere);
+                            pointMeshes.push(sphere);
+                        });
+
+                        // Re-add user location if available
+                        if (this.userLocation) {
+                            const geometry = new THREE.SphereGeometry(3, 16, 16);
+                            const material = new THREE.MeshBasicMaterial({
+                                color: 0xffff00,
+                                transparent: true,
+                                opacity: 0.9
+                            });
+                            const sphere = new THREE.Mesh(geometry, material);
+
+                            const pos = polar2Cartesian(this.userLocation.lat, this.userLocation.lng, POINT_ALTITUDE);
+                            sphere.position.set(pos.x, pos.y, pos.z);
+
+                            sphere.userData = {
+                                isUserLocation: true
+                            };
+
+                            pointsGroup.add(sphere);
+                        }
+
+                        // Sync rotation after updating points
+                        pointsGroup.rotation.copy(Globe.rotation);
+                    }
+                };
+
+                this.globeAnimationActive = true;
+
+                // Handle resize
+                const handleResize = () => {
+                    updateSize();
+                };
+
+                if (this.globeResizeHandler) {
+                    window.removeEventListener('resize', this.globeResizeHandler);
+                }
+                this.globeResizeHandler = handleResize;
+                window.addEventListener('resize', this.globeResizeHandler);
+
+                // Start animation
+                animate();
+
+                console.log('Globe initialized with', this.geohashChannels.length, 'clickable points');
+            }
+
+            addGeohashChannelToGlobe(geohash) {
+                // If globe is active, update it
+                if (this.globe && this.globeAnimationActive) {
+                    this.globe.updatePoints();
+                    console.log('Updated globe with new geohash channel:', geohash);
+                }
+            }
+
+            updateGeohashChannels() {
+                this.geohashChannels = [];
+
+                // Get all geohash channels from discovered channels and user channels
+                const allGeohashes = new Set();
+
+                // From common geohashes
+                this.commonGeohashes.forEach(g => allGeohashes.add(g.toLowerCase()));
+
+                // From user's channels
+                this.channels.forEach((value, key) => {
+                    if (value.geohash) {
+                        allGeohashes.add(value.geohash.toLowerCase());
+                    }
+                });
+
+                // From stored messages
+                this.messages.forEach((msgs, channel) => {
+                    if (channel.startsWith('#') && this.isValidGeohash(channel.substring(1))) {
+                        allGeohashes.add(channel.substring(1).toLowerCase());
+                    }
+                });
+
+                // Convert to array with coordinates
+                allGeohashes.forEach(geohash => {
+                    try {
+                        const coords = this.decodeGeohash(geohash);
+                        const messageCount = (this.messages.get(`#${geohash}`) || []).length;
+                        this.geohashChannels.push({
+                            geohash: geohash.toLowerCase(), // Ensure lowercase
+                            lat: coords.lat,
+                            lng: coords.lng,
+                            messages: messageCount,
+                            isJoined: this.channels.has(geohash)
+                        });
+                    } catch (e) {
+                        console.error('Error decoding geohash:', geohash, e);
+                    }
+                });
+            }
+
+            async selectGeohashChannel(channel) {
+                this.selectedGeohash = channel.geohash.toLowerCase();
+
+                // Stop auto-rotation when selecting a channel
+                if (this.globe && this.globe.controls) {
+                    this.globe.controls.autoRotate = false;
+                    this.globe.autoRotate = false;
+                }
+
+                const infoPanel = document.getElementById('geohashInfoPanel');
+                const infoTitle = document.getElementById('geohashInfoTitle');
+                const infoContent = document.getElementById('geohashInfoContent');
+                const joinBtn = document.getElementById('geohashJoinBtn');
+
+                infoTitle.textContent = `#${channel.geohash.toLowerCase()}`;
+
+                const distance = this.userLocation ?
+                    this.calculateDistance(this.userLocation.lat, this.userLocation.lng, channel.lat, channel.lng).toFixed(1) + ' km away' :
+                    '';
+
+                // Get city and country from reverse geocoding
+                let locationInfo = 'Loading location...';
+                infoContent.innerHTML = `
+        <div class="geohash-info-item">
+            <strong>Coordinates:</strong> ${channel.lat.toFixed(4)}, ${channel.lng.toFixed(4)}
+        </div>
+        <div class="geohash-info-item" id="locationInfoItem">
+            <strong>Location:</strong> ${locationInfo}
+        </div>
+        ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distance}</div>` : ''}
+        <div class="geohash-info-item">
+            <strong>Messages:</strong> ${channel.messages}
+        </div>
+    `;
+
+                // Update join button
+                if (channel.isJoined) {
+                    joinBtn.textContent = 'Switch to Channel';
+                } else {
+                    joinBtn.textContent = 'Join Channel';
+                }
+
+                // Set up join button with proper handler
+                joinBtn.onclick = () => {
+                    this.joinSelectedGeohash();
+                };
+
+                infoPanel.style.display = 'block';
+
+                // Fetch city and country asynchronously
+                try {
+                    const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${channel.lat}&lon=${channel.lng}&zoom=10`);
+                    const data = await response.json();
+
+                    const city = data.address.city || data.address.town || data.address.village || data.address.county || '';
+                    const country = data.address.country || '';
+
+                    locationInfo = [city, country].filter(x => x).join(', ') || 'Unknown location';
+
+                    // Update the location info element
+                    const locationInfoItem = document.getElementById('locationInfoItem');
+                    if (locationInfoItem) {
+                        locationInfoItem.innerHTML = `<strong>Location:</strong> ${locationInfo}`;
+                    }
+                } catch (error) {
+                    console.error('Error fetching location:', error);
+                    const locationInfoItem = document.getElementById('locationInfoItem');
+                    if (locationInfoItem) {
+                        locationInfoItem.innerHTML = `<strong>Location:</strong> Unknown`;
+                    }
+                }
+
+                console.log('Selected geohash channel:', channel.geohash, 'at', channel.lat, channel.lng);
+            }
+
+            joinSelectedGeohash() {
+                if (this.selectedGeohash) {
+                    const geohash = this.selectedGeohash.toLowerCase();
+
+                    console.log('Joining geohash channel:', geohash);
+
+                    // Close the explorer modal
+                    this.closeGeohashExplorer();
+
+                    // Small delay to ensure modal closes before switching
+                    setTimeout(() => {
+                        // Add the channel if not already present
+                        if (!this.channels.has(geohash)) {
+                            this.addChannel(geohash, geohash);
+                        }
+
+                        // Switch to the channel
+                        this.switchChannel(geohash, geohash);
+
+                        // Mark as user-joined
+                        this.userJoinedChannels.add(geohash);
+                        this.saveUserChannels();
+
+                        this.displaySystemMessage(`Joined geohash channel #${geohash}`);
+                    }, 100);
+                }
+            }
+
+            toggleAutoRotate() {
+                if (this.globe && this.globe.setAutoRotate) {
+                    const newValue = !this.globe.autoRotate;
+                    this.globe.setAutoRotate(newValue);
+                    this.globe.autoRotate = newValue;
+                    console.log('Auto-rotate:', newValue ? 'enabled' : 'disabled');
+                }
+            }
+
+            resetGlobeView() {
+                if (this.globe) {
+                    this.globe.camera.position.set(0, 0, 300);
+                    this.globe.scene.rotation.set(0, 0, 0);
+                    this.globe.setAutoRotate(true);
+                    this.globe.autoRotate = true;
+                    console.log('Globe view reset');
                 }
             }
 
@@ -7452,8 +8419,6 @@
 
                         // Only process messages sent by NYM client
                         if (!clientTag || clientTag[1] !== 'NYM') {
-                            console.log(`Ignoring non-NYM community message from ${event.pubkey}`);
-                            return;
                         }
 
                         // Parse a tag: "34550:adminPubkey:communityId"
@@ -13647,6 +14612,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         if (wasUserJoined) {
                             this.userJoinedChannels.add(geohash);
                         }
+                        this.addGeohashChannelToGlobe(geohash);
                     }
                 } else {
                     // This is a standard channel
@@ -15266,7 +16232,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.11.24 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.12.24 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>

@@ -1,3 +1,7 @@
+## v2.12.24 - 2025-10-18
+
+New: geohash channel explorer
+
 ## v2.11.24 - 2025-10-17
 
 New: optionally change timestamp format to 12hr from settings
