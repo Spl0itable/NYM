@@ -697,6 +697,7 @@
             animation: messageIn 0.3s;
             position: relative;
             flex-wrap: wrap;
+            align-items: flex-start;
         }
 
         .message.blocked {
@@ -1071,6 +1072,8 @@
             min-width: 120px;
             font-weight: bold;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
         }
 
         .nym-suffix {
@@ -2156,7 +2159,7 @@
             color: var(--primary);
             font-size: 14px;
             margin-bottom: 10px;
-            text-transform: uppercase;
+            text-transform: lowercase;
             letter-spacing: 1px;
         }
 
@@ -2211,7 +2214,9 @@
 
         .geohash-control-btn:hover {
             border-color: var(--primary);
-            background: rgba(0, 255, 0, 0.1);
+            background: var(--primary);
+            color: var(--bg);
+            box-shadow: 0 0 10px var(--primary);
         }
 
         .geohash-legend {
@@ -2260,7 +2265,10 @@
             }
 
             .geohash-legend {
-                display: none;
+                bottom: 10px;
+                right: 10px;
+                font-size: 9px;
+                padding: 8px;
             }
 
             pre {
@@ -2606,8 +2614,24 @@
         }
     </style>
     <!-- Three.js and Globe libraries -->
-    <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-    <script src="https://unpkg.com/three-globe@2.31.0/dist/three-globe.min.js"></script>
+    <script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+    <script type="module">
+        import * as THREE from 'three';
+
+        // Make available globally
+        window.THREE = THREE;
+
+        // Load three-globe after THREE is available
+        const script = document.createElement('script');
+        script.src = 'https://unpkg.com/three-globe@2.31.0/dist/three-globe.min.js';
+        document.head.appendChild(script);
+    </script>
 </head>
 
 <body>
@@ -2621,6 +2645,7 @@
         <div class="context-menu-item lightning" id="ctxZap" style="display: none;">⚡ Zap</div>
         <div class="context-menu-item" id="ctxPM">Private Message</div>
         <div class="context-menu-item" id="ctxQuote">Quote Message</div>
+        <div class="context-menu-item" id="ctxCopyPubkey">Copy Pubkey</div>
         <div class="context-menu-item danger" id="ctxBlock">Block User</div>
     </div>
 
@@ -2649,7 +2674,7 @@
             <div class="nav-section">
                 <div class="nav-title">
                     <span class="nav-title-text">Channels</span>
-                    <span class="discover-icon" onclick="nym.showGeohashExplorer()"
+                    <span class="discover-icon" style="padding-right:30px;" onclick="nym.showGeohashExplorer()"
                         title="Explore geohash channels globally">
                         <svg viewBox="0 0 24 24">
                             <circle cx="12" cy="12" r="10" fill="none" stroke-width="2" />
@@ -3285,7 +3310,6 @@
 
                     <div class="geohash-controls">
                         <button class="geohash-control-btn" onclick="nym.resetGlobeView()">Reset View</button>
-                        <button class="geohash-control-btn" onclick="nym.toggleAutoRotate()">Auto Rotate</button>
                     </div>
 
                     <div class="geohash-legend">
@@ -3602,7 +3626,7 @@
                 this.reconnectingRelays = new Set();
                 this.blacklistedRelays = new Set();
                 this.blacklistTimestamps = new Map();
-                this.blacklistDuration = 300000;
+                this.blacklistDuration = 600000;
                 this.pubkey = null;
                 this.privkey = null;
                 this.nym = null;
@@ -3750,6 +3774,7 @@
                 this.loadRecentEmojis();
                 this.lightningAddress = null;
                 this.userLightningAddresses = new Map();
+                this.userAvatars = new Map();
                 this.zaps = new Map();
                 this.currentZapTarget = null;
                 this.currentZapInvoice = null;
@@ -3874,7 +3899,6 @@
 
         <div class="geohash-controls">
             <button class="geohash-control-btn" onclick="nym.resetGlobeView()">Reset View</button>
-            <button class="geohash-control-btn" onclick="nym.toggleAutoRotate()">Auto Rotate</button>
         </div>
 
         <div class="geohash-legend">
@@ -4346,7 +4370,6 @@
                 // If globe is active, update it
                 if (this.globe && this.globeAnimationActive) {
                     this.globe.updatePoints();
-                    console.log('Updated globe with new geohash channel:', geohash);
                 }
             }
 
@@ -4428,7 +4451,7 @@
 
                 // Update join button
                 if (channel.isJoined) {
-                    joinBtn.textContent = 'Switch to Channel';
+                    joinBtn.textContent = 'Go to Channel';
                 } else {
                     joinBtn.textContent = 'Join Channel';
                 }
@@ -4494,21 +4517,19 @@
                 }
             }
 
-            toggleAutoRotate() {
-                if (this.globe && this.globe.setAutoRotate) {
-                    const newValue = !this.globe.autoRotate;
-                    this.globe.setAutoRotate(newValue);
-                    this.globe.autoRotate = newValue;
-                    console.log('Auto-rotate:', newValue ? 'enabled' : 'disabled');
-                }
-            }
-
             resetGlobeView() {
                 if (this.globe) {
                     this.globe.camera.position.set(0, 0, 300);
                     this.globe.scene.rotation.set(0, 0, 0);
                     this.globe.setAutoRotate(true);
                     this.globe.autoRotate = true;
+
+                    // Close any open geohash channel details
+                    const infoPanel = document.getElementById('geohashInfoPanel');
+                    if (infoPanel) {
+                        infoPanel.style.display = 'none';
+                    }
+
                     console.log('Globe view reset');
                 }
             }
@@ -4646,7 +4667,7 @@
             }
 
             // Add a command for sharing
-            cmdShare() {
+            async cmdShare() {
                 this.shareChannel();
             }
 
@@ -5012,49 +5033,96 @@
             }
 
             setupVisibilityMonitoring() {
-                // Track when app becomes visible/hidden
+                let backgroundCheckInterval = null;
+
                 document.addEventListener('visibilitychange', () => {
                     if (document.visibilityState === 'visible') {
                         console.log('App became visible, checking connection health...');
 
-                        // Wait a moment for network to stabilize
+                        // Clear background checks
+                        if (backgroundCheckInterval) {
+                            clearInterval(backgroundCheckInterval);
+                            backgroundCheckInterval = null;
+                        }
+
                         const delay = this.isFlutterWebView ? 200 : 500;
                         setTimeout(() => {
                             this.checkConnectionHealth();
 
-                            // If disconnected, immediately start reconnection attempts
                             if (!this.connected && navigator.onLine) {
                                 this.attemptReconnection();
                             }
                         }, delay);
                     } else {
-                        console.log('App hidden');
-                        this.stopReconnectionAttempts();
+                        console.log('App hidden - starting background connection monitoring');
+
+                        // Send periodic ping to keep WebSockets open
+                        backgroundCheckInterval = setInterval(() => {
+                            console.log('Background: Checking connections...');
+
+                            let hasActiveConnection = false;
+                            this.relayPool.forEach((relay, url) => {
+                                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                                    hasActiveConnection = true;
+
+                                    // Send a lightweight REQ to keep connection alive
+                                    try {
+                                        const pingReq = [
+                                            "REQ",
+                                            "keepalive-" + Math.random().toString(36).substring(7),
+                                            {
+                                                kinds: [0],
+                                                authors: [this.pubkey],
+                                                limit: 0  // Don't actually fetch anything
+                                            }
+                                        ];
+                                        relay.ws.send(JSON.stringify(pingReq));
+                                    } catch (err) {
+                                        console.log(`Keepalive ping failed for ${url}`);
+                                    }
+                                } else {
+                                    // Connection dead - remove it
+                                    this.relayPool.delete(url);
+                                    this.relayKinds.delete(url);
+                                }
+                            });
+
+                            if (!hasActiveConnection && navigator.onLine) {
+                                console.log('Background: No active connections, reconnecting...');
+                                this.reconnectToBroadcastRelays();
+                            }
+                        }, 15000); // Check every 15 seconds in background
                     }
                 });
 
-                // Also listen for page focus (for desktop)
+                // Also listen for page focus (desktop)
                 window.addEventListener('focus', () => {
+                    if (backgroundCheckInterval) {
+                        clearInterval(backgroundCheckInterval);
+                        backgroundCheckInterval = null;
+                    }
+
                     console.log('Window focused, checking connection health...');
                     const delay = this.isFlutterWebView ? 200 : 500;
                     setTimeout(() => {
                         this.checkConnectionHealth();
-
-                        // If disconnected, immediately start reconnection attempts
                         if (!this.connected && navigator.onLine) {
                             this.attemptReconnection();
                         }
                     }, delay);
                 });
 
-                // For Flutter WebView, also check on resume event
+                // Flutter WebView resume event
                 if (this.isFlutterWebView) {
                     window.addEventListener('resume', () => {
-                        console.log('App resumed (Flutter event), checking connection...');
+                        if (backgroundCheckInterval) {
+                            clearInterval(backgroundCheckInterval);
+                            backgroundCheckInterval = null;
+                        }
+
+                        console.log('App resumed (Flutter), checking connection...');
                         setTimeout(() => {
                             this.checkConnectionHealth();
-
-                            // If disconnected, immediately start reconnection attempts
                             if (!this.connected && navigator.onLine) {
                                 this.attemptReconnection();
                             }
@@ -5064,7 +5132,6 @@
             }
 
             async checkConnectionHealth() {
-                console.log('Checking connection health...');
 
                 // First, check if we think we're connected
                 let actuallyConnected = 0;
@@ -5080,16 +5147,12 @@
 
                 // Clean up dead relays
                 deadRelays.forEach(url => {
-                    console.log(`Removing dead relay from pool: ${url}`);
                     this.relayPool.delete(url);
                     this.relayKinds.delete(url);
                 });
 
-                console.log(`Connection health: ${actuallyConnected} relays actually connected out of ${this.relayPool.size} in pool`);
-
                 // If we have no actual connections, force reconnect
                 if (actuallyConnected === 0) {
-                    console.log('No active connections detected, forcing reconnect...');
                     this.connected = false;
                     this.updateConnectionStatus('Disconnected');
 
@@ -5113,7 +5176,6 @@
                     // If we're missing some broadcast relays, try to restore them
                     const missingBroadcast = this.broadcastRelays.filter(url => !this.relayPool.has(url));
                     if (missingBroadcast.length > 0) {
-                        console.log(`Missing ${missingBroadcast.length} broadcast relays, attempting to reconnect...`);
                         this.reconnectToBroadcastRelays();
                     }
 
@@ -5125,7 +5187,6 @@
                     );
 
                     if (missingDiscovered.length > 0) {
-                        console.log(`Missing ${missingDiscovered.length} discovered relays, attempting to reconnect...`);
                         setTimeout(() => {
                             this.retryDiscoveredRelays();
                         }, 1000);
@@ -5134,7 +5195,6 @@
             }
 
             async reconnectToBroadcastRelays() {
-                console.log('Reconnecting to broadcast relays...');
 
                 let connectedCount = 0;
 
@@ -5142,8 +5202,6 @@
                     if (!this.relayPool.has(relayUrl) ||
                         (this.relayPool.get(relayUrl).ws &&
                             this.relayPool.get(relayUrl).ws.readyState !== WebSocket.OPEN)) {
-
-                        console.log(`Attempting to connect to ${relayUrl}...`);
 
                         try {
                             await this.connectToRelay(relayUrl, 'broadcast');
@@ -5155,10 +5213,7 @@
                                 this.connected = true;
                                 this.updateConnectionStatus();
                             }
-
-                            console.log(`Successfully reconnected to ${relayUrl} (${connectedCount} total)`);
                         } catch (err) {
-                            console.log(`Failed to reconnect to ${relayUrl}:`, err);
                             this.trackRelayFailure(relayUrl);
                         }
 
@@ -5174,7 +5229,6 @@
                 }
 
                 this.updateConnectionStatus();
-                console.log(`Finished reconnecting to broadcast relays. Connected to ${connectedCount} relays.`);
             }
 
             setupNetworkMonitoring() {
@@ -5185,7 +5239,6 @@
 
                 // Listen for online/offline events
                 window.addEventListener('online', () => {
-                    console.log('Network connection restored');
                     this.displaySystemMessage('Network connection restored, reconnecting...');
                     this.reconnectionAttempts = 0; // Reset attempts on network restore
 
@@ -5224,7 +5277,6 @@
                                     this.updateConnectionStatus();
                                 })
                                 .catch(err => {
-                                    console.log(`Failed to reconnect to ${relayUrl}:`, err);
                                     // Restore to blacklist if it fails again
                                     if (tempBlacklist.has(relayUrl)) {
                                         this.blacklistedRelays.add(relayUrl);
@@ -5245,7 +5297,6 @@
                 });
 
                 window.addEventListener('offline', () => {
-                    console.log('Network connection lost');
 
                     // Force cleanup of relay pool
                     this.relayPool.forEach((relay, url) => {
@@ -5371,10 +5422,8 @@
                             await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
                             this.subscribeToSingleRelay(relayUrl);
                             connected = true;
-                            console.log(`Reconnected to ${relayUrl}`);
                             break;
                         } catch (err) {
-                            console.log(`Failed to reconnect to ${relayUrl}:`, err);
                         }
                     }
 
@@ -5387,7 +5436,7 @@
                         this.reconnectToBroadcastRelays();
                     }
                 } catch (error) {
-                    console.error('Reconnection attempt failed:', error);
+                    //
                 } finally {
                     this.isReconnecting = false;
                 }
@@ -5559,6 +5608,19 @@
                 document.getElementById('ctxBlock').addEventListener('click', () => {
                     if (this.contextMenuData) {
                         this.cmdBlock(this.contextMenuData.nym);
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+
+                // Add copy pubkey handler
+                document.getElementById('ctxCopyPubkey').addEventListener('click', () => {
+                    if (this.contextMenuData && this.contextMenuData.pubkey) {
+                        navigator.clipboard.writeText(this.contextMenuData.pubkey).then(() => {
+                            this.displaySystemMessage(`Copied pubkey to clipboard`);
+                        }).catch(err => {
+                            console.error('Failed to copy pubkey:', err);
+                            this.displaySystemMessage('Failed to copy pubkey');
+                        });
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
@@ -5926,7 +5988,6 @@
                             if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                                 initialConnected = true;
                                 connectedRelayUrl = relayUrl;
-                                console.log(`Already connected to ${relayUrl} from pre-connection`);
                                 break;
                             }
                         }
@@ -5936,7 +5997,6 @@
                     if (!initialConnected) {
                         for (const relayUrl of this.broadcastRelays) {
                             if (!this.shouldRetryRelay(relayUrl)) {
-                                console.log(`Skipping broadcast relay ${relayUrl} - waiting for retry delay`);
                                 continue;
                             }
 
@@ -5944,10 +6004,8 @@
                                 await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000);
                                 initialConnected = true;
                                 connectedRelayUrl = relayUrl;
-                                console.log(`Initially connected to ${relayUrl}`);
                                 break;
                             } catch (err) {
-                                console.log(`Failed to connect to ${relayUrl}, trying next...`);
                                 this.trackRelayFailure(relayUrl);
                             }
                         }
@@ -5989,7 +6047,6 @@
                                     this.updateConnectionStatus();
                                 })
                                 .catch(err => {
-                                    console.log(`Failed to connect to ${relayUrl}:`, err);
                                     this.trackRelayFailure(relayUrl);
                                 });
                         }
@@ -5999,11 +6056,9 @@
                     if (this.shouldRetryRelay(this.nosflareRelay)) {
                         this.connectToRelay(this.nosflareRelay, 'nosflare')
                             .then(() => {
-                                console.log('Connected to nosflare for broadcasting');
                                 this.updateConnectionStatus();
                             })
                             .catch(err => {
-                                console.log(`Failed to connect to nosflare:`, err);
                                 this.trackRelayFailure(this.nosflareRelay);
                             });
                     }
@@ -6026,7 +6081,6 @@
                                                 this.updateConnectionStatus();
                                             })
                                             .catch(err => {
-                                                console.log(`Failed to connect to ${relayUrl}:`, err);
                                                 this.trackRelayFailure(relayUrl);
                                             });
                                     }, index * 100);
@@ -6036,7 +6090,6 @@
                     }, 100);
 
                 } catch (error) {
-                    console.error('Failed to connect to relays:', error);
                     this.updateConnectionStatus('Connection Failed');
                     this.displaySystemMessage('Failed to connect to relays: ' + error.message);
 
@@ -6050,7 +6103,6 @@
                 // Try broadcast relays in order with very short timeout
                 for (const relayUrl of this.broadcastRelays) {
                     if (!this.shouldRetryRelay(relayUrl)) {
-                        console.log(`Skipping quick connect to ${relayUrl} - waiting for retry delay`);
                         continue;
                     }
 
@@ -6066,10 +6118,8 @@
                         this.subscribeToSingleRelay(relayUrl);
 
                         this.updateConnectionStatus();
-                        console.log(`Quick connected to ${relayUrl}`);
                         return true;
                     } catch (err) {
-                        console.log(`Quick connect failed to ${relayUrl}, trying next...`);
                         this.trackRelayFailure(relayUrl);
                     }
                 }
@@ -6200,10 +6250,16 @@
 
             shouldRetryRelay(relayUrl) {
                 const failedAttempt = this.failedRelays.get(relayUrl);
-                if (!failedAttempt) return true; // Never failed before, OK to retry
+                if (!failedAttempt) return true;
 
                 const now = Date.now();
-                return now - failedAttempt > this.relayRetryDelay; // Check if enough time has passed
+                const canRetry = now - failedAttempt > this.relayRetryDelay;
+
+                if (!canRetry) {
+                    //
+                }
+
+                return canRetry;
             }
 
             trackRelayFailure(relayUrl) {
@@ -6228,28 +6284,42 @@
                         }
 
                         if (!this.shouldRetryRelay(relayUrl)) {
-                            console.log(`Skipping relay ${relayUrl} - waiting for retry delay to expire`);
                             resolve();
                             return;
                         }
 
                         // Skip if already connected
                         if (this.relayPool.has(relayUrl)) {
-                            resolve();
-                            return;
+                            const existingRelay = this.relayPool.get(relayUrl);
+                            if (existingRelay.ws && existingRelay.ws.readyState === WebSocket.OPEN) {
+                                resolve();
+                                return;
+                            }
                         }
 
                         const ws = new WebSocket(relayUrl);
                         let verificationTimeout;
+                        let connectionTimeout;
+
+                        // Add connection timeout (5 seconds)
+                        connectionTimeout = setTimeout(() => {
+                            if (ws.readyState !== WebSocket.OPEN) {
+                                ws.close();
+                                this.blacklistedRelays.add(relayUrl);
+                                this.blacklistTimestamps.set(relayUrl, Date.now());
+                                reject(new Error('Connection timeout'));
+                            }
+                        }, 5000);
 
                         ws.onopen = () => {
+                            clearTimeout(connectionTimeout);
+
                             this.relayPool.set(relayUrl, {
                                 ws,
                                 type,
                                 status: 'connected',
-                                connectedAt: Date.now() // Track when connected
+                                connectedAt: Date.now()
                             });
-                            console.log(`Connected to ${type} relay: ${relayUrl}`);
 
                             this.clearRelayFailure(relayUrl);
 
@@ -6262,24 +6332,27 @@
                             // For read relays, set up verification timeout
                             if (type === 'read') {
                                 // Initialize kinds tracking for this relay
-                                this.relayKinds.set(relayUrl, new Set());
+                                if (!this.relayKinds.has(relayUrl)) {
+                                    this.relayKinds.set(relayUrl, new Set());
+                                }
 
                                 // Set timeout to check if relay sends our required kinds
                                 verificationTimeout = setTimeout(() => {
                                     const receivedKinds = this.relayKinds.get(relayUrl);
                                     const hasRequiredKinds =
-                                        receivedKinds.has(20000) || // geohash channels
-                                        receivedKinds.has(23333) || // standard channels  
-                                        receivedKinds.has(7) ||     // reactions (with proper k tags)
-                                        receivedKinds.has(4);       // PMs
+                                        receivedKinds && (
+                                            receivedKinds.has(20000) ||
+                                            receivedKinds.has(23333) ||
+                                            receivedKinds.has(7) ||
+                                            receivedKinds.has(4)
+                                        );
 
                                     if (!hasRequiredKinds) {
-                                        console.log(`Relay ${relayUrl} hasn't sent any required kinds, closing connection`);
                                         ws.close();
                                         this.relayPool.delete(relayUrl);
                                         this.relayKinds.delete(relayUrl);
                                         this.blacklistedRelays.add(relayUrl);
-                                        this.blacklistTimestamps.set(relayUrl, Date.now()); // Track when blacklisted
+                                        this.blacklistTimestamps.set(relayUrl, Date.now());
                                         this.updateConnectionStatus();
                                     }
                                 }, this.relayVerificationTimeout);
@@ -6293,24 +6366,33 @@
                                 const msg = JSON.parse(event.data);
                                 this.handleRelayMessage(msg, relayUrl);
                             } catch (e) {
-                                console.error(`Failed to parse message from ${relayUrl}:`, e);
                             }
                         };
 
                         ws.onerror = (error) => {
-                            console.error(`WebSocket error for ${relayUrl}:`, error);
-                            console.log(`WebSocket readyState: ${ws.readyState}`); // Log the state
                             clearTimeout(verificationTimeout);
+                            clearTimeout(connectionTimeout);
+
+                            // Immediately blacklist on connection error
+                            this.blacklistedRelays.add(relayUrl);
+                            this.blacklistTimestamps.set(relayUrl, Date.now());
+
+                            reject(error);
                         };
 
                         ws.onclose = () => {
                             clearTimeout(verificationTimeout);
+                            clearTimeout(connectionTimeout);
+
+                            // If connection closed before opening, blacklist it
+                            if (ws.readyState !== WebSocket.OPEN) {
+                                this.blacklistedRelays.add(relayUrl);
+                                this.blacklistTimestamps.set(relayUrl, Date.now());
+                            }
 
                             // Immediately remove from pool and update status
                             this.relayPool.delete(relayUrl);
                             this.relayKinds.delete(relayUrl);
-
-                            console.log(`Disconnected from ${relayUrl}`);
 
                             // Force status update after disconnect
                             this.updateConnectionStatus();
@@ -6336,7 +6418,6 @@
                                     setTimeout(() => {
                                         // Check WebSocket state and network connectivity
                                         if (!navigator.onLine) {
-                                            console.log(`Skipping reconnection attempt for ${relayUrl} - offline`);
                                             this.reconnectingRelays.delete(relayUrl);
                                             this.updateConnectionStatus();
                                             return;
@@ -6349,15 +6430,12 @@
                                             return;
                                         }
 
-                                        console.log(`Reconnection attempt ${attempt + 1}/${maxAttempts} for ${relayUrl}`);
-
                                         this.connectToRelay(relayUrl, type)
                                             .then(() => {
                                                 // Re-subscribe after reconnection
                                                 if (type === 'broadcast') {
                                                     this.subscribeToSingleRelay(relayUrl);
                                                 }
-                                                console.log(`Reconnected to ${relayUrl}`);
                                                 this.updateConnectionStatus();
 
                                                 // Remove from reconnecting set
@@ -6374,7 +6452,6 @@
                                                 }
                                             })
                                             .catch(err => {
-                                                console.error(`Reconnection attempt ${attempt + 1} failed for ${relayUrl}:`, err);
                                                 this.trackRelayFailure(relayUrl);
                                                 this.updateConnectionStatus();
 
@@ -6382,7 +6459,6 @@
                                                 if (attempt < maxAttempts - 1) {
                                                     attemptReconnect(attempt + 1);
                                                 } else {
-                                                    console.error(`Max reconnection attempts reached for ${relayUrl}`);
                                                     this.reconnectingRelays.delete(relayUrl);
                                                     this.updateConnectionStatus();
                                                 }
@@ -6397,6 +6473,8 @@
 
                     } catch (error) {
                         console.error(`Connection failed for ${relayUrl}:`, error);
+                        this.blacklistedRelays.add(relayUrl);
+                        this.blacklistTimestamps.set(relayUrl, Date.now());
                         this.trackRelayFailure(relayUrl);
                         reject(error);
                     }
@@ -6425,7 +6503,6 @@
             }
 
             async retryDiscoveredRelays() {
-                console.log('Retrying discovered relays after reconnection...');
 
                 // Clean expired blacklist entries first
                 for (const relayUrl of this.blacklistedRelays) {
@@ -6448,7 +6525,6 @@
                 }
 
                 if (relaysToTry.length > 0) {
-                    console.log(`Found ${relaysToTry.length} discovered relays to retry`);
 
                     // Try connecting to them with staggered timing
                     for (let i = 0; i < Math.min(relaysToTry.length, 20); i++) { // Try up to 20 relays
@@ -6457,17 +6533,14 @@
                             this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout)
                                 .then(() => {
                                     this.subscribeToSingleRelay(relayUrl);
-                                    console.log(`Reconnected to discovered relay: ${relayUrl}`);
                                     this.updateConnectionStatus();
                                 })
                                 .catch(err => {
-                                    console.log(`Failed to reconnect to ${relayUrl}:`, err);
                                     this.trackRelayFailure(relayUrl);
                                 });
                         }, i * 200); // Stagger by 200ms
                     }
                 } else {
-                    console.log('No discovered relays to retry');
 
                     // If we have no discovered relays, try to discover them again
                     this.discoverRelays().then(() => {
@@ -6481,17 +6554,14 @@
                             .slice(0, 10);
 
                         if (newRelaysToTry.length > 0) {
-                            console.log(`Found ${newRelaysToTry.length} newly discovered relays to connect`);
                             newRelaysToTry.forEach((relayUrl, index) => {
                                 setTimeout(() => {
                                     this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout)
                                         .then(() => {
                                             this.subscribeToSingleRelay(relayUrl);
-                                            console.log(`Connected to newly discovered relay: ${relayUrl}`);
                                             this.updateConnectionStatus();
                                         })
                                         .catch(err => {
-                                            console.log(`Failed to connect to ${relayUrl}:`, err);
                                             this.trackRelayFailure(relayUrl);
                                         });
                                 }, index * 200);
@@ -6744,11 +6814,12 @@
                     // Save with pubkey-specific key
                     localStorage.setItem(`nym_lightning_address_${this.pubkey}`, address);
 
-                    // Always save to Nostr profile (not just for extension users)
+                    // Always save to Nostr profile (merging with existing data)
                     await this.saveToNostrProfile();
                 } else {
                     this.lightningAddress = null;
                     localStorage.removeItem(`nym_lightning_address_${this.pubkey}`);
+                    // Only remove from local storage
                 }
 
                 this.updateLightningAddressDisplay();
@@ -6782,18 +6853,14 @@
                         // Start with existing profile or empty object
                         profileToSave = { ...(this.originalProfile || {}) };
 
-                        // Update only the fields we manage
+                        // Update only the specific fields we manage, don't delete others
                         profileToSave.name = this.nym;
                         profileToSave.display_name = this.nym;
 
-                        // Update lightning address if we have one, otherwise preserve existing
+                        // Update lightning address if we have one
                         if (this.lightningAddress) {
                             profileToSave.lud16 = this.lightningAddress;
-                        } else if (!profileToSave.lud16) {
-                            // Only remove if there wasn't one before
-                            delete profileToSave.lud16;
                         }
-
                     } else {
                         // Ephemeral mode - minimal profile
                         profileToSave = {
@@ -7200,7 +7267,6 @@
                             // Optional: Verify the k tag to ensure it's for supported kinds
                             const kTag = zapRequest.tags?.find(t => t[0] === 'k');
                             if (kTag && !['20000', '23333', '4', '4550'].includes(kTag[1])) {
-                                console.log('Ignoring zap for unsupported kind:', kTag[1]);
                                 return;
                             }
                         } catch (e) {
@@ -7429,7 +7495,6 @@
                     // Check if we need to refresh the relay list
                     const now = Date.now();
                     if (now - this.lastRelayDiscovery < this.relayDiscoveryInterval && this.discoveredRelays.size > 0) {
-                        console.log('Using cached relay list');
                         return;
                     }
 
@@ -7532,7 +7597,6 @@
                         const data = JSON.parse(cached);
                         if (data.timestamp && Date.now() - data.timestamp < this.relayDiscoveryInterval) {
                             data.relays.forEach(relay => this.discoveredRelays.add(relay));
-                            console.log(`Loaded ${data.relays.length} cached relays`);
                         }
                     }
                 } catch (error) {
@@ -7649,7 +7713,7 @@
                 if (!this.pubkey || this.connectionMode === 'ephemeral') return;
 
                 // Request NIP-78 settings (kind 30078)
-                const subscription = [
+                const settingsSubscription = [
                     "REQ",
                     "settings-" + Math.random().toString(36).substring(7),
                     {
@@ -7660,11 +7724,25 @@
                     }
                 ];
 
-                this.sendToRelay(subscription);
+                this.sendToRelay(settingsSubscription);
 
-                // Close subscription after timeout
+                // Request standard mute list (kind 10000)
+                const muteSubscription = [
+                    "REQ",
+                    "mutes-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [10000],
+                        authors: [this.pubkey],
+                        limit: 1
+                    }
+                ];
+
+                this.sendToRelay(muteSubscription);
+
+                // Close subscriptions after timeout
                 setTimeout(() => {
-                    this.sendToRelay(["CLOSE", subscription[1]]);
+                    this.sendToRelay(["CLOSE", settingsSubscription[1]]);
+                    this.sendToRelay(["CLOSE", muteSubscription[1]]);
                 }, 3000);
             }
 
@@ -7672,6 +7750,38 @@
                 if (!this.pubkey) return;
 
                 try {
+                    // For ephemeral users, only sync lightning address
+                    if (this.connectionMode === 'ephemeral') {
+                        if (!this.lightningAddress) {
+                            console.log('Ephemeral user - no lightning address to sync');
+                            return;
+                        }
+
+                        const settingsData = {
+                            lightningAddress: this.lightningAddress
+                        };
+
+                        const settingsEvent = {
+                            kind: 30078,
+                            created_at: Math.floor(Date.now() / 1000),
+                            tags: [
+                                ["d", "nym-settings"],
+                                ["title", "NYM Settings"],
+                                ["encrypted"]
+                            ],
+                            content: JSON.stringify(settingsData),
+                            pubkey: this.pubkey
+                        };
+
+                        if (this.privkey) {
+                            const signedSettingsEvent = window.NostrTools.finalizeEvent(settingsEvent, this.privkey);
+                            this.sendToRelay(["EVENT", signedSettingsEvent]);
+                            console.log('Lightning address synced for ephemeral user (kind 30078)');
+                        }
+                        return; // Don't sync anything else for ephemeral users
+                    }
+
+                    // Save NYM-specific settings (kind 30078)
                     const settingsData = {
                         theme: this.settings.theme,
                         sound: this.settings.sound,
@@ -7681,14 +7791,12 @@
                         sortByProximity: this.settings.sortByProximity,
                         blurOthersImages: this.blurOthersImages,
                         pinnedChannels: Array.from(this.pinnedChannels),
-                        blockedUsers: Array.from(this.blockedUsers),
-                        blockedKeywords: Array.from(this.blockedKeywords),
                         blockedChannels: Array.from(this.blockedChannels),
                         userJoinedChannels: Array.from(this.userJoinedChannels),
                         lightningAddress: this.lightningAddress
                     };
 
-                    const event = {
+                    const settingsEvent = {
                         kind: 30078,
                         created_at: Math.floor(Date.now() / 1000),
                         tags: [
@@ -7700,21 +7808,55 @@
                         pubkey: this.pubkey
                     };
 
-                    // Sign event
-                    let signedEvent;
+                    // Sign and send settings event
+                    let signedSettingsEvent;
                     if (this.connectionMode === 'extension' && window.nostr) {
-                        signedEvent = await window.nostr.signEvent(event);
-                    } else if ((this.connectionMode === 'nsec' || this.connectionMode === 'ephemeral') && this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                    } else {
-                        console.log('Cannot sign settings - no signing method available');
-                        return;
+                        signedSettingsEvent = await window.nostr.signEvent(settingsEvent);
+                    } else if (this.connectionMode === 'nsec' && this.privkey) {
+                        signedSettingsEvent = window.NostrTools.finalizeEvent(settingsEvent, this.privkey);
                     }
 
-                    if (signedEvent) {
-                        this.sendToRelay(["EVENT", signedEvent]);
-                        console.log('Settings synced to Nostr including:', Object.keys(settingsData));
+                    if (signedSettingsEvent) {
+                        this.sendToRelay(["EVENT", signedSettingsEvent]);
                     }
+
+                    // Save mute list (kind 10000) - standard Nostr mute list
+                    const muteTags = [];
+
+                    // Add blocked users as 'p' tags
+                    for (const pubkey of this.blockedUsers) {
+                        muteTags.push(["p", pubkey]);
+                    }
+
+                    // Add blocked keywords/phrases as 'word' tags
+                    for (const keyword of this.blockedKeywords) {
+                        muteTags.push(["word", keyword]);
+                    }
+
+                    const muteEvent = {
+                        kind: 10000,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: muteTags,
+                        content: "",
+                        pubkey: this.pubkey
+                    };
+
+                    // Sign and send mute event
+                    let signedMuteEvent;
+                    if (this.connectionMode === 'extension' && window.nostr) {
+                        signedMuteEvent = await window.nostr.signEvent(muteEvent);
+                    } else if (this.connectionMode === 'nsec' && this.privkey) {
+                        signedMuteEvent = window.NostrTools.finalizeEvent(muteEvent, this.privkey);
+                    }
+
+                    if (signedMuteEvent) {
+                        this.sendToRelay(["EVENT", signedMuteEvent]);
+                        console.log('Mute list synced to Nostr (kind 10000):', {
+                            blockedUsers: this.blockedUsers.size,
+                            blockedKeywords: this.blockedKeywords.size
+                        });
+                    }
+
                 } catch (error) {
                     console.error('Failed to save synced settings:', error);
                 }
@@ -7789,8 +7931,6 @@
                 ];
 
                 this.sendToRelay(publicCommunitySub);
-
-                console.log('Discovering public communities created with NYM...');
             }
 
 
@@ -7875,7 +8015,10 @@
                         const [subscriptionId, event] = data;
 
                         // Track what kinds this relay is sending us
-                        if (event && event.kind && this.relayKinds.has(relayUrl)) {
+                        if (event && event.kind) {
+                            if (!this.relayKinds.has(relayUrl)) {
+                                this.relayKinds.set(relayUrl, new Set());
+                            }
                             const relayKindTracker = this.relayKinds.get(relayUrl);
 
                             // For reactions (kind 7), only count them if they have the right k tags
@@ -7900,7 +8043,6 @@
                                 if (profile.lud16 || profile.lud06) {
                                     const lnAddress = profile.lud16 || profile.lud06;
                                     this.userLightningAddresses.set(pubkey, lnAddress);
-                                    console.log(`Got lightning address for ${pubkey}:`, lnAddress);
                                 }
 
                                 // Update nym if we don't have one for this user
@@ -7953,7 +8095,6 @@
                         break;
                     case 'NOTICE':
                         const notice = data[0];
-                        console.log(`Notice from ${relayUrl}: ${notice}`);
                         break;
                 }
             }
@@ -7974,7 +8115,6 @@
                                 kinds.has(4);       // PMs
 
                             if (!hasRequiredKinds) {
-                                console.log(`Relay ${url} doesn't support our required kinds, disconnecting`);
                                 relay.ws.close();
                                 this.relayPool.delete(url);
                                 this.relayKinds.delete(url);
@@ -7983,7 +8123,6 @@
                             }
                         } else if (now - relay.connectedAt > this.relayVerificationTimeout) {
                             // No kinds received within timeout
-                            console.log(`Relay ${url} hasn't sent any events within timeout, disconnecting`);
                             relay.ws.close();
                             this.relayPool.delete(url);
                             this.relayKinds.delete(url);
@@ -8131,7 +8270,7 @@
                     const geohash = geohashTag ? geohashTag[1] : '';
 
                     // Check if user is blocked or message contains blocked keywords
-                    if (this.blockedUsers.has(nym) || this.hasBlockedKeyword(event.content)) {
+                    if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content)) {
                         return;
                     }
 
@@ -8197,7 +8336,7 @@
                         // Show notification if mentioned and not blocked
                         const shouldNotify = !message.isOwn &&
                             this.isMentioned(message.content) &&
-                            !this.blockedUsers.has(nym) &&
+                            !this.isNymBlocked(nym) &&
                             !isHistorical &&
                             !alreadyNotified &&
                             (document.hidden || this.currentChannel !== geohash || this.currentGeohash !== geohash);
@@ -8224,7 +8363,7 @@
                     const channel = channelTag ? channelTag[1] : 'bar';
 
                     // Check if user is blocked or message contains blocked keywords
-                    if (this.blockedUsers.has(nym) || this.hasBlockedKeyword(event.content)) {
+                    if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content)) {
                         return;
                     }
 
@@ -8290,7 +8429,7 @@
                         // Show notification if mentioned and not blocked
                         const shouldNotify = !message.isOwn &&
                             this.isMentioned(message.content) &&
-                            !this.blockedUsers.has(nym) &&
+                            !this.isNymBlocked(nym) &&
                             !isHistorical &&
                             !alreadyNotified &&
                             (document.hidden || this.currentChannel !== channel || this.currentGeohash !== '');
@@ -8345,7 +8484,6 @@
 
                         // Filter out communities with spaces - don't add to UI
                         if (name.includes(' ')) {
-                            console.log(`Discovered community "${name}" has spaces, not adding to sidebar`);
                             return; // Don't add to UI, just store in map
                         }
 
@@ -8414,8 +8552,6 @@
                                 this.communityBans.get(communityId).add(bannedPubkey);
                             });
 
-                            console.log(`Loaded ${bannedTags.length} banned users for community ${communityId}`);
-
                             // If we're currently viewing this community, remove banned users' messages
                             if (this.currentCommunity === communityId) {
                                 bannedTags.forEach(tag => {
@@ -8480,10 +8616,17 @@
                             return; // Don't process messages from banned users AT ALL
                         }
 
+                        // ALSO CHECK IF USER IS GLOBALLY BLOCKED
+                        const nymForCheck = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
+                        if (this.blockedUsers.has(event.pubkey) || this.isNymBlocked(nymForCheck)) {
+                            console.log(`Blocked message from globally blocked user ${event.pubkey}`);
+                            return;
+                        }
+
                         const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
 
                         // Check if user is blocked globally
-                        if (this.blockedUsers.has(nym) || this.hasBlockedKeyword(event.content)) {
+                        if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content)) {
                             return;
                         }
 
@@ -8556,7 +8699,7 @@
                                 // Show notification if mentioned and not blocked
                                 const shouldNotify = !message.isOwn &&
                                     this.isMentioned(message.content) &&
-                                    !this.blockedUsers.has(nym) &&
+                                    !this.isNymBlocked(nym) &&
                                     !isHistorical &&
                                     !alreadyNotified &&
                                     (document.hidden || this.currentCommunity !== communityId);
@@ -8588,6 +8731,9 @@
                 } else if (event.kind === 4) {
                     // Handle legacy NIP-04 encrypted DMs
                     await this.handleEncryptedDM(event);
+                } else if (event.kind === 10000) {
+                    // Handle mute list of users/keywords
+                    this.handleMuteList(event);
                 } else if (event.kind === 30078) {
                     // Handle synced settings
                     this.handleSyncedSettings(event);
@@ -8759,7 +8905,6 @@
                     if (settings.timeFormat !== undefined) {
                         this.settings.timeFormat = settings.timeFormat;
                         localStorage.setItem('nym_time_format', settings.timeFormat);
-                        // Refresh visible timestamps if messages are loaded
                         if (document.querySelectorAll('.message-time').length > 0) {
                             this.refreshMessageTimestamps();
                         }
@@ -8772,35 +8917,19 @@
                         this.updateChannelPins();
                     }
 
-                    // Restore blocked channels
+                    // Restore blocked channels (keep this in custom settings)
                     if (settings.blockedChannels) {
                         this.blockedChannels = new Set(settings.blockedChannels);
                         localStorage.setItem('nym_blocked_channels', JSON.stringify(settings.blockedChannels));
                         this.updateBlockedChannelsList();
                     }
 
-                    // Restore blocked users
-                    if (settings.blockedUsers) {
-                        this.blockedUsers = new Set(settings.blockedUsers);
-                        localStorage.setItem('nym_blocked', JSON.stringify(settings.blockedUsers));
-                        this.updateBlockedList();
-                    }
-
-                    // Restore blocked keywords
-                    if (settings.blockedKeywords) {
-                        this.blockedKeywords = new Set(settings.blockedKeywords);
-                        localStorage.setItem('nym_blocked_keywords', JSON.stringify(settings.blockedKeywords));
-                        this.updateKeywordList();
-                    }
-
                     // Restore user joined channels
                     if (settings.userJoinedChannels) {
-                        // Clear existing and restore from sync
                         this.userJoinedChannels.clear();
 
                         settings.userJoinedChannels.forEach(key => {
                             this.userJoinedChannels.add(key);
-                            // Parse and add channel if not already present
                             if (!this.channels.has(key)) {
                                 if (this.isValidGeohash(key)) {
                                     this.addChannel(key, key);
@@ -8810,7 +8939,6 @@
                             }
                         });
 
-                        // Save to localStorage
                         localStorage.setItem('nym_user_joined_channels', JSON.stringify(settings.userJoinedChannels));
                         localStorage.setItem('nym_user_channels', JSON.stringify(
                             settings.userJoinedChannels.map(key => ({
@@ -8827,7 +8955,6 @@
                         localStorage.setItem(`nym_lightning_address_${this.pubkey}`, settings.lightningAddress);
                         this.updateLightningAddressDisplay();
 
-                        // Update in settings modal if open
                         const lightningInput = document.getElementById('lightningAddressInput');
                         if (lightningInput) {
                             lightningInput.value = settings.lightningAddress;
@@ -8842,21 +8969,55 @@
                         document.getElementById('timestampSelect').value = String(this.settings.showTimestamps);
                         document.getElementById('timeFormatSelect').value = this.settings.timeFormat;
 
-                        // Update blur settings in modal
                         const blurSelect = document.getElementById('blurImagesSelect');
                         if (blurSelect) {
                             blurSelect.value = String(this.blurOthersImages);
                         }
 
-                        // Show/hide time format option based on timestamp visibility
                         const timeFormatGroup = document.getElementById('timeFormatGroup');
                         if (timeFormatGroup) {
                             timeFormatGroup.style.display = this.settings.showTimestamps ? 'block' : 'none';
                         }
                     }
-                    console.log('Settings synced successfully:', Object.keys(settings));
                 } catch (error) {
                     console.error('Failed to parse synced settings:', error);
+                }
+            }
+
+            handleMuteList(event) {
+                if (event.pubkey !== this.pubkey || event.kind !== 10000) return;
+
+                // Extract blocked users from 'p' tags
+                const mutedPubkeys = event.tags
+                    .filter(tag => tag[0] === 'p' && tag[1])
+                    .map(tag => tag[1]);
+
+                if (mutedPubkeys.length > 0) {
+                    // Replace (not merge) with synced blocked users
+                    this.blockedUsers = new Set(mutedPubkeys);
+                    this.saveBlockedUsers();
+                    this.updateBlockedList();
+                    this.updateUserList();
+
+                    // Hide messages from blocked users after mute list loads**
+                    mutedPubkeys.forEach(pubkey => {
+                        this.hideMessagesFromBlockedUser(pubkey);
+                    });
+                }
+
+                // Extract blocked keywords from 'word' tags
+                const mutedWords = event.tags
+                    .filter(tag => tag[0] === 'word' && tag[1])
+                    .map(tag => tag[1]);
+
+                if (mutedWords.length > 0) {
+                    // Replace (not merge) with synced keywords
+                    this.blockedKeywords = new Set(mutedWords);
+                    this.saveBlockedKeywords();
+                    this.updateKeywordList();
+
+                    // Hide messages with blocked keywords after mute list loads**
+                    this.hideMessagesWithBlockedKeywords();
                 }
             }
 
@@ -9919,9 +10080,11 @@
             }
 
             addPMConversation(nym, pubkey, timestamp = Date.now()) {
+                const cleanNym = this.parseNymFromDisplay(nym);
+
                 if (!this.pmConversations.has(pubkey)) {
                     this.pmConversations.set(pubkey, {
-                        nym: nym,
+                        nym: cleanNym,
                         lastMessageTime: timestamp
                     });
 
@@ -9931,7 +10094,7 @@
                     item.dataset.pubkey = pubkey;
                     item.dataset.lastMessageTime = timestamp;
 
-                    const baseNym = nym.split('#')[0] || nym;
+                    const baseNym = cleanNym.split('#')[0] || cleanNym;
                     const suffix = this.getPubkeySuffix(pubkey);
                     const formattedNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
 
@@ -9946,7 +10109,7 @@
                 <span class="unread-badge" style="display:none">0</span>
             </div>
         `;
-                    item.onclick = () => this.openPM(nym, pubkey);
+                    item.onclick = () => this.openPM(cleanNym, pubkey);
 
                     // Insert in chronological order (most recent first)
                     this.insertPMInOrder(item, pmList);
@@ -10747,9 +10910,18 @@
             }
 
             displayMessage(message) {
-                // Check if message is from a blocked user (from stored state)
-                if (message.blocked || this.blockedUsers.has(message.author)) {
+                // Check if message is from a blocked user (from stored state OR by pubkey)
+                if (message.blocked || this.blockedUsers.has(message.pubkey) || this.isNymBlocked(message.author)) {
                     return; // Don't display blocked messages
+                }
+
+                // For community messages, also check if user is banned from that community
+                if (message.isCommunity && message.communityId) {
+                    if (this.communityBans.has(message.communityId) &&
+                        this.communityBans.get(message.communityId).has(message.pubkey)) {
+                        console.log(`Filtering banned user message in community ${message.communityId}`);
+                        return;
+                    }
                 }
 
                 // Handle PM messages differently
@@ -10956,7 +11128,9 @@
 
                     messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass}">${displayAuthor}${verifiedBadge}:</span>
+    <span class="message-author ${authorClass} ${userColorClass}">
+        ${displayAuthor}${verifiedBadge}:
+    </span>
     <span class="message-content ${userColorClass}">${formattedContent}</span>
     ${reactionButton}
 `;
@@ -11980,7 +12154,7 @@
                     '/kick': { desc: 'Kick user from community', fn: (args) => this.cmdKick(args) },
                     '/ban': { desc: 'Ban user from community', fn: (args) => this.cmdBan(args) },
                     '/unban': { desc: 'Unban user from community', fn: (args) => this.cmdUnban(args) },
-                    '/invitecommunity': { desc: 'Invite user to private community', fn: (args) => this.cmdInviteToCommunity(args) },
+                    '/invitetocommunity': { desc: 'Invite user to private community', fn: (args) => this.cmdInviteToCommunity(args) },
                     '/communityinfo': { desc: 'Show community info', fn: () => this.cmdCommunityInfo() },
                     '/ci': { desc: 'Shortcut for /communityinfo', fn: () => this.cmdCommunityInfo() },
                     '/members': { desc: 'List community members', fn: () => this.cmdListMembers() },
@@ -12489,7 +12663,7 @@
                 this.saveUserChannels();
             }
 
-            cmdLeave() {
+            async cmdLeave() {
                 if (this.inPMMode) {
                     this.displaySystemMessage('Use /pm to switch channels or close PMs from the sidebar');
                     return;
@@ -12538,13 +12712,28 @@
             }
 
 
-            cmdPM(args) {
+            async cmdPM(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /pm nym or /pm nym#xxxx');
+                    this.displaySystemMessage('Usage: /pm nym, /pm nym#xxxx, or /pm [pubkey]');
                     return;
                 }
 
                 const targetInput = args.trim();
+
+                // Check if input is a pubkey (64 hex characters)
+                if (/^[0-9a-f]{64}$/i.test(targetInput)) {
+                    const targetPubkey = targetInput.toLowerCase();
+
+                    if (targetPubkey === this.pubkey) {
+                        this.displaySystemMessage("You can't send private messages to yourself");
+                        return;
+                    }
+
+                    // Get nym from pubkey
+                    const targetNym = this.getNymFromPubkey(targetPubkey);
+                    this.openUserPM(targetNym, targetPubkey);
+                    return;
+                }
 
                 // Handle both nym and nym#xxxx formats
                 let searchNym = targetInput;
@@ -12584,7 +12773,7 @@
                         `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                     ).join(', ');
                     this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
-                    this.displaySystemMessage('Please specify using the #xxxx suffix');
+                    this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
                     return;
                 }
 
@@ -12626,7 +12815,7 @@
                 this.displaySystemMessage(changeMessage);
             }
 
-            cmdWho() {
+            async cmdWho() {
                 const currentChannelKey = this.currentGeohash || this.currentChannel;
                 const channelUserSet = this.channelUsers.get(currentChannelKey) || new Set();
 
@@ -12644,14 +12833,14 @@
                 this.displaySystemMessage(`Online nyms in this channel: ${users || 'none'}`);
             }
 
-            cmdClear() {
+            async cmdClear() {
                 document.getElementById('messagesContainer').innerHTML = '';
                 this.displaySystemMessage('Chat cleared');
             }
 
             async cmdInvite(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /invite nym or /invite nym#xxxx');
+                    this.displaySystemMessage('Usage: /invite nym, /invite nym#xxxx, or /invite [pubkey]');
                     return;
                 }
 
@@ -12664,55 +12853,67 @@
                 let targetPubkey = null;
                 let matchedNym = null;
 
-                // Check if input has #xxxx suffix
-                const hashIndex = targetInput.indexOf('#');
-                let searchNym = targetInput;
-                let searchSuffix = null;
+                // Check if input is a pubkey (64 hex characters)
+                if (/^[0-9a-f]{64}$/i.test(targetInput)) {
+                    targetPubkey = targetInput.toLowerCase();
 
-                if (hashIndex !== -1) {
-                    searchNym = targetInput.substring(0, hashIndex);
-                    searchSuffix = targetInput.substring(hashIndex + 1);
-                }
+                    if (targetPubkey === this.pubkey) {
+                        this.displaySystemMessage("You can't invite yourself");
+                        return;
+                    }
 
-                // Find user by nym, considering suffix if provided
-                const matches = [];
-                this.users.forEach((user, pubkey) => {
-                    const baseNym = user.nym.split('#')[0] || user.nym;
-                    if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                        if (searchSuffix) {
-                            // If suffix provided, only match exact pubkey suffix
-                            if (pubkey.endsWith(searchSuffix)) {
+                    matchedNym = this.getNymFromPubkey(targetPubkey);
+                } else {
+                    // Check if input has #xxxx suffix
+                    const hashIndex = targetInput.indexOf('#');
+                    let searchNym = targetInput;
+                    let searchSuffix = null;
+
+                    if (hashIndex !== -1) {
+                        searchNym = targetInput.substring(0, hashIndex);
+                        searchSuffix = targetInput.substring(hashIndex + 1);
+                    }
+
+                    // Find user by nym, considering suffix if provided
+                    const matches = [];
+                    this.users.forEach((user, pubkey) => {
+                        const baseNym = user.nym.split('#')[0] || user.nym;
+                        if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
+                            if (searchSuffix) {
+                                // If suffix provided, only match exact pubkey suffix
+                                if (pubkey.endsWith(searchSuffix)) {
+                                    matches.push({ nym: user.nym, pubkey: pubkey });
+                                }
+                            } else {
+                                // No suffix provided, collect all matches
                                 matches.push({ nym: user.nym, pubkey: pubkey });
                             }
-                        } else {
-                            // No suffix provided, collect all matches
-                            matches.push({ nym: user.nym, pubkey: pubkey });
                         }
+                    });
+
+                    if (matches.length === 0) {
+                        this.displaySystemMessage(`User ${targetInput} not found`);
+                        return;
                     }
-                });
 
-                if (matches.length === 0) {
-                    this.displaySystemMessage(`User ${targetInput} not found`);
-                    return;
-                }
+                    if (matches.length > 1 && !searchSuffix) {
+                        // Multiple users with same nym, show them
+                        const matchList = matches.map(m =>
+                            `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                        ).join(', ');
+                        this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                        this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
+                        return;
+                    }
 
-                if (matches.length > 1 && !searchSuffix) {
-                    // Multiple users with same nym, show them
-                    const matchList = matches.map(m =>
-                        `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-                    ).join(', ');
-                    this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
-                    this.displaySystemMessage('Please specify using the #xxxx suffix');
-                    return;
-                }
+                    // Single match or exact suffix match
+                    targetPubkey = matches[0].pubkey;
+                    matchedNym = matches[0].nym;
 
-                // Single match or exact suffix match
-                targetPubkey = matches[0].pubkey;
-                matchedNym = matches[0].nym;
-
-                if (targetPubkey === this.pubkey) {
-                    this.displaySystemMessage("You can't invite yourself");
-                    return;
+                    if (targetPubkey === this.pubkey) {
+                        this.displaySystemMessage("You can't invite yourself");
+                        return;
+                    }
                 }
 
                 // Determine if target is ephemeral (check if they have a persistent identity)
@@ -12865,346 +13066,452 @@
 
             async cmdAddMod(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /addmod nym or /addmod nym#xxxx');
+                    this.displaySystemMessage('Usage: /addmod nym, /addmod nym#xxxx, or /addmod [pubkey]');
                     return;
                 }
 
                 if (!this.currentCommunity) {
-                    this.displaySystemMessage('This command only works in community channels');
+                    this.displaySystemMessage('You must be in a community channel to use /addmod');
                     return;
                 }
 
-                const communityId = this.currentCommunity;
+                const community = this.communityChannels.get(this.currentCommunity);
+                if (!community) {
+                    this.displaySystemMessage('Current community not found');
+                    return;
+                }
 
-                // ONLY admins can add moderators
-                if (!this.ownedCommunities.has(communityId)) {
+                // Only admin can add moderators
+                if (!this.ownedCommunities.has(this.currentCommunity)) {
                     this.displaySystemMessage('Only the community admin can add moderators');
                     return;
                 }
 
-                const targetPubkey = await this.findUserPubkey(args);
+                const targetPubkey = await this.findUserPubkey(args.trim());
                 if (!targetPubkey) return;
 
+                const matchedNym = this.getNymFromPubkey(targetPubkey);
+
                 if (targetPubkey === this.pubkey) {
-                    this.displaySystemMessage('You are already the admin');
+                    this.displaySystemMessage("You're already the admin (and a moderator)");
                     return;
                 }
 
                 // Check if already a moderator
-                if (this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(targetPubkey)) {
-                    const nym = this.getNymFromPubkey(targetPubkey);
-                    this.displaySystemMessage(`${nym} is already a moderator`);
+                if (this.communityModerators.has(this.currentCommunity) &&
+                    this.communityModerators.get(this.currentCommunity).has(targetPubkey)) {
+                    this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, targetPubkey)} is already a moderator`);
                     return;
                 }
 
-                // Add to moderators set
-                if (!this.communityModerators.has(communityId)) {
-                    this.communityModerators.set(communityId, new Set());
+                // Add as moderator
+                if (!this.communityModerators.has(this.currentCommunity)) {
+                    this.communityModerators.set(this.currentCommunity, new Set());
                 }
-                this.communityModerators.get(communityId).add(targetPubkey);
+                this.communityModerators.get(this.currentCommunity).add(targetPubkey);
 
-                // Update community definition via NIP-72 event
-                await this.updateCommunityRole(communityId, targetPubkey, 'moderator');
+                // Update community definition
+                await this.updateCommunityDefinitionWithBans(this.currentCommunity);
 
-                const nym = this.getNymFromPubkey(targetPubkey);
-                this.displaySystemMessage(`Added ${nym} as moderator`);
+                // Parse base nym from display format - this removes HTML tags
+                const parsedNym = this.parseNymFromDisplay(matchedNym);
+                // Get just the base nym without any suffix
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(targetPubkey);
+                const fullNym = `${baseNym}#${suffix}`;
 
-                // Send a PM notification to the person being made a moderator
-                const community = this.communityChannels.get(communityId);
-                if (community) {
-                    const notificationMessage = `🎖️ You've been made a moderator of the community "${community.name}". You can now use moderation commands like /kick and /ban.`;
-                    await this.sendPM(notificationMessage, targetPubkey);
-                }
+                const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
+                this.displaySystemMessage(`Added ${displayNym} as a moderator`);
+
+                // Announce in channel with full nym#suffix
+                await this.publishCommunityMessage(`⭐ ${fullNym} is now a moderator of this community`, this.currentCommunity);
             }
 
             async cmdRemoveMod(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /removemod nym or /removemod nym#xxxx');
+                    this.displaySystemMessage('Usage: /removemod nym, /removemod nym#xxxx, or /removemod [pubkey]');
                     return;
                 }
 
                 if (!this.currentCommunity) {
-                    this.displaySystemMessage('This command only works in community channels');
+                    this.displaySystemMessage('You must be in a community channel to use /removemod');
                     return;
                 }
 
-                const communityId = this.currentCommunity;
+                const community = this.communityChannels.get(this.currentCommunity);
+                if (!community) {
+                    this.displaySystemMessage('Current community not found');
+                    return;
+                }
 
-                // ONLY admins can remove moderators
-                if (!this.ownedCommunities.has(communityId)) {
+                // Only admin can remove moderators
+                if (!this.ownedCommunities.has(this.currentCommunity)) {
                     this.displaySystemMessage('Only the community admin can remove moderators');
                     return;
                 }
 
-                const targetPubkey = await this.findUserPubkey(args);
+                const targetPubkey = await this.findUserPubkey(args.trim());
                 if (!targetPubkey) return;
 
-                // Check if user is actually a moderator
-                if (!this.communityModerators.has(communityId) ||
-                    !this.communityModerators.get(communityId).has(targetPubkey)) {
-                    const nym = this.getNymFromPubkey(targetPubkey);
-                    this.displaySystemMessage(`${nym} is not a moderator`);
+                const matchedNym = this.getNymFromPubkey(targetPubkey);
+
+                if (targetPubkey === this.pubkey) {
+                    this.displaySystemMessage("You can't remove yourself as admin");
                     return;
                 }
 
-                // Remove from moderators set
-                this.communityModerators.get(communityId).delete(targetPubkey);
+                // Check if actually a moderator
+                if (!this.communityModerators.has(this.currentCommunity) ||
+                    !this.communityModerators.get(this.currentCommunity).has(targetPubkey)) {
+                    this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, targetPubkey)} is not a moderator`);
+                    return;
+                }
 
-                await this.updateCommunityRole(communityId, targetPubkey, 'remove');
+                // Remove from moderators
+                this.communityModerators.get(this.currentCommunity).delete(targetPubkey);
 
-                const nym = this.getNymFromPubkey(targetPubkey);
-                this.displaySystemMessage(`Removed ${nym} from moderators`);
+                // Update community definition
+                await this.updateCommunityDefinitionWithBans(this.currentCommunity);
+
+                // Parse base nym from display format - this removes HTML tags
+                const parsedNym = this.parseNymFromDisplay(matchedNym);
+                // Get just the base nym without any suffix
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(targetPubkey);
+                const fullNym = `${baseNym}#${suffix}`;
+
+                const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
+                this.displaySystemMessage(`Removed ${displayNym} as a moderator`);
+
+                // Announce in channel with full nym#suffix
+                await this.publishCommunityMessage(`📋 ${fullNym} is no longer a moderator of this community`, this.currentCommunity);
             }
 
             async cmdKick(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /kick nym or /kick nym#xxxx');
+                    this.displaySystemMessage('Usage: /kick nym, /kick nym#xxxx, or /kick [pubkey]');
                     return;
                 }
 
                 if (!this.currentCommunity) {
-                    this.displaySystemMessage('This command only works in community channels');
+                    this.displaySystemMessage('You must be in a community channel to use /kick');
                     return;
                 }
 
-                const communityId = this.currentCommunity;
+                const community = this.communityChannels.get(this.currentCommunity);
+                if (!community) {
+                    this.displaySystemMessage('Current community not found');
+                    return;
+                }
 
-                // Check if user has moderation privileges (admin OR mod)
-                const isAdmin = this.ownedCommunities.has(communityId);
-                const isMod = this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(this.pubkey);
+                // Check if user is admin or moderator
+                const isAdmin = this.ownedCommunities.has(this.currentCommunity);
+                const isMod = this.communityModerators.has(this.currentCommunity) &&
+                    this.communityModerators.get(this.currentCommunity).has(this.pubkey);
 
                 if (!isAdmin && !isMod) {
-                    this.displaySystemMessage('You need admin or moderator privileges to kick users');
+                    this.displaySystemMessage('Only admins and moderators can kick users');
                     return;
                 }
 
-                const targetPubkey = await this.findUserPubkey(args);
+                const targetPubkey = await this.findUserPubkey(args.trim());
                 if (!targetPubkey) return;
 
-                if (targetPubkey === this.pubkey) {
-                    this.displaySystemMessage("You can't kick yourself");
-                    return;
-                }
+                const targetNym = this.getNymFromPubkey(targetPubkey);
 
-                // Check if target is the admin
-                const community = this.communityChannels.get(communityId);
-                if (community && community.admin === targetPubkey) {
-                    this.displaySystemMessage("You can't kick the community admin");
-                    return;
-                }
+                // Parse base nym from display format - this removes HTML tags
+                const parsedNym = this.parseNymFromDisplay(targetNym);
+                // Get just the base nym without any suffix
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(targetPubkey);
+                const fullNym = `${baseNym}#${suffix}`;
 
-                // Moderators cannot kick other moderators
-                if (!isAdmin && this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(targetPubkey)) {
-                    this.displaySystemMessage("Moderators cannot kick other moderators. Contact the admin.");
-                    return;
-                }
+                const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
+                this.displaySystemMessage(`Kicked ${displayNym} from this community`);
 
-                // Admins can kick mods, but should remove their mod status first
-                if (isAdmin && this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(targetPubkey)) {
-                    this.displaySystemMessage("Remove moderator status first before kicking");
-                    return;
-                }
-
-                const nym = this.getNymFromPubkey(targetPubkey);
-                this.displaySystemMessage(`Kicked ${nym} from community`);
-
-                // Publish kick action
-                await this.publishCommunityModeration(communityId, targetPubkey, 'kick');
+                // Announce in channel with full nym#suffix
+                await this.publishCommunityMessage(`👢 ${fullNym} has been kicked from this community`, this.currentCommunity);
             }
 
             async cmdBan(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /ban nym or /ban nym#xxxx');
+                    this.displaySystemMessage('Usage: /ban nym, /ban nym#xxxx, or /ban [pubkey]');
                     return;
                 }
 
                 if (!this.currentCommunity) {
-                    this.displaySystemMessage('This command only works in community channels');
+                    this.displaySystemMessage('You must be in a community channel to use /ban');
                     return;
                 }
 
-                const communityId = this.currentCommunity;
+                const community = this.communityChannels.get(this.currentCommunity);
+                if (!community) {
+                    this.displaySystemMessage('Current community not found');
+                    return;
+                }
 
-                // Check if user has moderation privileges (admin OR mod)
-                const isAdmin = this.ownedCommunities.has(communityId);
-                const isMod = this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(this.pubkey);
+                // Check if user is admin or moderator
+                const isAdmin = this.ownedCommunities.has(this.currentCommunity);
+                const isMod = this.communityModerators.has(this.currentCommunity) &&
+                    this.communityModerators.get(this.currentCommunity).has(this.pubkey);
 
                 if (!isAdmin && !isMod) {
-                    this.displaySystemMessage('You need admin or moderator privileges to ban users');
+                    this.displaySystemMessage('Only admins and moderators can ban users');
                     return;
                 }
 
-                const targetPubkey = await this.findUserPubkey(args);
+                const targetPubkey = await this.findUserPubkey(args.trim());
                 if (!targetPubkey) return;
+
+                const targetNym = this.getNymFromPubkey(targetPubkey);
 
                 if (targetPubkey === this.pubkey) {
                     this.displaySystemMessage("You can't ban yourself");
                     return;
                 }
 
-                // Check if target is the admin
-                const community = this.communityChannels.get(communityId);
-                if (community && community.admin === targetPubkey) {
-                    this.displaySystemMessage("You can't ban the community admin");
-                    return;
-                }
-
-                // Moderators cannot ban other moderators
-                if (!isAdmin && this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(targetPubkey)) {
-                    this.displaySystemMessage("Moderators cannot ban other moderators. Contact the admin.");
-                    return;
-                }
-
-                // Admins can ban mods, but should remove their mod status first
-                if (isAdmin && this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(targetPubkey)) {
-                    this.displaySystemMessage("Remove moderator status first before banning");
-                    return;
-                }
-
                 // Check if already banned
-                if (this.communityBans.has(communityId) &&
-                    this.communityBans.get(communityId).has(targetPubkey)) {
-                    const nym = this.getNymFromPubkey(targetPubkey);
-                    this.displaySystemMessage(`${nym} is already banned`);
+                if (this.communityBans.has(this.currentCommunity) &&
+                    this.communityBans.get(this.currentCommunity).has(targetPubkey)) {
+                    this.displaySystemMessage(`${this.formatNymWithPubkey(targetNym, targetPubkey)} is already banned`);
                     return;
                 }
 
-                // Add to ban list locally
-                if (!this.communityBans.has(communityId)) {
-                    this.communityBans.set(communityId, new Set());
+                // Add to bans
+                if (!this.communityBans.has(this.currentCommunity)) {
+                    this.communityBans.set(this.currentCommunity, new Set());
                 }
-                this.communityBans.get(communityId).add(targetPubkey);
+                this.communityBans.get(this.currentCommunity).add(targetPubkey);
 
-                const nym = this.getNymFromPubkey(targetPubkey);
-                this.displaySystemMessage(`Banned ${nym} from community`);
+                // Remove from moderators if they were one
+                if (this.communityModerators.has(this.currentCommunity)) {
+                    this.communityModerators.get(this.currentCommunity).delete(targetPubkey);
+                }
 
-                // IMPORTANT: Update community definition to include ban list
-                // This ensures bans persist and are visible to all users
-                await this.updateCommunityDefinitionWithBans(communityId);
+                // Clean up messages from banned user immediately
+                if (this.messages.has(this.currentCommunity)) {
+                    this.messages.get(this.currentCommunity).forEach(msg => {
+                        if (msg.pubkey === targetPubkey) {
+                            msg.blocked = true;
+                        }
+                    });
+                }
 
-                // Also publish a moderation event for real-time notification
-                await this.publishCommunityModeration(communityId, targetPubkey, 'ban');
-
-                // Clean up stored messages from banned user
-                this.cleanupBannedMessages(communityId, targetPubkey);
-
-                // Remove messages from DOM
+                // Remove from DOM immediately
                 document.querySelectorAll(`.message[data-pubkey="${targetPubkey}"]`).forEach(msg => {
-                    msg.remove();
+                    if (msg.closest('.messages-container')?.dataset.lastCommunity === this.currentCommunity) {
+                        msg.remove();
+                    }
                 });
+
+                // Update community definition
+                await this.updateCommunityDefinitionWithBans(this.currentCommunity);
+
+                // Parse base nym from display format - this removes HTML tags
+                const parsedNym = this.parseNymFromDisplay(targetNym);
+                // Get just the base nym without any suffix
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(targetPubkey);
+                const fullNym = `${baseNym}#${suffix}`;
+
+                const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
+                this.displaySystemMessage(`Banned ${displayNym} from this community`);
+
+                // Announce in channel with full nym#suffix
+                await this.publishCommunityMessage(`🚫 ${fullNym} has been banned from this community`, this.currentCommunity);
             }
 
             async cmdUnban(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /unban nym or /unban nym#xxxx');
+                    this.displaySystemMessage('Usage: /unban nym, /unban nym#xxxx, or /unban [pubkey]');
                     return;
                 }
 
                 if (!this.currentCommunity) {
-                    this.displaySystemMessage('This command only works in community channels');
+                    this.displaySystemMessage('You must be in a community channel to use /unban');
                     return;
                 }
 
-                const communityId = this.currentCommunity;
+                const community = this.communityChannels.get(this.currentCommunity);
+                if (!community) {
+                    this.displaySystemMessage('Current community not found');
+                    return;
+                }
 
-                // Check if user has moderation privileges (admin OR mod)
-                const isAdmin = this.ownedCommunities.has(communityId);
-                const isMod = this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(this.pubkey);
+                // Check if user is admin or moderator
+                const isAdmin = this.ownedCommunities.has(this.currentCommunity);
+                const isMod = this.communityModerators.has(this.currentCommunity) &&
+                    this.communityModerators.get(this.currentCommunity).has(this.pubkey);
 
                 if (!isAdmin && !isMod) {
-                    this.displaySystemMessage('You need admin or moderator privileges to unban users');
+                    this.displaySystemMessage('Only admins and moderators can unban users');
                     return;
                 }
 
-                const targetPubkey = await this.findUserPubkey(args);
+                const targetPubkey = await this.findUserPubkey(args.trim());
                 if (!targetPubkey) return;
 
-                // Check if user is actually banned
-                if (!this.communityBans.has(communityId) ||
-                    !this.communityBans.get(communityId).has(targetPubkey)) {
-                    const nym = this.getNymFromPubkey(targetPubkey);
-                    this.displaySystemMessage(`${nym} is not banned`);
+                const targetNym = this.getNymFromPubkey(targetPubkey);
+
+                // Check if actually banned
+                if (!this.communityBans.has(this.currentCommunity) ||
+                    !this.communityBans.get(this.currentCommunity).has(targetPubkey)) {
+                    this.displaySystemMessage(`${this.formatNymWithPubkey(targetNym, targetPubkey)} is not banned`);
                     return;
                 }
 
-                // Remove from ban list
-                this.communityBans.get(communityId).delete(targetPubkey);
+                // Remove from bans
+                this.communityBans.get(this.currentCommunity).delete(targetPubkey);
 
-                const nym = this.getNymFromPubkey(targetPubkey);
-                this.displaySystemMessage(`Unbanned ${nym} from community`);
+                // Update community definition
+                await this.updateCommunityDefinitionWithBans(this.currentCommunity);
 
-                // Update community definition to remove from ban list
-                await this.updateCommunityDefinitionWithBans(communityId);
+                // Parse base nym from display format - this removes HTML tags
+                const parsedNym = this.parseNymFromDisplay(targetNym);
+                // Get just the base nym without any suffix
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(targetPubkey);
+                const fullNym = `${baseNym}#${suffix}`;
 
-                // Publish unban action for real-time notification
-                await this.publishCommunityModeration(communityId, targetPubkey, 'unban');
+                const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
+                this.displaySystemMessage(`Unbanned ${displayNym} from this community`);
 
-                // Note: Old messages won't be restored, only new messages will appear
-                this.displaySystemMessage(`New messages from ${nym} will now appear`);
+                // Announce in channel with full nym#suffix
+                await this.publishCommunityMessage(`✅ ${fullNym} has been unbanned from this community`, this.currentCommunity);
             }
 
             async cmdInviteToCommunity(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /invitecommunity nym or /invitecommunity nym#xxxx');
+                    this.displaySystemMessage('Usage: /invitetocommunity nym, /invitetocommunity nym#xxxx, or /invitetocommunity [pubkey]');
                     return;
                 }
 
-                if (!this.isCurrentChannelCommunity()) {
-                    this.displaySystemMessage('This command only works in community channels');
+                if (!this.currentCommunity) {
+                    this.displaySystemMessage('You must be in a community channel to use /invitetocommunity');
                     return;
                 }
 
-                const communityId = this.getCurrentCommunityId();
-                const community = this.communityChannels.get(communityId);
-
+                const community = this.communityChannels.get(this.currentCommunity);
                 if (!community) {
-                    this.displaySystemMessage('Community not found');
+                    this.displaySystemMessage('Current community not found');
                     return;
                 }
 
-                // For private communities, only members can invite
-                // For public communities, anyone can invite
-                if (community.isPrivate) {
-                    const members = this.communityMembers.get(communityId) || new Set();
-                    const isMember = members.has(this.pubkey) ||
-                        this.ownedCommunities.has(communityId) ||
-                        this.moderatedCommunities.has(communityId);
+                // Check if user is a moderator
+                if (!community.moderators.includes(this.pubkey)) {
+                    this.displaySystemMessage('You must be a moderator to invite users to private communities');
+                    return;
+                }
 
-                    if (!isMember) {
-                        this.displaySystemMessage('Only members can invite to private communities');
+                const targetInput = args.trim();
+                let targetPubkey = null;
+                let matchedNym = null;
+
+                // Check if input is a pubkey (64 hex characters)
+                if (/^[0-9a-f]{64}$/i.test(targetInput)) {
+                    targetPubkey = targetInput.toLowerCase();
+
+                    if (targetPubkey === this.pubkey) {
+                        this.displaySystemMessage("You can't invite yourself");
+                        return;
+                    }
+
+                    matchedNym = this.getNymFromPubkey(targetPubkey);
+                } else {
+                    // Handle nym with optional suffix
+                    const hashIndex = targetInput.indexOf('#');
+                    let searchNym = targetInput;
+                    let searchSuffix = null;
+
+                    if (hashIndex !== -1) {
+                        searchNym = targetInput.substring(0, hashIndex);
+                        searchSuffix = targetInput.substring(hashIndex + 1);
+                    }
+
+                    // Find matching users
+                    const matches = [];
+                    this.users.forEach((user, pubkey) => {
+                        const baseNym = user.nym.split('#')[0] || user.nym;
+                        if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
+                            if (searchSuffix) {
+                                if (pubkey.endsWith(searchSuffix)) {
+                                    matches.push({ nym: user.nym, pubkey: pubkey });
+                                }
+                            } else {
+                                matches.push({ nym: user.nym, pubkey: pubkey });
+                            }
+                        }
+                    });
+
+                    if (matches.length === 0) {
+                        this.displaySystemMessage(`User ${targetInput} not found`);
+                        return;
+                    }
+
+                    if (matches.length > 1 && !searchSuffix) {
+                        const matchList = matches.map(m =>
+                            `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                        ).join(', ');
+                        this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                        this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
+                        return;
+                    }
+
+                    targetPubkey = matches[0].pubkey;
+                    matchedNym = matches[0].nym;
+
+                    if (targetPubkey === this.pubkey) {
+                        this.displaySystemMessage("You can't invite yourself");
                         return;
                     }
                 }
 
-                const targetPubkey = await this.findUserPubkey(args);
-                if (!targetPubkey) return;
-
-                // For private communities, add to invite list
-                if (community.isPrivate) {
-                    if (!this.communityInvites.has(communityId)) {
-                        this.communityInvites.set(communityId, new Set());
-                    }
-                    this.communityInvites.get(communityId).add(targetPubkey);
+                // Check if target is banned
+                if (community.bannedUsers.includes(targetPubkey)) {
+                    this.displaySystemMessage(`Cannot invite ${this.formatNymWithPubkey(matchedNym, targetPubkey)} - they are banned from this community`);
+                    return;
                 }
 
-                // Send PM invitation (for both public and private)
-                const privacyType = community.isPrivate ? 'private' : 'public';
-                const inviteMessage = `📨 You've been invited to join the ${privacyType} community: #${community.name}. Use /join ${community.name} to accept.`;
-                await this.sendPM(inviteMessage, targetPubkey);
+                // Check if target is ephemeral
+                const targetIsEphemeral = await this.isUserEphemeral(targetPubkey);
+                if (targetIsEphemeral) {
+                    this.displaySystemMessage(`Cannot invite ${this.formatNymWithPubkey(matchedNym, targetPubkey)} - ephemeral users cannot join communities`);
+                    return;
+                }
 
-                const nym = this.getNymFromPubkey(targetPubkey);
-                this.displaySystemMessage(`Sent invitation to ${nym}`);
+                // Check if already invited or member
+                if (community.invitedUsers && community.invitedUsers.includes(targetPubkey)) {
+                    this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, targetPubkey)} has already been invited`);
+                    return;
+                }
+
+                // Add to invited users
+                if (!community.invitedUsers) {
+                    community.invitedUsers = [];
+                }
+                community.invitedUsers.push(targetPubkey);
+
+                // Publish updated community metadata
+                await this.publishCommunityMetadata(this.currentCommunity, community);
+
+                // Send PM with invitation details
+                const privacyType = community.isPrivate ? 'PRIVATE' : 'PUBLIC';
+                const inviteMessage = `📨 Community Invitation: You've been invited to join #${community.name} [${privacyType} COMMUNITY]. Use /join ${community.name} to join!`;
+
+                const sent = await this.sendPM(inviteMessage, targetPubkey);
+
+                const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
+                if (sent) {
+                    this.displaySystemMessage(`Invitation sent to ${displayNym} for community #${community.name}`);
+
+                    // Announce in community channel
+                    await this.publishCommunityMessage(`📨 ${matchedNym} has been invited to this community`, this.currentCommunity);
+                } else {
+                    this.displaySystemMessage(`Failed to send invitation to ${displayNym}`);
+                }
             }
 
-            cmdCommunityInfo() {
+            async cmdCommunityInfo() {
                 if (!this.isCurrentChannelCommunity()) {
                     this.displaySystemMessage('This is not a community channel');
                     return;
@@ -13254,7 +13561,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
             }
 
-            cmdListMembers() {
+            async cmdListMembers() {
                 if (!this.isCurrentChannelCommunity()) {
                     this.displaySystemMessage('This is not a community channel');
                     return;
@@ -13293,7 +13600,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 this.displaySystemMessage(memberList);
             }
 
-            cmdListMods() {
+            async cmdListMods() {
                 if (!this.isCurrentChannelCommunity()) {
                     this.displaySystemMessage('This is not a community channel');
                     return;
@@ -13319,7 +13626,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 this.displaySystemMessage(modList);
             }
 
-            cmdCommunitySettings() {
+            async cmdCommunitySettings() {
                 if (!this.isCurrentChannelCommunity()) {
                     this.displaySystemMessage('This is not a community channel');
                     return;
@@ -13340,7 +13647,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 if (!args) {
                     // If no args, check if in a channel that can be blocked
                     if (this.inPMMode) {
-                        this.displaySystemMessage('Usage: /block nym, /block nym#xxxx, or /block #channel');
+                        this.displaySystemMessage('Usage: /block nym, /block nym#xxxx, /block [pubkey], or /block #channel');
                         return;
                     }
 
@@ -13431,58 +13738,23 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     return;
                 }
 
-                // For user blocking, handle suffix
-                const hashIndex = target.indexOf('#');
-                let searchNym = target;
-                let searchSuffix = null;
+                // User blocking - use findUserPubkey
+                const targetPubkey = await this.findUserPubkey(target);
+                if (!targetPubkey) return;
 
-                if (hashIndex !== -1) {
-                    searchNym = target.substring(0, hashIndex);
-                    searchSuffix = target.substring(hashIndex + 1);
-                }
-
-                // Find matching users
-                const matches = [];
-                this.users.forEach((user, pubkey) => {
-                    const baseNym = user.nym.split('#')[0] || user.nym;
-                    if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                        if (searchSuffix) {
-                            if (pubkey.endsWith(searchSuffix)) {
-                                matches.push({ nym: user.nym, pubkey: pubkey });
-                            }
-                        } else {
-                            matches.push({ nym: user.nym, pubkey: pubkey });
-                        }
-                    }
-                });
-
-                if (matches.length === 0) {
-                    this.displaySystemMessage(`User ${target} not found`);
-                    return;
-                }
-
-                if (matches.length > 1 && !searchSuffix) {
-                    const matchList = matches.map(m =>
-                        `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-                    ).join(', ');
-                    this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
-                    this.displaySystemMessage('Please specify using the #xxxx suffix');
-                    return;
-                }
-
-                const nym = matches[0].nym;
+                const targetNym = this.getNymFromPubkey(targetPubkey);
 
                 // Check if already blocked to toggle
-                if (this.blockedUsers.has(nym)) {
+                if (this.blockedUsers.has(targetPubkey)) {
                     await this.cmdUnblock(target);
                     return;
                 }
 
-                this.blockedUsers.add(nym);
+                this.blockedUsers.add(targetPubkey);
                 this.saveBlockedUsers();
-                this.hideMessagesFromBlockedUser(nym);
+                this.hideMessagesFromBlockedUser(targetPubkey);
 
-                this.displaySystemMessage(`Blocked ${this.formatNymWithPubkey(nym, matches[0].pubkey)}`);
+                this.displaySystemMessage(`Blocked ${this.formatNymWithPubkey(targetNym, targetPubkey)}`);
                 this.updateUserList();
                 this.updateBlockedList();
 
@@ -13492,10 +13764,26 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
             }
 
-            hideMessagesFromBlockedUser(nym) {
+            unblockByPubkey(pubkey) {
+                this.blockedUsers.delete(pubkey);
+                this.saveBlockedUsers();
+                this.showMessagesFromUnblockedUser(pubkey);
+
+                const nym = this.getNymFromPubkey(pubkey);
+                this.displaySystemMessage(`Unblocked ${nym}`);
+                this.updateUserList();
+                this.updateBlockedList();
+
+                // Save to synced settings for persistent connections
+                if (this.connectionMode !== 'ephemeral') {
+                    this.saveSyncedSettings();
+                }
+            }
+
+            hideMessagesFromBlockedUser(pubkey) {
                 // Hide messages in current DOM
                 document.querySelectorAll('.message').forEach(msg => {
-                    if (msg.dataset.author === nym) {
+                    if (msg.dataset.pubkey === pubkey) {
                         msg.style.display = 'none';
                         msg.classList.add('blocked-user-message');
                     }
@@ -13504,7 +13792,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Mark messages as blocked in stored messages
                 this.messages.forEach((channelMessages, channel) => {
                     channelMessages.forEach(msg => {
-                        if (msg.author === nym) {
+                        if (msg.pubkey === pubkey) {
                             msg.blocked = true;
                         }
                     });
@@ -13513,16 +13801,58 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Mark PM messages as blocked
                 this.pmMessages.forEach((conversationMessages, conversationKey) => {
                     conversationMessages.forEach(msg => {
-                        if (msg.author === nym) {
+                        if (msg.pubkey === pubkey) {
                             msg.blocked = true;
                         }
                     });
                 });
             }
 
+            hideMessagesWithBlockedKeywords() {
+                // Hide messages in current DOM that contain blocked keywords
+                document.querySelectorAll('.message').forEach(msg => {
+                    const content = msg.querySelector('.message-content');
+                    if (content) {
+                        const hasBlockedKeyword = Array.from(this.blockedKeywords).some(kw =>
+                            content.textContent.toLowerCase().includes(kw)
+                        );
+
+                        if (hasBlockedKeyword) {
+                            msg.style.display = 'none';
+                            msg.classList.add('blocked');
+                        }
+                    }
+                });
+
+                // Mark messages as blocked in stored messages
+                this.messages.forEach((channelMessages, channel) => {
+                    channelMessages.forEach(msg => {
+                        if (this.hasBlockedKeyword(msg.content)) {
+                            msg.blocked = true;
+                        }
+                    });
+                });
+
+                // Mark PM messages as blocked
+                this.pmMessages.forEach((conversationMessages, conversationKey) => {
+                    conversationMessages.forEach(msg => {
+                        if (this.hasBlockedKeyword(msg.content)) {
+                            msg.blocked = true;
+                        }
+                    });
+                });
+            }
+
+            isNymBlocked(nym) {
+                const cleanNym = this.parseNymFromDisplay(nym);
+                return Array.from(this.blockedUsers).some(blockedNym =>
+                    this.parseNymFromDisplay(blockedNym) === cleanNym
+                );
+            }
+
             async cmdUnblock(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /unblock nym, /unblock nym#xxxx, or /unblock #channel');
+                    this.displaySystemMessage('Usage: /unblock nym, /unblock nym#xxxx, /unblock [pubkey], or /unblock #channel');
                     return;
                 }
 
@@ -13553,41 +13883,25 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     return;
                 }
 
-                // User unblock logic
-                const hashIndex = target.indexOf('#');
-                let searchNym = target;
-                let searchSuffix = null;
-
-                if (hashIndex !== -1) {
-                    searchNym = target.substring(0, hashIndex);
-                    searchSuffix = target.substring(hashIndex + 1);
-                }
-
-                // Try to find the exact nym in blocked list
-                let nymToUnblock = null;
-
-                if (this.blockedUsers.has(searchNym)) {
-                    nymToUnblock = searchNym;
-                } else {
-                    // Search case-insensitively
-                    for (const blockedNym of this.blockedUsers) {
-                        if (blockedNym.toLowerCase() === searchNym.toLowerCase()) {
-                            nymToUnblock = blockedNym;
-                            break;
-                        }
-                    }
-                }
-
-                if (!nymToUnblock) {
-                    this.displaySystemMessage(`User ${target} is not blocked`);
+                // User unblock - use findUserPubkey
+                const targetPubkey = await this.findUserPubkey(target);
+                if (!targetPubkey) {
+                    this.displaySystemMessage(`User ${target} not found or is not blocked`);
                     return;
                 }
 
-                this.blockedUsers.delete(nymToUnblock);
-                this.saveBlockedUsers();
-                this.showMessagesFromUnblockedUser(nymToUnblock);
+                const targetNym = this.getNymFromPubkey(targetPubkey);
 
-                this.displaySystemMessage(`Unblocked ${nymToUnblock}`);
+                if (!this.blockedUsers.has(targetPubkey)) {
+                    this.displaySystemMessage(`User is not blocked`);
+                    return;
+                }
+
+                this.blockedUsers.delete(targetPubkey);
+                this.saveBlockedUsers();
+                this.showMessagesFromUnblockedUser(targetPubkey);
+
+                this.displaySystemMessage(`Unblocked ${this.formatNymWithPubkey(targetNym, targetPubkey)}`);
                 this.updateUserList();
                 this.updateBlockedList();
 
@@ -13597,22 +13911,11 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
             }
 
-            showMessagesFromUnblockedUser(nym) {
-                // Show messages in current DOM (unless blocked by keywords)
-                document.querySelectorAll('.message.blocked-user-message').forEach(msg => {
-                    if (msg.dataset.author === nym) {
-                        const content = msg.querySelector('.message-content');
-                        if (!content || !this.hasBlockedKeyword(content.textContent)) {
-                            msg.style.display = '';
-                            msg.classList.remove('blocked-user-message');
-                        }
-                    }
-                });
-
-                // Unmark messages in stored messages
+            showMessagesFromUnblockedUser(pubkey) {
+                // Unmark messages in stored messages FIRST
                 this.messages.forEach((channelMessages, channel) => {
                     channelMessages.forEach(msg => {
-                        if (msg.author === nym) {
+                        if (msg.pubkey === pubkey) {
                             delete msg.blocked;
                         }
                     });
@@ -13621,20 +13924,40 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Unmark PM messages
                 this.pmMessages.forEach((conversationMessages, conversationKey) => {
                     conversationMessages.forEach(msg => {
-                        if (msg.author === nym) {
+                        if (msg.pubkey === pubkey) {
                             delete msg.blocked;
                         }
                     });
+                });
+
+                // Show messages in current DOM (unless blocked by keywords)
+                document.querySelectorAll('.message.blocked-user-message').forEach(msg => {
+                    if (msg.dataset.pubkey === pubkey) {
+                        const content = msg.querySelector('.message-content');
+                        if (!content || !this.hasBlockedKeyword(content.textContent)) {
+                            msg.style.display = '';
+                            msg.classList.remove('blocked-user-message');
+                        }
+                    }
                 });
             }
 
             async cmdSlap(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /slap nym or /slap nym#xxxx');
+                    this.displaySystemMessage('Usage: /slap nym, /slap nym#xxxx, or /slap [pubkey]');
                     return;
                 }
 
                 const targetInput = args.trim();
+
+                // Check if input is a pubkey (64 hex characters)
+                if (/^[0-9a-f]{64}$/i.test(targetInput)) {
+                    const targetPubkey = targetInput.toLowerCase();
+                    const targetNym = this.getNymFromPubkey(targetPubkey);
+                    await this.publishMessage(`/me slaps ${targetNym} around a bit with a large trout`);
+                    return;
+                }
+
                 const hashIndex = targetInput.indexOf('#');
                 let searchNym = targetInput;
                 let searchSuffix = null;
@@ -13664,7 +13987,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                     ).join(', ');
                     this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
-                    this.displaySystemMessage('Please specify using the #xxxx suffix');
+                    this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
                     return;
                 }
 
@@ -13729,7 +14052,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await this.publishMessage(quotedText);
             }
 
-            cmdBRB(args) {
+            async cmdBRB(args) {
                 if (!args) {
                     this.displaySystemMessage('Usage: /brb message (e.g., /brb lunch, back in 30)');
                     return;
@@ -13759,7 +14082,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 this.updateUserList();
             }
 
-            cmdBack() {
+            async cmdBack() {
                 if (this.awayMessages.has(this.pubkey)) {
                     this.awayMessages.delete(this.pubkey);
 
@@ -13788,11 +14111,35 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
             async cmdZap(args) {
                 if (!args) {
-                    this.displaySystemMessage('Usage: /zap nym or /zap nym#xxxx');
+                    this.displaySystemMessage('Usage: /zap nym, /zap nym#xxxx, or /zap [pubkey]');
                     return;
                 }
 
                 const targetInput = args.trim();
+
+                // Check if input is a pubkey (64 hex characters)
+                if (/^[0-9a-f]{64}$/i.test(targetInput)) {
+                    const targetPubkey = targetInput.toLowerCase();
+
+                    if (targetPubkey === this.pubkey) {
+                        this.displaySystemMessage("You can't zap yourself");
+                        return;
+                    }
+
+                    const targetNym = this.getNymFromPubkey(targetPubkey);
+                    const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
+                    this.displaySystemMessage(`Checking if @${displayNym} can receive zaps...`);
+
+                    const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
+
+                    if (lnAddress) {
+                        this.showProfileZapModal(targetPubkey, targetNym, lnAddress);
+                    } else {
+                        this.displaySystemMessage(`@${displayNym} cannot receive zaps (no lightning address set)`);
+                    }
+                    return;
+                }
+
                 const hashIndex = targetInput.indexOf('#');
                 let searchNym = targetInput;
                 let searchSuffix = null;
@@ -13826,7 +14173,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                     ).join(', ');
                     this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
-                    this.displaySystemMessage('Please specify using the #xxxx suffix');
+                    this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
                     return;
                 }
 
@@ -13852,7 +14199,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
             }
 
-            cmdQuit() {
+            async cmdQuit() {
                 this.displaySystemMessage('Disconnecting from NYM...');
 
                 // Clear saved connection preferences
@@ -14154,14 +14501,22 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Community messages would be stored under the community ID
                 const communityMessages = this.messages.get(communityId) || [];
 
-                // Filter out messages from banned users BEFORE displaying
+                // Filter out messages from banned users AND globally blocked users
                 const filteredMessages = communityMessages.filter(msg => {
-                    // Check if author is banned
+                    // Check if author is banned from THIS community
                     if (bannedUsers.has(msg.pubkey)) {
                         return false;
                     }
-                    // Check if author is blocked
-                    if (this.blockedUsers.has(msg.author) || msg.blocked) {
+                    // Check if author is globally blocked (by pubkey or nym)
+                    if (this.blockedUsers.has(msg.pubkey) || this.isNymBlocked(msg.author) || msg.blocked) {
+                        return false;
+                    }
+                    // Check if message contains blocked keywords for this community
+                    if (this.hasCommunityBlockedKeyword(msg.content, communityId)) {
+                        return false;
+                    }
+                    // Check if message contains globally blocked keywords
+                    if (this.hasBlockedKeyword(msg.content)) {
                         return false;
                     }
                     return true;
@@ -15221,10 +15576,34 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             cleanupBannedMessages(communityId, bannedPubkey) {
-                // Remove messages from banned user in stored messages
+                // Mark messages from banned user as blocked in stored messages
                 if (this.messages.has(communityId)) {
-                    const filtered = this.messages.get(communityId).filter(msg => msg.pubkey !== bannedPubkey);
-                    this.messages.set(communityId, filtered);
+                    this.messages.get(communityId).forEach(msg => {
+                        if (msg.pubkey === bannedPubkey) {
+                            msg.blocked = true;
+                        }
+                    });
+                }
+
+                // Remove from DOM
+                document.querySelectorAll(`.message[data-pubkey="${bannedPubkey}"]`).forEach(msg => {
+                    msg.remove();
+                });
+            }
+
+            restoreUnbannedMessages(communityId, unbannedPubkey) {
+                // Unmark messages from unbanned user in stored messages
+                if (this.messages.has(communityId)) {
+                    this.messages.get(communityId).forEach(msg => {
+                        if (msg.pubkey === unbannedPubkey) {
+                            delete msg.blocked;
+                        }
+                    });
+                }
+
+                // Reload community messages if currently viewing this community
+                if (this.currentCommunity === communityId) {
+                    this.loadCommunityMessages(communityId);
                 }
             }
 
@@ -15298,13 +15677,119 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 if (this.blockedUsers.size === 0) {
                     list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked users</div>';
                 } else {
-                    list.innerHTML = Array.from(this.blockedUsers).map(nym => `
-                        <div class="blocked-item">
-                            <span>${this.escapeHtml(nym)}</span>
-                            <button class="unblock-btn" onclick="nym.cmdUnblock('${this.escapeHtml(nym)}')">Unblock</button>
-                        </div>
-                    `).join('');
+                    // Show loading state
+                    list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">Loading...</div>';
+
+                    // Load async without blocking
+                    this.loadBlockedUsersAsync(list);
                 }
+            }
+
+            async loadBlockedUsersAsync(listElement) {
+                // Initialize nymCache if it doesn't exist
+                if (!this.nymCache) {
+                    this.nymCache = {};
+                }
+
+                // Fetch metadata for blocked users who aren't in cache
+                const blockedArray = Array.from(this.blockedUsers);
+                const uncachedPubkeys = blockedArray.filter(pk => !this.nymCache[pk]);
+
+                if (uncachedPubkeys.length > 0) {
+                    await this.fetchMetadataForBlockedUsers(uncachedPubkeys);
+                }
+
+                // Now render with proper nyms
+                listElement.innerHTML = blockedArray.map(pubkey => {
+                    const nym = this.getNymFromPubkey(pubkey);
+                    return `
+            <div class="blocked-item">
+                <span>${nym}</span>
+                <button class="unblock-btn" onclick="nym.unblockByPubkey('${pubkey}')">Unblock</button>
+            </div>
+        `;
+                }).join('');
+            }
+
+            // Fetch metadata for blocked users
+            async fetchMetadataForBlockedUsers(pubkeys) {
+                if (pubkeys.length === 0) return;
+
+                return new Promise((resolve) => {
+                    const subId = "blocked-meta-" + Math.random().toString(36).substring(7);
+                    let receivedCount = 0;
+                    let messageHandlers = [];
+
+                    const cleanup = () => {
+                        messageHandlers.forEach(handler => {
+                            const index = this.relayMessageHandlers?.indexOf(handler);
+                            if (index > -1) {
+                                this.relayMessageHandlers.splice(index, 1);
+                            }
+                        });
+                        this.sendToRelay(["CLOSE", subId]);
+                    };
+
+                    const timeout = setTimeout(() => {
+                        cleanup();
+                        resolve();
+                    }, 3000);
+
+                    const handleMessage = (msg, relayUrl) => {
+                        if (!Array.isArray(msg)) return false;
+
+                        const [type, ...data] = msg;
+
+                        if (type === 'EVENT' && data[0] === subId) {
+                            const event = data[1];
+                            if (event && event.kind === 0) {
+                                // Temporarily process metadata ONLY for caching the nym
+                                try {
+                                    const metadata = JSON.parse(event.content);
+                                    const name = metadata.name || metadata.display_name || metadata.displayName;
+                                    if (name) {
+                                        // Store in nym cache (without adding to profile cache)
+                                        this.nymCache[event.pubkey] = name;
+                                    }
+                                    receivedCount++;
+
+                                    // If we got all metadata, resolve early
+                                    if (receivedCount >= pubkeys.length) {
+                                        clearTimeout(timeout);
+                                        cleanup();
+                                        resolve();
+                                    }
+                                } catch (e) {
+                                    console.error('Failed to parse blocked user metadata:', e);
+                                }
+                            }
+                        } else if (type === 'EOSE' && data[0] === subId) {
+                            clearTimeout(timeout);
+                            cleanup();
+                            resolve();
+                        }
+
+                        return false;
+                    };
+
+                    if (!this.relayMessageHandlers) {
+                        this.relayMessageHandlers = [];
+                    }
+                    this.relayMessageHandlers.push(handleMessage);
+                    messageHandlers.push(handleMessage);
+
+                    // Request metadata for blocked users
+                    const subscription = [
+                        "REQ",
+                        subId,
+                        {
+                            kinds: [0],
+                            authors: pubkeys
+                        }
+                    ];
+
+                    this.sendToRelay(subscription);
+                });
             }
 
             escapeHtml(text) {
@@ -15854,71 +16339,48 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             async addModFromSettings() {
-                const communityId = this.getCurrentCommunityId();
-                if (!communityId) return;
-
                 const input = document.getElementById('addModInput').value.trim();
                 if (!input) {
                     this.displaySystemMessage('Please enter a nym');
                     return;
                 }
 
-                const targetPubkey = await this.findUserPubkey(input);
-                if (!targetPubkey) return;
-
-                if (targetPubkey === this.pubkey) {
-                    this.displaySystemMessage('You are already the admin');
-                    return;
-                }
-
-                // Add to moderators
-                if (!this.communityModerators.has(communityId)) {
-                    this.communityModerators.set(communityId, new Set());
-                }
-                this.communityModerators.get(communityId).add(targetPubkey);
-
-                await this.updateCommunityRole(communityId, targetPubkey, 'moderator');
-
-                const nym = this.getNymFromPubkey(targetPubkey);
-                this.displaySystemMessage(`Added ${nym} as moderator`);
+                // Call the command method
+                await this.cmdAddMod(input);
 
                 // Clear input and reload UI
                 document.getElementById('addModInput').value = '';
-                this.loadCommunitySettingsUI(communityId);
+
+                const communityId = this.getCurrentCommunityId();
+                if (communityId) {
+                    this.loadCommunitySettingsUI(communityId);
+                }
             }
 
             async removeModFromSettings(pubkey) {
-                const communityId = this.getCurrentCommunityId();
-                if (!communityId) return;
-
-                if (this.communityModerators.has(communityId)) {
-                    this.communityModerators.get(communityId).delete(pubkey);
-                }
-
-                await this.updateCommunityRole(communityId, pubkey, 'remove');
-
                 const nym = this.getNymFromPubkey(pubkey);
-                this.displaySystemMessage(`Removed ${nym} from moderators`);
+
+                // Call the command method
+                await this.cmdRemoveMod(nym);
 
                 // Reload UI
-                this.loadCommunitySettingsUI(communityId);
+                const communityId = this.getCurrentCommunityId();
+                if (communityId) {
+                    this.loadCommunitySettingsUI(communityId);
+                }
             }
 
             async unbanFromSettings(pubkey) {
-                const communityId = this.getCurrentCommunityId();
-                if (!communityId) return;
-
-                if (this.communityBans.has(communityId)) {
-                    this.communityBans.get(communityId).delete(pubkey);
-                }
-
-                await this.publishCommunityModeration(communityId, pubkey, 'unban');
-
                 const nym = this.getNymFromPubkey(pubkey);
-                this.displaySystemMessage(`Unbanned ${nym}`);
+
+                // Call the command method
+                await this.cmdUnban(nym);
 
                 // Reload UI
-                this.loadCommunitySettingsUI(communityId);
+                const communityId = this.getCurrentCommunityId();
+                if (communityId) {
+                    this.loadCommunitySettingsUI(communityId);
+                }
             }
 
             async saveCommunitySettings() {
@@ -16125,7 +16587,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             await nym.connectToRelay(newRelayUrl);
         }
 
-        function showSettings() {
+        async function showSettings() {
             nym.updateRelayStatus();
 
             // Load lightning address
@@ -16805,7 +17267,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
             }, 5000); // Update every 5 seconds
 
-            // NEW: Periodic connection health check (every 30 seconds)
+            // Periodic connection health check (every 30 seconds)
             setInterval(() => {
                 if (nym.connected || nym.relayPool.size > 0) {
                     // Only log if we think we should be connected
@@ -16926,14 +17388,12 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     // Try to reconnect to expired blacklisted relays
                     expiredRelays.forEach(relayUrl => {
                         if (nym.broadcastRelays.includes(relayUrl) && !nym.relayPool.has(relayUrl)) {
-                            console.log(`Retrying previously blacklisted relay: ${relayUrl}`);
                             nym.connectToRelay(relayUrl, 'broadcast')
                                 .then(() => {
                                     nym.subscribeToSingleRelay(relayUrl);
                                     nym.updateConnectionStatus();
                                 })
                                 .catch(err => {
-                                    console.log(`Retry failed for ${relayUrl}:`, err);
                                     nym.trackRelayFailure(relayUrl);
                                 });
                         }

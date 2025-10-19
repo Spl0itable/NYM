@@ -1,3 +1,12 @@
+## v2.13.25 - 2025-10-19
+
+New: allow copying user pubkey to clipboard from context menu
+New: added copy pubkey to user context menu and updated commands to support pubkey
+New: added kind 10000 mute list support for blocked users and keywords
+Hotfix: bug where blocked users' nym nicks wouldn't display
+Hotfix: reset view on geohash explorer removes last opened location details
+Hotfix: prevent nostr profile save data from wiping pre-existing data in kind 0
+
 ## v2.12.25 - 2025-10-18
 
 Hotfix: hide your location from legend if location not enabled
