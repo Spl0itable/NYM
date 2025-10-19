@@ -13579,9 +13579,13 @@
                     return;
                 }
 
-                // Check if user is a moderator
-                if (!community.moderators.includes(this.pubkey)) {
-                    this.displaySystemMessage('You must be a moderator to invite users to private communities');
+                // Check if user is a moderator or admin
+                const isAdmin = this.ownedCommunities.has(this.currentCommunity);
+                const isMod = this.communityModerators.has(this.currentCommunity) &&
+                    this.communityModerators.get(this.currentCommunity).has(this.pubkey);
+
+                if (!isAdmin && !isMod) {
+                    this.displaySystemMessage('You must be an admin or moderator to invite users to private communities');
                     return;
                 }
 
@@ -13649,7 +13653,8 @@
                 }
 
                 // Check if target is banned
-                if (community.bannedUsers.includes(targetPubkey)) {
+                const bannedUsers = this.communityBans.get(this.currentCommunity) || new Set();
+                if (bannedUsers.has(targetPubkey)) {
                     this.displaySystemMessage(`Cannot invite ${this.formatNymWithPubkey(matchedNym, targetPubkey)} - they are banned from this community`);
                     return;
                 }
@@ -13662,19 +13667,21 @@
                 }
 
                 // Check if already invited or member
-                if (community.invitedUsers && community.invitedUsers.includes(targetPubkey)) {
+                if (!this.communityInvites) {
+                    this.communityInvites = new Map();
+                }
+                if (!this.communityInvites.has(this.currentCommunity)) {
+                    this.communityInvites.set(this.currentCommunity, new Set());
+                }
+
+                const invitedUsers = this.communityInvites.get(this.currentCommunity);
+                if (invitedUsers.has(targetPubkey)) {
                     this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, targetPubkey)} has already been invited`);
                     return;
                 }
 
                 // Add to invited users
-                if (!community.invitedUsers) {
-                    community.invitedUsers = [];
-                }
-                community.invitedUsers.push(targetPubkey);
-
-                // Publish updated community metadata
-                await this.publishCommunityMetadata(this.currentCommunity, community);
+                invitedUsers.add(targetPubkey);
 
                 // Send PM with invitation details
                 const privacyType = community.isPrivate ? 'PRIVATE' : 'PUBLIC';
@@ -17075,7 +17082,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.32 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.33 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>

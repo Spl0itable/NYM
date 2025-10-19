@@ -1,3 +1,7 @@
+## v2.13.33 - 2025-10-19
+
+Hotfix: invite community throwing error
+
 ## v2.13.32 - 2025-10-19
 
 Hotfix: changed private community channels badge from PRV to PRI
