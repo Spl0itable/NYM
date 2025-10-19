@@ -1,3 +1,7 @@
+## v2.13.29 - 2025-10-19
+
+Hotfix: kicked users now temp muted for 15min
+
 ## v2.13.28 - 2025-10-19
 
 Hotfix: case where kicked users weren't kicked

@@ -8245,15 +8245,48 @@
                                 break;
 
                             case 'kick':
-                                // Kicks are temporary - show notification if it affects the current user
-                                if (targetPubkey === this.pubkey && this.currentCommunity === communityId) {
-                                    this.displaySystemMessage(`You have been kicked from ${community.name}`);
-                                    // Switch to bar if we're kicked from current community
-                                    this.switchChannel('bar', '');
-                                } else if (this.currentCommunity === communityId && event.pubkey !== this.pubkey) {
-                                    const targetNym = this.getNymFromPubkey(targetPubkey);
-                                    const modNym = this.getNymFromPubkey(event.pubkey);
-                                    this.displaySystemMessage(`${targetNym} was kicked by ${modNym}`);
+                                // Get expiry timestamp
+                                const expiryTag = event.tags.find(t => t[0] === 'expiry');
+                                if (expiryTag) {
+                                    const kickExpiry = parseInt(expiryTag[1]);
+
+                                    // Initialize temporary kicks map if needed
+                                    if (!this.communityTemporaryKicks) {
+                                        this.communityTemporaryKicks = new Map();
+                                    }
+                                    if (!this.communityTemporaryKicks.has(communityId)) {
+                                        this.communityTemporaryKicks.set(communityId, new Map());
+                                    }
+
+                                    // Add the kick
+                                    this.communityTemporaryKicks.get(communityId).set(targetPubkey, kickExpiry);
+
+                                    // If the kicked user is us and we're in this community, kick us out
+                                    if (targetPubkey === this.pubkey && this.currentCommunity === communityId) {
+                                        const communityName = community.name;
+                                        this.displaySystemMessage(`You have been kicked from ${communityName}. You can rejoin in 15 minutes.`);
+
+                                        // Switch to #bar after a short delay
+                                        setTimeout(() => {
+                                            this.switchChannel('bar', '');
+                                        }, 1500);
+                                    }
+
+                                    // Set up auto-cleanup after expiry
+                                    const timeRemaining = kickExpiry - Date.now();
+                                    if (timeRemaining > 0) {
+                                        setTimeout(() => {
+                                            if (this.communityTemporaryKicks.has(communityId)) {
+                                                const kicks = this.communityTemporaryKicks.get(communityId);
+                                                if (kicks.has(targetPubkey)) {
+                                                    kicks.delete(targetPubkey);
+                                                    if (targetPubkey === this.pubkey) {
+                                                        this.displaySystemMessage(`Your kick from ${community?.name || 'the community'} has expired. You can rejoin now.`);
+                                                    }
+                                                }
+                                            }
+                                        }, timeRemaining);
+                                    }
                                 }
                                 break;
                         }
@@ -13363,24 +13396,39 @@
                 const kickExpiry = Date.now() + (15 * 60 * 1000); // 15 minutes
                 this.communityTemporaryKicks.get(this.currentCommunity).set(targetPubkey, kickExpiry);
 
-                // Publish kick event as a kind 1 message with special tag
+                // Publish kick event as NIP-56 moderation event (kind 1984)
                 const kickEvent = {
-                    kind: 1,
+                    kind: 1984,
                     created_at: Math.floor(Date.now() / 1000),
                     tags: [
-                        ['q', this.currentCommunity],
+                        ['a', `34550:${community.admin}:${this.currentCommunity}`],
                         ['p', targetPubkey],
-                        ['kick', kickExpiry.toString()]
+                        ['action', 'kick'],
+                        ['expiry', kickExpiry.toString()]
                     ],
-                    content: `👢 ${fullNym} has been kicked from this community`,
+                    content: `Kicked from community for 15 minutes`,
                     pubkey: this.pubkey
                 };
 
-                const signedEvent = await this.signEvent(kickEvent);
-                await this.relay.publish(signedEvent);
+                // Sign the event
+                let signedEvent;
+                if (window.nostr && !this.privkey) {
+                    signedEvent = await window.nostr.signEvent(kickEvent);
+                } else if (this.privkey) {
+                    signedEvent = window.NostrTools.finalizeEvent(kickEvent, this.privkey);
+                } else {
+                    this.displaySystemMessage('No signing method available');
+                    return;
+                }
+
+                // Send the signed event
+                this.sendToRelay(["EVENT", signedEvent]);
 
                 const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
                 this.displaySystemMessage(`Kicked ${displayNym} from this community (15 min cooldown)`);
+
+                // Also announce in the community channel
+                await this.publishCommunityMessage(`👢 ${fullNym} has been kicked from this community (15 min cooldown)`, this.currentCommunity);
 
                 // Set up auto-cleanup after 15 minutes
                 setTimeout(() => {
@@ -17069,7 +17117,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.28 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.29 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
