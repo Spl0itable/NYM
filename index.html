@@ -10495,6 +10495,21 @@
                         throw new Error('You are banned from this community');
                     }
 
+                    // CHECK IF USER IS TEMPORARILY KICKED
+                    if (this.communityTemporaryKicks && this.communityTemporaryKicks.has(communityId)) {
+                        const kicks = this.communityTemporaryKicks.get(communityId);
+                        if (kicks.has(this.pubkey)) {
+                            const kickExpiry = kicks.get(this.pubkey);
+                            if (Date.now() < kickExpiry) {
+                                const minutesLeft = Math.ceil((kickExpiry - Date.now()) / 60000);
+                                throw new Error(`You are temporarily kicked from this community. Try again in ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''}.`);
+                            } else {
+                                // Kick expired, remove it
+                                kicks.delete(this.pubkey);
+                            }
+                        }
+                    }
+
                     // Check if message contains blocked keywords
                     if (this.hasCommunityBlockedKeyword(content, communityId)) {
                         throw new Error('Message contains blocked keywords');
@@ -12592,6 +12607,29 @@
                         return;
                     }
 
+                    // CHECK IF TEMPORARILY KICKED
+                    if (this.communityTemporaryKicks && this.communityTemporaryKicks.has(matchedCommunityId)) {
+                        const kicks = this.communityTemporaryKicks.get(matchedCommunityId);
+                        if (kicks.has(this.pubkey)) {
+                            const kickExpiry = kicks.get(this.pubkey);
+                            if (Date.now() < kickExpiry) {
+                                const minutesLeft = Math.ceil((kickExpiry - Date.now()) / 60000);
+                                this.displaySystemMessage(`You are temporarily kicked from this community. Try again in ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''}.`);
+                                return;
+                            } else {
+                                // Kick expired, remove it
+                                kicks.delete(this.pubkey);
+                            }
+                        }
+                    }
+
+                    // CHECK IF BANNED
+                    if (this.communityBans.has(matchedCommunityId) &&
+                        this.communityBans.get(matchedCommunityId).has(this.pubkey)) {
+                        this.displaySystemMessage(`You are banned from the community "${matchedCommunity.name}".`);
+                        return;
+                    }
+
                     // Check if it's a private community and user has access
                     if (matchedCommunity.isPrivate) {
                         const isAdmin = matchedCommunity.admin === this.pubkey;
@@ -13219,18 +13257,65 @@
 
                 const targetNym = this.getNymFromPubkey(targetPubkey);
 
-                // Parse base nym from display format - this removes HTML tags
+                // Parse base nym from display format
                 const parsedNym = this.parseNymFromDisplay(targetNym);
-                // Get just the base nym without any suffix
                 const baseNym = parsedNym.split('#')[0] || parsedNym;
                 const suffix = this.getPubkeySuffix(targetPubkey);
                 const fullNym = `${baseNym}#${suffix}`;
 
-                const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
-                this.displaySystemMessage(`Kicked ${displayNym} from this community`);
+                // Don't allow kicking admin
+                if (targetPubkey === community.admin) {
+                    this.displaySystemMessage("You can't kick the community admin");
+                    return;
+                }
 
-                // Announce in channel with full nym#suffix
-                await this.publishCommunityMessage(`👢 ${fullNym} has been kicked from this community`, this.currentCommunity);
+                // Mods can't kick other mods
+                if (isMod && !isAdmin) {
+                    const targetIsMod = this.communityModerators.has(this.currentCommunity) &&
+                        this.communityModerators.get(this.currentCommunity).has(targetPubkey);
+                    if (targetIsMod) {
+                        this.displaySystemMessage("Moderators can't kick other moderators");
+                        return;
+                    }
+                }
+
+                // Initialize temporary kicks map if needed
+                if (!this.communityTemporaryKicks) {
+                    this.communityTemporaryKicks = new Map();
+                }
+                if (!this.communityTemporaryKicks.has(this.currentCommunity)) {
+                    this.communityTemporaryKicks.set(this.currentCommunity, new Map());
+                }
+
+                // Add temporary kick (15 minutes)
+                const kickExpiry = Date.now() + (15 * 60 * 1000); // 15 minutes
+                this.communityTemporaryKicks.get(this.currentCommunity).set(targetPubkey, kickExpiry);
+
+                // If it's the current user being kicked, boot them out
+                if (targetPubkey === this.pubkey) {
+                    this.displaySystemMessage(`You have been kicked from ${community.name}. You can rejoin in 15 minutes.`);
+
+                    // Switch to #bar
+                    setTimeout(() => {
+                        this.switchChannel('bar', '');
+                    }, 1000);
+                } else {
+                    // Announce the kick
+                    const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
+                    this.displaySystemMessage(`Kicked ${displayNym} from this community (15 min cooldown)`);
+                    await this.publishCommunityMessage(`👢 ${fullNym} has been kicked from this community`, this.currentCommunity);
+                }
+
+                // Set up auto-cleanup after 15 minutes
+                setTimeout(() => {
+                    if (this.communityTemporaryKicks.has(this.currentCommunity)) {
+                        const kicks = this.communityTemporaryKicks.get(this.currentCommunity);
+                        if (kicks.has(targetPubkey)) {
+                            kicks.delete(targetPubkey);
+                            console.log(`Kick expired for ${fullNym} in ${community.name}`);
+                        }
+                    }
+                }, 15 * 60 * 1000);
             }
 
             async cmdBan(args) {
@@ -16345,42 +16430,172 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     return;
                 }
 
-                // Call the command method
-                await this.cmdAddMod(input);
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
+
+                const community = this.communityChannels.get(communityId);
+                if (!community) {
+                    this.displaySystemMessage('Current community not found');
+                    return;
+                }
+
+                // Only admin can add moderators
+                if (!this.ownedCommunities.has(communityId)) {
+                    this.displaySystemMessage('Only the community admin can add moderators');
+                    return;
+                }
+
+                const targetPubkey = await this.findUserPubkey(input);
+                if (!targetPubkey) {
+                    // Clear input even on failure
+                    document.getElementById('addModInput').value = '';
+                    return;
+                }
+
+                const matchedNym = this.getNymFromPubkey(targetPubkey);
+
+                if (targetPubkey === this.pubkey) {
+                    this.displaySystemMessage("You're already the admin (and a moderator)");
+                    document.getElementById('addModInput').value = '';
+                    return;
+                }
+
+                // Check if already a moderator
+                if (this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(targetPubkey)) {
+                    this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, targetPubkey)} is already a moderator`);
+                    document.getElementById('addModInput').value = '';
+                    return;
+                }
+
+                // Add as moderator
+                if (!this.communityModerators.has(communityId)) {
+                    this.communityModerators.set(communityId, new Set());
+                }
+                this.communityModerators.get(communityId).add(targetPubkey);
+
+                // Update community definition
+                await this.updateCommunityDefinitionWithBans(communityId);
+
+                // Parse base nym from display format - this removes HTML tags
+                const parsedNym = this.parseNymFromDisplay(matchedNym);
+                // Get just the base nym without any suffix
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(targetPubkey);
+                const fullNym = `${baseNym}#${suffix}`;
+
+                const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
+                this.displaySystemMessage(`Added ${displayNym} as a moderator`);
+
+                // Announce in channel with full nym#suffix
+                await this.publishCommunityMessage(`⭐ ${fullNym} is now a moderator of this community`, communityId);
 
                 // Clear input and reload UI
                 document.getElementById('addModInput').value = '';
-
-                const communityId = this.getCurrentCommunityId();
-                if (communityId) {
-                    this.loadCommunitySettingsUI(communityId);
-                }
+                this.loadCommunitySettingsUI(communityId);
             }
 
             async removeModFromSettings(pubkey) {
-                const nym = this.getNymFromPubkey(pubkey);
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
 
-                // Call the command method
-                await this.cmdRemoveMod(nym);
+                const community = this.communityChannels.get(communityId);
+                if (!community) {
+                    this.displaySystemMessage('Current community not found');
+                    return;
+                }
+
+                // Only admin can remove moderators
+                if (!this.ownedCommunities.has(communityId)) {
+                    this.displaySystemMessage('Only the community admin can remove moderators');
+                    return;
+                }
+
+                const matchedNym = this.getNymFromPubkey(pubkey);
+
+                if (pubkey === this.pubkey) {
+                    this.displaySystemMessage("You can't remove yourself as admin");
+                    return;
+                }
+
+                // Check if actually a moderator
+                if (!this.communityModerators.has(communityId) ||
+                    !this.communityModerators.get(communityId).has(pubkey)) {
+                    this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, pubkey)} is not a moderator`);
+                    return;
+                }
+
+                // Remove from moderators
+                this.communityModerators.get(communityId).delete(pubkey);
+
+                // Update community definition
+                await this.updateCommunityDefinitionWithBans(communityId);
+
+                // Parse base nym from display format - this removes HTML tags
+                const parsedNym = this.parseNymFromDisplay(matchedNym);
+                // Get just the base nym without any suffix
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(pubkey);
+                const fullNym = `${baseNym}#${suffix}`;
+
+                const displayNym = this.formatNymWithPubkey(matchedNym, pubkey);
+                this.displaySystemMessage(`Removed ${displayNym} as a moderator`);
+
+                // Announce in channel with full nym#suffix
+                await this.publishCommunityMessage(`📋 ${fullNym} is no longer a moderator of this community`, communityId);
 
                 // Reload UI
-                const communityId = this.getCurrentCommunityId();
-                if (communityId) {
-                    this.loadCommunitySettingsUI(communityId);
-                }
+                this.loadCommunitySettingsUI(communityId);
             }
 
             async unbanFromSettings(pubkey) {
-                const nym = this.getNymFromPubkey(pubkey);
+                const communityId = this.getCurrentCommunityId();
+                if (!communityId) return;
 
-                // Call the command method
-                await this.cmdUnban(nym);
+                const community = this.communityChannels.get(communityId);
+                if (!community) return;
+
+                // Check if user is admin or moderator
+                const isAdmin = this.ownedCommunities.has(communityId);
+                const isMod = this.communityModerators.has(communityId) &&
+                    this.communityModerators.get(communityId).has(this.pubkey);
+
+                if (!isAdmin && !isMod) {
+                    this.displaySystemMessage('Only admins and moderators can unban users');
+                    return;
+                }
+
+                // Get target nym for display
+                const targetNym = this.getNymFromPubkey(pubkey);
+
+                // Parse base nym from display format - this removes HTML tags
+                const parsedNym = this.parseNymFromDisplay(targetNym);
+                // Get just the base nym without any suffix
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(pubkey);
+                const fullNym = `${baseNym}#${suffix}`;
+
+                // Check if actually banned
+                if (!this.communityBans.has(communityId) ||
+                    !this.communityBans.get(communityId).has(pubkey)) {
+                    this.displaySystemMessage(`${this.formatNymWithPubkey(targetNym, pubkey)} is not banned`);
+                    return;
+                }
+
+                // Remove from bans
+                this.communityBans.get(communityId).delete(pubkey);
+
+                // Update community definition
+                await this.updateCommunityDefinitionWithBans(communityId);
+
+                const displayNym = this.formatNymWithPubkey(targetNym, pubkey);
+                this.displaySystemMessage(`Unbanned ${displayNym} from this community`);
+
+                // Announce in channel with full nym#suffix
+                await this.publishCommunityMessage(`✅ ${fullNym} has been unbanned from this community`, communityId);
 
                 // Reload UI
-                const communityId = this.getCurrentCommunityId();
-                if (communityId) {
-                    this.loadCommunitySettingsUI(communityId);
-                }
+                this.loadCommunitySettingsUI(communityId);
             }
 
             async saveCommunitySettings() {
@@ -16743,7 +16958,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.12.25 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.26 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>

@@ -1,3 +1,7 @@
+## v2.13.26 - 2025-10-19
+
+Hotfix: case where kicked users weren't kicked
+
 ## v2.13.25 - 2025-10-19
 
 New: allow copying user pubkey to clipboard from context menu
