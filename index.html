@@ -15566,7 +15566,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                             body: body,
                             icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="40" fill="%230ff" text-anchor="middle" font-family="monospace">NYM</text></svg>',
                             tag: channelInfo ? (channelInfo.id || 'nym-notification') : 'nym-notification',
-                            requireInteraction: false
+                            requireInteraction: false,
+                            data: { channelInfo: channelInfo }
                         });
 
                         console.log('Browser notification created');
@@ -17117,7 +17118,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.29 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.30 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>

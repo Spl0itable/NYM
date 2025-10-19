@@ -1,3 +1,7 @@
+## v2.13.30 - 2025-10-19
+
+Hotfix: added better notification deep linking
+
 ## v2.13.29 - 2025-10-19
 
 Hotfix: kicked users now temp muted for 15min
