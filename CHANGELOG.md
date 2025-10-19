@@ -1,3 +1,7 @@
+## v2.13.27 - 2025-10-19
+
+Hotfix: case where unbanned users' messages did show to rest of community
+
 ## v2.13.26 - 2025-10-19
 
 Hotfix: case where kicked users weren't kicked

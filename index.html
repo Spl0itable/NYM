@@ -13438,6 +13438,12 @@
 
                 const targetNym = this.getNymFromPubkey(targetPubkey);
 
+                // Parse base nym from display format
+                const parsedNym = this.parseNymFromDisplay(targetNym);
+                const baseNym = parsedNym.split('#')[0] || parsedNym;
+                const suffix = this.getPubkeySuffix(targetPubkey);
+                const fullNym = `${baseNym}#${suffix}`;
+
                 // Check if actually banned
                 if (!this.communityBans.has(this.currentCommunity) ||
                     !this.communityBans.get(this.currentCommunity).has(targetPubkey)) {
@@ -13451,17 +13457,27 @@
                 // Update community definition
                 await this.updateCommunityDefinitionWithBans(this.currentCommunity);
 
-                // Parse base nym from display format - this removes HTML tags
-                const parsedNym = this.parseNymFromDisplay(targetNym);
-                // Get just the base nym without any suffix
-                const baseNym = parsedNym.split('#')[0] || parsedNym;
-                const suffix = this.getPubkeySuffix(targetPubkey);
-                const fullNym = `${baseNym}#${suffix}`;
+                // Re-subscribe to the unbanned user's messages for this community
+                if (this.connected && this.relay) {
+                    const filter = {
+                        kinds: [1],
+                        authors: [targetPubkey],
+                        '#q': [this.currentCommunity],
+                        since: Math.floor(Date.now() / 1000)
+                    };
+
+                    this.relay.subscribe([filter], {
+                        onevent: (event) => {
+                            this.handleNostrEvent(event);
+                        },
+                        oneose: () => {
+                            console.log(`Re-subscribed to messages from unbanned user ${fullNym}`);
+                        }
+                    });
+                }
 
                 const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
                 this.displaySystemMessage(`Unbanned ${displayNym} from this community`);
-
-                // Announce in channel with full nym#suffix
                 await this.publishCommunityMessage(`✅ ${fullNym} has been unbanned from this community`, this.currentCommunity);
             }
 
@@ -16588,6 +16604,25 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Update community definition
                 await this.updateCommunityDefinitionWithBans(communityId);
 
+                // Re-subscribe to the unbanned user's messages for this community
+                if (this.connected && this.relay) {
+                    const filter = {
+                        kinds: [1],
+                        authors: [pubkey],
+                        '#q': [communityId],
+                        since: Math.floor(Date.now() / 1000)
+                    };
+
+                    this.relay.subscribe([filter], {
+                        onevent: (event) => {
+                            this.handleNostrEvent(event);
+                        },
+                        oneose: () => {
+                            console.log(`Re-subscribed to messages from unbanned user ${fullNym}`);
+                        }
+                    });
+                }
+
                 const displayNym = this.formatNymWithPubkey(targetNym, pubkey);
                 this.displaySystemMessage(`Unbanned ${displayNym} from this community`);
 
@@ -16958,7 +16993,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.26 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.27 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
