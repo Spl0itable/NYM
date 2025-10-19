@@ -1,3 +1,7 @@
+## v2.13.32 - 2025-10-19
+
+Hotfix: changed private community channels badge from PRV to PRI
+
 ## v2.13.31 - 2025-10-19
 
 Hotfix: reverted half-working awake reconnection mechanism

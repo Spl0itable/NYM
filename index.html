@@ -4872,7 +4872,7 @@
                         const canAccess = !community.isPrivate || isOwned || isModerated || isMember;
 
                         if (canAccess) {
-                            const privacyBadge = community.isPrivate ? 'PRV' : 'PUB';
+                            const privacyBadge = community.isPrivate ? 'PRI' : 'PUB';
                             const privacyColor = community.isPrivate ? 'var(--purple)' : 'var(--primary)';
 
                             const prompt = document.createElement('div');
@@ -10783,7 +10783,7 @@
                 item.dataset.isCommunity = 'true'; // Mark as community
 
                 const badge = isPrivate ?
-                    '<span class="std-badge" style="border-color: var(--purple); color: var(--purple);">PRV</span>' :
+                    '<span class="std-badge" style="border-color: var(--purple); color: var(--purple);">PRI</span>' :
                     '<span class="std-badge" style="border-color: var(--primary); color: var(--primary);">PUB</span>';
 
                 const isPinned = this.pinnedChannels.has(communityId);
@@ -11461,7 +11461,7 @@
                             if (communityMatches.length === 1 && !isGeohash) {
                                 const communityId = communityMatches[0].id;
                                 const community = communityMatches[0].community;
-                                const badge = community.isPrivate ? ' [PRV]' : ' [PUB]';
+                                const badge = community.isPrivate ? ' [PRI]' : ' [PUB]';
                                 return `${space}<span class="channel-link" onclick="nym.quickJoinCommunity('${communityId}')">#${sanitized}${badge}</span>`;
                             }
 
@@ -11613,7 +11613,7 @@
                 // Add community options
                 communityMatches.forEach(({ id, community }) => {
                     optionCount++;
-                    const privacyBadge = community.isPrivate ? 'PRV' : 'PUB';
+                    const privacyBadge = community.isPrivate ? 'PRI' : 'PUB';
                     const privacyColor = community.isPrivate ? 'var(--purple)' : 'var(--primary)';
 
                     // Different access info based on user's role
@@ -16791,7 +16791,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     if (isPrivate) {
                         existingBadge.style.borderColor = 'var(--purple)';
                         existingBadge.style.color = 'var(--purple)';
-                        existingBadge.textContent = 'PRV';
+                        existingBadge.textContent = 'PRI';
                     } else {
                         existingBadge.style.borderColor = 'var(--primary)';
                         existingBadge.style.color = 'var(--primary)';
@@ -17075,7 +17075,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.31 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.32 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
