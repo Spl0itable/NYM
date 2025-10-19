@@ -1,3 +1,7 @@
+## v2.13.31 - 2025-10-19
+
+Hotfix: reverted half-working awake reconnection mechanism
+
 ## v2.13.30 - 2025-10-19
 
 Hotfix: added better notification deep linking

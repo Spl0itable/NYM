@@ -5033,96 +5033,49 @@
             }
 
             setupVisibilityMonitoring() {
-                let backgroundCheckInterval = null;
-
+                // Track when app becomes visible/hidden
                 document.addEventListener('visibilitychange', () => {
                     if (document.visibilityState === 'visible') {
                         console.log('App became visible, checking connection health...');
 
-                        // Clear background checks
-                        if (backgroundCheckInterval) {
-                            clearInterval(backgroundCheckInterval);
-                            backgroundCheckInterval = null;
-                        }
-
+                        // Wait a moment for network to stabilize
                         const delay = this.isFlutterWebView ? 200 : 500;
                         setTimeout(() => {
                             this.checkConnectionHealth();
 
+                            // If disconnected, immediately start reconnection attempts
                             if (!this.connected && navigator.onLine) {
                                 this.attemptReconnection();
                             }
                         }, delay);
                     } else {
-                        console.log('App hidden - starting background connection monitoring');
-
-                        // Send periodic ping to keep WebSockets open
-                        backgroundCheckInterval = setInterval(() => {
-                            console.log('Background: Checking connections...');
-
-                            let hasActiveConnection = false;
-                            this.relayPool.forEach((relay, url) => {
-                                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                                    hasActiveConnection = true;
-
-                                    // Send a lightweight REQ to keep connection alive
-                                    try {
-                                        const pingReq = [
-                                            "REQ",
-                                            "keepalive-" + Math.random().toString(36).substring(7),
-                                            {
-                                                kinds: [0],
-                                                authors: [this.pubkey],
-                                                limit: 0  // Don't actually fetch anything
-                                            }
-                                        ];
-                                        relay.ws.send(JSON.stringify(pingReq));
-                                    } catch (err) {
-                                        console.log(`Keepalive ping failed for ${url}`);
-                                    }
-                                } else {
-                                    // Connection dead - remove it
-                                    this.relayPool.delete(url);
-                                    this.relayKinds.delete(url);
-                                }
-                            });
-
-                            if (!hasActiveConnection && navigator.onLine) {
-                                console.log('Background: No active connections, reconnecting...');
-                                this.reconnectToBroadcastRelays();
-                            }
-                        }, 15000); // Check every 15 seconds in background
+                        console.log('App hidden');
+                        this.stopReconnectionAttempts();
                     }
                 });
 
-                // Also listen for page focus (desktop)
+                // Also listen for page focus (for desktop)
                 window.addEventListener('focus', () => {
-                    if (backgroundCheckInterval) {
-                        clearInterval(backgroundCheckInterval);
-                        backgroundCheckInterval = null;
-                    }
-
                     console.log('Window focused, checking connection health...');
                     const delay = this.isFlutterWebView ? 200 : 500;
                     setTimeout(() => {
                         this.checkConnectionHealth();
+
+                        // If disconnected, immediately start reconnection attempts
                         if (!this.connected && navigator.onLine) {
                             this.attemptReconnection();
                         }
                     }, delay);
                 });
 
-                // Flutter WebView resume event
+                // For Flutter WebView, also check on resume event
                 if (this.isFlutterWebView) {
                     window.addEventListener('resume', () => {
-                        if (backgroundCheckInterval) {
-                            clearInterval(backgroundCheckInterval);
-                            backgroundCheckInterval = null;
-                        }
-
-                        console.log('App resumed (Flutter), checking connection...');
+                        console.log('App resumed, checking connection...');
                         setTimeout(() => {
                             this.checkConnectionHealth();
+
+                            // If disconnected, immediately start reconnection attempts
                             if (!this.connected && navigator.onLine) {
                                 this.attemptReconnection();
                             }
@@ -17118,7 +17071,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.30 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.31 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
