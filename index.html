@@ -5050,7 +5050,11 @@
                         }, delay);
                     } else {
                         console.log('App hidden');
-                        this.stopReconnectionAttempts();
+                        // Stop monitoring when app goes to background
+                        if (this.reconnectionInterval) {
+                            clearInterval(this.reconnectionInterval);
+                            this.reconnectionInterval = null;
+                        }
                     }
                 });
 
