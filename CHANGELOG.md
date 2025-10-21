@@ -1,3 +1,7 @@
+## v2.13.34 - 2025-10-21
+
+Hotfix: shared nym.bar links for channels now open within the app and switch to the channel
+
 ## v2.13.33 - 2025-10-19
 
 Hotfix: invite community throwing error

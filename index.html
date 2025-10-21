@@ -3799,6 +3799,87 @@
                 }
             }
 
+            async handleChannelLink(channelInput, event) {
+                if (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+
+                // Parse channel type from prefix
+                let channelType = 'auto';
+                let channelName = channelInput;
+
+                if (channelInput.startsWith('c:')) {
+                    channelType = 'community';
+                    channelName = channelInput.substring(2);
+                } else if (channelInput.startsWith('g:')) {
+                    channelType = 'geohash';
+                    channelName = channelInput.substring(2);
+                } else if (channelInput.startsWith('e:')) {
+                    channelType = 'ephemeral';
+                    channelName = channelInput.substring(2);
+                }
+
+                // Handle based on type
+                if (channelType === 'community') {
+                    const communityId = channelName;
+
+                    if (this.connectionMode === 'ephemeral') {
+                        this.displaySystemMessage('Community channels require a persistent identity (extension or nsec login)');
+                        return;
+                    }
+
+                    // Check if community exists
+                    if (this.communityChannels.has(communityId)) {
+                        const community = this.communityChannels.get(communityId);
+
+                        // Check if private and has access
+                        if (community.isPrivate) {
+                            const hasAccess = this.ownedCommunities.has(communityId) ||
+                                (this.communityModerators.has(communityId) &&
+                                    this.communityModerators.get(communityId).has(this.pubkey)) ||
+                                (this.communityMembers.has(communityId) &&
+                                    this.communityMembers.get(communityId).has(this.pubkey)) ||
+                                (this.communityInvites.has(communityId) &&
+                                    this.communityInvites.get(communityId).has(this.pubkey));
+
+                            if (!hasAccess) {
+                                this.displaySystemMessage(`Cannot join private community "${community.name}" - invitation required`);
+                                return;
+                            }
+                        }
+
+                        // Add to UI if not present
+                        if (!document.querySelector(`[data-community="${communityId}"]`)) {
+                            this.addCommunityChannel(community.name, communityId, community.isPrivate);
+                        }
+
+                        this.switchToCommunity(communityId);
+                        this.userJoinedChannels.add(communityId);
+                        this.saveUserChannels();
+                    } else {
+                        this.displaySystemMessage('Community not found or you do not have access');
+                    }
+                } else if (channelType === 'geohash' || (channelType === 'auto' && this.isValidGeohash(channelName))) {
+                    // Geohash channel
+                    if (!this.channels.has(channelName)) {
+                        this.addChannel(channelName, channelName);
+                    }
+                    this.switchChannel(channelName, channelName);
+                    this.userJoinedChannels.add(channelName);
+                    this.saveUserChannels();
+                } else {
+                    // Standard ephemeral channel
+                    if (!this.channels.has(channelName)) {
+                        this.addChannel(channelName, '');
+                    }
+                    this.switchChannel(channelName, '');
+                    await this.createChannel(channelName);
+                    this.userJoinedChannels.add(channelName);
+                    this.saveUserChannels();
+                }
+            }
+
             showGeohashExplorer() {
                 const modal = document.getElementById('geohashExplorerModal');
                 if (modal) {
@@ -11351,7 +11432,6 @@
 
                 // Code blocks with proper line break handling
                 formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => {
-                    // Preserve line breaks in code blocks
                     const formattedCode = code.trim().replace(/\n/g, '<br>');
                     return `<pre><code>${formattedCode}</code></pre>`;
                 });
@@ -11360,7 +11440,7 @@
                 formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
                 formatted = formatted.replace(/__(.+?)__/g, '<strong>$1</strong>');
 
-                // Italic *text* or _text_ (avoid URLs and code blocks)
+                // Italic *text* or _text_
                 formatted = formatted.replace(/(?<![:/])(\*|_)([^*_\s][^*_]*)\1/g, '<em>$2</em>');
 
                 // Strikethrough ~~text~~
@@ -11378,9 +11458,15 @@
                 formatted = formatted.replace(
                     /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
                     (match, url) => {
-                        // Check if this message is from the current user
-                        const blurClass = '';  // Will be set dynamically when displayed
                         return `<img src="${url}" alt="Image" onclick="nym.expandImage('${url}')" />`;
+                    }
+                );
+
+                // Convert NYM app channel links BEFORE general URLs (IMPORTANT!)
+                formatted = formatted.replace(
+                    /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
+                    (match, prefix, channelId) => {
+                        return `<span class="channel-link" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('${prefix}:${this.escapeHtml(channelId)}', event); return false;">${match}</span>`;
                     }
                 );
 
@@ -11440,6 +11526,20 @@
                                     }
                                 }
                             });
+
+                            // Convert channel links to clickable elements
+                            formatted = formatted.replace(
+                                /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
+                                (match, prefix, channelId) => {
+                                    const typeMap = {
+                                        'e': 'ephemeral',
+                                        'g': 'geohash',
+                                        'c': 'community'
+                                    };
+                                    const type = typeMap[prefix] || 'ephemeral';
+                                    return `<span class="channel-link" onclick="nym.handleChannelLink('${prefix}:${this.escapeHtml(channelId)}', event)">${match}</span>`;
+                                }
+                            );
 
                             // Check if it's a valid geohash
                             const isGeohash = this.isValidGeohash(sanitized);
@@ -17082,7 +17182,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.33 ═══<br>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.34 ═══<br>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
         Connected Relays: ${connectedRelays} relays<br>
         Your nym: ${nym.nym || 'Not set'}<br>
