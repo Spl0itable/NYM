@@ -4864,7 +4864,7 @@
                 let html = '';
 
                 if (broadcastRelays.length > 0 || nosflareRelays.length > 0) {
-                    html += '<div style="margin-bottom: 10px;"><strong style="color: var(--primary);">Default Relays:</strong><br/>';
+                    html += '<div style="margin-bottom: 10px;"><strong style="color: var(--primary);">Default Relays:</strong><br>';
                     broadcastRelays.forEach(url => {
                         html += `<div style="font-size: 11px; margin-left: 10px;">• ${url}</div>`;
                     });
@@ -4875,7 +4875,7 @@
                 }
 
                 if (readRelays.length > 0) {
-                    html += `<div><strong style="color: var(--secondary);">Additional Read Relays (${readRelays.length}):</strong><br/>`;
+                    html += `<div><strong style="color: var(--secondary);">Additional Read Relays (${readRelays.length}):</strong><br>`;
                     readRelays.slice(0, 10).forEach(url => {
                         html += `<div style="font-size: 11px; margin-left: 10px;">• ${url}</div>`;
                     });
@@ -6180,7 +6180,7 @@
                     "nym-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [20000, 23333], // Geohash and standard channels only
-                        limit: 5000
+                        limit: 200
                     }
                 ];
                 ws.send(JSON.stringify(messagesSub));
@@ -6191,7 +6191,8 @@
                     "nym-community-posts-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [4550], // Community posts
-                        limit: 5000
+                        "#client": ["NYM"], // Only posts from NYM client
+                        limit: 200
                     }
                 ];
                 ws.send(JSON.stringify(communityPostsSub));
@@ -6202,7 +6203,7 @@
                     "moderation-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [1984], // NIP-56 moderation events
-                        limit: 5000,
+                        limit: 1000,
                         since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     }
                 ];
@@ -6215,8 +6216,8 @@
                     {
                         kinds: [7],
                         "#k": ["20000", "23333", "4", "4550"], // Reactions for channels, PMs, and community posts
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                        limit: 1000,
+                        since: Math.floor(Date.now() / 1000) - 7200 // Last 2 hours
                     }
                 ];
                 ws.send(JSON.stringify(reactionsSub));
@@ -6227,7 +6228,7 @@
                     "zaps-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [9735], // Zap receipt events
-                        limit: 5000,
+                        limit: 1000,
                         since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     }
                 ];
@@ -6248,12 +6249,14 @@
                 }
 
                 // Subscribe to ALL public community definitions (kind 34550)
+                // Subscribe to public communities created with NYM (kind 34550)
                 const allCommunitiesSub = [
                     "REQ",
                     "all-communities-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [34550], // NIP-72 community definitions
-                        limit: 5000,
+                        "#client": ["NYM"], // Only communities created with NYM
+                        limit: 200,
                         since: Math.floor(Date.now() / 1000) - 2592000 // Last 30 days
                     }
                 ];
@@ -6267,7 +6270,7 @@
                         {
                             kinds: [34550], // NIP-72 community definitions
                             authors: [this.pubkey], // Communities you created
-                            limit: 500
+                            limit: 100
                         }
                     ];
                     ws.send(JSON.stringify(myCommunitiesSub));
@@ -7574,7 +7577,7 @@
                             "relay-list-" + Math.random().toString(36).substring(7),
                             {
                                 kinds: [30066], // NIP-66 relay metadata
-                                limit: 5000
+                                limit: 1000
                             }
                         ];
                         ws.send(JSON.stringify(subscription));
@@ -7658,7 +7661,7 @@
                     "nym-channels-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [20000, 23333],
-                        limit: 5000
+                        limit: 200
                     }
                 ];
 
@@ -7670,7 +7673,8 @@
                     "nym-community-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [4550],
-                        limit: 5000
+                        "#client": ["NYM"],
+                        limit: 200
                     }
                 ];
 
@@ -7685,8 +7689,8 @@
                     {
                         kinds: [7], // Reaction events
                         "#k": ["20000", "23333", "4"], // Only reactions to our supported kinds
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                        limit: 1000,
+                        since: Math.floor(Date.now() / 1000) - 7200 // Last 2 hours
                     }
                 ];
 
@@ -7698,7 +7702,7 @@
                     "zaps-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [9735], // Zap receipt events
-                        limit: 5000,
+                        limit: 1000,
                         since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     }
                 ];
@@ -7942,7 +7946,7 @@
                     "channel-discovery-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [23333, 20000, 34550], // Add kind 34550 for community definitions
-                        limit: 5000,
+                        limit: 500,
                         since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     }
                 ];
@@ -7957,8 +7961,9 @@
                     "public-communities-" + Math.random().toString(36).substring(7),
                     {
                         kinds: [34550], // Community definitions
+                        "#client": ["NYM"], // Only communities created with NYM
                         "#public": [""], // Filter for public communities
-                        limit: 5000,
+                        limit: 200,
                         since: Math.floor(Date.now() / 1000) - 2592000 // Last 30 days
                     }
                 ];
@@ -11427,7 +11432,7 @@
 
                 // Code blocks with proper line break handling
                 formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => {
-                    const formattedCode = code.trim().replace(/\n/g, '<br/>');
+                    const formattedCode = code.trim().replace(/\n/g, '<br>');
                     return `<pre><code>${formattedCode}</code></pre>`;
                 });
 
@@ -17177,19 +17182,19 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.35 ═══<br/>
-        Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
-        Connected Relays: ${connectedRelays} relays<br/>
-        Your nym: ${nym.nym || 'Not set'}<br/>
-        <br/>
-        Created for ephemeral, anonymous communication.<br/>
-        Your identity exists only for this session.<br/>
-        No accounts. No persistence. Just nyms.<br/>
-        <br/>
-        Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br/>
-        <br/>
-        NYM is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br/><br/>
-        Made with ♥ by <a href="https://nostrservices.com" target="_blank" rel="noopener" style="color: var(--secondary)">21 Million LLC</a><br/><br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.34 ═══<br>
+        Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br>
+        Connected Relays: ${connectedRelays} relays<br>
+        Your nym: ${nym.nym || 'Not set'}<br>
+        <br>
+        Created for ephemeral, anonymous communication.<br>
+        Your identity exists only for this session.<br>
+        No accounts. No persistence. Just nyms.<br>
+        <br>
+        Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br>
+        <br>
+        NYM is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br>
+        Made with ♥ by 21 Million LLC<br/>
         Lead developer: <a href="https://nostr.band/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas</a>
     `);
         }
