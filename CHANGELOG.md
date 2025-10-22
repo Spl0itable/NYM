@@ -1,3 +1,7 @@
+## v2.13.38 - 2025-10-22
+
+Hotfix: retry read relays on reconnection
+
 ## v2.13.37 - 2025-10-22
 
 Hotfix: spread out each kind type in REQs

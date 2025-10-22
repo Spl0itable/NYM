@@ -6180,18 +6180,20 @@
                     // Messages in geohash channels
                     {
                         kinds: [20000],
-                        limit: 500
+                        limit: 500,
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // Messages in standard channels
                     {
                         kinds: [23333],
-                        limit: 500
+                        limit: 500,
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // Messages in communities
                     {
                         kinds: [4550],
                         "#client": ["NYM"],
-                        limit: 500
+                        limit: 500,
                     },
                     // Moderation events (NIP-56)
                     {
@@ -6202,13 +6204,15 @@
                     {
                         kinds: [7],
                         "#k": ["20000"],
-                        limit: 500
+                        limit: 500,
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // Reactions for standard channels
                     {
                         kinds: [7],
                         "#k": ["23333"],
-                        limit: 500
+                        limit: 500,
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // Reactions for PMs
                     {
@@ -6220,18 +6224,18 @@
                     {
                         kinds: [7],
                         "#k": ["4550"],
-                        limit: 500
+                        limit: 500,
                     },
                     // Zap receipts
                     {
                         kinds: [9735],
-                        limit: 500
+                        limit: 500,
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // All public community definitions
                     {
                         kinds: [34550],
-                        "#client": ["NYM"],
-                        limit: 500
+                        "#client": ["NYM"]
                     }
                 ];
 
@@ -6431,8 +6435,8 @@
                             // Force status update after disconnect
                             this.updateConnectionStatus();
 
-                            // Only reconnect broadcast/nosflare relays, not failed read relays
-                            if ((type === 'broadcast' || type === 'nosflare') && this.connected && !this.blacklistedRelays.has(relayUrl)) {
+                            // Reconnect ALL relay types (broadcast, nosflare, AND read relays)
+                            if (this.connected && !this.blacklistedRelays.has(relayUrl)) {
                                 // Track disconnections
                                 if (!this.reconnectingRelays) {
                                     this.reconnectingRelays = new Set();
@@ -6466,8 +6470,8 @@
 
                                         this.connectToRelay(relayUrl, type)
                                             .then(() => {
-                                                // Re-subscribe after reconnection
-                                                if (type === 'broadcast') {
+                                                // Re-subscribe after reconnection for ALL relay types
+                                                if (type === 'broadcast' || type === 'read') {
                                                     this.subscribeToSingleRelay(relayUrl);
                                                 }
                                                 this.updateConnectionStatus();
@@ -11845,7 +11849,7 @@
 
                 // Update channel meta with correct count
                 if (!this.inPMMode) {
-                    document.getElementById('channelMeta').textContent = `${channelUserCount} online nyms`;
+                    document.getElementById('channelMeta').textContent = `${channelUserCount} active nyms`;
                 }
             }
 
@@ -12163,7 +12167,7 @@
                     '/j': { desc: 'Shortcut for /join', fn: (args) => this.cmdJoin(args) },
                     '/pm': { desc: 'Send private message', fn: (args) => this.cmdPM(args) },
                     '/nick': { desc: 'Change your nym', fn: (args) => this.cmdNick(args) },
-                    '/who': { desc: 'List online nyms', fn: () => this.cmdWho() },
+                    '/who': { desc: 'List active nyms', fn: () => this.cmdWho() },
                     '/w': { desc: 'Shortcut for /who', fn: () => this.cmdWho() },
                     '/clear': { desc: 'Clear chat messages', fn: () => this.cmdClear() },
                     '/block': { desc: 'Block a user or #channel', fn: (args) => this.cmdBlock(args) },
@@ -17045,7 +17049,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.37 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.38 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
