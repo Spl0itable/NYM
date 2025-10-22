@@ -7717,7 +7717,7 @@
                             "channel-zaps-" + Math.random().toString(36).substring(7),
                             {
                                 kinds: [9735],
-                                "#e": messageIds.slice(0, 500), // Limit to 500 most recent messages
+                                "#e": messageIds.slice(0, 100), // Limit to 100 most recent messages
                                 since: Math.floor(Date.now() / 1000) - 86400
                             }
                         ];
@@ -11146,11 +11146,11 @@
                             return a.timestamp.getTime() - b.timestamp.getTime();
                         });
 
-                        // Prune messages if exceeding limit (500 max)
+                        // Prune messages if exceeding limit (1000 max)
                         const messages = this.messages.get(storageKey);
-                        if (messages && messages.length > 500) {
-                            // Keep only the most recent 500 messages
-                            const prunedMessages = messages.slice(-500);
+                        if (messages && messages.length > 1000) {
+                            // Keep only the most recent 1000 messages
+                            const prunedMessages = messages.slice(-1000);
                             this.messages.set(storageKey, prunedMessages);
 
                             // Also prune DOM if currently viewing this channel
@@ -11159,8 +11159,8 @@
                                 const container = document.getElementById('messagesContainer');
                                 const messageDOMs = container.querySelectorAll('.message[data-message-id]');
 
-                                // Remove old DOM elements beyond 500
-                                const toRemove = messageDOMs.length - 500;
+                                // Remove old DOM elements beyond 1000
+                                const toRemove = messageDOMs.length - 1000;
                                 if (toRemove > 0) {
                                     for (let i = 0; i < toRemove; i++) {
                                         messageDOMs[i].remove();
@@ -11347,7 +11347,7 @@
                 }
             }
 
-            pruneChannelMessages(channelKey, maxMessages = 500) {
+            pruneChannelMessages(channelKey, maxMessages = 1000) {
                 const messages = this.messages.get(channelKey);
                 if (!messages || messages.length <= maxMessages) return;
 
@@ -14859,7 +14859,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     loadMoreDiv.textContent = `Showing most recent ${maxDisplayMessages} messages (${originalCount - maxDisplayMessages} older messages available)`;
                     loadMoreDiv.onclick = () => {
                         // Load all messages (with a warning)
-                        if (originalCount > 500) {
+                        if (originalCount > 1000) {
                             if (confirm(`Loading ${originalCount} messages may slow down your browser. Continue?`)) {
                                 this.displayAllChannelMessages(storageKey);
                             }
