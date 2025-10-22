@@ -1,3 +1,7 @@
+## v2.13.37 - 2025-10-22
+
+Hotfix: spread out each kind type in REQs
+
 ## v2.13.36 - 2025-10-22
 
 Hotfix: tweaked number of events received from relays

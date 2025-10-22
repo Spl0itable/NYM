@@ -6177,9 +6177,14 @@
 
                 // Build filters array
                 const filters = [
-                    // Messages in geohash and standard channels
+                    // Messages in geohash channels
                     {
-                        kinds: [20000, 23333],
+                        kinds: [20000],
+                        limit: 500
+                    },
+                    // Messages in standard channels
+                    {
+                        kinds: [23333],
                         limit: 500
                     },
                     // Messages in communities
@@ -6193,10 +6198,28 @@
                         kinds: [1984],
                         limit: 500
                     },
-                    // Reactions (filtered by k tag)
+                    // Reactions for geohash channels
                     {
                         kinds: [7],
-                        "#k": ["20000", "23333", "4", "4550"],
+                        "#k": ["20000"],
+                        limit: 500
+                    },
+                    // Reactions for standard channels
+                    {
+                        kinds: [7],
+                        "#k": ["23333"],
+                        limit: 500
+                    },
+                    // Reactions for PMs
+                    {
+                        kinds: [7],
+                        "#k": ["4"],
+                        limit: 500
+                    },
+                    // Reactions for community posts
+                    {
+                        kinds: [7],
+                        "#k": ["4550"],
                         limit: 500
                     },
                     // Zap receipts
@@ -6211,6 +6234,23 @@
                         limit: 500
                     }
                 ];
+
+                // Add specific moderation filters
+                this.communityChannels.forEach((community, communityId) => {
+                    const isOwned = this.ownedCommunities.has(communityId);
+                    const isMod = this.communityModerators.has(communityId) &&
+                        this.communityModerators.get(communityId).has(this.pubkey);
+                    const isMember = this.communityMembers.has(communityId) &&
+                        this.communityMembers.get(communityId).has(this.pubkey);
+                    if (isOwned || isMod || isMember || !community.isPrivate) {
+                        const aTagValue = `34550:${community.admin}:${communityId}`;
+                        filters.push({
+                            kinds: [1984],
+                            '#a': [aTagValue],
+                            limit: 500
+                        });
+                    }
+                });
 
                 // Private messages
                 if (this.pubkey) {
@@ -14535,8 +14575,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     return; // Don't reload the same community
                 }
 
-                console.log('Switching to community:', communityId);
-
                 // Set community mode - clear ALL other modes
                 this.inPMMode = false;
                 this.currentPM = null;
@@ -17007,7 +17045,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.36 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.37 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
