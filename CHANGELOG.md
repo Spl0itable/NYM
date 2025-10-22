@@ -1,3 +1,7 @@
+## v2.13.36 - 2025-10-22
+
+Hotfix: tweaked number of events received from relays
+
 ## v2.13.35 - 2025-10-22
 
 Hotfix: increased number of events received from relays

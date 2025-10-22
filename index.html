@@ -6173,105 +6173,64 @@
                 if (relay.type === 'nosflare') return;
 
                 const ws = relay.ws;
+                const subId = "nym-" + Math.random().toString(36).substring(7);
 
-                // Subscribe to messages (channels only - communities handled separately)
-                const messagesSub = [
-                    "REQ",
-                    "nym-" + Math.random().toString(36).substring(7),
+                // Build filters array
+                const filters = [
+                    // Messages in geohash and standard channels
                     {
-                        kinds: [20000, 23333], // Geohash and standard channels only
-                        limit: 5000
-                    }
-                ];
-                ws.send(JSON.stringify(messagesSub));
-
-                // Subscribe to community posts (only from NYM client)
-                const communityPostsSub = [
-                    "REQ",
-                    "nym-community-posts-" + Math.random().toString(36).substring(7),
+                        kinds: [20000, 23333],
+                        limit: 500
+                    },
+                    // Messages in communities
                     {
-                        kinds: [4550], // Community posts
-                        limit: 5000
-                    }
-                ];
-                ws.send(JSON.stringify(communityPostsSub));
-
-                // Subscribe to moderation events (NIP-56)
-                const moderationSub = [
-                    "REQ",
-                    "moderation-" + Math.random().toString(36).substring(7),
+                        kinds: [4550],
+                        "#client": ["NYM"],
+                        limit: 500
+                    },
+                    // Moderation events (NIP-56)
                     {
-                        kinds: [1984], // NIP-56 moderation events
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
-                    }
-                ];
-                ws.send(JSON.stringify(moderationSub));
-
-                // Subscribe to reactions with k tag filter for all supported kinds
-                const reactionsSub = [
-                    "REQ",
-                    "reactions-" + Math.random().toString(36).substring(7),
+                        kinds: [1984],
+                        limit: 500
+                    },
+                    // Reactions (filtered by k tag)
                     {
                         kinds: [7],
-                        "#k": ["20000", "23333", "4", "4550"], // Reactions for channels, PMs, and community posts
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
-                    }
-                ];
-                ws.send(JSON.stringify(reactionsSub));
-
-                // Subscribe to ALL zap receipts (they contain the e tag for message ID)
-                const zapsSub = [
-                    "REQ",
-                    "zaps-" + Math.random().toString(36).substring(7),
+                        "#k": ["20000", "23333", "4", "4550"],
+                        limit: 500
+                    },
+                    // Zap receipts
                     {
-                        kinds: [9735], // Zap receipt events
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                        kinds: [9735],
+                        limit: 500
+                    },
+                    // All public community definitions
+                    {
+                        kinds: [34550],
+                        "#client": ["NYM"],
+                        limit: 500
                     }
                 ];
-                ws.send(JSON.stringify(zapsSub));
 
-                // Subscribe to PMs if we have a pubkey
+                // Private messages
                 if (this.pubkey) {
-                    const pmSub = [
-                        "REQ",
-                        "pms-" + Math.random().toString(36).substring(7),
-                        {
-                            kinds: [4],
-                            "#p": [this.pubkey],
-                            limit: 50
-                        }
-                    ];
-                    ws.send(JSON.stringify(pmSub));
+                    filters.push({
+                        kinds: [4],
+                        "#p": [this.pubkey],
+                        limit: 500
+                    });
+
+                    // Add "my communities" filter
+                    filters.push({
+                        kinds: [34550],
+                        "#client": ["NYM"],
+                        authors: [this.pubkey],
+                        limit: 500
+                    });
                 }
 
-                // Subscribe to ALL public community definitions (kind 34550)
-                const allCommunitiesSub = [
-                    "REQ",
-                    "all-communities-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [34550], // NIP-72 community definitions
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 2592000 // Last 30 days
-                    }
-                ];
-                ws.send(JSON.stringify(allCommunitiesSub));
-
-                // If we have a pubkey, also subscribe to communities YOU created
-                if (this.pubkey) {
-                    const myCommunitiesSub = [
-                        "REQ",
-                        "my-communities-" + Math.random().toString(36).substring(7),
-                        {
-                            kinds: [34550], // NIP-72 community definitions
-                            authors: [this.pubkey], // Communities you created
-                            limit: 500
-                        }
-                    ];
-                    ws.send(JSON.stringify(myCommunitiesSub));
-                }
+                // Send single REQ with all filters
+                ws.send(JSON.stringify(["REQ", subId, ...filters]));
             }
 
             async connectToRelayWithTimeout(relayUrl, type, timeout) {
@@ -7574,7 +7533,7 @@
                             "relay-list-" + Math.random().toString(36).substring(7),
                             {
                                 kinds: [30066], // NIP-66 relay metadata
-                                limit: 5000
+                                limit: 500
                             }
                         ];
                         ws.send(JSON.stringify(subscription));
@@ -7649,98 +7608,6 @@
                 } catch (error) {
                     console.error('Failed to save cached relays:', error);
                 }
-            }
-
-            subscribeToMessages() {
-                // Subscribe to ephemeral and channel messages
-                const channelSubscription = [
-                    "REQ",
-                    "nym-channels-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [20000, 23333],
-                        limit: 5000
-                    }
-                ];
-
-                this.sendToRelay(channelSubscription);
-
-                // Subscribe to community messages (only from NYM client)
-                const communitySubscription = [
-                    "REQ",
-                    "nym-community-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [4550],
-                        limit: 5000
-                    }
-                ];
-
-                this.sendToRelay(communitySubscription);
-            }
-
-            subscribeToReactions() {
-                // Subscribe to reactions (NIP-25) with filters for our specific kinds
-                const subscription = [
-                    "REQ",
-                    "reactions-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [7], // Reaction events
-                        "#k": ["20000", "23333", "4"], // Only reactions to our supported kinds
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
-                    }
-                ];
-
-                this.sendToRelay(subscription);
-
-                // Subscribe to zap receipts for ALL messages we might care about
-                const zapSubscription = [
-                    "REQ",
-                    "zaps-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [9735], // Zap receipt events
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
-                    }
-                ];
-
-                this.sendToRelay(zapSubscription);
-
-                // Also subscribe to zap receipts specifically for messages in current view
-                const currentChannelKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-                const channelMessages = this.messages.get(currentChannelKey) || [];
-
-                if (channelMessages.length > 0) {
-                    const messageIds = channelMessages.map(m => m.id).filter(id => id);
-                    if (messageIds.length > 0) {
-                        const channelZapSubscription = [
-                            "REQ",
-                            "channel-zaps-" + Math.random().toString(36).substring(7),
-                            {
-                                kinds: [9735],
-                                "#e": messageIds.slice(0, 500), // Limit to 500 most recent messages
-                                since: Math.floor(Date.now() / 1000) - 86400
-                            }
-                        ];
-                        this.sendToRelay(channelZapSubscription);
-                    }
-                }
-            }
-
-            subscribeToPMs() {
-                if (!this.pubkey) return;
-
-                // Only subscribe to legacy NIP-04 support for compatibility
-                const legacySubscription = [
-                    "REQ",
-                    "pms-legacy-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [4], // NIP-04 encrypted direct messages
-                        "#p": [this.pubkey],
-                        limit: 50
-                    }
-                ];
-
-                this.sendToRelay(legacySubscription);
             }
 
             async loadSyncedSettings() {
@@ -7935,38 +7802,6 @@
                 });
             }
 
-            async discoverExistingChannels() {
-                // Subscribe to recent channel creation/message events to discover channels
-                const discoverySubscription = [
-                    "REQ",
-                    "channel-discovery-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [23333, 20000, 34550], // Add kind 34550 for community definitions
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
-                    }
-                ];
-
-                this.sendToRelay(discoverySubscription);
-            }
-
-            async discoverPublicCommunities() {
-                // Subscribe to public community definitions created with NYM
-                const publicCommunitySub = [
-                    "REQ",
-                    "public-communities-" + Math.random().toString(36).substring(7),
-                    {
-                        kinds: [34550], // Community definitions
-                        "#public": [""], // Filter for public communities
-                        limit: 5000,
-                        since: Math.floor(Date.now() / 1000) - 2592000 // Last 30 days
-                    }
-                ];
-
-                this.sendToRelay(publicCommunitySub);
-            }
-
-
             sendToRelay(message) {
                 const msg = JSON.stringify(message);
 
@@ -8030,12 +7865,8 @@
                     this.subscribeToSingleRelay(url);
                 });
 
-                // Also do channel discovery (includes communities now)
+                // Also do channel discovery
                 this.discoverChannels();
-                this.discoverExistingChannels();
-
-                // Explicitly discover public communities
-                this.discoverPublicCommunities();
             }
 
             handleRelayMessage(msg, relayUrl) {
@@ -14657,7 +14488,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Ephemeral)</span>`;
                 }
 
-                console.log('Setting channel title to:', fullTitle);
                 document.getElementById('currentChannel').innerHTML = fullTitle;
 
                 // Update active state
@@ -17177,7 +17007,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.35 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.36 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
