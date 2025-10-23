@@ -1,3 +1,8 @@
+## v2.13.39 - 2025-10-22
+
+Hotfix: autoscroll bug
+Hotfix: nosflare blaster not working
+
 ## v2.13.38 - 2025-10-22
 
 Hotfix: retry read relays on reconnection

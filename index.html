@@ -3342,6 +3342,7 @@
                     'wss://offchain.pub',
                     'wss://relay.primal.net',
                     'wss://nos.lol',
+                    'wss://sendit.nosflare.com',
                     'wss://a.nos.lol',
                     'wss://adre.su',
                     'wss://alien.macneilmediagroup.com',
@@ -3615,7 +3616,6 @@
                     'wss://x.kojira.io',
                     'wss://zap.watch'
                 ];
-                this.nosflareRelay = 'wss://sendit.nosflare.com';
                 this.discoveredRelays = new Set();
                 this.relayList = [];
                 this.lastRelayDiscovery = 0;
@@ -5260,12 +5260,6 @@
                     }
                 }
 
-                // Also try nosflare
-                if (!this.relayPool.has(this.nosflareRelay)) {
-                    this.connectToRelay(this.nosflareRelay, 'nosflare')
-                        .catch(err => console.log('Nosflare reconnect failed:', err));
-                }
-
                 this.updateConnectionStatus();
             }
 
@@ -5323,15 +5317,6 @@
                                 });
                         }
                     });
-
-                    // Also try nosflare
-                    if (!this.relayPool.has(this.nosflareRelay)) {
-                        this.connectToRelay(this.nosflareRelay, 'nosflare')
-                            .catch(err => {
-                                console.log('Nosflare reconnect failed:', err);
-                                this.updateConnectionStatus();
-                            });
-                    }
                 });
 
                 window.addEventListener('offline', () => {
@@ -6169,8 +6154,8 @@
                 const relay = this.relayPool.get(relayUrl);
                 if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
-                // Never send REQ to nosflare
-                if (relay.type === 'nosflare') return;
+                // Never send REQ to nosflare (sendit.nosflare.com)
+                if (relayUrl === 'wss://sendit.nosflare.com') return;
 
                 const ws = relay.ws;
                 const subId = "nym-" + Math.random().toString(36).substring(7);
@@ -6440,6 +6425,11 @@
                                 // Track disconnections
                                 if (!this.reconnectingRelays) {
                                     this.reconnectingRelays = new Set();
+                                }
+
+                                // Only reconnect if not already reconnecting this URL
+                                if (this.reconnectingRelays.has(relayUrl)) {
+                                    return;
                                 }
 
                                 this.reconnectingRelays.add(relayUrl);
@@ -7853,8 +7843,8 @@
                     // For EVENT messages, send to broadcast relays and nosflare
                     this.broadcastEvent(message);
                 } else if (Array.isArray(message) && message[0] === 'REQ') {
-                    // For REQ messages, send to all connected read relays
-                    this.sendRequestToAllRelays(message);
+                    // For REQ messages, send to all relays EXCEPT sendit.nosflare.com
+                    this.sendRequestToAllRelaysExceptNosflare(message);
                 } else {
                     // For other messages (CLOSE, etc.), send to all relays
                     this.relayPool.forEach((relay, url) => {
@@ -7865,22 +7855,27 @@
                 }
             }
 
+            sendRequestToAllRelaysExceptNosflare(message) {
+                const msg = JSON.stringify(message);
+
+                // Send REQ to all connected relays EXCEPT sendit.nosflare.com
+                this.relayPool.forEach((relay, url) => {
+                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN && url !== 'wss://sendit.nosflare.com') {
+                        relay.ws.send(msg);
+                    }
+                });
+            }
+
             broadcastEvent(message) {
                 const msg = JSON.stringify(message);
 
-                // Send to broadcast relays
+                // Send to all broadcast relays
                 this.broadcastRelays.forEach(relayUrl => {
                     const relay = this.relayPool.get(relayUrl);
                     if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                         relay.ws.send(msg);
                     }
                 });
-
-                // Also send to nosflare
-                const nosflare = this.relayPool.get(this.nosflareRelay);
-                if (nosflare && nosflare.ws && nosflare.ws.readyState === WebSocket.OPEN) {
-                    nosflare.ws.send(msg);
-                }
             }
 
             sendRequestToAllRelays(message) {
@@ -11183,22 +11178,36 @@
                     });
                 }
 
-                // Find the correct position to insert the message based on timestamp
-                const existingMessages = Array.from(container.querySelectorAll('.message[data-timestamp]'));
-                const messageTimestamp = message.timestamp.getTime();
+                // Only sort by timestamp if we're scrolled to the bottom or if this is historical
+                const isScrolledToBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100;
+                const shouldSort = isScrolledToBottom || message.isHistorical;
 
-                let insertBefore = null;
-                for (const existing of existingMessages) {
-                    const existingTimestamp = parseInt(existing.dataset.timestamp);
-                    if (messageTimestamp < existingTimestamp) {
-                        insertBefore = existing;
-                        break;
+                if (shouldSort) {
+                    // Find the correct position to insert the message based on timestamp
+                    const existingMessages = Array.from(container.querySelectorAll('.message[data-timestamp]'));
+                    const messageTimestamp = message.timestamp.getTime();
+
+                    let insertBefore = null;
+                    for (const existing of existingMessages) {
+                        const existingTimestamp = parseInt(existing.dataset.timestamp);
+                        if (messageTimestamp < existingTimestamp) {
+                            insertBefore = existing;
+                            break;
+                        }
                     }
-                }
 
-                if (insertBefore) {
-                    container.insertBefore(messageEl, insertBefore);
+                    if (insertBefore) {
+                        container.insertBefore(messageEl, insertBefore);
+                    } else {
+                        const typingIndicator = container.querySelector('.typing-indicator');
+                        if (typingIndicator) {
+                            container.insertBefore(messageEl, typingIndicator);
+                        } else {
+                            container.appendChild(messageEl);
+                        }
+                    }
                 } else {
+                    // Just append at the end for new messages when not at bottom
                     const typingIndicator = container.querySelector('.typing-indicator');
                     if (typingIndicator) {
                         container.insertBefore(messageEl, typingIndicator);
@@ -11217,8 +11226,52 @@
                     this.updateMessageZaps(message.id);
                 }
 
-                if (shouldScroll && this.settings.autoscroll) {
-                    container.scrollTop = container.scrollHeight;
+                // Track scroll position before adding images
+                const scrollBeforeImages = container.scrollTop;
+                const heightBeforeImages = container.scrollHeight;
+                const isAtBottom = shouldScroll;
+
+                // Wait for any images in the message to load
+                const images = messageEl.querySelectorAll('img');
+                if (images.length > 0) {
+                    let loadedImages = 0;
+                    const totalImages = images.length;
+
+                    const handleImageLoad = () => {
+                        loadedImages++;
+                        if (loadedImages === totalImages) {
+                            // All images loaded
+                            if (this.settings.autoscroll && isAtBottom) {
+                                // Scroll to bottom if we were at bottom before
+                                container.scrollTop = container.scrollHeight;
+                            } else if (!isAtBottom) {
+                                // Maintain scroll position for older messages
+                                const heightAfterImages = container.scrollHeight;
+                                const heightDiff = heightAfterImages - heightBeforeImages;
+                                container.scrollTop = scrollBeforeImages + heightDiff;
+                            }
+                        }
+                    };
+
+                    images.forEach(img => {
+                        if (img.complete) {
+                            // Image already loaded
+                            handleImageLoad();
+                        } else {
+                            // Wait for image to load
+                            img.addEventListener('load', handleImageLoad, { once: true });
+                            img.addEventListener('error', handleImageLoad, { once: true });
+                        }
+                    });
+                } else {
+                    // No images, apply autoscroll immediately
+                    if (this.settings.autoscroll) {
+                        if (isAtBottom || message.isHistorical) {
+                            setTimeout(() => {
+                                container.scrollTop = container.scrollHeight;
+                            }, 0);
+                        }
+                    }
                 }
             }
 
@@ -17049,7 +17102,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.38 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.13.39 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
