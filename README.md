@@ -13,7 +13,7 @@ A lightweight ephemeral and persistent chat client built on Nostr protocol, brid
 
 ## Overview
 
-NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kinds 20000 and 23333), persistent communities (kinds 4550 and 34550), and NIP-04 encrypted events (kind 4) for private messages. No registration required - just pick a nym and start chatting, or connect using a Nostr extension for persistent identity.
+NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kinds 20000 and 23333), persistent communities (kinds 4550 and 34550), and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting, or connect using a Nostr extension for persistent identity.
 
 ![NYM Screenshot](https://nym.bar/images/NYM.png)
 
@@ -33,7 +33,7 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 - **Proximity Sorting** - Sort geohash channels by distance from your location
 
 ### Messaging
-- **Private Messages** - End-to-end encrypted PMs using NIP-04
+- **Private Messages** - End-to-end encrypted PMs using NIP-17
 - **Rich Text** - Markdown support for bold, italic, strikethrough, code blocks, and quotes
 - **Message Reactions** - React to messages with emojis (NIP-25)
 - **Auto-Reply** - Set away messages with `/brb` command
@@ -72,7 +72,7 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 - Support for public and private communities with member management
 
 ### Private Messages
-- NIP-04 encrypted direct messages `kind 4`
+- NIP-17 encrypted direct messages `kind 1059`
 - End-to-end encryption with recipient's public key
 
 ### Reactions & Zaps
