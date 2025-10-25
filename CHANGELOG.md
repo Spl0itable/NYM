@@ -1,3 +1,7 @@
+## v2.15.39 - 2025-10-25
+
+New: deprecated NIP-04 private messages for NIP-17 (NIP-44 encrypted and NIP-59 gift wrapped)
+
 ## v2.14.39 - 2025-10-25
 
 New: guided tutorial on first-ever session

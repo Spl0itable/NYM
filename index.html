@@ -31,7 +31,7 @@
     <link rel="apple-touch-icon" href="https://nym.bar/images/NYM-favicon.png">
 
     <!-- Import nostr-tools -->
-    <script src="https://unpkg.com/nostr-tools/lib/nostr.bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/nostr-tools@2.7.2/lib/nostr.bundle.js"></script>
 
     <!-- Import QRCode library for Lightning invoices -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -6781,10 +6781,10 @@
                         limit: 500,
                         since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
-                    // Reactions for PMs
+                    // Reactions for PMs (NIP-17 gift wraps)
                     {
                         kinds: [7],
-                        "#k": ["4"],
+                        "#k": ["1059"],
                         limit: 500
                     },
                     // Reactions for community posts
@@ -6823,10 +6823,10 @@
                     }
                 });
 
-                // Private messages
                 if (this.pubkey) {
+                    // NIP-17 gift wraps (kind 1059)
                     filters.push({
-                        kinds: [4],
+                        kinds: [1059],
                         "#p": [this.pubkey],
                         limit: 500
                     });
@@ -6949,7 +6949,7 @@
                                             receivedKinds.has(20000) ||
                                             receivedKinds.has(23333) ||
                                             receivedKinds.has(7) ||
-                                            receivedKinds.has(4)
+                                            receivedKinds.has(1059)
                                         );
 
                                     if (!hasRequiredKinds) {
@@ -7636,7 +7636,7 @@
 
                         let originalKind = '23333'; // Default
                         if (this.inPMMode) {
-                            originalKind = '4';
+                            originalKind = '1059'; // PMs via NIP-17
                         } else if (this.currentCommunity) {
                             originalKind = '4550'; // Community post
                         } else if (this.currentGeohash) {
@@ -7876,7 +7876,7 @@
 
                             // Optional: Verify the k tag to ensure it's for supported kinds
                             const kTag = zapRequest.tags?.find(t => t[0] === 'k');
-                            if (kTag && !['20000', '23333', '4', '4550'].includes(kTag[1])) {
+                            if (kTag && !['20000', '23333', '1059', '4550'].includes(kTag[1])) {
                                 return;
                             }
                         } catch (e) {
@@ -8509,8 +8509,8 @@
                             // For reactions (kind 7), only count them if they have the right k tags
                             if (event.kind === 7) {
                                 const kTag = event.tags?.find(t => t[0] === 'k');
-                                if (kTag && ['20000', '23333', '4'].includes(kTag[1])) {
-                                    relayKindTracker.add(7); // Only add if it's a reaction for our kinds
+                                if (kTag && ['20000', '23333', '1059', '4550'].includes(kTag[1])) {
+                                    relayKindTracker.add(7);
                                 }
                             } else {
                                 // For other kinds, add them directly
@@ -8597,7 +8597,7 @@
                                 kinds.has(20000) || // geohash channels
                                 kinds.has(23333) || // standard channels  
                                 kinds.has(7) ||     // reactions (already filtered for our k tags)
-                                kinds.has(4);       // PMs
+                                kinds.has(1059);    // PMs
 
                             if (!hasRequiredKinds) {
                                 relay.ws.close();
@@ -9318,9 +9318,9 @@
                 } else if (event.kind === 9735) {
                     // Handle zap receipt (NIP-57)
                     this.handleZapReceipt(event);
-                } else if (event.kind === 4) {
-                    // Handle legacy NIP-04 encrypted DMs
-                    await this.handleEncryptedDM(event);
+                } else if (event.kind === 1059) {
+                    // Handle NIP-17 gift wrap (NIP-59 + NIP-44)
+                    await this.handleGiftWrapDM(event);
                 } else if (event.kind === 10000) {
                     // Handle mute list of users/keywords
                     this.handleMuteList(event);
@@ -9618,8 +9618,8 @@
 
                 if (!eTag) return;
 
-                // Only process reactions for our supported kinds
-                if (kTag && !['20000', '23333', '4', '4550'].includes(kTag[1])) {
+                // Only process reactions for our supported kinds (include 1059 = NIP-17 gift wraps)
+                if (kTag && !['20000', '23333', '1059', '4550'].includes(kTag[1])) {
                     return;
                 }
 
@@ -10074,14 +10074,13 @@
                     messageReactions.get(emoji).set(this.pubkey, this.nym);
 
                     // Determine the kind based on current context
-                    let originalKind = '23333'; // Default to standard channel
-                    if (this.inPMMode) {
-                        originalKind = '4'; // PM
-                    } else if (this.currentCommunity) {
-                        originalKind = '4550'; // Community post
-                    } else if (this.currentGeohash) {
-                        originalKind = '20000'; // Geohash channel
-                    }
+                    // Determine original kind from the message element (data-kind), else derive from context
+                    const msgKind = messageEl.dataset.kind;
+                    let originalKind = (msgKind && /^[0-9]+$/.test(msgKind)) ? msgKind : (
+                        this.inPMMode ? '1059' :                  // PMs now use gift wraps
+                            (this.currentCommunity ? '4550' :
+                                (this.currentGeohash ? '20000' : '23333'))
+                    );
 
                     // Send to relay with proper k tag
                     const event = {
@@ -10190,347 +10189,296 @@
                 return false;
             }
 
-            async handleEncryptedDM(event) {
-                try {
-                    // Only process kind 4 events
-                    if (event.kind !== 4) return;
+            // NIP-44 helpers (v2) using bundled nostr-tools API
+            async encryptNIP44(plaintext, recipientPubkey) {
+                // Try extension first (it does ECDH in the extension)
+                if (window.nostr?.nip44?.encrypt) {
+                    return await window.nostr.nip44.encrypt(recipientPubkey, plaintext); // v2 default
+                }
+                // Local fallback: derive conversation key and encrypt
+                if (!this.privkey) throw new Error('No privkey available for NIP-44 encryption');
+                const { nip44 } = window.NostrTools;
+                const ck = nip44.getConversationKey(this.privkey, recipientPubkey);
+                return nip44.encrypt(plaintext, ck);
+            }
 
-                    // Find the p tag to see who the message is for/from
-                    const pTag = event.tags.find(t => t[0] === 'p');
-                    if (!pTag) return;
+            async decryptNIP44(payload, senderPubkey) {
+                // Try extension first
+                if (window.nostr?.nip44?.decrypt) {
+                    return await window.nostr.nip44.decrypt(senderPubkey, payload); // v2 default
+                }
+                // Local fallback: derive conversation key and decrypt
+                if (!this.privkey) throw new Error('No privkey available for NIP-44 decryption');
+                const { nip44 } = window.NostrTools;
+                const ck = nip44.getConversationKey(this.privkey, senderPubkey);
+                return nip44.decrypt(payload, ck);
+            }
 
-                    const otherPubkey = pTag[1];
+            randomNow() {
+                const TWO_DAYS = 2 * 24 * 60 * 60;
+                return Math.round(Date.now() / 1000 - Math.random() * TWO_DAYS);
+            }
 
-                    // Determine if this is a message TO us or FROM us
-                    let conversationPubkey;
-                    let isIncoming = false;
+            nip59WrapEvent(event, senderPrivateKey, recipientPublicKey) {
+                const NT = window.NostrTools;
+                const now = Math.floor(Date.now() / 1000);
 
-                    if (otherPubkey === this.pubkey && event.pubkey !== this.pubkey) {
-                        // Message is TO us from someone else
-                        isIncoming = true;
-                        conversationPubkey = event.pubkey;
-                    } else if (event.pubkey === this.pubkey && otherPubkey !== this.pubkey) {
-                        // Message is FROM us to someone else
-                        isIncoming = false;
-                        conversationPubkey = otherPubkey;
-                    } else {
-                        // Message is not part of our conversations, ignore
-                        return;
-                    }
+                // rumor (unsigned) with computed id
+                const rumor = {
+                    created_at: now,
+                    content: '',
+                    tags: [],
+                    ...event,
+                    pubkey: NT.getPublicKey(senderPrivateKey)
+                };
+                rumor.id = NT.getEventHash(rumor);
 
-                    // Create conversation key for this PM pair
-                    const conversationKey = this.getPMConversationKey(conversationPubkey);
+                // Seal (kind 13) encrypted with NIP-44 v2 conversation key (sender <-> recipient)
+                const ckSeal = NT.nip44.getConversationKey(senderPrivateKey, recipientPublicKey);
+                const sealedContent = NT.nip44.encrypt(JSON.stringify(rumor), ckSeal);
+                const sealUnsigned = {
+                    kind: 13,
+                    content: sealedContent,
+                    created_at: this.randomNow(),
+                    tags: []
+                };
+                const seal = NT.finalizeEvent(sealUnsigned, senderPrivateKey);
 
-                    // Check if we already have this exact message (prevent duplicates)
-                    const existingMessages = this.pmMessages.get(conversationKey) || [];
-                    const exists = existingMessages.some(m => m.id === event.id);
-                    if (exists) return; // Skip if already processed
+                // GiftWrap (kind 1059) using ephemeral keypair
+                const ephSk = NT.generateSecretKey();
+                const ephPk = NT.getPublicKey(ephSk);
+                const ckWrap = NT.nip44.getConversationKey(ephSk, recipientPublicKey);
+                const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+                const wrapUnsigned = {
+                    kind: 1059,
+                    content: wrapContent,
+                    created_at: this.randomNow(),
+                    tags: [['p', recipientPublicKey]],
+                    pubkey: ephPk
+                };
+                return NT.finalizeEvent(wrapUnsigned, ephSk);
+            }
 
-                    // Decrypt the message
-                    let decryptedContent;
-                    try {
-                        if (window.nostr && !this.privkey) {
-                            // Use extension to decrypt
-                            decryptedContent = await window.nostr.nip04.decrypt(
-                                conversationPubkey,
-                                event.content
-                            );
-                        } else if (this.privkey) {
-                            // Use local keys to decrypt
-                            decryptedContent = await this.decryptNIP04(
-                                event.content,
-                                conversationPubkey,
-                                this.privkey
-                            );
-                        } else {
-                            return;
-                        }
-                    } catch (err) {
-                        console.error('Failed to decrypt PM:', err);
-                        return;
-                    }
+            nip59UnwrapEvent(wrap, recipientPrivateKey) {
+                const NT = window.NostrTools;
 
-                    if (!decryptedContent) return;
+                // unwrap GiftWrap (ECDH with wrap.pubkey = ephemeral sender)
+                const ckWrap = NT.nip44.getConversationKey(recipientPrivateKey, wrap.pubkey);
+                const sealJson = NT.nip44.decrypt(wrap.content, ckWrap);
+                const seal = JSON.parse(sealJson);
 
-                    // Handle both legacy JSON format (from old NYM) and standard plain text
-                    let senderNym;
-                    let actualContent = decryptedContent;
+                // unwrap Seal (ECDH with seal.pubkey = sender identity)
+                const ckSeal = NT.nip44.getConversationKey(recipientPrivateKey, seal.pubkey);
+                const rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
+                return JSON.parse(rumorJson); // rumor
+            }
 
-                    // Try to parse as JSON first (for backward compatibility with old NYM messages)
-                    try {
-                        const contentData = JSON.parse(decryptedContent);
-                        if (contentData.nym && contentData.content) {
-                            // This is the old NYM JSON format
-                            senderNym = contentData.nym;
-                            actualContent = contentData.content;
-                        } else {
-                            // JSON but not our format, treat as plain text
-                            senderNym = this.getNymFromPubkey(event.pubkey);
-                            actualContent = decryptedContent;
-                        }
-                    } catch {
-                        // Not JSON, use as plain text (standard NIP-04)
-                        senderNym = this.getNymFromPubkey(event.pubkey);
-                        actualContent = decryptedContent;
-                    }
+            // Send PM using NIP-17 (Gift Wrap; NIP-59 + NIP-44 v2)
+            async sendNIP17PM(content, recipientPubkey) {
+                const now = Math.floor(Date.now() / 1000);
 
-                    // Update user tracking with the nym
-                    if (!this.users.has(event.pubkey) || this.users.get(event.pubkey).nym.startsWith('anon-')) {
-                        this.users.set(event.pubkey, {
-                            nym: senderNym,
-                            pubkey: event.pubkey,
-                            lastSeen: Date.now(),
-                            status: 'online',
-                            channels: new Set()
-                        });
-                    }
+                // Inner rumor (kind 14) tagged with recipient
+                const rumor = {
+                    kind: 14,
+                    created_at: now,
+                    tags: [
+                        ['p', recipientPubkey],
+                        ['client', 'NYM']
+                    ],
+                    content,
+                    pubkey: this.pubkey
+                };
 
-                    // Check if sender is blocked
-                    if (isIncoming && this.blockedUsers.has(senderNym)) {
-                        return;
-                    }
+                // A) Local key available (ephemeral/nsec)
+                if (this.privkey) {
+                    const NT = window.NostrTools;
+                    const wrapped = NT.nip59?.wrapEvent
+                        ? NT.nip59.wrapEvent(rumor, this.privkey, recipientPubkey)
+                        : this.nip59WrapEvent(rumor, this.privkey, recipientPubkey);
 
-                    if (!this.pmMessages.has(conversationKey)) {
-                        this.pmMessages.set(conversationKey, []);
-                    }
+                    this.sendToRelay(['EVENT', wrapped]);
 
-                    // Check if this is a historical message (older than 10 seconds)
-                    const messageAge = Date.now() - (event.created_at * 1000);
-                    const isHistorical = messageAge > 10000;
-
-                    // Add PM conversation if not exists
-                    if (!this.pmConversations.has(conversationPubkey)) {
-                        const otherNym = isIncoming ? senderNym : this.getNymFromPubkey(conversationPubkey);
-                        this.addPMConversation(otherNym, conversationPubkey, event.created_at * 1000);
-                    } else {
-                        // Update existing conversation with new timestamp
-                        const conversation = this.pmConversations.get(conversationPubkey);
-                        if (conversation) {
-                            conversation.lastMessageTime = event.created_at * 1000;
-                            conversation.nym = isIncoming ? senderNym : conversation.nym; // Update nym if needed
-                        }
-
-                        // Update DOM element timestamp and reorder
-                        const pmItem = document.querySelector(`[data-pubkey="${conversationPubkey}"]`);
-                        if (pmItem) {
-                            pmItem.dataset.lastMessageTime = event.created_at * 1000;
-
-                            // Reorder PMs to maintain chronological order
-                            if (!isHistorical) {
-                                this.reorderPMs();
-                            }
-                        }
-                    }
-
-                    // Store the PM message with the actual event ID from the relay
-                    const pmMessage = {
-                        id: event.id,
-                        author: isIncoming ? senderNym : this.nym,
-                        pubkey: event.pubkey,
-                        content: actualContent,
-                        timestamp: new Date(event.created_at * 1000),
-                        isOwn: !isIncoming,
+                    // Show locally (use outer id for reactions/zaps)
+                    const conversationKey = this.getPMConversationKey(recipientPubkey);
+                    if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+                    this.pmMessages.get(conversationKey).push({
+                        id: wrapped.id,
+                        author: this.nym,
+                        pubkey: this.pubkey,
+                        content,
+                        timestamp: new Date(),
+                        isOwn: true,
                         isPM: true,
-                        conversationKey: conversationKey,
-                        conversationPubkey: conversationPubkey,
-                        isHistorical: isHistorical
+                        conversationKey,
+                        conversationPubkey: recipientPubkey,
+                        eventKind: 1059
+                    });
+
+                    // NEW: ensure the sidebar shows/updates this conversation
+                    this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
+                    this.movePMToTop(recipientPubkey);
+
+                    if (this.inPMMode && this.currentPM === recipientPubkey) {
+                        this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
+                    }
+                    return wrapped;
+                }
+
+                // B) Extension only path (seal via extension, wrap locally)
+                if (window.nostr?.nip44?.encrypt && window.nostr?.signEvent) {
+                    const NT = window.NostrTools;
+
+                    // Compute rumor.id (unsigned)
+                    rumor.id = NT.getEventHash(rumor);
+
+                    // Seal (kind 13) signed by identity in extension
+                    const sealContent = await window.nostr.nip44.encrypt(recipientPubkey, JSON.stringify(rumor));
+                    const sealUnsigned = {
+                        kind: 13,
+                        content: sealContent,
+                        created_at: this.randomNow(),
+                        tags: []
                     };
+                    const seal = await window.nostr.signEvent(sealUnsigned);
 
-                    this.pmMessages.get(conversationKey).push(pmMessage);
+                    // GiftWrap (kind 1059) with local ephemeral
+                    const ephSk = NT.generateSecretKey();
+                    const ckWrap = NT.nip44.getConversationKey(ephSk, recipientPubkey);
+                    const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+                    const wrapUnsigned = {
+                        kind: 1059,
+                        content: wrapContent,
+                        created_at: this.randomNow(),
+                        tags: [['p', recipientPubkey]]
+                    };
+                    const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
 
-                    // Sort messages by timestamp
-                    this.pmMessages.get(conversationKey).sort((a, b) => a.timestamp - b.timestamp);
+                    this.sendToRelay(['EVENT', wrapped]);
 
-                    // Display if in PM mode with this user
-                    if (this.inPMMode && this.currentPM === conversationPubkey) {
-                        this.displayMessage(pmMessage);
-                    } else if (isIncoming && !isHistorical) {
-                        // Only update unread count and show notification for NEW incoming messages
-                        this.updateUnreadCount(conversationKey);
+                    // Show locally
+                    const conversationKey = this.getPMConversationKey(recipientPubkey);
+                    if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+                    this.pmMessages.get(conversationKey).push({
+                        id: wrapped.id,
+                        author: this.nym,
+                        pubkey: this.pubkey,
+                        content,
+                        timestamp: new Date(),
+                        isOwn: true,
+                        isPM: true,
+                        conversationKey,
+                        conversationPubkey: recipientPubkey,
+                        eventKind: 1059
+                    });
 
-                        // Show notification
-                        const shouldNotify = document.hidden || !this.inPMMode || this.currentPM !== conversationPubkey;
+                    // Ensure the sidebar shows/updates this conversation
+                    this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
+                    this.movePMToTop(recipientPubkey);
 
-                        if (shouldNotify) {
-                            const channelInfo = {
-                                type: 'pm',
-                                nym: senderNym,
-                                pubkey: conversationPubkey,
-                                id: conversationKey
-                            };
-                            this.showNotification(`PM from ${senderNym}`, actualContent, channelInfo);
-                        }
+                    if (this.inPMMode && this.currentPM === recipientPubkey) {
+                        this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
                     }
-
-                } catch (error) {
-                    console.error('Failed to handle encrypted DM:', error);
+                    return wrapped;
                 }
+
+                throw new Error('No signing/encryption available for NIP-17 (need local privkey or extension)');
             }
 
-            async decryptNIP04(content, pubkey, privkey) {
+            // Receive NIP-17 (GiftWrap); unwrap via nip59 or local polyfill; extension fallback if no local privkey
+            async handleGiftWrapDM(event) {
                 try {
-                    // Use nostr-tools nip04 decrypt function
-                    if (typeof window.NostrTools.nip04 !== 'undefined') {
-                        const decrypted = await window.NostrTools.nip04.decrypt(privkey, pubkey, content);
-                        return decrypted;
-                    }
+                    const NT = window.NostrTools;
 
-                    // Fallback: Parse the encrypted content
-                    const [ciphertext, iv] = content.split('?iv=');
-                    if (!iv) throw new Error('Invalid encrypted format');
+                    // A) Local privkey: unwrap with nip59 or polyfill
+                    if (this.privkey) {
+                        const rumor = NT.nip59?.unwrapEvent
+                            ? NT.nip59.unwrapEvent(event, this.privkey)
+                            : this.nip59UnwrapEvent(event, this.privkey);
 
-                    // Convert hex privkey to Uint8Array if needed
-                    let privkeyBytes;
-                    if (typeof privkey === 'string') {
-                        privkeyBytes = new Uint8Array(privkey.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-                    } else {
-                        privkeyBytes = privkey;
-                    }
+                        const senderPubkey = rumor.pubkey;
+                        const senderNym = this.getNymFromPubkey(senderPubkey);
+                        const conversationKey = this.getPMConversationKey(senderPubkey);
 
-                    // Convert hex pubkey to Uint8Array
-                    const pubkeyBytes = new Uint8Array(pubkey.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+                        if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+                        if (this.pmMessages.get(conversationKey).some(m => m.id === event.id)) return;
 
-                    // Generate shared secret using secp256k1
-                    // Since we're using nostr-tools, we can use its internal functions
-                    const sharedPoint = window.NostrTools.getSharedSecret(privkeyBytes, '02' + pubkey);
-                    const sharedSecret = sharedPoint.substring(2, 66);
+                        const ts = (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000;
+                        const msg = {
+                            id: event.id, // keep outer id for reactions/zaps
+                            author: senderNym,
+                            pubkey: senderPubkey,
+                            content: rumor.content,
+                            timestamp: new Date(ts),
+                            isOwn: false,
+                            isPM: true,
+                            conversationKey,
+                            conversationPubkey: senderPubkey,
+                            eventKind: 1059,
+                            isHistorical: (Date.now() - ts) > 10_000
+                        };
 
-                    // Derive key using SHA-256
-                    const encoder = new TextEncoder();
-                    const sharedSecretBytes = new Uint8Array(sharedSecret.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-                    const keyMaterial = await crypto.subtle.importKey(
-                        'raw',
-                        sharedSecretBytes,
-                        { name: 'HKDF' },
-                        false,
-                        ['deriveKey']
-                    );
+                        this.pmMessages.get(conversationKey).push(msg);
+                        this.pmMessages.get(conversationKey).sort((a, b) => a.timestamp - b.timestamp);
 
-                    // Derive AES key
-                    const aesKey = await crypto.subtle.deriveKey(
-                        {
-                            name: 'HKDF',
-                            salt: new Uint8Array(0),
-                            info: encoder.encode('nip04-v1'),
-                            hash: 'SHA-256'
-                        },
-                        keyMaterial,
-                        { name: 'AES-CBC', length: 256 },
-                        false,
-                        ['decrypt']
-                    );
+                        // NEW: ensure the sidebar shows/updates this conversation
+                        this.addPMConversation(senderNym, senderPubkey, ts);
+                        this.movePMToTop(senderPubkey);
 
-                    // Decode base64 ciphertext and IV
-                    const ciphertextBytes = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0));
-                    const ivBytes = Uint8Array.from(atob(iv), c => c.charCodeAt(0));
-
-                    // Decrypt
-                    const decryptedBytes = await crypto.subtle.decrypt(
-                        { name: 'AES-CBC', iv: ivBytes },
-                        aesKey,
-                        ciphertextBytes
-                    );
-
-                    // Convert to string
-                    const decoder = new TextDecoder();
-                    return decoder.decode(decryptedBytes);
-
-                } catch (error) {
-                    console.error('NIP-04 decryption failed:', error);
-
-                    // Try a simpler approach if nostr-tools methods are available
-                    try {
-                        if (window.NostrTools && window.NostrTools.nip04) {
-                            return await window.NostrTools.nip04.decrypt(privkey, pubkey, content);
+                        if (this.inPMMode && this.currentPM === senderPubkey) {
+                            this.displayMessage(msg);
+                        } else if (!msg.isHistorical) {
+                            this.updateUnreadCount(conversationKey);
+                            this.showNotification(`PM from ${msg.author}`, rumor.content, { type: 'pm', nym: msg.author, pubkey: senderPubkey, id: conversationKey });
                         }
-                    } catch (fallbackError) {
-                        console.error('Fallback decryption also failed:', fallbackError);
+                        return;
                     }
 
-                    return null;
-                }
-            }
+                    // B) Extension-only: decrypt wrap (ephemeral) then seal (sender)
+                    if (window.nostr?.nip44?.decrypt) {
+                        const sealJson = await window.nostr.nip44.decrypt(event.pubkey, event.content);
+                        const seal = JSON.parse(sealJson);
 
-            async encryptNIP04(content, pubkey, privkey) {
-                try {
-                    // Use nostr-tools nip04 encrypt function
-                    if (typeof window.NostrTools.nip04 !== 'undefined') {
-                        const encrypted = await window.NostrTools.nip04.encrypt(privkey, pubkey, content);
-                        return encrypted;
-                    }
+                        const rumorJson = await window.nostr.nip44.decrypt(seal.pubkey, seal.content);
+                        const rumor = JSON.parse(rumorJson);
 
-                    // Fallback: Manual implementation
-                    // Convert hex privkey to Uint8Array if needed
-                    let privkeyBytes;
-                    if (typeof privkey === 'string') {
-                        privkeyBytes = new Uint8Array(privkey.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-                    } else {
-                        privkeyBytes = privkey;
-                    }
+                        const senderPubkey = rumor.pubkey;
+                        const senderNym = this.getNymFromPubkey(senderPubkey);
+                        const conversationKey = this.getPMConversationKey(senderPubkey);
 
-                    // Convert hex pubkey to Uint8Array
-                    const pubkeyBytes = new Uint8Array(pubkey.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+                        if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+                        if (this.pmMessages.get(conversationKey).some(m => m.id === event.id)) return;
 
-                    // Generate shared secret using secp256k1
-                    const sharedPoint = window.NostrTools.getSharedSecret(privkeyBytes, '02' + pubkey);
-                    const sharedSecret = sharedPoint.substring(2, 66); // Remove '02' prefix and take x coordinate
+                        const ts = (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000;
+                        const msg = {
+                            id: event.id,
+                            author: senderNym,
+                            pubkey: senderPubkey,
+                            content: rumor.content,
+                            timestamp: new Date(ts),
+                            isOwn: false,
+                            isPM: true,
+                            conversationKey,
+                            conversationPubkey: senderPubkey,
+                            eventKind: 1059,
+                            isHistorical: (Date.now() - ts) > 10_000
+                        };
 
-                    // Derive key using SHA-256
-                    const encoder = new TextEncoder();
-                    const sharedSecretBytes = new Uint8Array(sharedSecret.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-                    const keyMaterial = await crypto.subtle.importKey(
-                        'raw',
-                        sharedSecretBytes,
-                        { name: 'HKDF' },
-                        false,
-                        ['deriveKey']
-                    );
+                        this.pmMessages.get(conversationKey).push(msg);
+                        this.pmMessages.get(conversationKey).sort((a, b) => a.timestamp - b.timestamp);
 
-                    // Derive AES key
-                    const aesKey = await crypto.subtle.deriveKey(
-                        {
-                            name: 'HKDF',
-                            salt: new Uint8Array(0),
-                            info: encoder.encode('nip04-v1'),
-                            hash: 'SHA-256'
-                        },
-                        keyMaterial,
-                        { name: 'AES-CBC', length: 256 },
-                        false,
-                        ['encrypt']
-                    );
+                        // Ensure the sidebar shows/updates this conversation
+                        this.addPMConversation(senderNym, senderPubkey, ts);
+                        this.movePMToTop(senderPubkey);
 
-                    // Generate random IV
-                    const iv = crypto.getRandomValues(new Uint8Array(16));
-
-                    // Encrypt the content
-                    const contentBytes = encoder.encode(content);
-                    const ciphertext = await crypto.subtle.encrypt(
-                        { name: 'AES-CBC', iv: iv },
-                        aesKey,
-                        contentBytes
-                    );
-
-                    // Convert to base64
-                    const ciphertextBase64 = btoa(String.fromCharCode(...new Uint8Array(ciphertext)));
-                    const ivBase64 = btoa(String.fromCharCode(...iv));
-
-                    // Return in NIP-04 format
-                    return `${ciphertextBase64}?iv=${ivBase64}`;
-
-                } catch (error) {
-                    console.error('NIP-04 encryption failed:', error);
-
-                    // Try a simpler approach if nostr-tools methods are available
-                    try {
-                        if (window.NostrTools && window.NostrTools.nip04) {
-                            return await window.NostrTools.nip04.encrypt(privkey, pubkey, content);
+                        if (this.inPMMode && this.currentPM === senderPubkey) {
+                            this.displayMessage(msg);
+                        } else if (!msg.isHistorical) {
+                            this.updateUnreadCount(conversationKey);
+                            this.showNotification(`PM from ${msg.author}`, rumor.content, { type: 'pm', nym: msg.author, pubkey: senderPubkey, id: conversationKey });
                         }
-                    } catch (fallbackError) {
-                        console.error('Fallback encryption also failed:', fallbackError);
                     }
-
-                    return null;
+                } catch (_) {
+                    // ignore bad wraps we can't decrypt
                 }
             }
 
@@ -10542,90 +10490,14 @@
 
             async sendPM(content, recipientPubkey) {
                 try {
-                    if (!this.connected) {
-                        throw new Error('Not connected to relay');
-                    }
+                    if (!this.connected) throw new Error('Not connected to relay');
 
-                    // Use NIP-04 for private messages
-                    const signedEvent = await this.sendNIP04PM(content, recipientPubkey);
-
-                    if (signedEvent) {
-                        // Display own PM immediately with the actual event ID
-                        const conversationKey = this.getPMConversationKey(recipientPubkey);
-                        if (!this.pmMessages.has(conversationKey)) {
-                            this.pmMessages.set(conversationKey, []);
-                        }
-
-                        const pmMessage = {
-                            id: signedEvent.id, // Use the actual signed event ID
-                            author: this.nym,
-                            pubkey: this.pubkey,
-                            content: content,
-                            timestamp: new Date(),
-                            isOwn: true,
-                            isPM: true,
-                            conversationKey: conversationKey,
-                            conversationPubkey: recipientPubkey
-                        };
-
-                        this.pmMessages.get(conversationKey).push(pmMessage);
-
-                        if (this.inPMMode && this.currentPM === recipientPubkey) {
-                            this.displayMessage(pmMessage);
-                        }
-
-                        return true;
-                    }
-
-                    return false;
+                    const wrapped = await this.sendNIP17PM(content, recipientPubkey);
+                    return !!wrapped;
                 } catch (error) {
                     console.error('Failed to send PM:', error);
                     this.displaySystemMessage('Failed to send PM: ' + error.message);
                     return false;
-                }
-            }
-
-            async sendNIP04PM(content, recipientPubkey) {
-                try {
-                    // Encrypt the message directly (no JSON wrapper)
-                    let encryptedContent;
-                    if (window.nostr && !this.privkey) {
-                        // Use extension to encrypt
-                        encryptedContent = await window.nostr.nip04.encrypt(recipientPubkey, content);
-                    } else if (this.privkey) {
-                        // Use local keys to encrypt
-                        encryptedContent = await this.encryptNIP04(content, recipientPubkey, this.privkey);
-                    } else {
-                        throw new Error('No encryption method available');
-                    }
-
-                    // Create NIP-04 DM event
-                    const event = {
-                        kind: 4, // NIP-04 encrypted direct message
-                        created_at: Math.floor(Date.now() / 1000),
-                        tags: [
-                            ['p', recipientPubkey] // Tag ONLY the recipient
-                        ],
-                        content: encryptedContent,
-                        pubkey: this.pubkey
-                    };
-
-                    // Sign and send the event
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        signedEvent = await window.nostr.signEvent(event);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                    } else {
-                        throw new Error('No signing method available');
-                    }
-
-                    this.sendToRelay(["EVENT", signedEvent]);
-
-                    return signedEvent; // Return the signed event so we can use its ID
-                } catch (error) {
-                    console.error('Failed to send NIP-04 PM:', error);
-                    throw error;
                 }
             }
 
@@ -17687,7 +17559,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.14.39 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.15.39 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
