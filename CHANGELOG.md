@@ -1,3 +1,7 @@
+## v2.14.39 - 2025-10-25
+
+New: guided tutorial on first-ever session
+
 ## v2.13.39 - 2025-10-22
 
 Hotfix: autoscroll bug

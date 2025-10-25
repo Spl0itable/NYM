@@ -1201,6 +1201,7 @@
         }
 
         .system-message {
+            white-space: pre-line;
             color: var(--warning);
             font-style: italic;
             text-align: center;
@@ -2242,7 +2243,123 @@
             border-radius: 50%;
         }
 
+        .tutorial-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 999999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            pointer-events: auto;
+        }
+
+        .tutorial-overlay.active {
+            display: flex;
+        }
+
+        .tutorial-highlight {
+            position: fixed;
+            border: 2px solid var(--secondary);
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.5), 0 0 0 9999px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            pointer-events: none;
+            z-index: 999999;
+            transition: all 0.2s ease;
+        }
+
+        .tutorial-card {
+            position: fixed;
+            max-width: min(420px, 92vw);
+            background: var(--bg-secondary);
+            border: 2px solid var(--primary);
+            color: var(--text);
+            box-shadow: 0 0 30px rgba(0, 255, 0, 0.4);
+            font-family: var(--font-mono);
+            padding: 16px;
+            z-index: 1000000;
+            pointer-events: auto;
+        }
+
+        .tutorial-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+
+        .tutorial-title {
+            color: var(--primary);
+            font-weight: bold;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            font-size: 14px;
+        }
+
+        .tutorial-skip {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            padding: 6px 10px;
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .tutorial-skip:hover {
+            color: var(--text);
+            border-color: var(--primary);
+        }
+
+        .tutorial-body {
+            font-size: 13px;
+            line-height: 1.4;
+            color: var(--text);
+        }
+
+        .tutorial-progress {
+            margin-top: 10px;
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .tutorial-actions {
+            margin-top: 12px;
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+
+        .tutorial-btn {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 14px;
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .tutorial-btn:hover {
+            background: var(--primary);
+            color: var(--bg);
+            box-shadow: 0 0 10px var(--primary);
+        }
+
         @media (max-width: 768px) {
+            .tutorial-card {
+                max-width: 94vw;
+                padding: 14px;
+            }
+
+            .tutorial-body {
+                font-size: 13px;
+            }
+
             .geohash-explorer-content {
                 width: 100%;
                 height: 100%;
@@ -3328,7 +3445,472 @@
         </div>
     </div>
 
+    <!-- Guided Tutorial Overlay -->
+    <div id="tutorialOverlay" class="tutorial-overlay" aria-hidden="true">
+        <div id="tutorialHighlight" class="tutorial-highlight" style="display:none;"></div>
+        <div id="tutorialCard" class="tutorial-card" role="dialog" aria-modal="true" aria-labelledby="tutorialTitle">
+            <div class="tutorial-header">
+                <div class="tutorial-title" id="tutorialTitle">NYM Tutorial</div>
+                <button id="tutorialSkipBtn" class="tutorial-skip" type="button">Skip</button>
+            </div>
+            <div class="tutorial-body" id="tutorialBody">
+                Let’s take a quick 60‑second tour so you know where everything lives.
+            </div>
+            <div class="tutorial-progress" id="tutorialProgress">Step 1 of 1</div>
+            <div class="tutorial-actions">
+                <button id="tutorialPrevBtn" class="tutorial-btn" type="button">Back</button>
+                <button id="tutorialNextBtn" class="tutorial-btn" type="button">Next</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // Guided Tutorial
+        (function () {
+            const state = {
+                steps: [],
+                idx: 0,
+                started: false,
+                overlay: null,
+                card: null,
+                highlight: null,
+                elTitle: null,
+                elBody: null,
+                elProgress: null,
+                btnPrev: null,
+                btnNext: null,
+                btnSkip: null,
+                sidebarInitiallyOpen: null,
+                _onResize: null,
+                _onScroll: null
+            };
+
+            function $(sel) { return document.querySelector(sel); }
+
+            function buildSteps() {
+                state.steps = [
+                    {
+                        title: 'NYM Tutorial',
+                        body: 'Take a quick tour so you know what’s where. You can skip anytime. And use the /help command in any channel to learn more.',
+                        selector: null
+                    },
+                    {
+                        title: 'Your Nym',
+                        body: 'Tap here to edit your nickname for this session.',
+                        selector: '.nym-display',
+                        onBefore: ensureSidebarOpenOnMobile
+                    },
+                    {
+                        title: 'Connection',
+                        body: 'The current relay connection status.',
+                        selector: '.status-indicator',
+                        onBefore: ensureSidebarOpenOnMobile
+                    },
+                    {
+                        title: 'Main Menu',
+                        body: 'Create or join a channel. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start anew.',
+                        selector: (window.innerWidth > 768 ? '.header-actions' : '.sidebar-actions'),
+                        onBefore: () => { if (window.innerWidth <= 768) return ensureSidebarOpenOnMobile(); }
+                    },
+                    {
+                        title: 'Channels',
+                        body: 'Browse and switch channels. Each channel type is denoted by a unique, colorful badge (Ephemeral is blue, Geohash is yellow, Public community is green, and Private community is pink). Use the search or "+ Channel" button in menu to join or create. Note: only users who used a Nostr login method can view public/private communities.',
+                        selector: '#channelList',
+                        onBefore: ensureSidebarOpenOnMobile
+                    },
+                    {
+                        title: 'Explore Geohash',
+                        body: 'Tap the globe to explore geohash channels on a 3D globe.',
+                        selector: '.discover-icon',
+                        onBefore: ensureSidebarOpenOnMobile
+                    },
+                    {
+                        title: 'Private Messages',
+                        body: 'Your one‑on‑one, end-to-end encrypted messages live here.',
+                        selector: '#pmList',
+                        onBefore: ensureSidebarOpenOnMobile
+                    },
+                    {
+                        title: 'Active Nyms',
+                        body: 'See who is currently active. Tap a nym to PM them.',
+                        selector: '#userList',
+                        onBefore: ensureSidebarOpenOnMobile
+                    },
+                    {
+                        title: 'Messages',
+                        body: 'Channel messages appear here. Tap a nym\'s nickname for quick actions such as to react with emoji, zap Bitcoin, PM, mention, block and more from the context menu.',
+                        selector: '#messagesContainer',
+                        onBefore: ensureSidebarClosedOnMobile
+                    },
+                    {
+                        title: 'Compose',
+                        body: 'Type your message, add emoji or upload an image, then SEND. Markdown is supported. You can also type commands for other actions, such as creating an away message and many more.',
+                        selector: '.input-container'
+                    },
+                    {
+                        title: 'Share',
+                        body: 'Invite others to a channel with a shareable link.',
+                        selector: '#shareChannelBtn'
+                    },
+                    {
+                        title: 'All set!',
+                        body: 'That\'s it. Enjoy NYM! Check out all of the available commands by typing the /help command in any channel.',
+                        selector: null,
+                        final: true
+                    }
+                ];
+            }
+
+            function ensureSidebarOpenOnMobile() {
+                if (window.innerWidth > 768) return Promise.resolve();
+
+                const sidebar = $('#sidebar');
+                const overlay = $('#mobileOverlay');
+                if (!sidebar) return Promise.resolve();
+
+                // Already open
+                if (sidebar.classList.contains('open')) return Promise.resolve();
+
+                // Open it and wait for transition to complete
+                sidebar.classList.add('open');
+                overlay && overlay.classList.add('active');
+
+                return new Promise((resolve) => {
+                    let settled = false;
+
+                    const done = () => {
+                        if (settled) return;
+                        settled = true;
+                        sidebar.removeEventListener('transitionend', onEnd);
+                        clearTimeout(timer);
+                        // small delay to allow layout to settle before measuring
+                        setTimeout(() => resolve(), 30);
+                    };
+
+                    const onEnd = (e) => {
+                        if (e.propertyName === 'transform') {
+                            done();
+                        }
+                    };
+
+                    sidebar.addEventListener('transitionend', onEnd, { once: true });
+                    // Fallback timeout in case transitionend doesn’t fire
+                    const timer = setTimeout(done, 400);
+                });
+            }
+
+            // Close the sidebar on mobile and wait for transition
+            function ensureSidebarClosedOnMobile() {
+                if (window.innerWidth > 768) return Promise.resolve();
+
+                const sidebar = $('#sidebar');
+                const overlay = $('#mobileOverlay');
+                if (!sidebar) return Promise.resolve();
+
+                // Already closed
+                if (!sidebar.classList.contains('open')) {
+                    overlay && overlay.classList.remove('active');
+                    return Promise.resolve();
+                }
+
+                // Close it and wait for transition to complete
+                sidebar.classList.remove('open');
+                overlay && overlay.classList.remove('active');
+
+                return new Promise((resolve) => {
+                    let settled = false;
+
+                    const done = () => {
+                        if (settled) return;
+                        settled = true;
+                        sidebar.removeEventListener('transitionend', onEnd);
+                        clearTimeout(timer);
+                        // small delay to allow layout to settle before measuring
+                        setTimeout(() => resolve(), 30);
+                    };
+
+                    const onEnd = (e) => {
+                        if (e.propertyName === 'transform') {
+                            done();
+                        }
+                    };
+
+                    sidebar.addEventListener('transitionend', onEnd, { once: true });
+                    // Fallback timeout
+                    const timer = setTimeout(done, 400);
+                });
+            }
+
+            function restoreSidebarAfterTutorial() {
+                if (window.innerWidth <= 768) {
+                    const sidebar = $('#sidebar');
+                    const overlay = $('#mobileOverlay');
+                    if (!sidebar) return;
+
+                    const initiallyOpen = !!state.sidebarInitiallyOpen;
+                    const currentlyOpen = sidebar.classList.contains('open');
+
+                    // Restore to the initial open/closed state
+                    if (initiallyOpen && !currentlyOpen) {
+                        sidebar.classList.add('open');
+                        overlay && overlay.classList.add('active');
+                    } else if (!initiallyOpen && currentlyOpen) {
+                        sidebar.classList.remove('open');
+                        overlay && overlay.classList.remove('active');
+                    }
+                }
+            }
+
+            function getTargetEl(step) {
+                if (!step.selector) return null;
+                if (typeof step.selector === 'function') {
+                    const resolvedSelector = step.selector();
+                    return resolvedSelector ? $(resolvedSelector) : null;
+                }
+                return $(step.selector) || null;
+            }
+
+            function positionStep() {
+                const step = state.steps[state.idx];
+                const target = getTargetEl(step);
+                const highlight = state.highlight;
+                const card = state.card;
+
+                // Reset display
+                highlight.style.display = 'none';
+
+                // If there is a target, try to highlight and position near it
+                if (target && target.getBoundingClientRect) {
+                    const rect = target.getBoundingClientRect();
+
+                    // If target is off-screen, scroll into view then re-position
+                    const fullyOutVert = rect.bottom < 0 || rect.top > window.innerHeight;
+                    const fullyOutHorz = rect.right < 0 || rect.left > window.innerWidth;
+                    if (fullyOutVert || fullyOutHorz) {
+                        try {
+                            target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+                        } catch (_) { }
+                        setTimeout(positionStep, 250);
+                        return;
+                    }
+
+                    const pad = 8;
+                    const hlLeft = Math.max(8, rect.left - pad);
+                    const hlTop = Math.max(8, rect.top - pad);
+                    const hlWidth = Math.min(window.innerWidth - hlLeft - 8, rect.width + pad * 2);
+                    const hlHeight = Math.min(window.innerHeight - hlTop - 8, rect.height + pad * 2);
+
+                    highlight.style.display = 'block';
+                    highlight.style.left = `${hlLeft}px`;
+                    highlight.style.top = `${hlTop}px`;
+                    highlight.style.width = `${hlWidth}px`;
+                    highlight.style.height = `${hlHeight}px`;
+
+                    // Place card relative to target
+                    card.style.visibility = 'hidden';
+                    card.style.left = '12px';
+                    card.style.top = '12px';
+
+                    // Wait a frame to measure
+                    requestAnimationFrame(() => {
+                        const cRect = card.getBoundingClientRect();
+                        const spaceBelow = window.innerHeight - rect.bottom;
+                        const spaceAbove = rect.top;
+
+                        let top;
+                        if (spaceBelow > cRect.height + 16) {
+                            top = rect.bottom + 12;
+                        } else if (spaceAbove > cRect.height + 16) {
+                            top = rect.top - cRect.height - 12;
+                        } else {
+                            // fallback: bottom area
+                            top = Math.min(window.innerHeight - cRect.height - 12, Math.max(12, rect.bottom + 12));
+                        }
+
+                        let left = rect.left + (rect.width - cRect.width) / 2;
+                        left = Math.max(12, Math.min(left, window.innerWidth - cRect.width - 12));
+
+                        card.style.left = `${left}px`;
+                        card.style.top = `${top}px`;
+                        card.style.visibility = 'visible';
+                    });
+                } else {
+                    // Center the card for generic/welcome/final steps
+                    highlight.style.display = 'none';
+                    card.style.visibility = 'hidden';
+                    requestAnimationFrame(() => {
+                        const cRect = card.getBoundingClientRect();
+                        const left = Math.max(12, (window.innerWidth - cRect.width) / 2);
+                        const top = Math.max(12, (window.innerHeight - cRect.height) / 2);
+                        card.style.left = `${left}px`;
+                        card.style.top = `${top}px`;
+                        card.style.visibility = 'visible';
+                    });
+                }
+            }
+
+            function renderStep() {
+                const step = state.steps[state.idx];
+
+                const updateAndPosition = () => {
+                    state.elTitle.textContent = step.title || 'NYM';
+                    state.elBody.textContent = step.body || '';
+                    state.elProgress.textContent = `Step ${state.idx + 1} of ${state.steps.length}`;
+
+                    state.btnPrev.disabled = state.idx === 0;
+                    state.btnNext.textContent = (step.final || state.idx === state.steps.length - 1) ? 'Done' : 'Next';
+
+                    positionStep();
+                };
+
+                if (step.onBefore && typeof step.onBefore === 'function') {
+                    try {
+                        const maybe = step.onBefore();
+                        if (maybe && typeof maybe.then === 'function') {
+                            return maybe.then(updateAndPosition);
+                        }
+                    } catch (_) {
+                        // fall through to update
+                    }
+                }
+                updateAndPosition();
+            }
+
+            function nextStep() {
+                const last = state.steps.length - 1;
+                if (state.idx >= last) {
+                    endTutorial(true);
+                    return;
+                }
+                state.idx++;
+                // Skip steps if target not found
+                skipIfTargetMissingForward();
+            }
+
+            function prevStep() {
+                if (state.idx <= 0) {
+                    renderStep();
+                    return;
+                }
+                state.idx--;
+                skipIfTargetMissingBackward();
+            }
+
+            function skipIfTargetMissingForward() {
+                // Move forward to first step that has a valid target (or no selector)
+                let guard = 0;
+                while (guard++ < state.steps.length) {
+                    const step = state.steps[state.idx];
+                    const target = getTargetEl(step);
+                    if (!step.selector || (target && target.getBoundingClientRect)) break;
+                    if (state.idx >= state.steps.length - 1) break;
+                    state.idx++;
+                }
+                renderStep();
+            }
+
+            function skipIfTargetMissingBackward() {
+                // Move backward to first step that has a valid target (or no selector)
+                let guard = 0;
+                while (guard++ < state.steps.length) {
+                    const step = state.steps[state.idx];
+                    const target = getTargetEl(step);
+                    if (!step.selector || (target && target.getBoundingClientRect)) break;
+                    if (state.idx <= 0) break;
+                    state.idx--;
+                }
+                renderStep();
+            }
+
+            function startTutorial() {
+                if (state.started) return;
+                // Don’t start while the initial setup modal is open
+                const setupActive = document.getElementById('setupModal')?.classList.contains('active');
+                if (setupActive) return;
+
+                buildSteps();
+
+                state.overlay = document.getElementById('tutorialOverlay');
+                state.card = document.getElementById('tutorialCard');
+                state.highlight = document.getElementById('tutorialHighlight');
+                state.elTitle = document.getElementById('tutorialTitle');
+                state.elBody = document.getElementById('tutorialBody');
+                state.elProgress = document.getElementById('tutorialProgress');
+                state.btnPrev = document.getElementById('tutorialPrevBtn');
+                state.btnNext = document.getElementById('tutorialNextBtn');
+                state.btnSkip = document.getElementById('tutorialSkipBtn');
+
+                state.sidebarInitiallyOpen = document.getElementById('sidebar')?.classList.contains('open');
+
+                state.overlay.classList.add('active');
+                state.overlay.style.display = 'flex';
+                state.started = true;
+                state.idx = 0;
+
+                // Wire events
+                state.btnPrev.onclick = prevStep;
+                state.btnNext.onclick = () => {
+                    const isFinal = state.idx === state.steps.length - 1 || state.steps[state.idx].final;
+                    if (isFinal) endTutorial(true);
+                    else nextStep();
+                };
+                state.btnSkip.onclick = () => endTutorial(true);
+                state._onResize = () => positionStep();
+                state._onScroll = () => positionStep();
+                window.addEventListener('resize', state._onResize);
+                window.addEventListener('scroll', state._onScroll, true);
+                document.addEventListener('keydown', keyHandler);
+
+                renderStep();
+            }
+
+            function keyHandler(e) {
+                if (!state.started) return;
+                if (e.key === 'Escape') {
+                    endTutorial(true);
+                } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
+                    state.btnNext.click();
+                } else if (e.key === 'ArrowLeft') {
+                    state.btnPrev.click();
+                }
+            }
+
+            function endTutorial(markSeen) {
+                // Hide
+                state.overlay?.classList.remove('active');
+                if (state.overlay) state.overlay.style.display = 'none';
+                if (state.highlight) state.highlight.style.display = 'none';
+
+                // Save flag
+                if (markSeen) {
+                    try { localStorage.setItem('nym_tutorial_seen', 'true'); } catch (_) { }
+                }
+
+                // Clean up
+                window.removeEventListener('resize', state._onResize);
+                window.removeEventListener('scroll', state._onScroll, true);
+                document.removeEventListener('keydown', keyHandler);
+
+                restoreSidebarAfterTutorial();
+
+                state.started = false;
+            }
+
+            // Expose helper to app
+            window.maybeStartTutorial = function (force = false) {
+                try {
+                    if (!force) {
+                        const seen = localStorage.getItem('nym_tutorial_seen') === 'true';
+                        if (seen) return;
+                    }
+                    // Delay a bit to let UI settle after login/restore
+                    setTimeout(() => startTutorial(), 300);
+                } catch (_) {
+                    setTimeout(() => startTutorial(), 300);
+                }
+            };
+        })();
+
         // NYM - Ephemeral Nostr Chat
         class NYM {
             constructor() {
@@ -12638,9 +13220,12 @@
             // Command implementations
             showHelp() {
                 const helpText = Object.entries(this.commands)
-                    .map(([cmd, info]) => `${cmd} - ${info.desc}`)
-                    .join('\n');
-                this.displaySystemMessage(`Available commands:\n${helpText}\n\nMarkdown supported: **bold**, *italic*, ~~strikethrough~~, \`code\`, > quote\n\nType : to quickly pick an emoji\n\nNyms are shown as name#xxxx where xxxx is the last 4 characters of their pubkey\n\nClick on users for more options`);
+                    .map(([cmd, info]) => `${cmd} - ${info.desc}  \n`)
+                    .join('');
+
+                this.displaySystemMessage(
+                    `Available commands:  \n${helpText}\n\nMarkdown supported: **bold**, *italic*, ~~strikethrough~~, \`code\`, > quote\n\nType : to quickly pick an emoji\n\nNyms are shown as name#xxxx where xxxx is the last 4 characters of their pubkey\n\nClick on users for more options`
+                );
             }
 
             async cmdJoin(args) {
@@ -17102,7 +17687,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.13.39 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.14.39 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
@@ -17215,7 +17800,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         // Function to check for saved connection on page load
         async function checkSavedConnection() {
-            // Check for auto-ephemeral preference FIRST (highest priority)
+            // Auto-ephemeral preference FIRST
             const autoEphemeral = localStorage.getItem('nym_auto_ephemeral');
             if (autoEphemeral === 'true') {
                 try {
@@ -17239,15 +17824,18 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         Notification.requestPermission();
                     }
 
-                    // Show welcome message
+                    // Welcome message
                     nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Type /help for available commands.`);
                     nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
                     nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
+                    // Start tutorial if not seen
+                    window.maybeStartTutorial(false);
+
                     // Route to channel from URL if present
                     await routeToUrlChannel();
 
-                    return; // Exit early, don't check other saved connections
+                    return; // Exit early
                 } catch (error) {
                     console.error('Failed to auto-start ephemeral session:', error);
                     // Clear the preference and show setup modal
@@ -17261,10 +17849,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             const savedRelay = localStorage.getItem('nym_relay_url');
             const savedNsec = localStorage.getItem('nym_nsec');
 
-            // Check if we have a saved nsec - this should be the priority check
+            // Saved NSEC restore
             if (savedNsec) {
                 try {
-                    // Hide setup modal
                     const setupModal = document.getElementById('setupModal');
                     setupModal.classList.remove('active');
 
@@ -17273,9 +17860,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     // Restore from saved nsec
                     nym.privkey = nym.decodeNsec(savedNsec);
                     nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
-                    nym.connectionMode = 'nsec'; // Set connection mode
+                    nym.connectionMode = 'nsec';
 
-                    // Set a default nym while loading profile
+                    // Default text while loading
                     nym.nym = 'Loading profile...';
                     document.getElementById('currentNym').textContent = nym.nym;
 
@@ -17285,27 +17872,26 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     // Fetch profile after connection
                     if (nym.connected) {
                         await nym.fetchProfileFromRelay(nym.pubkey);
-
-                        // If still loading profile, generate a default nym
                         if (nym.nym === 'Loading profile...') {
                             nym.nym = nym.generateRandomNym();
                             document.getElementById('currentNym').textContent = nym.nym;
                         }
                     }
 
-                    // Request notification permission
                     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
                         Notification.requestPermission();
                     }
 
-                    // Show welcome back message
                     nym.displaySystemMessage(`Welcome back to NYM, ${nym.nym}!`);
                     nym.displaySystemMessage(`Your Nostr identity has been restored.`);
                     nym.displaySystemMessage(`Type /help for available commands.`);
 
+                    // Start tutorial if not seen
+                    window.maybeStartTutorial(false);
+
+                    return;
                 } catch (error) {
                     console.error('Failed to restore connection:', error);
-                    // Clear invalid data and show setup modal
                     localStorage.removeItem('nym_nsec');
                     localStorage.removeItem('nym_connection_mode');
                     localStorage.removeItem('nym_relay_url');
@@ -17314,44 +17900,40 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 return;
             }
 
-            // Original connection mode restoration logic for extension mode
+            // Extension mode restore
             if (savedMode === 'extension' && window.nostr) {
                 try {
-                    // Hide setup modal properly by removing active class
                     const setupModal = document.getElementById('setupModal');
                     setupModal.classList.remove('active');
 
                     nym.displaySystemMessage('Reconnecting with Nostr extension...');
-                    // Use extension
                     await nym.useExtension();
 
-                    // Connect to saved relay
                     await nym.connectToRelay(savedRelay);
 
-                    // Fetch profile after connection
                     if (nym.connected) {
                         await nym.fetchProfileFromRelay(nym.pubkey);
                     }
 
-                    // Request notification permission
                     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
                         Notification.requestPermission();
                     }
 
-                    // Show welcome back message
                     nym.displaySystemMessage(`Welcome back to NYM, ${nym.nym}!`);
                     nym.displaySystemMessage(`Your Nostr identity has been restored.`);
                     nym.displaySystemMessage(`Type /help for available commands.`);
 
+                    // Start tutorial if not seen
+                    window.maybeStartTutorial(false);
+
                 } catch (error) {
                     console.error('Failed to restore connection:', error);
-                    // Show setup modal if auto-connect fails - ensure it has active class
                     localStorage.removeItem('nym_connection_mode');
                     localStorage.removeItem('nym_relay_url');
                     document.getElementById('setupModal').classList.add('active');
                 }
             }
-            // If no saved connection, modal already has 'active' class from HTML
+            // If no saved connection, the setup modal remains visible (default).
         }
 
         async function initializeNym() {
@@ -17372,7 +17954,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     document.getElementById('currentNym').textContent = nym.nym;
                     localStorage.removeItem('nym_connection_mode');
 
-                    // Check if auto-ephemeral checkbox is checked
+                    // Auto-ephemeral checkbox
                     const autoEphemeralCheckbox = document.getElementById('autoEphemeralCheckbox');
                     if (autoEphemeralCheckbox && autoEphemeralCheckbox.checked) {
                         localStorage.setItem('nym_auto_ephemeral', 'true');
@@ -17456,7 +18038,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Close setup modal
                 closeModal('setupModal');
 
-                // Show welcome message
+                // Welcome messages
                 const modeText = mode === 'ephemeral' ? 'ephemeral' : 'persistent Nostr';
                 nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Type /help for available commands.`);
                 nym.displaySystemMessage(`Your ${modeText} identity is active${mode === 'ephemeral' ? ' for this session only' : ''}.`);
@@ -17464,6 +18046,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
                 // Route to channel from URL if present
                 await routeToUrlChannel();
+
+                // Start tutorial if not seen yet
+                window.maybeStartTutorial(false);
 
             } catch (error) {
                 console.error('Initialization failed:', error);
