@@ -3053,6 +3053,30 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Disappearing PM (forward secrecy)</label>
+                    <select class="form-select" id="dmForwardSecrecySelect">
+                        <option value="false">Disabled</option>
+                        <option value="true">Enabled</option>
+                    </select>
+                    <div class="form-hint">
+                        When enabled, your private messages include an "expiration" tag (NIP‑40) so relays/clients can
+                        delete them after the period chosen when enabled.
+                    </div>
+                </div>
+
+                <div class="form-group" id="dmTTLGroup">
+                    <label class="form-label">Disappear After</label>
+                    <select class="form-select" id="dmTTLSelect">
+                        <option value="3600">1 hour</option>
+                        <option value="21600">6 hours</option>
+                        <option value="86400" selected>1 day</option>
+                        <option value="259200">3 days</option>
+                        <option value="604800">7 days</option>
+                    </select>
+                    <div class="form-hint">This sets the "expiration" timestamp on each outgoing gift‑wrapped PM.</div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Notification Sound</label>
                     <select class="form-select" id="soundSelect">
                         <option value="beep">Classic Beep</option>
@@ -6576,7 +6600,10 @@
             }
 
             parseNymFromDisplay(displayNym) {
-                return displayNym.replace(/<span class="nym-suffix">.*?<\/span>/g, '');
+                if (!displayNym) return '';
+                let n = displayNym.replace(/<span\s+class=["']nym-suffix["'][^>]*>.*?<\/span>/gi, '');
+                n = n.replace(/\s*#([0-9a-f]{4})\s*$/i, '');
+                return n.trim();
             }
 
             async connectToRelays() {
@@ -6824,20 +6851,28 @@
                 });
 
                 if (this.pubkey) {
-                    // NIP-17 gift wraps (kind 1059)
-                    filters.push({
-                        kinds: [1059],
-                        "#p": [this.pubkey],
-                        limit: 500
-                    });
-
-                    // Add "my communities" filter
-                    filters.push({
-                        kinds: [34550],
-                        "#client": ["NYM"],
-                        authors: [this.pubkey],
-                        limit: 500
-                    });
+                    filters.push(
+                        // Gift wraps addressed to me
+                        {
+                            kinds: [1059],
+                            "#p": [this.pubkey],
+                            limit: 500
+                        },
+                        // Profile/community definitions by me
+                        {
+                            kinds: [34550],
+                            "#client": ["NYM"],
+                            authors: [this.pubkey],
+                            limit: 500
+                        },
+                        // Any reactions with #p = my pubkey
+                        {
+                            kinds: [7],
+                            "#p": [this.pubkey],
+                            since: Math.floor(Date.now() / 1000) - 86400,
+                            limit: 500
+                        }
+                    );
                 }
 
                 // Send single REQ with all filters
@@ -8310,7 +8345,9 @@
                         pinnedChannels: Array.from(this.pinnedChannels),
                         blockedChannels: Array.from(this.blockedChannels),
                         userJoinedChannels: Array.from(this.userJoinedChannels),
-                        lightningAddress: this.lightningAddress
+                        lightningAddress: this.lightningAddress,
+                        dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
+                        dmTTLSeconds: this.settings.dmTTLSeconds || 86400
                     };
 
                     const settingsEvent = {
@@ -8337,7 +8374,7 @@
                         this.sendToRelay(["EVENT", signedSettingsEvent]);
                     }
 
-                    // Save mute list (kind 10000) - standard Nostr mute list
+                    // Save mute list (kind 10000)
                     const muteTags = [];
 
                     // Add blocked users as 'p' tags
@@ -8451,13 +8488,37 @@
             broadcastEvent(message) {
                 const msg = JSON.stringify(message);
 
-                // Send to all broadcast relays
-                this.broadcastRelays.forEach(relayUrl => {
-                    const relay = this.relayPool.get(relayUrl);
-                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        relay.ws.send(msg);
+                let evt = null;
+                try {
+                    if (Array.isArray(message) && message[0] === 'EVENT' && message[1] && typeof message[1] === 'object') {
+                        evt = message[1];
                     }
-                });
+                } catch (_) { }
+
+                const wideFanout = evt && (evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 4550 || evt.kind === 1984 || evt.kind === 34550 || evt.kind === 9734 || evt.kind === 9735);
+
+                if (wideFanout) {
+                    // Send to every connected relay for maximum propagation
+                    this.relayPool.forEach((relay, url) => {
+                        if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                            relay.ws.send(msg);
+                        }
+                    });
+                } else {
+                    // Broadcast relays + nosflare
+                    this.broadcastRelays.forEach(relayUrl => {
+                        const relay = this.relayPool.get(relayUrl);
+                        if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                            relay.ws.send(msg);
+                        }
+                    });
+
+                    // Also send to nosflare if connected, to ensure a widely reachable write endpoint
+                    const nosflare = this.relayPool.get('wss://sendit.nosflare.com');
+                    if (nosflare && nosflare.ws && nosflare.ws.readyState === WebSocket.OPEN) {
+                        nosflare.ws.send(msg);
+                    }
+                }
             }
 
             sendRequestToAllRelays(message) {
@@ -8524,30 +8585,34 @@
                                 const profile = JSON.parse(event.content);
                                 const pubkey = event.pubkey;
 
-                                // Store lightning address if present
                                 if (profile.lud16 || profile.lud06) {
                                     const lnAddress = profile.lud16 || profile.lud06;
                                     this.userLightningAddresses.set(pubkey, lnAddress);
                                 }
 
-                                // Update nym if we don't have one for this user
                                 if (profile.name || profile.username || profile.display_name) {
-                                    const profileName = profile.name || profile.username || profile.display_name;
+                                    const profileName = (profile.name || profile.username || profile.display_name).substring(0, 20);
                                     if (!this.users.has(pubkey) || this.users.get(pubkey).nym.startsWith('anon-')) {
                                         this.users.set(pubkey, {
-                                            nym: profileName.substring(0, 20),
-                                            pubkey: pubkey,
+                                            nym: profileName,
+                                            pubkey,
                                             lastSeen: Date.now(),
                                             status: 'online',
                                             channels: new Set()
                                         });
+                                    } else {
+                                        // Update existing user name without discarding channels/status
+                                        const u = this.users.get(pubkey);
+                                        u.nym = profileName;
+                                        u.lastSeen = Date.now();
+                                        this.users.set(pubkey, u);
                                     }
-                                }
-                            } catch (e) {
-                                // Ignore profile parse errors
-                            }
-                        }
 
+                                    // Refresh PM sidebar entry and any open PM header
+                                    this.updatePMNicknameFromProfile(pubkey, profileName);
+                                }
+                            } catch (e) { }
+                        }
                         // Deduplicate events by ID
                         if (event && event.id) {
                             if (this.eventDeduplication.has(event.id)) {
@@ -9569,6 +9634,27 @@
                             timeFormatGroup.style.display = this.settings.showTimestamps ? 'block' : 'none';
                         }
                     }
+                    if (settings.dmForwardSecrecyEnabled !== undefined) {
+                        this.settings.dmForwardSecrecyEnabled = !!settings.dmForwardSecrecyEnabled;
+                        localStorage.setItem('nym_dm_fwdsec_enabled', String(this.settings.dmForwardSecrecyEnabled));
+                    }
+                    if (settings.dmTTLSeconds !== undefined) {
+                        const ttl = parseInt(settings.dmTTLSeconds, 10);
+                        this.settings.dmTTLSeconds = isFinite(ttl) && ttl > 0 ? ttl : 86400;
+                        localStorage.setItem('nym_dm_ttl_seconds', String(this.settings.dmTTLSeconds));
+                    }
+
+                    // If modal open, reflect values
+                    if (document.getElementById('settingsModal').classList.contains('active')) {
+                        const dmEnabledSel = document.getElementById('dmForwardSecrecySelect');
+                        const dmTtlSel = document.getElementById('dmTTLSelect');
+                        const dmTtlGroup = document.getElementById('dmTTLGroup');
+                        if (dmEnabledSel && dmTtlSel && dmTtlGroup) {
+                            dmEnabledSel.value = this.settings.dmForwardSecrecyEnabled ? 'true' : 'false';
+                            dmTtlSel.value = String(this.settings.dmTTLSeconds || 86400);
+                            dmTtlGroup.style.display = this.settings.dmForwardSecrecyEnabled ? 'block' : 'none';
+                        }
+                    }
                 } catch (error) {
                     console.error('Failed to parse synced settings:', error);
                 }
@@ -10043,20 +10129,13 @@
 
             async sendReaction(messageId, emoji) {
                 try {
-                    // Find the original message element to get the pubkey
                     const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
-                    if (!messageEl) {
-                        console.error('Message element not found');
-                        return;
-                    }
+                    if (!messageEl) return;
 
                     const targetPubkey = messageEl.dataset.pubkey;
-                    if (!targetPubkey) {
-                        console.error('Could not find target pubkey');
-                        return;
-                    }
+                    if (!targetPubkey) return;
 
-                    // Update local reactions state
+                    // Ensure local state contains this reaction so UI updates immediately
                     if (!this.reactions.has(messageId)) {
                         this.reactions.set(messageId, new Map());
                     }
@@ -10064,38 +10143,44 @@
                     if (!messageReactions.has(emoji)) {
                         messageReactions.set(emoji, new Map());
                     }
-
-                    // Check if already reacted
                     if (messageReactions.get(emoji).has(this.pubkey)) {
-                        return; // Already reacted
+                        return; // Already reacted with this emoji
                     }
-
-                    // Add current user's reaction to state
                     messageReactions.get(emoji).set(this.pubkey, this.nym);
 
-                    // Determine the kind based on current context
-                    // Determine original kind from the message element (data-kind), else derive from context
-                    const msgKind = messageEl.dataset.kind;
-                    let originalKind = (msgKind && /^[0-9]+$/.test(msgKind)) ? msgKind : (
-                        this.inPMMode ? '1059' :                  // PMs now use gift wraps
-                            (this.currentCommunity ? '4550' :
-                                (this.currentGeohash ? '20000' : '23333'))
-                    );
+                    // Infer original kind directly from the rendered message element/container context
+                    const container = document.getElementById('messagesContainer');
+                    let originalKind = '23333'; // default to standard
+                    if (messageEl.classList.contains('pm')) {
+                        originalKind = '1059'; // NIP-17 gift wrap
+                    } else if (container && container.dataset && container.dataset.lastCommunity) {
+                        originalKind = '4550';  // community post
+                    } else if (container && container.dataset && container.dataset.lastChannel) {
+                        const lc = container.dataset.lastChannel;
+                        // lastChannel is "#geohash" or "channel"; treat geohash with leading "#" as kind 20000
+                        if (lc.startsWith('#') && this.isValidGeohash(lc.substring(1))) {
+                            originalKind = '20000';
+                        } else {
+                            originalKind = '23333';
+                        }
+                    } else if (this.currentCommunity) {
+                        originalKind = '4550';
+                    } else if (this.currentGeohash) {
+                        originalKind = '20000';
+                    }
 
-                    // Send to relay with proper k tag
                     const event = {
                         kind: 7,
                         created_at: Math.floor(Date.now() / 1000),
                         tags: [
                             ['e', messageId],
                             ['p', targetPubkey],
-                            ['k', originalKind] // Add the kind of the original message
+                            ['k', originalKind]
                         ],
                         content: emoji,
                         pubkey: this.pubkey
                     };
 
-                    // Sign event
                     let signedEvent;
                     if (window.nostr && !this.privkey) {
                         signedEvent = await window.nostr.signEvent(event);
@@ -10107,14 +10192,12 @@
                         this.sendToRelay(["EVENT", signedEvent]);
                         this.addToRecentEmojis(emoji);
                     } else {
-                        // If signing failed, revert the visual update
                         messageReactions.get(emoji).delete(this.pubkey);
                         this.updateMessageReactions(messageId);
                         this.displaySystemMessage('Failed to sign reaction');
                     }
                 } catch (error) {
                     console.error('Failed to send reaction:', error);
-                    // Revert on error
                     const messageReactions = this.reactions.get(messageId);
                     if (messageReactions && messageReactions.has(emoji)) {
                         messageReactions.get(emoji).delete(this.pubkey);
@@ -10193,9 +10276,9 @@
             async encryptNIP44(plaintext, recipientPubkey) {
                 // Try extension first (it does ECDH in the extension)
                 if (window.nostr?.nip44?.encrypt) {
-                    return await window.nostr.nip44.encrypt(recipientPubkey, plaintext); // v2 default
+                    return await window.nostr.nip44.encrypt(recipientPubkey, plaintext);
                 }
-                // Local fallback: derive conversation key and encrypt
+                // Local fallback derive conversation key and encrypt
                 if (!this.privkey) throw new Error('No privkey available for NIP-44 encryption');
                 const { nip44 } = window.NostrTools;
                 const ck = nip44.getConversationKey(this.privkey, recipientPubkey);
@@ -10205,9 +10288,9 @@
             async decryptNIP44(payload, senderPubkey) {
                 // Try extension first
                 if (window.nostr?.nip44?.decrypt) {
-                    return await window.nostr.nip44.decrypt(senderPubkey, payload); // v2 default
+                    return await window.nostr.nip44.decrypt(senderPubkey, payload);
                 }
-                // Local fallback: derive conversation key and decrypt
+                // Local fallback derive conversation key and decrypt
                 if (!this.privkey) throw new Error('No privkey available for NIP-44 decryption');
                 const { nip44 } = window.NostrTools;
                 const ck = nip44.getConversationKey(this.privkey, senderPubkey);
@@ -10219,11 +10302,11 @@
                 return Math.round(Date.now() / 1000 - Math.random() * TWO_DAYS);
             }
 
-            nip59WrapEvent(event, senderPrivateKey, recipientPublicKey) {
+            nip59WrapEvent(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
                 const NT = window.NostrTools;
-                const now = Math.floor(Date.now() / 1000);
 
-                // rumor (unsigned) with computed id
+                // Rumor (unsigned) with computed id
+                const now = Math.floor(Date.now() / 1000);
                 const rumor = {
                     created_at: now,
                     content: '',
@@ -10233,7 +10316,7 @@
                 };
                 rumor.id = NT.getEventHash(rumor);
 
-                // Seal (kind 13) encrypted with NIP-44 v2 conversation key (sender <-> recipient)
+                // Seal (kind 13)
                 const ckSeal = NT.nip44.getConversationKey(senderPrivateKey, recipientPublicKey);
                 const sealedContent = NT.nip44.encrypt(JSON.stringify(rumor), ckSeal);
                 const sealUnsigned = {
@@ -10244,7 +10327,7 @@
                 };
                 const seal = NT.finalizeEvent(sealUnsigned, senderPrivateKey);
 
-                // GiftWrap (kind 1059) using ephemeral keypair
+                // GiftWrap (kind 1059) with ephemeral keypair
                 const ephSk = NT.generateSecretKey();
                 const ephPk = NT.getPublicKey(ephSk);
                 const ckWrap = NT.nip44.getConversationKey(ephSk, recipientPublicKey);
@@ -10256,28 +10339,33 @@
                     tags: [['p', recipientPublicKey]],
                     pubkey: ephPk
                 };
+
+                // Add expiration only if enabled
+                if (expirationTs) {
+                    wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
+                }
+
                 return NT.finalizeEvent(wrapUnsigned, ephSk);
             }
 
             nip59UnwrapEvent(wrap, recipientPrivateKey) {
                 const NT = window.NostrTools;
 
-                // unwrap GiftWrap (ECDH with wrap.pubkey = ephemeral sender)
+                // Unwrap GiftWrap (ECDH with wrap.pubkey = ephemeral sender)
                 const ckWrap = NT.nip44.getConversationKey(recipientPrivateKey, wrap.pubkey);
                 const sealJson = NT.nip44.decrypt(wrap.content, ckWrap);
                 const seal = JSON.parse(sealJson);
 
-                // unwrap Seal (ECDH with seal.pubkey = sender identity)
+                // Unwrap Seal (ECDH with seal.pubkey = sender identity)
                 const ckSeal = NT.nip44.getConversationKey(recipientPrivateKey, seal.pubkey);
                 const rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
                 return JSON.parse(rumorJson); // rumor
             }
 
-            // Send PM using NIP-17 (Gift Wrap; NIP-59 + NIP-44 v2)
+            // Send PM using NIP-17 (GiftWrap 1059) and optional forward secrecy
             async sendNIP17PM(content, recipientPubkey) {
                 const now = Math.floor(Date.now() / 1000);
 
-                // Inner rumor (kind 14) tagged with recipient
                 const rumor = {
                     kind: 14,
                     created_at: now,
@@ -10289,16 +10377,19 @@
                     pubkey: this.pubkey
                 };
 
-                // A) Local key available (ephemeral/nsec)
+                // Optional expiration (NIP-40) on gift wrap level
+                const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
+                    ? Math.floor(Date.now() / 1000) + this.settings.dmTTLSeconds
+                    : null;
+
+                // Local key available (ephemeral/nsec)
                 if (this.privkey) {
                     const NT = window.NostrTools;
-                    const wrapped = NT.nip59?.wrapEvent
-                        ? NT.nip59.wrapEvent(rumor, this.privkey, recipientPubkey)
-                        : this.nip59WrapEvent(rumor, this.privkey, recipientPubkey);
+                    const wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
 
                     this.sendToRelay(['EVENT', wrapped]);
 
-                    // Show locally (use outer id for reactions/zaps)
+                    // Show locally
                     const conversationKey = this.getPMConversationKey(recipientPubkey);
                     if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
                     this.pmMessages.get(conversationKey).push({
@@ -10314,30 +10405,25 @@
                         eventKind: 1059
                     });
 
-                    // NEW: ensure the sidebar shows/updates this conversation
                     this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
                     this.movePMToTop(recipientPubkey);
 
                     if (this.inPMMode && this.currentPM === recipientPubkey) {
                         this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
                     }
-                    return wrapped;
+                    return true;
                 }
 
-                // B) Extension only path (seal via extension, wrap locally)
+                // Extension-only path (seal via extension, wrap locally)
                 if (window.nostr?.nip44?.encrypt && window.nostr?.signEvent) {
                     const NT = window.NostrTools;
 
-                    // Compute rumor.id (unsigned)
                     rumor.id = NT.getEventHash(rumor);
 
                     // Seal (kind 13) signed by identity in extension
                     const sealContent = await window.nostr.nip44.encrypt(recipientPubkey, JSON.stringify(rumor));
                     const sealUnsigned = {
-                        kind: 13,
-                        content: sealContent,
-                        created_at: this.randomNow(),
-                        tags: []
+                        kind: 13, content: sealContent, created_at: this.randomNow(), tags: []
                     };
                     const seal = await window.nostr.signEvent(sealUnsigned);
 
@@ -10351,6 +10437,12 @@
                         created_at: this.randomNow(),
                         tags: [['p', recipientPubkey]]
                     };
+
+                    // Add expiration only if enabled
+                    if (expirationTs) {
+                        wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
+                    }
+
                     const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
 
                     this.sendToRelay(['EVENT', wrapped]);
@@ -10371,114 +10463,130 @@
                         eventKind: 1059
                     });
 
-                    // Ensure the sidebar shows/updates this conversation
                     this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
                     this.movePMToTop(recipientPubkey);
 
                     if (this.inPMMode && this.currentPM === recipientPubkey) {
                         this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
                     }
-                    return wrapped;
+                    return true;
                 }
 
                 throw new Error('No signing/encryption available for NIP-17 (need local privkey or extension)');
             }
 
-            // Receive NIP-17 (GiftWrap); unwrap via nip59 or local polyfill; extension fallback if no local privkey
+            // Receive NIP-17 (GiftWrap 1059): unwrap, verify, store
             async handleGiftWrapDM(event) {
                 try {
                     const NT = window.NostrTools;
 
-                    // A) Local privkey: unwrap with nip59 or polyfill
-                    if (this.privkey) {
-                        const rumor = NT.nip59?.unwrapEvent
-                            ? NT.nip59.unwrapEvent(event, this.privkey)
-                            : this.nip59UnwrapEvent(event, this.privkey);
-
-                        const senderPubkey = rumor.pubkey;
-                        const senderNym = this.getNymFromPubkey(senderPubkey);
-                        const conversationKey = this.getPMConversationKey(senderPubkey);
-
-                        if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
-                        if (this.pmMessages.get(conversationKey).some(m => m.id === event.id)) return;
-
-                        const ts = (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000;
-                        const msg = {
-                            id: event.id, // keep outer id for reactions/zaps
-                            author: senderNym,
-                            pubkey: senderPubkey,
-                            content: rumor.content,
-                            timestamp: new Date(ts),
-                            isOwn: false,
-                            isPM: true,
-                            conversationKey,
-                            conversationPubkey: senderPubkey,
-                            eventKind: 1059,
-                            isHistorical: (Date.now() - ts) > 10_000
-                        };
-
-                        this.pmMessages.get(conversationKey).push(msg);
-                        this.pmMessages.get(conversationKey).sort((a, b) => a.timestamp - b.timestamp);
-
-                        // NEW: ensure the sidebar shows/updates this conversation
-                        this.addPMConversation(senderNym, senderPubkey, ts);
-                        this.movePMToTop(senderPubkey);
-
-                        if (this.inPMMode && this.currentPM === senderPubkey) {
-                            this.displayMessage(msg);
-                        } else if (!msg.isHistorical) {
-                            this.updateUnreadCount(conversationKey);
-                            this.showNotification(`PM from ${msg.author}`, rumor.content, { type: 'pm', nym: msg.author, pubkey: senderPubkey, id: conversationKey });
+                    // Process only gift wraps addressed to me
+                    if (this.pubkey) {
+                        const wrapRecipients = [];
+                        for (const t of event.tags || []) {
+                            if (Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string') {
+                                wrapRecipients.push(t[1]);
+                            }
                         }
-                        return;
+                        if (wrapRecipients.length > 0 && !wrapRecipients.includes(this.pubkey)) {
+                            return; // not for me
+                        }
                     }
 
-                    // B) Extension-only: decrypt wrap (ephemeral) then seal (sender)
-                    if (window.nostr?.nip44?.decrypt) {
+                    // Unwrap local privkey path
+                    const unwrapWithLocal = () => {
+                        const ckWrap = NT.nip44.getConversationKey(this.privkey, event.pubkey);
+                        const sealJson = NT.nip44.decrypt(event.content, ckWrap);
+                        const seal = JSON.parse(sealJson);
+
+                        const ckSeal = NT.nip44.getConversationKey(this.privkey, seal.pubkey);
+                        const rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
+                        const rumor = JSON.parse(rumorJson);
+
+                        return { seal, rumor };
+                    };
+
+                    // Unwrap extension-only path
+                    const unwrapWithExtension = async () => {
                         const sealJson = await window.nostr.nip44.decrypt(event.pubkey, event.content);
                         const seal = JSON.parse(sealJson);
 
                         const rumorJson = await window.nostr.nip44.decrypt(seal.pubkey, seal.content);
                         const rumor = JSON.parse(rumorJson);
 
-                        const senderPubkey = rumor.pubkey;
-                        const senderNym = this.getNymFromPubkey(senderPubkey);
-                        const conversationKey = this.getPMConversationKey(senderPubkey);
+                        return { seal, rumor };
+                    };
 
-                        if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
-                        if (this.pmMessages.get(conversationKey).some(m => m.id === event.id)) return;
+                    let seal, rumor;
+                    if (this.privkey) {
+                        ({ seal, rumor } = unwrapWithLocal());
+                    } else if (window.nostr?.nip44?.decrypt) {
+                        ({ seal, rumor } = await unwrapWithExtension());
+                    } else {
+                        return; // no way to decrypt
+                    }
 
-                        const ts = (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000;
-                        const msg = {
-                            id: event.id,
-                            author: senderNym,
-                            pubkey: senderPubkey,
-                            content: rumor.content,
-                            timestamp: new Date(ts),
-                            isOwn: false,
-                            isPM: true,
-                            conversationKey,
-                            conversationPubkey: senderPubkey,
-                            eventKind: 1059,
-                            isHistorical: (Date.now() - ts) > 10_000
-                        };
+                    // Validate rumor and identity
+                    if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15)) return;
+                    if (typeof rumor.content !== 'string') return;
+                    if (!seal?.pubkey || !rumor.pubkey || rumor.pubkey !== seal.pubkey) return; // drop impersonations
 
-                        this.pmMessages.get(conversationKey).push(msg);
-                        this.pmMessages.get(conversationKey).sort((a, b) => a.timestamp - b.timestamp);
+                    const senderPubkey = rumor.pubkey;
+                    const isOwn = !!this.pubkey && senderPubkey === this.pubkey;
 
-                        // Ensure the sidebar shows/updates this conversation
-                        this.addPMConversation(senderNym, senderPubkey, ts);
-                        this.movePMToTop(senderPubkey);
+                    // Determine the peer for the conversation
+                    const rumorPTags = (rumor.tags || []).filter(t => Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string').map(t => t[1]);
+                    let peerPubkey = null;
+                    if (isOwn) {
+                        peerPubkey = rumorPTags.find(pk => pk !== this.pubkey) || rumorPTags[0] || null;
+                    } else {
+                        peerPubkey = senderPubkey;
+                    }
+                    if (!peerPubkey) return; // can't place the message without a peer
 
-                        if (this.inPMMode && this.currentPM === senderPubkey) {
-                            this.displayMessage(msg);
-                        } else if (!msg.isHistorical) {
-                            this.updateUnreadCount(conversationKey);
-                            this.showNotification(`PM from ${msg.author}`, rumor.content, { type: 'pm', nym: msg.author, pubkey: senderPubkey, id: conversationKey });
-                        }
+                    const conversationKey = this.getPMConversationKey(peerPubkey);
+                    if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+
+                    // Deduplicate within the correct conversation
+                    const list = this.pmMessages.get(conversationKey);
+                    if (list.some(m => m.id === event.id)) return;
+
+                    const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
+                    const msg = {
+                        id: event.id,                                  // keep outer id for reactions/zaps
+                        author: isOwn ? this.nym : this.getNymFromPubkey(senderPubkey),
+                        pubkey: senderPubkey,
+                        content: rumor.content,
+                        timestamp: new Date(tsSec * 1000),
+                        isOwn,
+                        isPM: true,
+                        conversationKey,
+                        conversationPubkey: peerPubkey,
+                        eventKind: 1059,
+                        isHistorical: (Date.now() / 1000 - tsSec) > 10
+                    };
+
+                    list.push(msg);
+                    list.sort((a, b) => a.timestamp - b.timestamp);
+                    this.pmMessages.set(conversationKey, list);
+
+                    this.addPMConversation(this.getNymFromPubkey(peerPubkey), peerPubkey, tsSec * 1000);
+                    this.movePMToTop(peerPubkey);
+
+                    if (this.inPMMode && this.currentPM === peerPubkey) {
+                        this.displayMessage(msg);
+                    } else if (!msg.isHistorical && !isOwn) {
+                        // Only notify for messages from others
+                        this.updateUnreadCount(conversationKey);
+                        this.showNotification(`PM from ${msg.author}`, rumor.content, {
+                            type: 'pm',
+                            nym: msg.author,
+                            pubkey: peerPubkey,   // open the correct thread
+                            id: conversationKey
+                        });
                     }
                 } catch (_) {
-                    // ignore bad wraps we can't decrypt
+                    // ignore undecipherable wraps
                 }
             }
 
@@ -10541,12 +10649,49 @@
                 this.updateViewMoreButton('pmList');
             }
 
+            requestUserProfile(pubkey) {
+                try {
+                    const subId = 'user-prof-' + Math.random().toString(36).slice(2);
+                    this.sendToRelay(["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }]);
+                    // Close after a short window
+                    setTimeout(() => {
+                        this.sendToRelay(["CLOSE", subId]);
+                    }, 3000);
+                } catch (_) { }
+            }
+
+            updatePMNicknameFromProfile(pubkey, profileName) {
+                if (!profileName) return;
+                const clean = this.parseNymFromDisplay(profileName).substring(0, 20);
+
+                // Update memory
+                if (this.pmConversations.has(pubkey)) {
+                    this.pmConversations.get(pubkey).nym = clean;
+                }
+
+                // Update sidebar DOM item if present
+                const item = document.querySelector(`.pm-item[data-pubkey="${pubkey}"]`);
+                if (item) {
+                    const suffix = this.getPubkeySuffix(pubkey);
+                    const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+                        ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+                        : '';
+                    const pmNameEl = item.querySelector('.pm-name');
+                    if (pmNameEl) {
+                        pmNameEl.innerHTML = `@${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span> ${verifiedBadge}`;
+                    }
+                }
+            }
+
             addPMConversation(nym, pubkey, timestamp = Date.now()) {
-                const cleanNym = this.parseNymFromDisplay(nym);
+                // Prefer known profile name if available
+                let baseNym = this.users.has(pubkey)
+                    ? this.parseNymFromDisplay(this.users.get(pubkey).nym)
+                    : this.parseNymFromDisplay(nym);
 
                 if (!this.pmConversations.has(pubkey)) {
                     this.pmConversations.set(pubkey, {
-                        nym: cleanNym,
+                        nym: baseNym,
                         lastMessageTime: timestamp
                     });
 
@@ -10556,28 +10701,28 @@
                     item.dataset.pubkey = pubkey;
                     item.dataset.lastMessageTime = timestamp;
 
-                    const baseNym = cleanNym.split('#')[0] || cleanNym;
                     const suffix = this.getPubkeySuffix(pubkey);
-                    const formattedNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
-
-                    const verifiedBadge = this.isVerifiedDeveloper(pubkey) ?
-                        `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
+                    const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+                        ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+                        : '';
 
                     item.innerHTML = `
-            <span class="pm-name">@${formattedNym} ${verifiedBadge}</span>
+            <span class="pm-name">@${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span> ${verifiedBadge}</span>
             <div class="channel-badges">
                 <span class="pm-badge">PM</span>
                 <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
                 <span class="unread-badge" style="display:none">0</span>
             </div>
         `;
-                    item.onclick = () => this.openPM(cleanNym, pubkey);
+                    item.onclick = () => this.openPM(baseNym, pubkey);
 
-                    // Insert in chronological order (most recent first)
                     this.insertPMInOrder(item, pmList);
-
-                    // Update view more button
                     this.updateViewMoreButton('pmList');
+
+                    // Proactively request their profile
+                    if (!this.users.has(pubkey) || /^anon$/i.test(baseNym)) {
+                        this.requestUserProfile(pubkey);
+                    }
                 }
             }
 
@@ -10637,9 +10782,11 @@
                 this.currentGeohash = null;
 
                 // Format the nym with pubkey suffix for display
-                const baseNym = nym.split('#')[0] || nym;
+                const known = this.users.get(pubkey);
+                const baseNym = known ? this.parseNymFromDisplay(known.nym) : this.parseNymFromDisplay(nym);
                 const suffix = this.getPubkeySuffix(pubkey);
-                const displayNym = `${baseNym}<span class="nym-suffix">#${suffix}</span>`;
+                const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+                document.getElementById('currentChannel').innerHTML = `@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
 
                 // Update UI with formatted nym
                 document.getElementById('currentChannel').innerHTML = `@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
@@ -11587,7 +11734,7 @@
                     // Build the initial HTML with quote detection
                     const formattedContent = this.formatMessageWithQuotes(message.content);
 
-                    const baseNym = message.author.split('#')[0] || message.author;
+                    const baseNym = this.parseNymFromDisplay(message.author);
                     const displayAuthor = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
                     const escapedAuthorBase = this.escapeHtml(message.author).split('#')[0] || this.escapeHtml(message.author);
                     const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
@@ -12308,15 +12455,13 @@
                 // Filter users based on search term
                 let displayUsers = allUsers;
                 if (this.userSearchTerm) {
+                    const term = this.userSearchTerm.toLowerCase();
                     displayUsers = allUsers.filter(user =>
-                        user.nym.toLowerCase().includes(this.userSearchTerm.toLowerCase())
+                        this.parseNymFromDisplay(user.nym).toLowerCase().includes(term)
                     );
                 }
 
                 // Get users in current channel for the count
-                const channelUserSet = this.channelUsers.get(currentChannelKey) || new Set();
-
-                // Count ALL active users in this channel (including those in user tracking)
                 let channelUserCount = 0;
                 this.users.forEach((user, pubkey) => {
                     if (Date.now() - user.lastSeen < 300000 &&
@@ -12326,21 +12471,22 @@
                     }
                 });
 
-                // Display deduplicated users in sidebar
-                userListContent.innerHTML = displayUsers.map((user, index) => {
-                    const baseNym = user.nym.split('#')[0] || user.nym;
+                // Build HTML
+                userListContent.innerHTML = displayUsers.map((user) => {
+                    const baseNym = this.parseNymFromDisplay(user.nym);
                     const suffix = this.getPubkeySuffix(user.pubkey);
                     const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
-                    const verifiedBadge = this.isVerifiedDeveloper(user.pubkey) ?
-                        `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>` : '';
+                    const verifiedBadge = this.isVerifiedDeveloper(user.pubkey)
+                        ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>`
+                        : '';
 
                     const userColorClass = this.settings.theme === 'bitchat' ? this.getUserColorClass(user.pubkey) : '';
 
                     return `
             <div class="user-item list-item ${userColorClass}" 
-                 onclick="nym.openUserPM('${this.escapeHtml(user.nym)}', '${user.pubkey}')" 
-                 oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(user.nym)}', '${user.pubkey}')"
-                 data-nym="${this.escapeHtml(displayNym)}">
+                 onclick="nym.openUserPM('${this.escapeHtml(baseNym)}', '${user.pubkey}')" 
+                 oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}')"
+                 data-nym="${this.escapeHtml(baseNym)}">
                 <span class="user-status ${user.status}"></span>
                 <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
             </div>
@@ -12354,9 +12500,9 @@
                     userListTitle.textContent = `Active Nyms (${allUsers.length})`;
                 }
 
-                // Update channel meta with correct count
                 if (!this.inPMMode) {
-                    document.getElementById('channelMeta').textContent = `${channelUserCount} active nyms`;
+                    const meta = document.getElementById('channelMeta');
+                    if (meta) meta.textContent = `${channelUserCount} active nyms`;
                 }
             }
 
@@ -15996,14 +16142,24 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             showNotification(title, body, channelInfo = null) {
+                const baseTitle = this.parseNymFromDisplay(title);
+
+                // If this is a PM notification (we have a pubkey), append plain suffix for readability
+                let titleToShow = baseTitle;
+                if (channelInfo && channelInfo.pubkey) {
+                    const suffix = this.getPubkeySuffix(channelInfo.pubkey);
+                    titleToShow = `${baseTitle}#${suffix}`;
+                }
+
+                // Sound
                 if (this.settings.sound !== 'none') {
                     this.playSound(this.settings.sound);
                 }
 
-                // Check if Notification API is available
+                // Browser notification
                 if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
                     try {
-                        const notification = new Notification(title, {
+                        const notification = new Notification(titleToShow, {
                             body: body,
                             icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="40" fill="%230ff" text-anchor="middle" font-family="monospace">NYM</text></svg>',
                             tag: channelInfo ? (channelInfo.id || 'nym-notification') : 'nym-notification',
@@ -16011,17 +16167,13 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                             data: { channelInfo: channelInfo }
                         });
 
-                        console.log('Browser notification created');
-
-                        // Add click handler for deep linking
                         if (channelInfo) {
                             notification.onclick = (event) => {
-                                console.log('Notification clicked, channelInfo:', channelInfo);
                                 event.preventDefault();
                                 window.focus();
 
                                 if (channelInfo.type === 'pm') {
-                                    this.openUserPM(channelInfo.nym, channelInfo.pubkey);
+                                    this.openUserPM(baseTitle, channelInfo.pubkey);
                                 } else if (channelInfo.type === 'community') {
                                     this.switchToCommunity(channelInfo.communityId);
                                 } else if (channelInfo.type === 'geohash') {
@@ -16038,24 +16190,20 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     }
                 }
 
-                // In-app notification (always show this as fallback)
+                // In-app notification (fallback)
                 const notifEl = document.createElement('div');
                 notifEl.className = 'notification';
                 notifEl.innerHTML = `
-        <div class="notification-title">${this.escapeHtml(title)}</div>
+        <div class="notification-title">${this.escapeHtml(titleToShow)}</div>
         <div class="notification-body">${this.escapeHtml(body)}</div>
         <div class="notification-time">${new Date().toLocaleTimeString()}</div>
     `;
 
-                console.log('In-app notification element created');
-
-                // Add click handler for in-app notification too
                 if (channelInfo) {
                     notifEl.style.cursor = 'pointer';
                     notifEl.onclick = () => {
-                        console.log('In-app notification clicked');
                         if (channelInfo.type === 'pm') {
-                            this.openUserPM(channelInfo.nym, channelInfo.pubkey);
+                            this.openUserPM(baseTitle, channelInfo.pubkey);
                         } else if (channelInfo.type === 'community') {
                             this.switchToCommunity(channelInfo.communityId);
                         } else if (channelInfo.type === 'geohash') {
@@ -16068,8 +16216,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
 
                 document.body.appendChild(notifEl);
-                console.log('In-app notification added to DOM');
-
                 setTimeout(() => {
                     notifEl.style.animation = 'slideIn 0.3s reverse';
                     setTimeout(() => notifEl.remove(), 300);
@@ -16281,7 +16427,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     autoscroll: localStorage.getItem('nym_autoscroll') !== 'false',
                     showTimestamps: localStorage.getItem('nym_timestamps') !== 'false',
                     sortByProximity: localStorage.getItem('nym_sort_proximity') === 'true',
-                    timeFormat: localStorage.getItem('nym_time_format') || '24hr'
+                    timeFormat: localStorage.getItem('nym_time_format') || '24hr',
+                    dmForwardSecrecyEnabled: localStorage.getItem('nym_dm_fwdsec_enabled') === 'true',
+                    dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10)
                 };
             }
 
@@ -17453,6 +17601,22 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             nym.updateBlockedList();
             nym.updateKeywordList();
             nym.updateBlockedChannelsList();
+
+            // Fill in disappearing message controls
+            const dmEnabledSel = document.getElementById('dmForwardSecrecySelect');
+            const dmTtlSel = document.getElementById('dmTTLSelect');
+            const dmTtlGroup = document.getElementById('dmTTLGroup');
+
+            if (dmEnabledSel && dmTtlSel && dmTtlGroup) {
+                dmEnabledSel.value = nym.settings.dmForwardSecrecyEnabled ? 'true' : 'false';
+                dmTtlSel.value = String(nym.settings.dmTTLSeconds || 86400);
+                dmTtlGroup.style.display = nym.settings.dmForwardSecrecyEnabled ? 'block' : 'none';
+
+                dmEnabledSel.onchange = () => {
+                    dmTtlGroup.style.display = dmEnabledSel.value === 'true' ? 'block' : 'none';
+                };
+            }
+
             document.getElementById('settingsModal').classList.add('active');
         }
 
@@ -17477,6 +17641,18 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             // Apply blur settings
             nym.blurOthersImages = blurImages;
             nym.saveImageBlurSettings();
+
+            // Read disappearing message controls
+            const dmEnabled = document.getElementById('dmForwardSecrecySelect').value === 'true';
+            const dmTTL = parseInt(document.getElementById('dmTTLSelect').value || '86400', 10);
+
+            // Apply in memory
+            nym.settings.dmForwardSecrecyEnabled = dmEnabled;
+            nym.settings.dmTTLSeconds = isFinite(dmTTL) && dmTTL > 0 ? dmTTL : 86400;
+
+            // Persist locally
+            localStorage.setItem('nym_dm_fwdsec_enabled', String(nym.settings.dmForwardSecrecyEnabled));
+            localStorage.setItem('nym_dm_ttl_seconds', String(nym.settings.dmTTLSeconds));
 
             // Only handle auto-ephemeral if currently in ephemeral mode
             if (nym.connectionMode === 'ephemeral') {
@@ -17559,7 +17735,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.15.39 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.39 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

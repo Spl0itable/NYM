@@ -1,3 +1,8 @@
+## v2.16.39 - 2025-10-26
+
+New: forward secrecy (disappearing private messages) added, can be enabled from settings
+Hotfix: correctly routes your messages to the right threads
+
 ## v2.15.39 - 2025-10-25
 
 New: deprecated NIP-04 private messages for NIP-17 (NIP-44 encrypted and NIP-59 gift wrapped)
