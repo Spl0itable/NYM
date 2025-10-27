@@ -1,3 +1,9 @@
+## v2.16.40 - 2025-10-27
+
+Tweak: bucketed padding added to all private messages to help against correlation attacks
+Hotfix: checking if user can be zapped not correctly getting lightning address
+Hotfix: reconnect and resend REQ messages to relays on app visibility changes
+
 ## v2.16.39 - 2025-10-26
 
 New: forward secrecy (disappearing private messages) added, can be enabled from settings
