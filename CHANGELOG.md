@@ -1,3 +1,7 @@
+## v2.16.41 - 2025-10-29
+
+Hotfix: minor bug fixes
+
 ## v2.16.40 - 2025-10-27
 
 Hotfix: checking if user can be zapped not correctly getting lightning address
