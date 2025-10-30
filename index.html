@@ -5993,7 +5993,7 @@
                                 clearInterval(this.reconnectionInterval);
                                 this.reconnectionInterval = null;
                             }
-                        }, 1000);
+                        }, 5000);
                     }
                 };
 
@@ -7006,7 +7006,7 @@
                         let verificationTimeout;
                         let connectionTimeout;
 
-                        // Add connection timeout (1 second)
+                        // Add connection timeout (5 seconds)
                         connectionTimeout = setTimeout(() => {
                             if (ws.readyState !== WebSocket.OPEN) {
                                 ws.close();
@@ -7014,7 +7014,7 @@
                                 this.blacklistTimestamps.set(relayUrl, Date.now());
                                 reject(new Error('Connection timeout'));
                             }
-                        }, 1000);
+                        }, 5000);
 
                         ws.onopen = () => {
                             clearTimeout(connectionTimeout);
@@ -18261,14 +18261,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 if (nym.connected) {
                     nym.cleanupNonResponsiveRelays();
                 }
-            }, 1000);
+            }, 5000);
 
             // Periodically update connection status
             setInterval(() => {
                 if (nym.connected) {
                     nym.updateConnectionStatus();
                 }
-            }, 1000);
+            }, 5000);
 
             // Periodic connection health check
             setInterval(() => {
@@ -18276,7 +18276,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     // Only log if we think we should be connected
                     nym.checkConnectionHealth();
                 }
-            }, 1000);
+            }, 5000);
 
             // Check for saved connection AFTER initialization is complete
             setTimeout(() => {
@@ -18288,7 +18288,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 if (nym.connected) {
                     nym.updateUserList();
                 }
-            }, 1000);
+            }, 5000);
 
             // Override the existing search functions to handle collapsed lists properly
             const originalHandleChannelSearch = nym.handleChannelSearch;
@@ -18371,7 +18371,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 });
 
                 // Clear event deduplication if too large
-                if (nym.eventDeduplication.size > 500) {
+                if (nym.eventDeduplication.size > 5000) {
                     nym.eventDeduplication.clear();
                     console.log('Cleared event deduplication cache');
                 }
