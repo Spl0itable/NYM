@@ -4384,6 +4384,7 @@
                 this.zaps = new Map();
                 this.currentZapTarget = null;
                 this.currentZapInvoice = null;
+                this.pendingLightningWaiters = new Map();
                 this.zapCheckInterval = null;
                 this.zapInvoiceData = null;
                 this.listExpansionStates = new Map();
@@ -6786,8 +6787,7 @@
                     // Messages in communities
                     {
                         kinds: [4550],
-                        "#client": ["NYM"],
-                        limit: 500,
+                        limit: 500
                     },
                     // Moderation events (NIP-56)
                     {
@@ -6829,7 +6829,7 @@
                     // All public community definitions
                     {
                         kinds: [34550],
-                        "#client": ["NYM"]
+                        limit: 500
                     }
                 ];
 
@@ -6861,7 +6861,6 @@
                         // Profile/community definitions by me
                         {
                             kinds: [34550],
-                            "#client": ["NYM"],
                             authors: [this.pubkey],
                             limit: 500
                         },
@@ -7324,111 +7323,75 @@
                 }
             }
 
+            // Resolve any pending waiters for a user's lightning address
+            notifyLightningAddress(pubkey, address) {
+                const waiters = this.pendingLightningWaiters.get(pubkey);
+                if (!waiters) return;
+                for (const resolve of Array.from(waiters)) {
+                    try { resolve(address); } catch (_) { }
+                }
+                this.pendingLightningWaiters.delete(pubkey);
+            }
+
+            // Wait for a user's lightning address to be discovered
+            waitForLightningAddress(pubkey, timeoutMs = 8000) {
+                // If already cached, resolve immediately
+                if (this.userLightningAddresses.has(pubkey)) {
+                    return Promise.resolve(this.userLightningAddresses.get(pubkey));
+                }
+
+                return new Promise((resolve) => {
+                    const resolver = (addr) => resolve(addr || null);
+
+                    // Register waiter
+                    if (!this.pendingLightningWaiters.has(pubkey)) {
+                        this.pendingLightningWaiters.set(pubkey, new Set());
+                    }
+                    const set = this.pendingLightningWaiters.get(pubkey);
+                    set.add(resolver);
+
+                    // Timeout fallback
+                    const timer = setTimeout(() => {
+                        // Clean up this resolver to prevent leaks
+                        const s = this.pendingLightningWaiters.get(pubkey);
+                        if (s) {
+                            s.delete(resolver);
+                            if (s.size === 0) this.pendingLightningWaiters.delete(pubkey);
+                        }
+                        resolve(null);
+                    }, timeoutMs);
+
+                    // Wrap resolver to clear timeout when it fires
+                    const wrapped = (addr) => {
+                        clearTimeout(timer);
+                        resolve(addr || null);
+                    };
+
+                    // Replace the bare resolver with a wrapped one that clears the timeout
+                    set.delete(resolver);
+                    set.add(wrapped);
+                });
+            }
+
             async fetchLightningAddressForUser(pubkey) {
-                // Check if already cached
+                // Serve from cache if available
                 if (this.userLightningAddresses.has(pubkey)) {
                     return this.userLightningAddresses.get(pubkey);
                 }
 
-                return new Promise((resolve) => {
-                    const subId = "ln-addr-" + Math.random().toString(36).substring(7);
-                    let foundAddress = false;
-                    let messageHandlers = [];
+                try { this.requestUserProfile(pubkey); } catch (_) { }
 
-                    const cleanup = () => {
-                        // Restore original handlers
-                        messageHandlers.forEach(handler => {
-                            const index = this.relayMessageHandlers?.indexOf(handler);
-                            if (index > -1) {
-                                this.relayMessageHandlers.splice(index, 1);
-                            }
-                        });
-                        // Close subscription
-                        this.sendToRelay(["CLOSE", subId]);
-                    };
+                // Fire a direct, one-shot profile request to all connected relays
+                const subId = 'ln-addr-' + Math.random().toString(36).slice(2);
+                const req = ["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }];
+                try { this.sendToRelay(req); } catch (_) { }
 
-                    const timeout = setTimeout(() => {
-                        console.log('Timeout: No lightning address found for user');
-                        cleanup();
-                        resolve(null);
-                    }, 5000); // Increased to 5 seconds for slower relays
+                // Wait for handleEvent(kind 0) to notice LUD16/LUD06 (or timeout)
+                const addr = await this.waitForLightningAddress(pubkey, 8000);
 
-                    // Create handler for this specific request
-                    const handleMessage = (msg, relayUrl) => {
-                        if (!Array.isArray(msg)) return;
+                try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
 
-                        const [type, ...data] = msg;
-
-                        if (type === 'EVENT' && data[0] === subId) {
-                            const event = data[1];
-                            if (event && event.kind === 0 && event.pubkey === pubkey) {
-                                try {
-                                    const profile = JSON.parse(event.content);
-
-                                    // Check for lightning address
-                                    if (profile.lud16 || profile.lud06) {
-                                        const lnAddress = profile.lud16 || profile.lud06;
-                                        // Cache it for future use
-                                        this.userLightningAddresses.set(pubkey, lnAddress);
-                                        console.log(`Found lightning address for ${pubkey}:`, lnAddress);
-
-                                        if (!foundAddress) {
-                                            foundAddress = true;
-                                            clearTimeout(timeout);
-                                            cleanup();
-                                            resolve(lnAddress);
-                                        }
-                                        return true; // Handled
-                                    }
-                                } catch (e) {
-                                    console.error('Failed to parse profile:', e);
-                                }
-                            }
-                        } else if (type === 'EOSE' && data[0] === subId) {
-                            // End of stored events from this relay
-                            // Don't resolve null yet - wait for other relays or timeout
-                            console.log(`EOSE received from ${relayUrl} for lightning address lookup`);
-                        }
-
-                        return false; // Not handled
-                    };
-
-                    // Hook into relay message handling
-                    if (!this.relayMessageHandlers) {
-                        this.relayMessageHandlers = [];
-                        const originalHandler = this.handleRelayMessage.bind(this);
-                        this.handleRelayMessage = (msg, relayUrl) => {
-                            // Process through handlers
-                            let handled = false;
-                            for (const handler of this.relayMessageHandlers) {
-                                if (handler(msg, relayUrl)) {
-                                    handled = true;
-                                    break;
-                                }
-                            }
-                            // Always call original handler
-                            originalHandler(msg, relayUrl);
-                        };
-                    }
-
-                    // Add our handler
-                    this.relayMessageHandlers.push(handleMessage);
-                    messageHandlers.push(handleMessage);
-
-                    // Request the user's profile from ALL connected relays
-                    const subscription = [
-                        "REQ",
-                        subId,
-                        {
-                            kinds: [0],
-                            authors: [pubkey],
-                            limit: 1
-                        }
-                    ];
-
-                    // Send to all connected relays
-                    this.sendToRelay(subscription);
-                });
+                return addr;
             }
 
             async loadLightningAddress() {
@@ -17735,7 +17698,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.39 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.40 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18250,22 +18213,22 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 if (nym.connected) {
                     nym.cleanupNonResponsiveRelays();
                 }
-            }, 30000); // Check every 30 seconds
+            }, 5000);
 
             // Periodically update connection status
             setInterval(() => {
                 if (nym.connected) {
                     nym.updateConnectionStatus();
                 }
-            }, 5000); // Update every 5 seconds
+            }, 1000);
 
-            // Periodic connection health check (every 30 seconds)
+            // Periodic connection health check
             setInterval(() => {
                 if (nym.connected || nym.relayPool.size > 0) {
                     // Only log if we think we should be connected
                     nym.checkConnectionHealth();
                 }
-            }, 30000); // Check every 30 seconds
+            }, 1000);
 
             // Check for saved connection AFTER initialization is complete
             setTimeout(() => {
@@ -18277,7 +18240,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 if (nym.connected) {
                     nym.updateUserList();
                 }
-            }, 30000);
+            }, 5000);
 
             // Override the existing search functions to handle collapsed lists properly
             const originalHandleChannelSearch = nym.handleChannelSearch;

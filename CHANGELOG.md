@@ -1,3 +1,7 @@
+## v2.16.40 - 2025-10-30
+
+Hotfix: checking if user can be zapped not correctly getting lightning address
+
 ## v2.16.39 - 2025-10-26
 
 New: forward secrecy (disappearing private messages) added, can be enabled from settings
