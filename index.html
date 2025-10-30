@@ -4234,6 +4234,7 @@
                 this.blacklistedRelays = new Set();
                 this.blacklistTimestamps = new Map();
                 this.blacklistDuration = 600000;
+                this.audioCtx = null;
                 this.pubkey = null;
                 this.privkey = null;
                 this.nym = null;
@@ -5749,6 +5750,10 @@
                             clearInterval(this.reconnectionInterval);
                             this.reconnectionInterval = null;
                         }
+                    }
+                    if (this.audioCtx) {
+                        if (document.hidden && this.audioCtx.state !== 'closed') this.audioCtx.suspend().catch(() => { });
+                        if (!document.hidden && this.audioCtx.state === 'suspended') this.audioCtx.resume().catch(() => { });
                     }
                 });
 
@@ -16215,30 +16220,35 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             playSound(type) {
-                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const oscillator = audioContext.createOscillator();
-                const gainNode = audioContext.createGain();
+                try {
+                    if (!this.audioCtx) {
+                        const Ctx = window.AudioContext || window.webkitAudioContext;
+                        this.audioCtx = new Ctx();
+                    }
+                    const ctx = this.audioCtx;
+                    if (ctx.state === 'suspended') ctx.resume().catch(() => { });
 
-                oscillator.connect(gainNode);
-                gainNode.connect(audioContext.destination);
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
 
-                switch (type) {
-                    case 'beep':
-                        oscillator.frequency.value = 800;
-                        gainNode.gain.value = 0.1;
-                        break;
-                    case 'icq':
-                        oscillator.frequency.value = 600;
-                        gainNode.gain.value = 0.15;
-                        break;
-                    case 'msn':
-                        oscillator.frequency.value = 1000;
-                        gainNode.gain.value = 0.1;
-                        break;
+                    switch (type) {
+                        case 'beep': osc.frequency.value = 800; gain.gain.value = 0.1; break;
+                        case 'icq': osc.frequency.value = 600; gain.gain.value = 0.15; break;
+                        case 'msn': osc.frequency.value = 1000; gain.gain.value = 0.1; break;
+                        default: osc.frequency.value = 800; gain.gain.value = 0.1; break;
+                    }
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.10);
+
+                    osc.onended = () => {
+                        try { osc.disconnect(); } catch (_) { }
+                        try { gain.disconnect(); } catch (_) { }
+                    };
+                } catch (_) {
+                    // ignore audio errors on locked or unsupported contexts
                 }
-
-                oscillator.start();
-                oscillator.stop(audioContext.currentTime + 0.1);
             }
 
             applyTheme(theme) {
@@ -17727,7 +17737,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.40 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.41 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18160,6 +18170,15 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
             preConnect();
 
+            // Close all sockets when the WebView/page is being torn down
+            window.addEventListener('pagehide', () => {
+                try {
+                    nym.relayPool.forEach(relay => {
+                        try { relay.ws?.close(); } catch (_) { }
+                    });
+                } catch (_) { }
+            });
+
             // Add QRCode library check
             if (typeof QRCode === 'undefined') {
                 console.warn('QRCode library not loaded, falling back to text display for invoices');
@@ -18242,22 +18261,22 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 if (nym.connected) {
                     nym.cleanupNonResponsiveRelays();
                 }
-            }, 30000); // Check every 30 seconds
+            }, 5000);
 
             // Periodically update connection status
             setInterval(() => {
                 if (nym.connected) {
                     nym.updateConnectionStatus();
                 }
-            }, 5000); // Update every 5 seconds
+            }, 5000);
 
-            // Periodic connection health check (every 30 seconds)
+            // Periodic connection health check
             setInterval(() => {
                 if (nym.connected || nym.relayPool.size > 0) {
                     // Only log if we think we should be connected
                     nym.checkConnectionHealth();
                 }
-            }, 30000); // Check every 30 seconds
+            }, 5000);
 
             // Check for saved connection AFTER initialization is complete
             setTimeout(() => {
@@ -18269,7 +18288,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 if (nym.connected) {
                     nym.updateUserList();
                 }
-            }, 30000);
+            }, 5000);
 
             // Override the existing search functions to handle collapsed lists properly
             const originalHandleChannelSearch = nym.handleChannelSearch;
