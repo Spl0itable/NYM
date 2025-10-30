@@ -4388,6 +4388,8 @@
                 this.pendingLightningWaiters = new Map();
                 this.zapCheckInterval = null;
                 this.zapInvoiceData = null;
+                this.pmPadMin = 256;
+                this.pmPadMax = 1536;
                 this.listExpansionStates = new Map();
                 this.profileRequestQueue = new Set();
                 this.profileRequestInFlight = new Set();
@@ -10237,10 +10239,51 @@
                 return Math.round(Date.now() / 1000 - Math.random() * TWO_DAYS);
             }
 
+            // Generate base64-encoded random bytes
+            randomPadBase64(len) {
+                const bytes = new Uint8Array(len);
+                crypto.getRandomValues(bytes);
+                // Convert to base64
+                let binary = '';
+                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                return btoa(binary);
+            }
+
+            // Insert randomized padding into the rumor as a custom tag before hashing/sealing
+            addRumorPadding(rumor) {
+                try {
+                    if (!Array.isArray(rumor.tags)) rumor.tags = [];
+                    if (rumor.tags.some(t => Array.isArray(t) && t[0] === 'pad')) return rumor;
+
+                    // Estimate current rumor JSON length
+                    const estimateLen = () => {
+                        try { return JSON.stringify(rumor).length; } catch { return 0; }
+                    };
+
+                    // Choose a target bucket
+                    const buckets = [768, 1024, 1280, 1536, 2048, 2560];
+                    const cur = estimateLen();
+                    let target = buckets.find(b => b > cur) || (cur + 1024);
+
+                    // Add small jitter to avoid exact equality within a bucket
+                    target += Math.floor(Math.random() * 64);
+
+                    const deficit = Math.max(0, target - cur);
+                    const neededBytes = Math.ceil(deficit * 3 / 4);
+
+                    const maxBytes = Math.max(this.pmPadMax, 256);
+                    const padBytes = Math.max(this.pmPadMin, Math.min(neededBytes, maxBytes));
+
+                    const b64 = this.randomPadBase64(padBytes);
+                    rumor.tags.push(['pad', b64, 'v=1']);
+                } catch (e) { console.warn('PM padding suppressed:', e); }
+                return rumor;
+            }
+
             nip59WrapEvent(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
                 const NT = window.NostrTools;
 
-                // Rumor (unsigned) with computed id
+                // Build rumor (unsigned)
                 const now = Math.floor(Date.now() / 1000);
                 const rumor = {
                     created_at: now,
@@ -10249,6 +10292,11 @@
                     ...event,
                     pubkey: NT.getPublicKey(senderPrivateKey)
                 };
+
+                // Insert padding before hash
+                this.addRumorPadding(rumor);
+
+                // Compute rumor id after padding
                 rumor.id = NT.getEventHash(rumor);
 
                 // Seal (kind 13)
@@ -10275,14 +10323,12 @@
                     pubkey: ephPk
                 };
 
-                // Add expiration only if enabled
                 if (expirationTs) {
                     wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
                 }
 
                 return NT.finalizeEvent(wrapUnsigned, ephSk);
             }
-
 
             nip59UnwrapEvent(wrap, recipientPrivateKey) {
                 const NT = window.NostrTools;
@@ -10354,6 +10400,9 @@
                 if (window.nostr?.nip44?.encrypt && window.nostr?.signEvent) {
                     const NT = window.NostrTools;
 
+                    // Add padding before hash
+                    this.addRumorPadding(rumor);
+
                     rumor.id = NT.getEventHash(rumor);
 
                     // Seal (kind 13) signed by identity in extension
@@ -10374,7 +10423,6 @@
                         tags: [['p', recipientPubkey]]
                     };
 
-                    // Add expiration only if enabled
                     if (expirationTs) {
                         wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
                     }
