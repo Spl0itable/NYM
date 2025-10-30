@@ -3060,7 +3060,7 @@
                     </select>
                     <div class="form-hint">
                         When enabled, your private messages include an "expiration" tag (NIP‑40) so relays/clients can
-                        delete them after the period chosen.
+                        delete them after the period chosen when enabled.
                     </div>
                 </div>
 
@@ -3939,7 +3939,6 @@
         class NYM {
             constructor() {
                 this.relayPool = new Map();
-                this.relaySubs = new Map();
                 this.blacklistedRelays = new Set();
                 this.relayKinds = new Map();
                 this.relayVerificationTimeout = 10000;
@@ -4385,18 +4384,9 @@
                 this.zaps = new Map();
                 this.currentZapTarget = null;
                 this.currentZapInvoice = null;
-                this.pendingLightningWaiters = new Map();
                 this.zapCheckInterval = null;
                 this.zapInvoiceData = null;
-                this.pmPadMin = 256;
-                this.pmPadMax = 1536;
                 this.listExpansionStates = new Map();
-                this.profileRequestQueue = new Set();
-                this.profileRequestInFlight = new Set();
-                this.profileRequestTimer = null;
-                this.profileBatchFiltersPerReq = 128;
-                this.profileBatchDebounceMs = 60;
-                this.profileSubMap = new Map();
                 this.userLocation = null;
                 this.userColors = new Map();
                 this.blurOthersImages = true;
@@ -5733,16 +5723,17 @@
                 // Track when app becomes visible/hidden
                 document.addEventListener('visibilitychange', () => {
                     if (document.visibilityState === 'visible') {
+                        console.log('App became visible, checking connection health...');
+
+                        // Wait a moment for network to stabilize
                         const delay = this.isFlutterWebView ? 200 : 500;
                         setTimeout(() => {
                             this.checkConnectionHealth();
 
+                            // If disconnected, immediately start reconnection attempts
                             if (!this.connected && navigator.onLine) {
                                 this.attemptReconnection();
                             }
-
-                            // Always refresh subscriptions when we come back to foreground
-                            setTimeout(() => this.resubscribeAllRelays(), 250);
                         }, delay);
                     } else {
                         console.log('App hidden');
@@ -5765,9 +5756,6 @@
                         if (!this.connected && navigator.onLine) {
                             this.attemptReconnection();
                         }
-
-                        // Always refresh subscriptions when window regains focus
-                        setTimeout(() => this.resubscribeAllRelays(), 250);
                     }, delay);
                 });
 
@@ -5782,9 +5770,6 @@
                             if (!this.connected && navigator.onLine) {
                                 this.attemptReconnection();
                             }
-
-                            // Always refresh subscriptions when app resumes (Flutter WebView)
-                            setTimeout(() => this.resubscribeAllRelays(), 250);
                         }, 200);
                     });
                 }
@@ -5938,9 +5923,6 @@
                                 });
                         }
                     });
-
-                    // After kicking reconnection, refresh all REQs shortly after
-                    setTimeout(() => this.resubscribeAllRelays(), 1000);
                 });
 
                 window.addEventListener('offline', () => {
@@ -6081,9 +6063,6 @@
 
                         // Reconnect to other relays in background
                         this.reconnectToBroadcastRelays();
-
-                        // Ensure all open relays get fresh REQs
-                        setTimeout(() => this.resubscribeAllRelays(), 250);
                     }
                 } catch (error) {
                     //
@@ -6780,40 +6759,6 @@
                 return false; // All broadcast relays failed
             }
 
-            _registerSub(relayUrl, subId) {
-                if (!this.relaySubs.has(relayUrl)) this.relaySubs.set(relayUrl, new Set());
-                this.relaySubs.get(relayUrl).add(subId);
-            }
-
-            _closeSubs(relayUrl) {
-                const relay = this.relayPool.get(relayUrl);
-                const set = this.relaySubs.get(relayUrl);
-                if (!set || set.size === 0) return;
-
-                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    for (const id of set) {
-                        try {
-                            relay.ws.send(JSON.stringify(["CLOSE", id]));
-                        } catch (_) { }
-                    }
-                }
-
-                set.clear();
-            }
-
-            resubscribeAllRelays() {
-                // Close and recreate our single "full" subscription on every readable relay
-                this.relayPool.forEach((relay, url) => {
-                    if (relay.type === 'nosflare') return; // write-only
-                    if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
-
-                    // Close any prior subs to prevent duplicates
-                    this._closeSubs(url);
-                    // Re-create the full filters subscription
-                    this.subscribeToSingleRelay(url);
-                });
-            }
-
             subscribeToSingleRelay(relayUrl) {
                 const relay = this.relayPool.get(relayUrl);
                 if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
@@ -6822,31 +6767,27 @@
                 if (relayUrl === 'wss://sendit.nosflare.com') return;
 
                 const ws = relay.ws;
-
-                // Close any previous subs on this relay so we don't duplicate
-                this._closeSubs(relayUrl);
-
                 const subId = "nym-" + Math.random().toString(36).substring(7);
 
-                // Build filters array (same as your current code)
+                // Build filters array
                 const filters = [
                     // Messages in geohash channels
                     {
                         kinds: [20000],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // Messages in standard channels
                     {
                         kinds: [23333],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // Messages in communities
                     {
                         kinds: [4550],
                         "#client": ["NYM"],
-                        limit: 500
+                        limit: 500,
                     },
                     // Moderation events (NIP-56)
                     {
@@ -6858,14 +6799,14 @@
                         kinds: [7],
                         "#k": ["20000"],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // Reactions for standard channels
                     {
                         kinds: [7],
                         "#k": ["23333"],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // Reactions for PMs (NIP-17 gift wraps)
                     {
@@ -6877,13 +6818,13 @@
                     {
                         kinds: [7],
                         "#k": ["4550"],
-                        limit: 500
+                        limit: 500,
                     },
                     // Zap receipts
                     {
                         kinds: [9735],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400
+                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
                     },
                     // All public community definitions
                     {
@@ -6936,9 +6877,6 @@
 
                 // Send single REQ with all filters
                 ws.send(JSON.stringify(["REQ", subId, ...filters]));
-
-                // Track this subscription for future CLOSE and resubscribe
-                this._registerSub(relayUrl, subId);
             }
 
             async connectToRelayWithTimeout(relayUrl, type, timeout) {
@@ -7079,9 +7017,6 @@
                             this.blacklistedRelays.add(relayUrl);
                             this.blacklistTimestamps.set(relayUrl, Date.now());
 
-                            // Clean any tracked subs for this relay
-                            this.relaySubs.delete(relayUrl);
-
                             reject(error);
                         };
 
@@ -7095,10 +7030,9 @@
                                 this.blacklistTimestamps.set(relayUrl, Date.now());
                             }
 
-                            // Remove from pools and tracked subs
+                            // Immediately remove from pool and update status
                             this.relayPool.delete(relayUrl);
                             this.relayKinds.delete(relayUrl);
-                            this.relaySubs.delete(relayUrl);
 
                             // Force status update after disconnect
                             this.updateConnectionStatus();
@@ -7390,77 +7324,111 @@
                 }
             }
 
-            // Resolve any pending waiters for a user's lightning address
-            notifyLightningAddress(pubkey, address) {
-                const waiters = this.pendingLightningWaiters.get(pubkey);
-                if (!waiters) return;
-                for (const resolve of Array.from(waiters)) {
-                    try { resolve(address); } catch (_) { }
-                }
-                this.pendingLightningWaiters.delete(pubkey);
-            }
-
-            // Wait for a user's lightning address to be discovered
-            waitForLightningAddress(pubkey, timeoutMs = 8000) {
-                // If already cached, resolve immediately
-                if (this.userLightningAddresses.has(pubkey)) {
-                    return Promise.resolve(this.userLightningAddresses.get(pubkey));
-                }
-
-                return new Promise((resolve) => {
-                    const resolver = (addr) => resolve(addr || null);
-
-                    // Register waiter
-                    if (!this.pendingLightningWaiters.has(pubkey)) {
-                        this.pendingLightningWaiters.set(pubkey, new Set());
-                    }
-                    const set = this.pendingLightningWaiters.get(pubkey);
-                    set.add(resolver);
-
-                    // Timeout fallback
-                    const timer = setTimeout(() => {
-                        // Clean up this resolver to prevent leaks
-                        const s = this.pendingLightningWaiters.get(pubkey);
-                        if (s) {
-                            s.delete(resolver);
-                            if (s.size === 0) this.pendingLightningWaiters.delete(pubkey);
-                        }
-                        resolve(null);
-                    }, timeoutMs);
-
-                    // Wrap resolver to clear timeout when it fires
-                    const wrapped = (addr) => {
-                        clearTimeout(timer);
-                        resolve(addr || null);
-                    };
-
-                    // Replace the bare resolver with a wrapped one that clears the timeout
-                    set.delete(resolver);
-                    set.add(wrapped);
-                });
-            }
-
             async fetchLightningAddressForUser(pubkey) {
-                // Serve from cache if available
+                // Check if already cached
                 if (this.userLightningAddresses.has(pubkey)) {
                     return this.userLightningAddresses.get(pubkey);
                 }
 
-                // Kick the batched profile pipeline
-                try { this.requestUserProfile(pubkey); } catch (_) { }
+                return new Promise((resolve) => {
+                    const subId = "ln-addr-" + Math.random().toString(36).substring(7);
+                    let foundAddress = false;
+                    let messageHandlers = [];
 
-                // Fire a direct, one-shot profile request to all connected relays
-                const subId = 'ln-addr-' + Math.random().toString(36).slice(2);
-                const req = ["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }];
-                try { this.sendToRelay(req); } catch (_) { }
+                    const cleanup = () => {
+                        // Restore original handlers
+                        messageHandlers.forEach(handler => {
+                            const index = this.relayMessageHandlers?.indexOf(handler);
+                            if (index > -1) {
+                                this.relayMessageHandlers.splice(index, 1);
+                            }
+                        });
+                        // Close subscription
+                        this.sendToRelay(["CLOSE", subId]);
+                    };
 
-                // Wait for handleEvent(kind 0) to notice LUD16/LUD06 (or timeout)
-                const addr = await this.waitForLightningAddress(pubkey, 8000);
+                    const timeout = setTimeout(() => {
+                        console.log('Timeout: No lightning address found for user');
+                        cleanup();
+                        resolve(null);
+                    }, 5000); // Increased to 5 seconds for slower relays
 
-                // Close the one-shot REQ across relays (best-effort)
-                try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+                    // Create handler for this specific request
+                    const handleMessage = (msg, relayUrl) => {
+                        if (!Array.isArray(msg)) return;
 
-                return addr;
+                        const [type, ...data] = msg;
+
+                        if (type === 'EVENT' && data[0] === subId) {
+                            const event = data[1];
+                            if (event && event.kind === 0 && event.pubkey === pubkey) {
+                                try {
+                                    const profile = JSON.parse(event.content);
+
+                                    // Check for lightning address
+                                    if (profile.lud16 || profile.lud06) {
+                                        const lnAddress = profile.lud16 || profile.lud06;
+                                        // Cache it for future use
+                                        this.userLightningAddresses.set(pubkey, lnAddress);
+                                        console.log(`Found lightning address for ${pubkey}:`, lnAddress);
+
+                                        if (!foundAddress) {
+                                            foundAddress = true;
+                                            clearTimeout(timeout);
+                                            cleanup();
+                                            resolve(lnAddress);
+                                        }
+                                        return true; // Handled
+                                    }
+                                } catch (e) {
+                                    console.error('Failed to parse profile:', e);
+                                }
+                            }
+                        } else if (type === 'EOSE' && data[0] === subId) {
+                            // End of stored events from this relay
+                            // Don't resolve null yet - wait for other relays or timeout
+                            console.log(`EOSE received from ${relayUrl} for lightning address lookup`);
+                        }
+
+                        return false; // Not handled
+                    };
+
+                    // Hook into relay message handling
+                    if (!this.relayMessageHandlers) {
+                        this.relayMessageHandlers = [];
+                        const originalHandler = this.handleRelayMessage.bind(this);
+                        this.handleRelayMessage = (msg, relayUrl) => {
+                            // Process through handlers
+                            let handled = false;
+                            for (const handler of this.relayMessageHandlers) {
+                                if (handler(msg, relayUrl)) {
+                                    handled = true;
+                                    break;
+                                }
+                            }
+                            // Always call original handler
+                            originalHandler(msg, relayUrl);
+                        };
+                    }
+
+                    // Add our handler
+                    this.relayMessageHandlers.push(handleMessage);
+                    messageHandlers.push(handleMessage);
+
+                    // Request the user's profile from ALL connected relays
+                    const subscription = [
+                        "REQ",
+                        subId,
+                        {
+                            kinds: [0],
+                            authors: [pubkey],
+                            limit: 1
+                        }
+                    ];
+
+                    // Send to all connected relays
+                    this.sendToRelay(subscription);
+                });
             }
 
             async loadLightningAddress() {
@@ -8520,14 +8488,37 @@
             broadcastEvent(message) {
                 const msg = JSON.stringify(message);
 
-                // Send EVENTs to every open connection (broadcast, discovered "read", and nosflare)
-                this.relayPool.forEach((relay) => {
-                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        try {
-                            relay.ws.send(msg);
-                        } catch (_) { }
+                let evt = null;
+                try {
+                    if (Array.isArray(message) && message[0] === 'EVENT' && message[1] && typeof message[1] === 'object') {
+                        evt = message[1];
                     }
-                });
+                } catch (_) { }
+
+                const wideFanout = evt && (evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 4550 || evt.kind === 1984 || evt.kind === 34550 || evt.kind === 9734 || evt.kind === 9735);
+
+                if (wideFanout) {
+                    // Send to every connected relay for maximum propagation
+                    this.relayPool.forEach((relay, url) => {
+                        if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                            relay.ws.send(msg);
+                        }
+                    });
+                } else {
+                    // Broadcast relays + nosflare
+                    this.broadcastRelays.forEach(relayUrl => {
+                        const relay = this.relayPool.get(relayUrl);
+                        if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                            relay.ws.send(msg);
+                        }
+                    });
+
+                    // Also send to nosflare if connected, to ensure a widely reachable write endpoint
+                    const nosflare = this.relayPool.get('wss://sendit.nosflare.com');
+                    if (nosflare && nosflare.ws && nosflare.ws.readyState === WebSocket.OPEN) {
+                        nosflare.ws.send(msg);
+                    }
+                }
             }
 
             sendRequestToAllRelays(message) {
@@ -8593,12 +8584,10 @@
                             try {
                                 const profile = JSON.parse(event.content);
                                 const pubkey = event.pubkey;
-                                this.profileRequestInFlight.delete(pubkey);
 
                                 if (profile.lud16 || profile.lud06) {
                                     const lnAddress = profile.lud16 || profile.lud06;
                                     this.userLightningAddresses.set(pubkey, lnAddress);
-                                    this.notifyLightningAddress(pubkey, lnAddress);
                                 }
 
                                 if (profile.name || profile.username || profile.display_name) {
@@ -8697,6 +8686,7 @@
             async handleEvent(event) {
                 const messageAge = Date.now() - (event.created_at * 1000);
                 const isHistorical = messageAge > 10000; // Older than 10 seconds
+
                 // Handle NIP-72 moderation events FIRST (before processing messages)
                 if (event.kind === 5 && event.tags.some(t => t[0] === 'a' && t[1]?.includes('34550:'))) {
                     // Community deletion event
@@ -8726,6 +8716,7 @@
                     }
                     return;
                 }
+
                 // Handle NIP-72 moderation events FIRST (before processing messages)
                 if (event.kind === 1984) { // NIP-56 reporting/moderation events
                     const pTag = event.tags.find(t => t[0] === 'p');
@@ -8852,6 +8843,79 @@
                     }
                     return;
                 }
+
+                // Handle kick events (kind 1 with kick tag)
+                if (event.kind === 1) {
+                    const kickTag = event.tags.find(t => t[0] === 'kick');
+                    const pTag = event.tags.find(t => t[0] === 'p');
+                    const qTag = event.tags.find(t => t[0] === 'q');
+
+                    if (kickTag && pTag && qTag) {
+                        const targetPubkey = pTag[1];
+                        const communityId = qTag[1];
+                        const kickExpiry = parseInt(kickTag[1]);
+
+                        // Check that the kick came from admin or moderator
+                        const community = this.communityChannels.get(communityId);
+                        if (!community) {
+                            // Community not found, ignore kick
+                            return;
+                        }
+
+                        const isFromAdmin = event.pubkey === community.admin;
+                        const isFromMod = this.communityModerators.has(communityId) &&
+                            this.communityModerators.get(communityId).has(event.pubkey);
+
+                        if (!isFromAdmin && !isFromMod) {
+                            // Kick not from authorized user, ignore it
+                            console.log(`Ignoring unauthorized kick from ${event.pubkey}`);
+                            return;
+                        }
+
+                        // Only process if this kick is directed at us
+                        if (targetPubkey === this.pubkey) {
+                            // Initialize temporary kicks map if needed
+                            if (!this.communityTemporaryKicks) {
+                                this.communityTemporaryKicks = new Map();
+                            }
+                            if (!this.communityTemporaryKicks.has(communityId)) {
+                                this.communityTemporaryKicks.set(communityId, new Map());
+                            }
+
+                            // Add the kick
+                            this.communityTemporaryKicks.get(communityId).set(this.pubkey, kickExpiry);
+
+                            // If we're currently in this community, kick us out
+                            if (this.currentCommunity === communityId) {
+                                const communityName = community.name;
+                                this.displaySystemMessage(`You have been kicked from ${communityName}. You can rejoin in 15 minutes.`);
+
+                                // Switch to #bar after a short delay
+                                setTimeout(() => {
+                                    this.switchChannel('bar', '');
+                                }, 1500);
+                            }
+
+                            // Set up auto-cleanup after expiry
+                            const timeRemaining = kickExpiry - Date.now();
+                            if (timeRemaining > 0) {
+                                setTimeout(() => {
+                                    if (this.communityTemporaryKicks.has(communityId)) {
+                                        const kicks = this.communityTemporaryKicks.get(communityId);
+                                        if (kicks.has(this.pubkey)) {
+                                            kicks.delete(this.pubkey);
+                                            this.displaySystemMessage(`Your kick from ${community.name} has expired. You can rejoin now.`);
+                                        }
+                                    }
+                                }, timeRemaining);
+                            }
+
+                            // Don't display this as a regular message
+                            return;
+                        }
+                    }
+                }
+
                 if (event.kind === 20000) {
                     // Handle geohash channel messages
                     const nymTag = event.tags.find(t => t[0] === 'n');
@@ -9068,7 +9132,7 @@
                             createdAt: event.created_at * 1000
                         });
 
-                        // Don't show communities to ephemeral users
+                        // IMPORTANT: Don't show communities to ephemeral users
                         if (this.connectionMode === 'ephemeral') {
                             return; // Skip adding to UI for ephemeral users
                         }
@@ -9338,7 +9402,6 @@
                         if (profile.lud16 || profile.lud06) {
                             const lnAddress = profile.lud16 || profile.lud06;
                             this.userLightningAddresses.set(pubkey, lnAddress);
-                            this.notifyLightningAddress(pubkey, lnAddress);
                         }
 
                         // Update nym if we don't have one for this user
@@ -10239,51 +10302,10 @@
                 return Math.round(Date.now() / 1000 - Math.random() * TWO_DAYS);
             }
 
-            // Generate base64-encoded random bytes
-            randomPadBase64(len) {
-                const bytes = new Uint8Array(len);
-                crypto.getRandomValues(bytes);
-                // Convert to base64
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-                return btoa(binary);
-            }
-
-            // Insert randomized padding into the rumor as a custom tag before hashing/sealing
-            addRumorPadding(rumor) {
-                try {
-                    if (!Array.isArray(rumor.tags)) rumor.tags = [];
-                    if (rumor.tags.some(t => Array.isArray(t) && t[0] === 'pad')) return rumor;
-
-                    // Estimate current rumor JSON length
-                    const estimateLen = () => {
-                        try { return JSON.stringify(rumor).length; } catch { return 0; }
-                    };
-
-                    // Choose a target bucket
-                    const buckets = [768, 1024, 1280, 1536, 2048, 2560];
-                    const cur = estimateLen();
-                    let target = buckets.find(b => b > cur) || (cur + 1024);
-
-                    // Add small jitter to avoid exact equality within a bucket
-                    target += Math.floor(Math.random() * 64);
-
-                    const deficit = Math.max(0, target - cur);
-                    const neededBytes = Math.ceil(deficit * 3 / 4);
-
-                    const maxBytes = Math.max(this.pmPadMax, 256);
-                    const padBytes = Math.max(this.pmPadMin, Math.min(neededBytes, maxBytes));
-
-                    const b64 = this.randomPadBase64(padBytes);
-                    rumor.tags.push(['pad', b64, 'v=1']);
-                } catch (e) { console.warn('PM padding suppressed:', e); }
-                return rumor;
-            }
-
             nip59WrapEvent(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
                 const NT = window.NostrTools;
 
-                // Build rumor (unsigned)
+                // Rumor (unsigned) with computed id
                 const now = Math.floor(Date.now() / 1000);
                 const rumor = {
                     created_at: now,
@@ -10292,11 +10314,6 @@
                     ...event,
                     pubkey: NT.getPublicKey(senderPrivateKey)
                 };
-
-                // Insert padding before hash
-                this.addRumorPadding(rumor);
-
-                // Compute rumor id after padding
                 rumor.id = NT.getEventHash(rumor);
 
                 // Seal (kind 13)
@@ -10323,6 +10340,7 @@
                     pubkey: ephPk
                 };
 
+                // Add expiration only if enabled
                 if (expirationTs) {
                     wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
                 }
@@ -10400,9 +10418,6 @@
                 if (window.nostr?.nip44?.encrypt && window.nostr?.signEvent) {
                     const NT = window.NostrTools;
 
-                    // Add padding before hash
-                    this.addRumorPadding(rumor);
-
                     rumor.id = NT.getEventHash(rumor);
 
                     // Seal (kind 13) signed by identity in extension
@@ -10423,6 +10438,7 @@
                         tags: [['p', recipientPubkey]]
                     };
 
+                    // Add expiration only if enabled
                     if (expirationTs) {
                         wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
                     }
@@ -10633,71 +10649,15 @@
                 this.updateViewMoreButton('pmList');
             }
 
-            _scheduleProfileBatchFlush() {
-                if (this.profileRequestTimer) return;
-                this.profileRequestTimer = setTimeout(() => {
-                    this.profileRequestTimer = null;
-                    this.flushProfileRequestQueue();
-                }, this.profileBatchDebounceMs || 60);
-            }
-
-            flushProfileRequestQueue() {
-                if (!this.profileRequestQueue || this.profileRequestQueue.size === 0) return;
-
-                const allPubkeys = Array.from(this.profileRequestQueue);
-                this.profileRequestQueue.clear();
-
-                // Mark as in-flight
-                allPubkeys.forEach(pk => this.profileRequestInFlight.add(pk));
-
-                const chunkSize = this.profileBatchFiltersPerReq || 128;
-
-                for (let i = 0; i < allPubkeys.length; i += chunkSize) {
-                    const chunk = allPubkeys.slice(i, i + chunkSize);
-
-                    // Build one REQ message with many filters
-                    const subId = 'user-prof-batch-' + Math.random().toString(36).slice(2);
-                    const filters = chunk.map(pk => ({ kinds: [0], authors: [pk], limit: 1 }));
-
-                    // Track which pubkeys belong to this sub so we can clear in-flight on CLOSE
-                    this.profileSubMap.set(subId, new Set(chunk));
-
-                    try {
-                        this.sendToRelay(["REQ", subId, ...filters]);
-                    } catch (e) {
-                        // If sending fails, release in-flight for this chunk so they can be retried later
-                        chunk.forEach(pk => this.profileRequestInFlight.delete(pk));
-                        this.profileSubMap.delete(subId);
-                        continue;
-                    }
-
-                    // Close the sub after a short window and release any remaining in-flight pubkeys
-                    setTimeout(() => {
-                        try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
-                        const set = this.profileSubMap.get(subId);
-                        if (set) {
-                            set.forEach(pk => this.profileRequestInFlight.delete(pk));
-                            this.profileSubMap.delete(subId);
-                        }
-                    }, 5000);
-                }
-            }
-
             requestUserProfile(pubkey) {
-                if (!pubkey) return;
-
-                // Skip if we already have a non-anon name
-                const known = this.users && this.users.get(pubkey);
-                const knownName = known && (known.nym || '').trim();
-                if (knownName && !/^anon([\-0-9a-z_]*)?$/i.test(knownName)) {
-                    return;
-                }
-
-                // Don’t double-request while a previous batch is in-flight
-                if (this.profileRequestInFlight.has(pubkey)) return;
-
-                this.profileRequestQueue.add(pubkey);
-                this._scheduleProfileBatchFlush();
+                try {
+                    const subId = 'user-prof-' + Math.random().toString(36).slice(2);
+                    this.sendToRelay(["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }]);
+                    // Close after a short window
+                    setTimeout(() => {
+                        this.sendToRelay(["CLOSE", subId]);
+                    }, 3000);
+                } catch (_) { }
             }
 
             updatePMNicknameFromProfile(pubkey, profileName) {
@@ -17775,7 +17735,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.40 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.39 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
