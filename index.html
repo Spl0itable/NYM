@@ -3948,6 +3948,7 @@
                     'wss://offchain.pub',
                     'wss://relay.primal.net',
                     'wss://nos.lol',
+                    'wss://nostr21.com',
                     'wss://sendit.nosflare.com',
                     'wss://a.nos.lol',
                     'wss://adre.su',
@@ -4381,6 +4382,9 @@
                 this.lightningAddress = null;
                 this.userLightningAddresses = new Map();
                 this.userAvatars = new Map();
+                this.profileFetchQueue = [];
+                this.profileFetchTimer = null;
+                this.profileFetchBatchDelay = 100;
                 this.zaps = new Map();
                 this.currentZapTarget = null;
                 this.currentZapInvoice = null;
@@ -6765,24 +6769,25 @@
                 if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
                 // Never send REQ to nosflare (sendit.nosflare.com)
-                if (relayUrl === 'wss://sendit.nosflare.com') return;
+                if (['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(relayUrl)) return;
 
                 const ws = relay.ws;
+
                 const subId = "nym-" + Math.random().toString(36).substring(7);
 
-                // Build filters array
+                // Build filters array (same as your current code)
                 const filters = [
                     // Messages in geohash channels
                     {
                         kinds: [20000],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                        since: Math.floor(Date.now() / 1000) - 86400
                     },
                     // Messages in standard channels
                     {
                         kinds: [23333],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                        since: Math.floor(Date.now() / 1000) - 86400
                     },
                     // Messages in communities
                     {
@@ -6799,14 +6804,14 @@
                         kinds: [7],
                         "#k": ["20000"],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                        since: Math.floor(Date.now() / 1000) - 86400
                     },
                     // Reactions for standard channels
                     {
                         kinds: [7],
                         "#k": ["23333"],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                        since: Math.floor(Date.now() / 1000) - 86400
                     },
                     // Reactions for PMs (NIP-17 gift wraps)
                     {
@@ -6818,13 +6823,13 @@
                     {
                         kinds: [7],
                         "#k": ["4550"],
-                        limit: 500,
+                        limit: 500
                     },
                     // Zap receipts
                     {
                         kinds: [9735],
                         limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400 // Last 24 hours
+                        since: Math.floor(Date.now() / 1000) - 86400
                     },
                     // All public community definitions
                     {
@@ -6876,6 +6881,7 @@
 
                 // Send single REQ with all filters
                 ws.send(JSON.stringify(["REQ", subId, ...filters]));
+
             }
 
             async connectToRelayWithTimeout(relayUrl, type, timeout) {
@@ -8442,7 +8448,7 @@
 
                 // Send REQ to all connected relays EXCEPT sendit.nosflare.com
                 this.relayPool.forEach((relay, url) => {
-                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN && url !== 'wss://sendit.nosflare.com') {
+                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN && !['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(url)) {
                         relay.ws.send(msg);
                     }
                 });
@@ -8807,78 +8813,6 @@
                     return;
                 }
 
-                // Handle kick events (kind 1 with kick tag)
-                if (event.kind === 1) {
-                    const kickTag = event.tags.find(t => t[0] === 'kick');
-                    const pTag = event.tags.find(t => t[0] === 'p');
-                    const qTag = event.tags.find(t => t[0] === 'q');
-
-                    if (kickTag && pTag && qTag) {
-                        const targetPubkey = pTag[1];
-                        const communityId = qTag[1];
-                        const kickExpiry = parseInt(kickTag[1]);
-
-                        // Check that the kick came from admin or moderator
-                        const community = this.communityChannels.get(communityId);
-                        if (!community) {
-                            // Community not found, ignore kick
-                            return;
-                        }
-
-                        const isFromAdmin = event.pubkey === community.admin;
-                        const isFromMod = this.communityModerators.has(communityId) &&
-                            this.communityModerators.get(communityId).has(event.pubkey);
-
-                        if (!isFromAdmin && !isFromMod) {
-                            // Kick not from authorized user, ignore it
-                            console.log(`Ignoring unauthorized kick from ${event.pubkey}`);
-                            return;
-                        }
-
-                        // Only process if this kick is directed at us
-                        if (targetPubkey === this.pubkey) {
-                            // Initialize temporary kicks map if needed
-                            if (!this.communityTemporaryKicks) {
-                                this.communityTemporaryKicks = new Map();
-                            }
-                            if (!this.communityTemporaryKicks.has(communityId)) {
-                                this.communityTemporaryKicks.set(communityId, new Map());
-                            }
-
-                            // Add the kick
-                            this.communityTemporaryKicks.get(communityId).set(this.pubkey, kickExpiry);
-
-                            // If we're currently in this community, kick us out
-                            if (this.currentCommunity === communityId) {
-                                const communityName = community.name;
-                                this.displaySystemMessage(`You have been kicked from ${communityName}. You can rejoin in 15 minutes.`);
-
-                                // Switch to #bar after a short delay
-                                setTimeout(() => {
-                                    this.switchChannel('bar', '');
-                                }, 1500);
-                            }
-
-                            // Set up auto-cleanup after expiry
-                            const timeRemaining = kickExpiry - Date.now();
-                            if (timeRemaining > 0) {
-                                setTimeout(() => {
-                                    if (this.communityTemporaryKicks.has(communityId)) {
-                                        const kicks = this.communityTemporaryKicks.get(communityId);
-                                        if (kicks.has(this.pubkey)) {
-                                            kicks.delete(this.pubkey);
-                                            this.displaySystemMessage(`Your kick from ${community.name} has expired. You can rejoin now.`);
-                                        }
-                                    }
-                                }, timeRemaining);
-                            }
-
-                            // Don't display this as a regular message
-                            return;
-                        }
-                    }
-                }
-
                 if (event.kind === 20000) {
                     // Handle geohash channel messages
                     const nymTag = event.tags.find(t => t[0] === 'n');
@@ -9218,11 +9152,6 @@
 
                     if (aTag) {
                         const nymTag = event.tags.find(t => t[0] === 'n');
-                        const clientTag = event.tags.find(t => t[0] === 'client');
-
-                        // Only process messages sent by NYM client
-                        if (!clientTag || clientTag[1] !== 'NYM') {
-                        }
 
                         // Parse a tag: "34550:adminPubkey:communityId"
                         const [kind, adminPubkey, communityId] = aTag[1].split(':');
@@ -9398,6 +9327,9 @@
 
                 // Block client spam
                 if (trimmed.includes('joined the channel via bitchat.land')) return true;
+
+                // Block non-nym community messages
+                if (trimmed.includes('["client","chorus"]')) return true;
 
                 // Check if it's a URL (contains :// or starts with www.)
                 if (trimmed.includes('://') || trimmed.startsWith('www.')) return false;
@@ -10333,8 +10265,7 @@
                     kind: 14,
                     created_at: now,
                     tags: [
-                        ['p', recipientPubkey],
-                        ['client', 'NYM']
+                        ['p', recipientPubkey]
                     ],
                     content,
                     pubkey: this.pubkey
@@ -10614,12 +10545,8 @@
 
             requestUserProfile(pubkey) {
                 try {
-                    const subId = 'user-prof-' + Math.random().toString(36).slice(2);
-                    this.sendToRelay(["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }]);
-                    // Close after a short window
-                    setTimeout(() => {
-                        this.sendToRelay(["CLOSE", subId]);
-                    }, 3000);
+                    // Use the batched profile fetching system
+                    this.fetchProfileFromRelay(pubkey);
                 } catch (_) { }
             }
 
@@ -10913,82 +10840,127 @@
 
             async fetchProfileFromRelay(pubkey) {
                 return new Promise((resolve) => {
-                    const timeout = setTimeout(() => {
-                        console.log('No profile found, using default nym');
-                        resolve();
-                    }, 3000);
+                    // Add to queue
+                    this.profileFetchQueue.push({ pubkey, resolve });
 
-                    const subId = "profile-" + Math.random().toString(36).substring(7);
-                    const originalHandler = this.handleRelayMessage.bind(this);
+                    // Clear existing timer
+                    if (this.profileFetchTimer) {
+                        clearTimeout(this.profileFetchTimer);
+                    }
 
-                    this.handleRelayMessage = (msg) => {
-                        if (!Array.isArray(msg)) return;
+                    // Set timer to process batch
+                    this.profileFetchTimer = setTimeout(() => {
+                        this.processBatchedProfileFetch();
+                    }, this.profileFetchBatchDelay);
+                });
+            }
 
-                        const [type, ...data] = msg;
+            processBatchedProfileFetch() {
+                if (this.profileFetchQueue.length === 0) return;
 
-                        if (type === 'EVENT' && data[0] === subId) {
-                            const event = data[1];
-                            if (event && event.kind === 0 && event.pubkey === pubkey) {
-                                try {
-                                    const profile = JSON.parse(event.content);
+                // Get unique pubkeys and their resolvers
+                const batch = this.profileFetchQueue;
+                this.profileFetchQueue = [];
+                this.profileFetchTimer = null;
 
-                                    // Store complete original profile for non-ephemeral connections
-                                    if (this.connectionMode !== 'ephemeral') {
-                                        this.originalProfile = profile;
-                                        console.log('Stored complete profile with fields:', Object.keys(profile));
-                                    }
+                const pubkeyMap = new Map();
+                batch.forEach(({ pubkey, resolve }) => {
+                    if (!pubkeyMap.has(pubkey)) {
+                        pubkeyMap.set(pubkey, []);
+                    }
+                    pubkeyMap.get(pubkey).push(resolve);
+                });
 
-                                    // Get name
-                                    if (profile.name || profile.username || profile.display_name) {
-                                        const profileName = profile.name || profile.username || profile.display_name;
-                                        this.nym = profileName.substring(0, 20);
-                                        document.getElementById('currentNym').textContent = this.nym;
-                                        console.log('Profile loaded:', this.nym);
-                                    }
+                const pubkeys = Array.from(pubkeyMap.keys());
+                const resolvers = pubkeyMap;
 
-                                    // Get lightning address
-                                    if (pubkey === this.pubkey && (profile.lud16 || profile.lud06)) {
-                                        const lnAddress = profile.lud16 || profile.lud06;
-                                        this.lightningAddress = lnAddress;
-                                        localStorage.setItem(`nym_lightning_address_${this.pubkey}`, lnAddress);
-                                        this.updateLightningAddressDisplay();
-                                    }
-                                } catch (e) {
-                                    console.error('Failed to parse profile:', e);
+                console.log(`Batching profile fetch for ${pubkeys.length} pubkeys`);
+
+                const timeout = setTimeout(() => {
+                    console.log('Profile batch fetch timeout');
+                    resolvers.forEach(resolveList => {
+                        resolveList.forEach(resolve => resolve());
+                    });
+                }, 3000);
+
+                const subId = "profile-batch-" + Math.random().toString(36).substring(7);
+                const originalHandler = this.handleRelayMessage.bind(this);
+                const foundPubkeys = new Set();
+
+                this.handleRelayMessage = (msg) => {
+                    if (!Array.isArray(msg)) return;
+
+                    const [type, ...data] = msg;
+
+                    if (type === 'EVENT' && data[0] === subId) {
+                        const event = data[1];
+                        if (event && event.kind === 0 && resolvers.has(event.pubkey)) {
+                            foundPubkeys.add(event.pubkey);
+
+                            try {
+                                const profile = JSON.parse(event.content);
+
+                                // Store complete original profile for non-ephemeral connections
+                                if (event.pubkey === this.pubkey && this.connectionMode !== 'ephemeral') {
+                                    this.originalProfile = profile;
+                                    console.log('Stored complete profile with fields:', Object.keys(profile));
                                 }
 
-                                clearTimeout(timeout);
-                                this.handleRelayMessage = originalHandler;
-                                resolve();
+                                // Get name
+                                if (event.pubkey === this.pubkey && (profile.name || profile.username || profile.display_name)) {
+                                    const profileName = profile.name || profile.username || profile.display_name;
+                                    this.nym = profileName.substring(0, 20);
+                                    document.getElementById('currentNym').textContent = this.nym;
+                                    console.log('Profile loaded:', this.nym);
+                                }
+
+                                // Get lightning address
+                                if (event.pubkey === this.pubkey && (profile.lud16 || profile.lud06)) {
+                                    const lnAddress = profile.lud16 || profile.lud06;
+                                    this.lightningAddress = lnAddress;
+                                    localStorage.setItem(`nym_lightning_address_${this.pubkey}`, lnAddress);
+                                    this.updateLightningAddressDisplay();
+                                }
+                            } catch (e) {
+                                console.error('Failed to parse profile:', e);
                             }
-                        } else if (type === 'EOSE' && data[0] === subId) {
-                            clearTimeout(timeout);
-                            this.handleRelayMessage = originalHandler;
-                            resolve();
+
+                            // Resolve all promises for this pubkey
+                            const resolveList = resolvers.get(event.pubkey);
+                            resolveList.forEach(resolve => resolve());
+                            resolvers.delete(event.pubkey);
                         }
+                    } else if (type === 'EOSE' && data[0] === subId) {
+                        clearTimeout(timeout);
+                        this.handleRelayMessage = originalHandler;
 
-                        originalHandler(msg);
-                    };
-
-                    const subscription = [
-                        "REQ",
-                        subId,
-                        {
-                            kinds: [0],
-                            authors: [pubkey],
-                            limit: 1
-                        }
-                    ];
-
-                    if (this.connected) {
-                        this.sendToRelay(subscription);
-                        setTimeout(() => {
-                            this.sendToRelay(["CLOSE", subId]);
-                        }, 3500);
-                    } else {
-                        this.messageQueue.push(JSON.stringify(subscription));
+                        // Resolve any remaining unfound profiles
+                        resolvers.forEach(resolveList => {
+                            resolveList.forEach(resolve => resolve());
+                        });
                     }
-                });
+
+                    originalHandler(msg);
+                };
+
+                const subscription = [
+                    "REQ",
+                    subId,
+                    {
+                        kinds: [0],
+                        authors: pubkeys, // Array of all pubkeys
+                        limit: pubkeys.length
+                    }
+                ];
+
+                if (this.connected) {
+                    this.sendToRelay(subscription);
+                    setTimeout(() => {
+                        this.sendToRelay(["CLOSE", subId]);
+                    }, 3500);
+                } else {
+                    this.messageQueue.push(JSON.stringify(subscription));
+                }
             }
 
             async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash) {
@@ -10998,8 +10970,7 @@
                     }
 
                     const tags = [
-                        ['n', this.nym], // nym tag
-                        ['client', 'NYM']
+                        ['n', this.nym]
                     ];
 
                     let kind;
@@ -11092,8 +11063,7 @@
                         created_at: Math.floor(Date.now() / 1000),
                         tags: [
                             ['a', `34550:${community.admin}:${communityId}`],
-                            ['n', this.nym],
-                            ['client', 'NYM']
+                            ['n', this.nym]
                         ],
                         content: content,
                         pubkey: this.pubkey
@@ -11136,8 +11106,7 @@
                         tags: [
                             ['d', channelName],
                             ['relay', this.relayUrl], // Add relay tag
-                            ['about', `Channel #${channelName} created via NYM`],
-                            ['client', 'NYM']
+                            ['about', `Channel #${channelName} created via NYM`]
                         ],
                         content: JSON.stringify({
                             name: channelName,
@@ -11195,8 +11164,7 @@
                             ['name', name],
                             ['description', description || `Community ${name}`],
                             ['image', imageUrl || ''], // Community image
-                            ['p', this.pubkey, '', 'admin'], // Creator is admin
-                            ['client', 'NYM'] // Add this line if not present
+                            ['p', this.pubkey, '', 'admin']
                         ],
                         content: description || '',
                         pubkey: this.pubkey
@@ -17698,7 +17666,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.40 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.41 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

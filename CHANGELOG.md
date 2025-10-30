@@ -1,3 +1,7 @@
+## v2.16.41 - 2025-10-31
+
+Hotfix: incorrect use of client tag and minor bug fixes
+
 ## v2.16.40 - 2025-10-30
 
 Hotfix: checking if user can be zapped not correctly getting lightning address
