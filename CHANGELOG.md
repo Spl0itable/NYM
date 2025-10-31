@@ -1,3 +1,7 @@
+## v2.16.44 - 2025-10-31
+
+Hotfix: slight refactor with hardcoded nostr-tools import
+
 ## v2.16.43 - 2025-10-31
 
 Hotfix: bitchat theme user colors made brighter for easier visibility against black background
