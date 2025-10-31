@@ -1,7 +1,3 @@
-## v2.16.46 - 2025-11-01
-
-Hotfix: mobile CSS styling improvements
-
 ## v2.16.45 - 2025-10-31
 
 Hotfix: user context menu not correctly getting the right user for blocking or slapping

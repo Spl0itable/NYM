@@ -53,7 +53,6 @@
             --text-bright: #00ffaa;
             --border: #00ff00;
             --font-mono: 'Courier New', 'Consolas', 'Monaco', monospace;
-            --viewport-height: 100vh;
         }
 
         body {
@@ -2438,51 +2437,31 @@
             }
 
             .main-content {
-                display: flex;
-                flex-direction: column;
-                height: 100%;
-                position: relative;
+                margin-left: 0;
             }
 
             .input-container {
-                position: relative;
-                bottom: auto;
-                left: auto;
-                right: auto;
-                flex-shrink: 0;
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
                 padding: 10px;
                 flex-direction: column;
                 gap: 10px;
                 background: var(--bg-secondary);
                 border-top: 2px solid var(--border);
                 z-index: 500;
-                max-height: 200px;
-            }
-
-            .container {
-                height: 100vh;
-                height: var(--viewport-height, 100vh);
             }
 
             .messages-container {
-                flex: 1;
-                overflow-y: auto;
-                -webkit-overflow-scrolling: touch;
-                padding: 10px 5px;
-                padding-bottom: 10px;
-                margin-bottom: 0;
-            }
-
-            @supports (-webkit-touch-callout: none) {
-                .input-container {
-                    padding-bottom: calc(10px + env(safe-area-inset-bottom));
-                }
+                padding-bottom: 120px;
+                padding-left: 5px;
+                padding-right: 5px;
             }
 
             .message-input {
                 font-size: 16px !important;
                 min-height: 44px;
-                max-height: 100px;
                 -webkit-appearance: none;
                 border-radius: 0;
             }
@@ -24067,7 +24046,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.46 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.45 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
