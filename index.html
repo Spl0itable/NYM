@@ -2658,11 +2658,11 @@
         }
 
         .bitchat-user-4 {
-            color: #1E90FF;
+            color: #5CB3FF;
         }
 
         .bitchat-user-5 {
-            color: #8A2BE2;
+            color: #B565FF;
         }
 
         .bitchat-user-6 {
@@ -2674,11 +2674,11 @@
         }
 
         .bitchat-user-8 {
-            color: #7285b2;
+            color: #A3B5E0;
         }
 
         .bitchat-user-9 {
-            color: #9370DB;
+            color: #B491FF;
         }
 
         .bitchat-user-10 {
@@ -2694,7 +2694,7 @@
         }
 
         .bitchat-user-13 {
-            color: #006f6f;
+            color: #00BFBF;
         }
 
         .bitchat-user-14 {
@@ -2702,7 +2702,7 @@
         }
 
         .bitchat-user-15 {
-            color: #4169E1;
+            color: #6B9AFF;
         }
 
         body.theme-ghost {
@@ -5247,32 +5247,31 @@
 
             // Generate a unique color based on pubkey
             generateUniqueColor(pubkey) {
-                // Simple hash function for pubkey
                 let hash = 0;
                 for (let i = 0; i < pubkey.length; i++) {
                     hash = pubkey.charCodeAt(i) + ((hash << 5) - hash);
                 }
 
-                // Generate HSL color (ensures good visibility)
+                // Generate HSL color
                 const hue = Math.abs(hash) % 360;
-                const saturation = 70 + (Math.abs(hash) % 30); // 70-100%
-                const lightness = 40 + (Math.abs(hash) % 30);  // 40-70%
+                const saturation = 65 + (Math.abs(hash) % 35); // 65-100%
+                const lightness = 60 + (Math.abs(hash) % 25);  // 60-85%
 
                 // Create unique class name
-                const uniqueClass = `bitchat-user-${Math.abs(hash) % 1000}`;  // Changed prefix
+                const uniqueClass = `bitchat-user-${Math.abs(hash) % 1000}`;
 
                 // Add dynamic style if not exists
                 if (!document.getElementById(uniqueClass)) {
                     const style = document.createElement('style');
                     style.id = uniqueClass;
                     style.textContent = `
-                .${uniqueClass} {
-                    color: hsl(${hue}, ${saturation}%, ${lightness}%) !important;
-                }
-                .${uniqueClass} .nym-suffix {
-                    color: hsl(${hue}, ${saturation}%, ${lightness}%) !important;
-                }
-            `;
+            .${uniqueClass} {
+                color: hsl(${hue}, ${saturation}%, ${lightness}%) !important;
+            }
+            .${uniqueClass} .nym-suffix {
+                color: hsl(${hue}, ${saturation}%, ${lightness}%) !important;
+            }
+        `;
                     document.head.appendChild(style);
                 }
 
@@ -17695,7 +17694,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.42 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.43 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

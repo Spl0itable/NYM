@@ -1,3 +1,7 @@
+## v2.16.43 - 2025-10-31
+
+Hotfix: bitchat theme user colors made brighter for easier visibility against black background
+
 ## v2.16.42 - 2025-10-31
 
 Hotfix: resend REQs on reconnect or app refocus
