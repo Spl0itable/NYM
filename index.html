@@ -12526,7 +12526,8 @@
                 // Add the click handler for slap
                 slapOption.addEventListener('click', () => {
                     if (this.contextMenuData) {
-                        this.cmdSlap(this.contextMenuData.nym);
+                        // Pass the pubkey directly as the argument
+                        this.cmdSlap(this.contextMenuData.pubkey);
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
@@ -12568,20 +12569,26 @@
 
                 document.getElementById('ctxBlock').addEventListener('click', () => {
                     if (this.contextMenuData) {
-                        this.cmdBlock(this.contextMenuData.nym);
+                        // Pass the pubkey directly as the argument
+                        this.cmdBlock(this.contextMenuData.pubkey);
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
 
                 // Add copy pubkey handler
-                document.getElementById('ctxCopyPubkey').addEventListener('click', () => {
+                document.getElementById('ctxCopyPubkey').addEventListener('click', async () => {
                     if (this.contextMenuData && this.contextMenuData.pubkey) {
-                        navigator.clipboard.writeText(this.contextMenuData.pubkey).then(() => {
+                        try {
+                            await navigator.clipboard.writeText(this.contextMenuData.pubkey);
                             this.displaySystemMessage(`Copied pubkey to clipboard`);
-                        }).catch(err => {
+                        } catch (err) {
                             console.error('Failed to copy pubkey:', err);
+                            console.log('Pubkey was:', this.contextMenuData.pubkey);
                             this.displaySystemMessage('Failed to copy pubkey');
-                        });
+                        }
+                    } else {
+                        console.error('No pubkey in contextMenuData:', this.contextMenuData);
+                        this.displaySystemMessage('No pubkey available to copy');
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
@@ -20834,15 +20841,34 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     return;
                 }
 
-                // User blocking - use findUserPubkey
-                const targetPubkey = await this.findUserPubkey(target);
-                if (!targetPubkey) return;
+                // Check if input is already a pubkey (64 hex characters)
+                let targetPubkey;
+                if (/^[0-9a-f]{64}$/i.test(target)) {
+                    targetPubkey = target.toLowerCase();
+                } else {
+                    // User blocking - use findUserPubkey for nym lookup
+                    targetPubkey = await this.findUserPubkey(target);
+                    if (!targetPubkey) return;
+                }
 
                 const targetNym = this.getNymFromPubkey(targetPubkey);
+                const cleanNym = this.getCleanNym ? this.getCleanNym(targetNym) : targetNym.replace(/<[^>]*>/g, '');
 
                 // Check if already blocked to toggle
                 if (this.blockedUsers.has(targetPubkey)) {
-                    await this.cmdUnblock(target);
+                    // Unblock
+                    this.blockedUsers.delete(targetPubkey);
+                    this.saveBlockedUsers();
+                    this.showMessagesFromUnblockedUser(targetPubkey);
+
+                    this.displaySystemMessage(`Unblocked ${cleanNym}`);
+                    this.updateUserList();
+                    this.updateBlockedList();
+
+                    // Save to synced settings for persistent connections
+                    if (this.connectionMode !== 'ephemeral') {
+                        await this.saveSyncedSettings();
+                    }
                     return;
                 }
 
@@ -20850,7 +20876,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 this.saveBlockedUsers();
                 this.hideMessagesFromBlockedUser(targetPubkey);
 
-                this.displaySystemMessage(`Blocked ${this.formatNymWithPubkey(targetNym, targetPubkey)}`);
+                this.displaySystemMessage(`Blocked ${cleanNym}`);
                 this.updateUserList();
                 this.updateBlockedList();
 
@@ -21050,7 +21076,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 if (/^[0-9a-f]{64}$/i.test(targetInput)) {
                     const targetPubkey = targetInput.toLowerCase();
                     const targetNym = this.getNymFromPubkey(targetPubkey);
-                    await this.publishMessage(`/me slaps ${targetNym} around a bit with a large trout`);
+                    // Strip HTML tags from nym
+                    const cleanNym = targetNym.replace(/<[^>]*>/g, '');
+                    await this.publishMessage(`/me slaps ${cleanNym} around a bit with a large trout`);
                     return;
                 }
 
@@ -21067,7 +21095,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 const matches = [];
                 this.users.forEach((user, pubkey) => {
                     const baseNym = user.nym.split('#')[0] || user.nym;
-                    if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
+                    // Strip HTML from baseNym for comparison
+                    const cleanBaseNym = baseNym.replace(/<[^>]*>/g, '');
+                    if (cleanBaseNym === searchNym || cleanBaseNym.toLowerCase() === searchNym.toLowerCase()) {
                         if (searchSuffix) {
                             if (pubkey.endsWith(searchSuffix)) {
                                 matches.push({ nym: user.nym, pubkey: pubkey });
@@ -21087,8 +21117,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     return;
                 }
 
-                // Use the target nym for the action (without suffix for cleaner message)
-                const targetNym = matches.length > 0 ? matches[0].nym : searchNym;
+                // Use the target nym for the action (without suffix and without HTML tags)
+                const targetNym = matches.length > 0 ? matches[0].nym.replace(/<[^>]*>/g, '') : searchNym;
                 await this.publishMessage(`/me slaps ${targetNym} around a bit with a large trout`);
             }
 
@@ -21952,7 +21982,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 this.displaySystemMessage(`Left channel ${geohash ? '#' + geohash : '#' + channel}`);
             }
 
-            // Add right-click context menu for channel items
+            // Add left-click context menu for channel items
             setupChannelContextMenu() {
                 document.addEventListener('contextmenu', (e) => {
                     const channelItem = e.target.closest('.channel-item');
@@ -24016,7 +24046,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.44 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.45 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

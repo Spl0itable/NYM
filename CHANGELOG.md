@@ -1,3 +1,7 @@
+## v2.16.45 - 2025-10-31
+
+Hotfix: user context menu not correctly getting the right user for blocking or slapping
+
 ## v2.16.44 - 2025-10-31
 
 Hotfix: slight refactor with hardcoded nostr-tools import
