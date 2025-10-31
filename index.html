@@ -5729,16 +5729,16 @@
                 document.addEventListener('visibilitychange', () => {
                     if (document.visibilityState === 'visible') {
                         console.log('App became visible, checking connection health...');
-
-                        // Wait a moment for network to stabilize
                         const delay = this.isFlutterWebView ? 200 : 500;
                         setTimeout(() => {
                             this.checkConnectionHealth();
 
-                            // If disconnected, immediately start reconnection attempts
                             if (!this.connected && navigator.onLine) {
                                 this.attemptReconnection();
                             }
+
+                            // Always refresh subscriptions when we come back to foreground
+                            setTimeout(() => this.resubscribeAllRelays(), 250);
                         }, delay);
                     } else {
                         console.log('App hidden');
@@ -5761,6 +5761,9 @@
                         if (!this.connected && navigator.onLine) {
                             this.attemptReconnection();
                         }
+
+                        // Always refresh subscriptions when window regains focus
+                        setTimeout(() => this.resubscribeAllRelays(), 250);
                     }, delay);
                 });
 
@@ -5775,6 +5778,9 @@
                             if (!this.connected && navigator.onLine) {
                                 this.attemptReconnection();
                             }
+
+                            // Always refresh subscriptions when app resumes
+                            setTimeout(() => this.resubscribeAllRelays(), 250);
                         }, 200);
                     });
                 }
@@ -6764,18 +6770,54 @@
                 return false; // All broadcast relays failed
             }
 
+            resubscribeAllRelays() {
+                this.relayPool.forEach((relay, url) => {
+                    if (relay.type === 'nosflare') return; // write-only
+                    if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+
+                    // Close existing subscriptions before resubscribing
+                    this.closeSubscriptionsForRelay(url);
+                    this.subscribeToSingleRelay(url);
+                });
+            }
+
+            closeSubscriptionsForRelay(relayUrl) {
+                const relay = this.relayPool.get(relayUrl);
+                if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+
+                // Never send to nosflare
+                if (['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(relayUrl)) return;
+
+                // Close all active subscriptions for this relay
+                if (relay.subscriptions) {
+                    relay.subscriptions.forEach(subId => {
+                        relay.ws.send(JSON.stringify(["CLOSE", subId]));
+                    });
+                    relay.subscriptions.clear();
+                } else {
+                    // Initialize subscriptions set if it doesn't exist
+                    relay.subscriptions = new Set();
+                }
+            }
+
             subscribeToSingleRelay(relayUrl) {
                 const relay = this.relayPool.get(relayUrl);
                 if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
-                // Never send REQ to nosflare (sendit.nosflare.com)
+                // Never send REQ to nosflare
                 if (['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(relayUrl)) return;
 
                 const ws = relay.ws;
 
                 const subId = "nym-" + Math.random().toString(36).substring(7);
 
-                // Build filters array (same as your current code)
+                // Track this subscription
+                if (!relay.subscriptions) {
+                    relay.subscriptions = new Set();
+                }
+                relay.subscriptions.add(subId);
+
+                // Build filters array
                 const filters = [
                     // Messages in geohash channels
                     {
@@ -6794,7 +6836,7 @@
                         kinds: [4550],
                         limit: 500
                     },
-                    // Moderation events (NIP-56)
+                    // Moderation events
                     {
                         kinds: [1984],
                         limit: 500
@@ -6813,7 +6855,7 @@
                         limit: 500,
                         since: Math.floor(Date.now() / 1000) - 86400
                     },
-                    // Reactions for PMs (NIP-17 gift wraps)
+                    // Reactions for PMs
                     {
                         kinds: [7],
                         "#k": ["1059"],
@@ -6823,6 +6865,11 @@
                     {
                         kinds: [7],
                         "#k": ["4550"],
+                        limit: 500
+                    },
+                    // Community reports
+                    {
+                        kinds: [1984],
                         limit: 500
                     },
                     // Zap receipts
@@ -6837,23 +6884,6 @@
                         limit: 500
                     }
                 ];
-
-                // Add specific moderation filters
-                this.communityChannels.forEach((community, communityId) => {
-                    const isOwned = this.ownedCommunities.has(communityId);
-                    const isMod = this.communityModerators.has(communityId) &&
-                        this.communityModerators.get(communityId).has(this.pubkey);
-                    const isMember = this.communityMembers.has(communityId) &&
-                        this.communityMembers.get(communityId).has(this.pubkey);
-                    if (isOwned || isMod || isMember || !community.isPrivate) {
-                        const aTagValue = `34550:${community.admin}:${communityId}`;
-                        filters.push({
-                            kinds: [1984],
-                            '#a': [aTagValue],
-                            limit: 500
-                        });
-                    }
-                });
 
                 if (this.pubkey) {
                     filters.push(
@@ -6881,7 +6911,6 @@
 
                 // Send single REQ with all filters
                 ws.send(JSON.stringify(["REQ", subId, ...filters]));
-
             }
 
             async connectToRelayWithTimeout(relayUrl, type, timeout) {
@@ -17666,7 +17695,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.41 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.42 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

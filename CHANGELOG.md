@@ -1,3 +1,7 @@
+## v2.16.42 - 2025-10-31
+
+Hotfix: resend REQs on reconnect or app refocus
+
 ## v2.16.41 - 2025-10-31
 
 Hotfix: incorrect use of client tag and minor bug fixes
