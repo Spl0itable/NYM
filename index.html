@@ -2457,6 +2457,9 @@
                 border-top: 2px solid var(--border);
                 z-index: 500;
                 max-height: 200px;
+                padding-bottom: max(10px, env(safe-area-inset-bottom));
+                padding-left: max(10px, env(safe-area-inset-left));
+                padding-right: max(10px, env(safe-area-inset-right));
             }
 
             .container {
@@ -2467,16 +2470,12 @@
             .messages-container {
                 flex: 1;
                 overflow-y: auto;
+                overflow-x: hidden;
                 -webkit-overflow-scrolling: touch;
+                overscroll-behavior: contain;
                 padding: 10px 5px;
                 padding-bottom: 10px;
                 margin-bottom: 0;
-            }
-
-            @supports (-webkit-touch-callout: none) {
-                .input-container {
-                    padding-bottom: calc(10px + env(safe-area-inset-bottom));
-                }
             }
 
             .message-input {
@@ -2484,7 +2483,8 @@
                 min-height: 44px;
                 max-height: 100px;
                 -webkit-appearance: none;
-                border-radius: 0;
+                -moz-appearance: none;
+                appearance: none;
             }
 
             .message-input:focus {
@@ -24067,7 +24067,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.46 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.16.47 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

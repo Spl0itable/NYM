@@ -1,3 +1,7 @@
+## v2.16.47 - 2025-11-01
+
+Hotfix: mobile CSS styling improvements x2
+
 ## v2.16.46 - 2025-11-01
 
 Hotfix: mobile CSS styling improvements
