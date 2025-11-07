@@ -15033,10 +15033,14 @@ ${code}
             }
 
             parseNymFromDisplay(displayNym) {
-                if (!displayNym) return '';
-                let n = displayNym.replace(/<span\s+class=["']nym-suffix["'][^>]*>.*?<\/span>/gi, '');
-                n = n.replace(/\s*#([0-9a-f]{4})\s*$/i, '');
-                return n.trim();
+                if (!displayNym) return 'anon';
+
+                // Strip all HTML tags first, including flair
+                const withoutHtml = displayNym.replace(/<[^>]*>/g, '').trim();
+
+                // Then get base nym without suffix
+                const parts = withoutHtml.split('#');
+                return parts[0] || withoutHtml;
             }
 
             async connectToRelays() {
@@ -15287,8 +15291,7 @@ ${code}
                     {
                         kinds: [30078],
                         "#d": ["nym-shop-active"],
-                        limit: 1000,
-                        since: Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60) // last 7 days
+                        limit: 1000
                     },
                     // Reactions for community posts
                     {
@@ -17825,7 +17828,6 @@ ${code}
                                             }
                                         });
                                     }
-                                    // Flair is handled in rendering; we don't re-render the author text here
                                 });
                             }
                         } catch (e) {
@@ -19214,21 +19216,28 @@ ${code}
                         ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
                         : '';
 
+                    // Get user's shop items for flair
+                    const userShopItems = this.getUserShopItems(pubkey);
+                    const flairHtml = this.getFlairForUser(pubkey);
+
+                    // Clean the base nym of any HTML for display
+                    const cleanBaseNym = this.parseNymFromDisplay(baseNym);
+
                     item.innerHTML = `
-            <span class="pm-name">@${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span> ${verifiedBadge}</span>
-            <div class="channel-badges">
-                <span class="pm-badge">PM</span>
-                <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
-                <span class="unread-badge" style="display:none">0</span>
-            </div>
-        `;
-                    item.onclick = () => this.openPM(baseNym, pubkey);
+    <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}</span>
+    <div class="channel-badges">
+        <span class="pm-badge">PM</span>
+        <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
+        <span class="unread-badge" style="display:none">0</span>
+    </div>
+`;
+                    item.onclick = () => this.openPM(cleanBaseNym, pubkey);
 
                     this.insertPMInOrder(item, pmList);
                     this.updateViewMoreButton('pmList');
 
                     // Proactively request their profile
-                    if (!this.users.has(pubkey) || /^anon$/i.test(baseNym)) {
+                    if (!this.users.has(pubkey) || /^anon$/i.test(cleanBaseNym)) {
                         this.requestUserProfile(pubkey);
                     }
                 }
@@ -19414,9 +19423,18 @@ ${code}
             }
 
             isMentioned(content) {
-                const lowerContent = content.toLowerCase();
-                const lowerNym = this.nym.toLowerCase();
-                return lowerContent.includes(`@${lowerNym}`) || lowerContent.includes(lowerNym);
+                if (!content || !this.nym) return false;
+
+                // Strip HTML from nym for comparison
+                const cleanNym = this.parseNymFromDisplay(this.nym);
+
+                // Create pattern that matches the clean nym with optional suffix
+                const nymPattern = new RegExp(`@${cleanNym}(#[0-9a-f]{4})?\\b`, 'gi');
+
+                // Strip HTML from content for mention detection
+                const cleanContent = content.replace(/<[^>]*>/g, '');
+
+                return nymPattern.test(cleanContent);
             }
 
             async generateKeypair() {
@@ -20069,13 +20087,21 @@ ${code}
             getNymFromPubkey(pubkey) {
                 const user = this.users.get(pubkey);
                 if (user) {
-                    return this.formatNymWithPubkey(user.nym, pubkey);
+                    // Get user's flair
+                    const flairHtml = this.getFlairForUser(pubkey);
+                    // Get clean nym without existing HTML
+                    const cleanNym = this.parseNymFromDisplay(user.nym);
+                    // Return nym with flair included
+                    return `${cleanNym}#${this.getPubkeySuffix(pubkey)}${flairHtml}`;
                 }
 
-                // Check PM conversations for saved nyms
-                if (this.pmConversations.has(pubkey)) {
-                    const nym = this.pmConversations.get(pubkey).nym;
-                    return this.formatNymWithPubkey(nym, pubkey);
+                // Check if we've seen this user in PM conversations
+                const pmConvo = Array.from(this.pmConversations.values())
+                    .find(conv => conv.pubkey === pubkey);
+                if (pmConvo && pmConvo.nym) {
+                    const flairHtml = this.getFlairForUser(pubkey);
+                    const cleanNym = this.parseNymFromDisplay(pmConvo.nym);
+                    return `${cleanNym}#${this.getPubkeySuffix(pubkey)}${flairHtml}`;
                 }
 
                 // Return shortened pubkey as fallback with anon prefix
@@ -20247,7 +20273,19 @@ ${code}
                 // Check for action messages
                 if (message.content.startsWith('/me ')) {
                     messageEl.className = 'action-message';
-                    messageEl.innerHTML = `* ${this.escapeHtml(message.author)} ${this.formatMessage(message.content.substring(4))}`;
+
+                    // Get clean author name and flair
+                    const cleanAuthor = this.parseNymFromDisplay(message.author);
+                    const authorFlairHtml = this.getFlairForUser(message.pubkey);
+                    const authorWithFlair = `${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
+
+                    // Get the action content (everything after /me)
+                    const actionContent = message.content.substring(4);
+
+                    // Format the action content but preserve any HTML in mentioned users
+                    const formattedAction = this.formatMessage(actionContent);
+
+                    messageEl.innerHTML = `* ${authorWithFlair} ${formattedAction}`;
                 } else {
                     const classes = ['message'];
 
@@ -20477,38 +20515,69 @@ ${code}
             }
 
             formatMessageWithQuotes(content) {
-                // Check if message starts with a quote (> @username: text)
-                const quoteMatch = content.match(/^>\s*@(\w+):\s*(.+?)(?:\n|$)/);
+                // Check if content contains a quote pattern
+                const quotePattern = /^>(.+?)$/gm;
+                const quotes = content.match(quotePattern);
 
-                if (quoteMatch) {
-                    const quotedUser = quoteMatch[1];
-                    const quotedText = quoteMatch[2];
-                    const remainingContent = content.substring(quoteMatch[0].length).trim();
-
-                    // Check if the quoted text might be ASCII art
-                    const quotedLines = quotedText.split('\n');
-                    const isAsciiArt = quotedLines.some(line => {
-                        const specialCharCount = (line.match(/[^\w\s]/g) || []).length;
-                        return specialCharCount > 5 && line.length > 10;
-                    });
-
-                    if (isAsciiArt) {
-                        // Preserve ASCII art in quotes
-                        let html = `<div class="message-quote">@${this.escapeHtml(quotedUser)}: <pre style="margin: 5px 0; font-family: var(--font-mono);">${this.escapeHtml(quotedText)}</pre></div>`;
-                        if (remainingContent) {
-                            html += this.formatMessage(remainingContent);
-                        }
-                        return html;
-                    } else {
-                        let html = `<div class="message-quote">@${this.escapeHtml(quotedUser)}: ${this.escapeHtml(quotedText)}</div>`;
-                        if (remainingContent) {
-                            html += this.formatMessage(remainingContent);
-                        }
-                        return html;
-                    }
+                if (!quotes) {
+                    return this.formatMessage(content);
                 }
 
-                return this.formatMessage(content);
+                // Process each quote to extract and lookup the author
+                let html = '';
+                let lastIndex = 0;
+                let match;
+
+                quotePattern.lastIndex = 0;
+                while ((match = quotePattern.exec(content)) !== null) {
+                    // Add any content before this quote
+                    if (match.index > lastIndex) {
+                        const beforeQuote = content.substring(lastIndex, match.index);
+                        html += this.formatMessage(beforeQuote);
+                    }
+
+                    const quotedText = match[1].trim();
+
+                    // Extract author from quote if it follows pattern "> @author: message"
+                    const authorMatch = quotedText.match(/^@([^:]+):\s*(.+)/);
+
+                    if (authorMatch) {
+                        const quotedAuthor = authorMatch[1].trim();
+                        const quotedMessage = authorMatch[2];
+
+                        // Clean the author name of HTML for comparison
+                        const cleanAuthor = quotedAuthor.replace(/<[^>]*>/g, '');
+
+                        // Look up the author's pubkey
+                        let authorPubkey = null;
+                        this.users.forEach((user, pubkey) => {
+                            const userNym = this.parseNymFromDisplay(user.nym);
+                            const fullNym = `${userNym}#${this.getPubkeySuffix(pubkey)}`;
+                            if (fullNym === cleanAuthor || userNym === cleanAuthor) {
+                                authorPubkey = pubkey;
+                            }
+                        });
+
+                        // Get author's flair if found
+                        const flairHtml = authorPubkey ? this.getFlairForUser(authorPubkey) : '';
+                        const displayAuthor = `${this.escapeHtml(cleanAuthor)}${flairHtml}`;
+
+                        html += `<blockquote><span class="quote-author">@${displayAuthor}:</span> ${this.formatMessage(quotedMessage)}</blockquote>`;
+                    } else {
+                        // Regular quote without author
+                        html += `<blockquote>${this.formatMessage(quotedText)}</blockquote>`;
+                    }
+
+                    lastIndex = match.index + match[0].length;
+                }
+
+                // Add any remaining content
+                if (lastIndex < content.length) {
+                    const remainingContent = content.substring(lastIndex);
+                    html += this.formatMessage(remainingContent);
+                }
+
+                return html;
             }
 
             closeReactionPickerHandler(e) {
@@ -20533,10 +20602,12 @@ ${code}
             formatMessage(content) {
                 let formatted = content;
 
-                // First, escape HTML entities
-                formatted = formatted.replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')
+                // First, escape HTML entities EXCEPT for flair HTML that's already in the content
+                // We need to be careful not to double-escape flair HTML
+                formatted = formatted
+                    .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
+                    .replace(/<(?!span class="flair|\/span|svg|\/svg|path|\/path|title|\/title)/g, '&lt;')
+                    .replace(/>(?![^<]*<\/(?:span|svg|title|path)>)/g, '&gt;')
                     .replace(/"/g, '&quot;');
 
                 // Code blocks with proper line break handling
@@ -20586,11 +20657,13 @@ ${code}
                 );
 
                 // Process mentions and channels together in one pass
+                // Updated regex to handle HTML within mentions
                 formatted = formatted.replace(
-                    /(@[^@#\n]*?#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(?:^|\s)(#[\w\s-]+?)(?=\s|$|[.,!?])/gi,
+                    /(@[^@#\s]*(?:<span class="flair[^"]*"[^>]*>[\s\S]*?<\/span>)?[^@#\s]*#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(?:^|\s)(#[\w\s-]+?)(?=\s|$|[.,!?])/gi,
                     (match, mentionWithSuffix, simpleMention, channel, offset) => {
                         if (mentionWithSuffix) {
-                            // This is a mention with a pubkey suffix
+                            // This is a mention with a pubkey suffix, may contain HTML flair
+                            // Don't escape the HTML that's already there for flair
                             return `<span style="color: var(--secondary)">${mentionWithSuffix}</span>`;
                         } else if (simpleMention) {
                             // This is a simple mention without spaces or suffix
@@ -20636,57 +20709,80 @@ ${code}
                                 }
                             });
 
-                            // Convert channel links to clickable elements
-                            formatted = formatted.replace(
-                                /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
-                                (match, prefix, channelId) => {
-                                    const typeMap = {
-                                        'e': 'ephemeral',
-                                        'g': 'geohash',
-                                        'c': 'community'
-                                    };
-                                    const type = typeMap[prefix] || 'ephemeral';
-                                    return `<span class="channel-link" onclick="nym.handleChannelLink('${prefix}:${this.escapeHtml(channelId)}', event)">${match}</span>`;
+                            // Check if this is a geohash channel
+                            if (this.geohashRegex && this.geohashRegex.test(sanitized)) {
+                                // Get geohash channel info if available
+                                const geohashChannelInfo = this.getGeohashChannelInfo(sanitized);
+                                const isActive = this.activeGeohashChannels.has(sanitized);
+                                const classes = ['channel-reference', 'geohash-reference'];
+                                if (isActive) classes.push('active-channel');
+
+                                let displayText = channel;
+                                if (geohashChannelInfo && geohashChannelInfo.name) {
+                                    displayText = `#${geohashChannelInfo.name}`;
                                 }
-                            );
 
-                            // Check if it's a valid geohash
-                            const isGeohash = this.isValidGeohash(sanitized);
+                                let title = `Geohash Channel: ${sanitized}`;
+                                if (geohashChannelInfo && geohashChannelInfo.description) {
+                                    title += ` - ${geohashChannelInfo.description}`;
+                                }
 
-                            // Check if it exists as a standard channel
-                            const isStandard = true; // Standard channels can always be created
-
-                            // Count how many types exist
-                            const typesCount = communityMatches.length + (isGeohash ? 1 : 0) + (isStandard ? 1 : 0);
-
-                            const space = match.startsWith(' ') ? ' ' : '';
-
-                            // If multiple types exist, show disambiguation
-                            if (typesCount > 1 || communityMatches.length > 1) {
-                                return `${space}<span class="channel-link" onclick="nym.showChannelOptions('${this.escapeHtml(sanitized)}')">#${sanitized} [MULTIPLE]</span>`;
+                                return `${offset || ''}<span class="${classes.join(' ')}" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('g:${sanitized}', event); return false;">${displayText}</span>`;
                             }
 
-                            // If only community exists
-                            if (communityMatches.length === 1 && !isGeohash) {
-                                const communityId = communityMatches[0].id;
-                                const community = communityMatches[0].community;
-                                const badge = community.isPrivate ? ' [PRI]' : ' [PUB]';
-                                return `${space}<span class="channel-link" onclick="nym.quickJoinCommunity('${communityId}')">#${sanitized}${badge}</span>`;
+                            // Check if it's a standard channel
+                            if (this.channels.has(sanitized)) {
+                                // Standard channel reference
+                                const isActive = this.channels.has(sanitized);
+                                const classes = ['channel-reference'];
+                                if (isActive) classes.push('active-channel');
+
+                                // Check if this channel is also joined by user
+                                if (this.userJoinedChannels && this.userJoinedChannels.has(sanitized)) {
+                                    classes.push('joined-channel');
+                                }
+
+                                return `${offset || ''}<span class="${classes.join(' ')}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('e:${sanitized}', event); return false;">${channel}</span>`;
                             }
 
-                            // If only geohash exists (and no community with same name)
-                            if (isGeohash && communityMatches.length === 0) {
-                                const badge = ' [GEO]';
-                                return `${space}<span class="channel-link" onclick="nym.joinChannelOption('geohash', '${this.escapeHtml(sanitized)}')">#${sanitized}${badge}</span>`;
+                            // If we have community matches, use the first one
+                            if (communityMatches.length > 0) {
+                                const { id, community } = communityMatches[0];
+                                const classes = ['channel-reference', 'community-reference'];
+
+                                // Check if this is the current community
+                                if (this.currentCommunity === id) {
+                                    classes.push('active-channel');
+                                }
+
+                                return `${offset || ''}<span class="${classes.join(' ')}" title="Community: ${community.name}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('c:${id}', event); return false;">#${community.name}</span>`;
                             }
 
-                            // Default to standard channel
-                            const badge = ' [EPH]';
-                            return `${space}<span class="channel-link" onclick="nym.joinChannelOption('standard', '${this.escapeHtml(sanitized)}')">#${sanitized}${badge}</span>`;
+                            // No matching channel found - return as regular text
+                            return match;
                         }
-                        return match;
                     }
                 );
+
+                // Convert emoji shortcodes :emoji:
+                formatted = formatted.replace(/:([a-z0-9_]+):/g, (match, code) => {
+                    const emoji = this.emojiMap[code];
+                    return emoji || match;
+                });
+
+                // Convert simple emoticons to emojis
+                formatted = formatted.replace(/(^|\s):\)($|\s)/g, '$1😊$2');
+                formatted = formatted.replace(/(^|\s):\(($|\s)/g, '$1😢$2');
+                formatted = formatted.replace(/(^|\s):D($|\s)/g, '$1😃$2');
+                formatted = formatted.replace(/(^|\s):P($|\s)/g, '$1😛$2');
+                formatted = formatted.replace(/(^|\s);-?\)($|\s)/g, '$1😉$2');
+                formatted = formatted.replace(/(^|\s):o($|\s)/gi, '$1😮$2');
+                formatted = formatted.replace(/(^|\s):\|($|\s)/g, '$1😐$2');
+                formatted = formatted.replace(/(^|\s)&lt;3($|\s)/g, '$1❤️$2');
+                formatted = formatted.replace(/(^|\s)\/\\($|\s)/g, '$1⚠️$2');
+
+                // Line breaks
+                formatted = formatted.replace(/\n/g, '<br>');
 
                 return formatted;
             }
@@ -23368,55 +23464,68 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
 
                 const targetInput = args.trim();
+                let targetNym = '';
 
                 // Check if input is a pubkey (64 hex characters)
                 if (/^[0-9a-f]{64}$/i.test(targetInput)) {
                     const targetPubkey = targetInput.toLowerCase();
-                    const targetNym = this.getNymFromPubkey(targetPubkey);
-                    // Strip HTML tags from nym
-                    const cleanNym = targetNym.replace(/<[^>]*>/g, '');
-                    await this.publishMessage(`/me slaps ${cleanNym} around a bit with a large trout`);
-                    return;
-                }
-
-                const hashIndex = targetInput.indexOf('#');
-                let searchNym = targetInput;
-                let searchSuffix = null;
-
-                if (hashIndex !== -1) {
-                    searchNym = targetInput.substring(0, hashIndex);
-                    searchSuffix = targetInput.substring(hashIndex + 1);
-                }
-
-                // Find matching users
-                const matches = [];
-                this.users.forEach((user, pubkey) => {
-                    const baseNym = user.nym.split('#')[0] || user.nym;
-                    // Strip HTML from baseNym for comparison
-                    const cleanBaseNym = baseNym.replace(/<[^>]*>/g, '');
-                    if (cleanBaseNym === searchNym || cleanBaseNym.toLowerCase() === searchNym.toLowerCase()) {
-                        if (searchSuffix) {
-                            if (pubkey.endsWith(searchSuffix)) {
-                                matches.push({ nym: user.nym, pubkey: pubkey });
-                            }
-                        } else {
-                            matches.push({ nym: user.nym, pubkey: pubkey });
-                        }
+                    const user = this.users.get(targetPubkey);
+                    if (user) {
+                        // Get the base nym without HTML tags and flair
+                        targetNym = this.parseNymFromDisplay(user.nym);
+                    } else {
+                        targetNym = `anon#${targetPubkey.slice(-4)}`;
                     }
-                });
+                } else {
+                    const hashIndex = targetInput.indexOf('#');
+                    let searchNym = targetInput;
+                    let searchSuffix = null;
 
-                if (matches.length > 1 && !searchSuffix) {
-                    const matchList = matches.map(m =>
-                        `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-                    ).join(', ');
-                    this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
-                    this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
-                    return;
+                    if (hashIndex !== -1) {
+                        searchNym = targetInput.substring(0, hashIndex);
+                        searchSuffix = targetInput.substring(hashIndex + 1);
+                    }
+
+                    // Find matching users
+                    const matches = [];
+                    this.users.forEach((user, pubkey) => {
+                        // Strip HTML from user nym for comparison
+                        const cleanNym = this.parseNymFromDisplay(user.nym);
+
+                        if (cleanNym === searchNym || cleanNym.toLowerCase() === searchNym.toLowerCase()) {
+                            if (searchSuffix) {
+                                if (pubkey.endsWith(searchSuffix)) {
+                                    matches.push({ nym: cleanNym, pubkey: pubkey });
+                                }
+                            } else {
+                                matches.push({ nym: cleanNym, pubkey: pubkey });
+                            }
+                        }
+                    });
+
+                    if (matches.length > 1 && !searchSuffix) {
+                        const matchList = matches.map(m =>
+                            `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                        ).join(', ');
+                        this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                        this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
+                        return;
+                    }
+
+                    // Use the target nym for the action (without HTML tags)
+                    targetNym = matches.length > 0 ? matches[0].nym : searchNym;
                 }
 
-                // Use the target nym for the action (without suffix and without HTML tags)
-                const targetNym = matches.length > 0 ? matches[0].nym.replace(/<[^>]*>/g, '') : searchNym;
-                await this.publishMessage(`/me slaps ${targetNym} around a bit with a large trout`);
+                // Create the slap message content  
+                const slapContent = `/me slaps ${targetNym} around a bit with a large trout`;
+
+                // Send the message using the current channel context
+                try {
+                    await this.publishMessage(slapContent, this.currentChannel, this.currentGeohash);
+                } catch (error) {
+                    console.error('Failed to send slap message:', error);
+                    this.displaySystemMessage('Failed to send slap: ' + error.message);
+                }
             }
 
             async cmdMe(args) {
@@ -26343,7 +26452,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.17.45 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.17.46 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

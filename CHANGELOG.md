@@ -1,3 +1,7 @@
+## v2.17.46 - 2025-11-08
+
+Hotfix: corrected shop item flair not correctly parsing html and broken slap with trout
+
 ## v2.17.45 - 2025-11-07
 
 New: shop to buy addon packs to change the styling of your messages and nickname that others will see across all channels
