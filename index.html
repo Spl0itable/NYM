@@ -2723,6 +2723,626 @@
                     rgba(255, 255, 255, 0.02) 2px,
                     rgba(255, 255, 255, 0.02) 4px);
         }
+
+        .shop-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .shop-modal.active {
+            display: flex;
+        }
+
+        .shop-content {
+            background: var(--bg-secondary);
+            border: 2px solid var(--primary);
+            border-radius: 0;
+            padding: 0;
+            width: 90%;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+            box-shadow: 0 0 30px rgba(0, 255, 0, 0.3);
+        }
+
+        .shop-header {
+            background: linear-gradient(135deg, rgba(0, 255, 0, 0.1), rgba(0, 255, 255, 0.1));
+            padding: 20px;
+            border-bottom: 1px solid var(--primary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .shop-title {
+            font-size: 24px;
+            color: var(--primary);
+            text-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .shop-balance {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--lightning);
+            font-size: 14px;
+        }
+
+        .shop-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: 1px solid var(--danger);
+            color: var(--danger);
+            padding: 5px 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .shop-close:hover {
+            background: rgba(255, 0, 0, 0.1);
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+        }
+
+        .shop-tabs {
+            display: flex;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .shop-tab {
+            flex: 1;
+            padding: 15px;
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .shop-tab.active {
+            color: var(--primary);
+            background: rgba(0, 255, 0, 0.05);
+        }
+
+        .shop-tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--primary);
+        }
+
+        .shop-body {
+            padding: 20px;
+        }
+
+        .shop-items {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .shop-item {
+            background: rgba(0, 255, 0, 0.02);
+            border: 1px solid rgba(0, 255, 0, 0.2);
+            padding: 15px;
+            transition: all 0.3s;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .shop-item:hover {
+            background: rgba(0, 255, 0, 0.05);
+            border-color: var(--primary);
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
+        }
+
+        .shop-item.purchased {
+            background: rgba(0, 255, 255, 0.05);
+            border-color: var(--secondary);
+            cursor: default;
+        }
+
+        .shop-item.purchased::after {
+            content: '✓ OWNED';
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            color: var(--secondary);
+            font-size: 10px;
+            padding: 2px 5px;
+            background: rgba(0, 255, 255, 0.2);
+            border: 1px solid var(--secondary);
+        }
+
+        .shop-item-icon {
+            font-size: 32px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .shop-item-name {
+            font-size: 14px;
+            color: var(--text);
+            margin-bottom: 5px;
+            font-weight: bold;
+            text-align: center;
+        }
+
+        .shop-item-description {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+            min-height: 40px;
+        }
+
+        .shop-item-preview {
+            padding: 10px;
+            background: var(--bg);
+            border: 1px solid rgba(0, 255, 0, 0.1);
+            margin-bottom: 10px;
+            font-size: 12px;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .shop-item-price {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(0, 255, 0, 0.1);
+        }
+
+        .shop-price-amount {
+            color: var(--lightning);
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        .shop-buy-btn {
+            background: linear-gradient(135deg, rgba(247, 147, 26, 0.2), rgba(247, 147, 26, 0.1));
+            border: 1px solid var(--lightning);
+            color: var(--lightning);
+            padding: 5px 15px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .shop-buy-btn:hover {
+            background: rgba(247, 147, 26, 0.3);
+            box-shadow: 0 0 10px rgba(247, 147, 26, 0.5);
+        }
+
+        .shop-category-title {
+            color: var(--primary);
+            font-size: 18px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(0, 255, 0, 0.2);
+        }
+
+        .shop-active-items {
+            background: rgba(0, 255, 255, 0.05);
+            border: 1px solid var(--secondary);
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .shop-active-items-title {
+            color: var(--secondary);
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .shop-active-item {
+            display: inline-block;
+            padding: 5px 10px;
+            background: rgba(0, 255, 255, 0.1);
+            border: 1px solid var(--secondary);
+            margin: 5px;
+            font-size: 12px;
+        }
+
+        .style-preview-matrix {
+            color: #00ff00;
+            text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00;
+            animation: matrixGlow 2s ease-in-out infinite;
+        }
+
+        @keyframes matrixGlow {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.7;
+            }
+        }
+
+        .style-preview-neon {
+            color: #ff00ff;
+            text-shadow: 0 0 5px #ff00ff, 0 0 10px #ff00ff, 0 0 15px #ff00ff;
+            animation: neonPulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes neonPulse {
+
+            0%,
+            100% {
+                text-shadow: 0 0 5px #ff00ff, 0 0 10px #ff00ff, 0 0 15px #ff00ff;
+            }
+
+            50% {
+                text-shadow: 0 0 10px #ff00ff, 0 0 20px #ff00ff, 0 0 30px #ff00ff;
+            }
+        }
+
+        .style-preview-ghost {
+            color: rgba(255, 255, 255, 0.5);
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+            animation: ghostFloat 3s ease-in-out infinite;
+        }
+
+        @keyframes ghostFloat {
+
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+
+            50% {
+                transform: translateY(-3px);
+            }
+        }
+
+        .style-preview-fire {
+            background: linear-gradient(45deg, #ff0000, #ff6600, #ffaa00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 20px rgba(255, 100, 0, 0.5);
+            animation: fireFlicker 0.5s ease-in-out infinite;
+        }
+
+        @keyframes fireFlicker {
+
+            0%,
+            100% {
+                filter: brightness(1);
+            }
+
+            50% {
+                filter: brightness(1.2);
+            }
+        }
+
+        .style-preview-ice {
+            color: #00ffff;
+            text-shadow: 0 0 10px #00ffff, 0 0 20px rgba(0, 255, 255, 0.5);
+            background: linear-gradient(135deg, #00ffff, #0088ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .style-preview-rainbow {
+            background: linear-gradient(90deg, #ff0000, #ff7700, #ffff00, #00ff00, #0099ff, #6633ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: rainbowShift 3s linear infinite;
+        }
+
+        @keyframes rainbowShift {
+            0% {
+                filter: hue-rotate(0deg);
+            }
+
+            100% {
+                filter: hue-rotate(360deg);
+            }
+        }
+
+        .style-preview-glitch {
+            position: relative;
+            color: #00ff00;
+            animation: glitchMain 2s infinite;
+        }
+
+        @keyframes glitchMain {
+
+            0%,
+            100% {
+                text-shadow: 0 0 2px #00ff00;
+            }
+
+            25% {
+                text-shadow: -2px 0 #ff0000, 2px 0 #00ffff;
+            }
+
+            50% {
+                text-shadow: 2px 0 #ff00ff, -2px 0 #ffff00;
+            }
+
+            75% {
+                text-shadow: 0 0 2px #00ff00;
+            }
+        }
+
+        .flair-badge {
+            display: inline-block;
+            margin-left: 5px;
+            font-size: 14px;
+            vertical-align: middle;
+        }
+
+        .flair-crown {
+            color: #ffd700;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+        }
+
+        .flair-diamond {
+            color: #00ffff;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+        }
+
+        .flair-skull {
+            color: #ff0000;
+            text-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+        }
+
+        .flair-star {
+            color: #ffff00;
+            text-shadow: 0 0 10px rgba(255, 255, 0, 0.5);
+        }
+
+        .flair-lightning {
+            color: #f7931a;
+            text-shadow: 0 0 10px rgba(247, 147, 26, 0.5);
+        }
+
+        .flair-heart {
+            color: #ff1493;
+            text-shadow: 0 0 10px rgba(255, 20, 147, 0.5);
+        }
+
+        .flair-mask {
+            color: #ffffff;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+            animation: maskPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes maskPulse {
+
+            0%,
+            100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.1);
+            }
+        }
+
+        .style-preview-satoshi,
+        .message.style-satoshi .message-content {
+            position: relative;
+            font-weight: bold;
+            background: linear-gradient(135deg, #f7931a 0%, #f9a826 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            color: #f7931a;
+            isolation: isolate;
+        }
+
+        .style-preview-satoshi {
+            text-shadow: 0 0 20px rgba(247, 147, 26, 0.5);
+        }
+
+        .style-preview-satoshi::before,
+        .message.style-satoshi .message-content::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: -1;
+            pointer-events: none;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><text x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='system-ui,-apple-system,Segoe UI,Roboto,Arial' font-size='18' fill='%23f7931a' fill-opacity='0.14'>&#x20BF;</text></svg>");
+            background-size: 28px 28px;
+            background-repeat: repeat;
+            background-position: 0 0;
+        }
+
+        .message.style-satoshi .message-content {
+            text-shadow: 0 0 12px rgba(247, 147, 26, 0.35);
+        }
+
+        .message.style-matrix .message-content {
+            color: #00ff00 !important;
+            text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00;
+            animation: matrixGlow 2s ease-in-out infinite;
+        }
+
+        .message.style-neon .message-content {
+            color: #ff00ff !important;
+            text-shadow: 0 0 5px #ff00ff, 0 0 10px #ff00ff, 0 0 15px #ff00ff;
+            animation: neonPulse 1.5s ease-in-out infinite;
+        }
+
+        .message.style-ghost .message-content {
+            color: rgba(255, 255, 255, 0.7) !important;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+            animation: ghostFloat 3s ease-in-out infinite;
+        }
+
+        .message.style-fire .message-content {
+            background: linear-gradient(45deg, #ff0000, #ff6600, #ffaa00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: fireFlicker 0.5s ease-in-out infinite;
+        }
+
+        .message.style-ice .message-content {
+            background: linear-gradient(135deg, #00ffff, #0088ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .message.style-rainbow .message-content {
+            background: linear-gradient(90deg, #ff0000, #ff7700, #ffff00, #00ff00, #0099ff, #6633ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: rainbowShift 3s linear infinite;
+        }
+
+        .message.style-glitch .message-content {
+            color: #00ff00 !important;
+            animation: glitchMain 2s infinite;
+        }
+
+        .style-preview-aurora {
+            background: linear-gradient(120deg, #00ffd5, #5b8cff, #ff00ea, #00ffd5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: auroraShift 6s linear infinite;
+            font-weight: 700;
+            text-shadow: 0 0 10px rgba(91, 140, 255, 0.3);
+        }
+
+        @keyframes auroraShift {
+            0% {
+                filter: hue-rotate(0deg);
+            }
+
+            100% {
+                filter: hue-rotate(360deg);
+            }
+        }
+
+        .message.style-aurora .message-content {
+            background: linear-gradient(120deg, #00ffd5, #5b8cff, #ff00ea, #00ffd5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: auroraShift 6s linear infinite;
+            text-shadow: 0 0 10px rgba(91, 140, 255, 0.3);
+        }
+
+        .flair-rocket {
+            color: #ff6b6b;
+            text-shadow: 0 0 10px rgba(255, 107, 107, 0.6);
+        }
+
+        .flair-shield {
+            color: #52ff9d;
+            text-shadow: 0 0 10px rgba(82, 255, 157, 0.6);
+        }
+
+        .message.supporter-style {
+            background: linear-gradient(135deg, rgba(255, 215, 0, 0.08), rgba(255, 215, 0, 0.03));
+            border-left: 3px solid #ffd700;
+        }
+
+        .message.supporter-style .message-content {
+            color: #ffd700 !important;
+            text-shadow: 0 0 8px rgba(255, 215, 0, 0.25);
+        }
+
+        .message.cosmetic-aura-gold {
+            box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.35), 0 0 18px rgba(255, 215, 0, 0.18);
+            border-left: 3px solid #ffd700;
+            background: linear-gradient(135deg, rgba(255, 215, 0, 0.05), rgba(255, 215, 0, 0.02));
+        }
+
+        .message .message-author.cosmetic-name-glow {
+            color: #88ffe3 !important;
+            text-shadow: 0 0 6px rgba(136, 255, 227, 0.85), 0 0 14px rgba(0, 255, 170, 0.35);
+        }
+
+        .supporter-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 8px;
+            background: linear-gradient(135deg, rgba(255, 215, 0, 0.2), rgba(255, 215, 0, 0.1));
+            border: 1px solid #ffd700;
+            border-radius: 3px;
+            margin-left: 5px;
+        }
+
+        .supporter-badge-icon {
+            color: #ffd700;
+            font-size: 14px;
+        }
+
+        .supporter-badge-text {
+            color: #ffd700;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .message.supporter-style {
+            background: linear-gradient(135deg, rgba(255, 215, 0, 0.05), rgba(255, 215, 0, 0.02));
+            border-left: 3px solid #ffd700;
+        }
+
+        .message.supporter-style .message-header {
+            color: #ffd700;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.3);
+        }
+
+        .shop-recovery {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .shop-recovery input {
+            padding: 5px 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: var(--font-mono);
+        }
+
+        .shop-recovery button {
+            padding: 5px 15px;
+            background: var(--bg);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .shop-recovery button:hover {
+            background: rgba(0, 255, 0, 0.1);
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+        }
     </style>
 </head>
 
@@ -2758,6 +3378,7 @@
 
             <div class="sidebar-actions">
                 <button class="icon-btn" onclick="showChannelModal(); nym.closeSidebar();">+ Channel</button>
+                <button class="icon-btn" onclick="nym.openShop(); nym.closeSidebar();">Shop</button>
                 <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();">Settings</button>
                 <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();">About</button>
                 <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Logout">Logout</button>
@@ -2852,6 +3473,7 @@
                 </div>
                 <div class="header-actions">
                     <button class="icon-btn" onclick="showChannelModal()">+ Channel</button>
+                    <button class="icon-btn" onclick="nym.openShop()">Shop</button>
                     <button class="icon-btn" onclick="showSettings()">Settings</button>
                     <button class="icon-btn" onclick="showAbout()">About</button>
                     <button class="icon-btn" onclick="signOut()" title="Logout">Logout</button>
@@ -2902,6 +3524,37 @@
                 <div class="emoji-picker" id="emojiPicker"></div>
             </div>
         </main>
+    </div>
+
+    <!-- Shop Modal -->
+    <div class="shop-modal" id="shopModal">
+        <div class="shop-content">
+            <button class="shop-close" onclick="nym.closeShop()">✕</button>
+
+            <div class="shop-header">
+                <div class="shop-title">
+                    <span>SHOP</span><br /><br />
+                    <span style="font-size:12px;">Buy addon packs to change the styling of your messages and
+                        nickname</span>
+                </div>
+                <div class="shop-recovery">
+                    <input type="text" id="recoveryCodeInput" placeholder="Recovery code">
+                    <button
+                        onclick="nym.restorePurchases(document.getElementById('recoveryCodeInput').value)">Restore</button>
+                </div>
+            </div>
+
+            <div class="shop-tabs">
+                <button class="shop-tab active" onclick="nym.switchShopTab('styles', event)">Message Styles</button>
+                <button class="shop-tab" onclick="nym.switchShopTab('flair', event)">Nickname Flair</button>
+                <button class="shop-tab" onclick="nym.switchShopTab('special', event)">Special Items</button>
+                <button class="shop-tab" onclick="nym.switchShopTab('inventory', event)">My Items</button>
+            </div>
+
+            <div class="shop-body" id="shopBody">
+                <!-- Content will be dynamically generated -->
+            </div>
+        </div>
     </div>
 
     <!-- Image Modal -->
@@ -10730,6 +11383,1020 @@
                 if (this.isFlutterWebView) {
                     console.log('Running in Flutter WebView - using enhanced connection monitoring');
                 }
+                this.shopItems = {
+                    styles: [
+                        {
+                            id: 'style-satoshi',
+                            name: 'Satoshi',
+                            description: 'Bitcoin-themed orange glow',
+                            price: 212121,
+                            preview: 'style-preview-satoshi',
+                            type: 'message-style',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Satoshi (Bitcoin)">
+  <title>Satoshi (Bitcoin)</title>
+  <circle cx="12" cy="12" r="9"/>
+  <path d="M10 6v12"/>
+  <path d="M10 7H13C15.1 7 16.5 8.2 16.5 9.8C16.5 11.4 15.1 12.5 13 12.5H10"/>
+  <path d="M10 12.5H13C15.1 12.5 16.5 13.7 16.5 15.3C16.5 16.9 15.1 18 13 18H10"/>
+  <path d="M12.5 5v2"/>
+  <path d="M12.5 17v2"/>
+</svg>`
+                        },
+                        {
+                            id: 'style-glitch',
+                            name: 'Glitch',
+                            description: 'Digital glitch effect',
+                            price: 101010,
+                            preview: 'style-preview-glitch',
+                            type: 'message-style',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Glitch">
+  <title>Glitch</title>
+  <rect x="3" y="5" width="18" height="12" rx="2"/>
+  <path d="M6 9H11 M13 9H18 M5 12H12 M14 12H17 M7 15H11 M12 15H18"/>
+</svg>`
+                        },
+                        {
+                            id: 'style-aurora',
+                            name: 'Aurora',
+                            description: 'Shifting neon aurora gradient',
+                            price: 2424,
+                            preview: 'style-preview-aurora',
+                            type: 'message-style',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Aurora">
+  <title>Aurora</title>
+  <path d="M2 15 Q7 12 12 15 T22 15"/>
+  <path d="M2 12 Q7 9 12 12 T22 12"/>
+  <path d="M2 9 Q7 6 12 9 T22 9"/>
+</svg>`
+                        },
+                        {
+                            id: 'style-neon',
+                            name: 'Neon',
+                            description: 'Cyberpunk neon purple',
+                            price: 1984,
+                            preview: 'style-preview-neon',
+                            type: 'message-style',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Neon">
+  <title>Neon</title>
+  <rect x="3.5" y="5" width="17" height="12" rx="3"/>
+  <path d="M17 8v2 M16 9h2"/>
+</svg>`
+                        },
+                        {
+                            id: 'style-ghost',
+                            name: 'Ghost',
+                            description: 'Mysterious ethereal fade',
+                            price: 666,
+                            preview: 'style-preview-ghost',
+                            type: 'message-style',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Ghost">
+  <title>Ghost</title>
+  <path d="M12 4c-3.5 0-6 2.6-6 6v5.5c0 .8.7 1.5 1.5 1.5.7 0 1.3-.4 1.9-.9.6.6 1.4.9 2.6.9s2-.3 2.6-.9c.6.5 1.2.9 1.9.9.8 0 1.5-.7 1.5-1.5V10c0-3.4-2.5-6-6-6Z"/>
+  <circle cx="9.5" cy="11" r="1" fill="currentColor" stroke="none"/>
+  <circle cx="14.5" cy="11" r="1" fill="currentColor" stroke="none"/>
+</svg>`
+                        },
+                        {
+                            id: 'style-matrix',
+                            name: 'Matrix',
+                            description: 'Green terminal glow effect',
+                            price: 1337,
+                            preview: 'style-preview-matrix',
+                            type: 'message-style',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Matrix">
+  <title>Matrix</title>
+  <rect x="3" y="5" width="18" height="12" rx="2"/>
+  <path d="M2 19H22"/>
+  <path d="M7 9V12 M10 8V12 M13 10V13 M16 8.5V13"/>
+</svg>`
+                        },
+                        {
+                            id: 'style-fire',
+                            name: 'Fire',
+                            description: 'Burning hot flame effect',
+                            price: 911,
+                            preview: 'style-preview-fire',
+                            type: 'message-style',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Fire">
+  <title>Fire</title>
+  <path d="M12 3c3 3 6 6 6 9.5 0 3.6-2.7 6.5-6 6.5s-6-2.9-6-6.5C6 9 9 6 12 3Z"/>
+  <path d="M12 8c1.9 1.7 3 3.4 3 5 0 1.9-1.3 3.5-3 3.5s-3-1.6-3-3.5c0-1.6 1.1-3.3 3-5Z"/>
+</svg>`
+                        },
+                        {
+                            id: 'style-ice',
+                            name: 'Ice',
+                            description: 'Cool frozen text effect',
+                            price: 777,
+                            preview: 'style-preview-ice',
+                            type: 'message-style',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Ice">
+  <title>Ice</title>
+  <path d="M12 2V22"/>
+  <path d="M2 12H22"/>
+  <path d="M4.9 6.5L19.1 17.5"/>
+  <path d="M19.1 6.5L4.9 17.5"/>
+</svg>`
+                        },
+                        {
+                            id: 'style-rainbow',
+                            name: 'Rainbow',
+                            description: 'Animated rainbow gradient',
+                            price: 2222,
+                            preview: 'style-preview-rainbow',
+                            type: 'message-style',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Rainbow">
+  <title>Rainbow</title>
+  <path d="M4 16a8 8 0 0 1 16 0"/>
+  <path d="M6.5 16a5.5 5.5 0 0 1 11 0"/>
+  <path d="M9 16a3 3 0 0 1 6 0"/>
+</svg>`
+                        }
+                    ],
+                    flair: [
+                        {
+                            id: 'flair-crown',
+                            name: 'Crown',
+                            description: 'Royal golden crown',
+                            price: 5000,
+                            type: 'nickname-flair',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="1em" height="1em" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+     vector-effect="non-scaling-stroke" role="img" aria-label="Crown">
+  <title>Crown</title>
+  <polyline points="3 9 7 13 12 7 17 13 21 9"/>
+  <path d="M5 18V13l4 2 3-5 3 5 4-2v5"/>
+  <path d="M4 18h16"/>
+</svg>`
+                        },
+                        {
+                            id: 'flair-diamond',
+                            name: 'Diamond',
+                            description: 'Sparkling diamond',
+                            price: 10000,
+                            type: 'nickname-flair',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="1em" height="1em" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+     vector-effect="non-scaling-stroke" role="img" aria-label="Diamond">
+  <title>Diamond</title>
+  <polygon points="12 3 19 9 12 21 5 9"/>
+  <path d="M5 9h14"/>
+  <path d="M12 3L9 9M12 3L15 9"/>
+</svg>`
+                        },
+                        {
+                            id: 'flair-skull',
+                            name: 'Skull',
+                            description: 'Badass skull',
+                            price: 1666,
+                            type: 'nickname-flair',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="1em" height="1em" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+     vector-effect="non-scaling-stroke" role="img" aria-label="Skull">
+  <title>Skull</title>
+  <circle cx="12" cy="10" r="5.5"/>
+  <rect x="8" y="14.5" width="8" height="4" rx="1.2"/>
+  <circle cx="9.5" cy="10" r="1.2"/>
+  <circle cx="14.5" cy="10" r="1.2"/>
+  <path d="M11.2 12.8 12 11.2 12.8 12.8Z"/>
+  <path d="M10 14.5v2M12 14.5v2M14 14.5v2"/>
+</svg>`
+                        },
+                        {
+                            id: 'flair-star',
+                            name: 'Star',
+                            description: 'Shining star',
+                            price: 2500,
+                            type: 'nickname-flair',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="1em" height="1em" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+     vector-effect="non-scaling-stroke" role="img" aria-label="Star">
+  <title>Star</title>
+  <polygon points="12 2 14.8 8.2 21.5 9 16.5 13.4 17.9 20 12 16.8 6.1 20 7.5 13.4 2.5 9 9.2 8.2"/>
+</svg>`
+                        },
+                        {
+                            id: 'flair-lightning',
+                            name: 'Lightning',
+                            description: 'Electric lightning bolt',
+                            price: 2100,
+                            type: 'nickname-flair',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="1em" height="1em" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+     vector-effect="non-scaling-stroke" role="img" aria-label="Lightning">
+  <title>Lightning</title>
+  <polygon points="13 2 6 12 11 12 9 22 18 10 13 10"/>
+</svg>`
+                        },
+                        {
+                            id: 'flair-heart',
+                            name: 'Heart',
+                            description: 'Loving heart',
+                            price: 1111,
+                            type: 'nickname-flair',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="1em" height="1em" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+     vector-effect="non-scaling-stroke" role="img" aria-label="Heart">
+  <title>Heart</title>
+  <path d="M12 21
+           C7 17 4 14 4 10
+           C4 7 6 5 9 5
+           C11 5 12 7 12 7
+           C12 7 13 5 15 5
+           C18 5 20 7 20 10
+           C20 14 17 17 12 21Z"/>
+</svg>`
+                        },
+                        {
+                            id: 'flair-mask',
+                            name: 'Fawkes',
+                            description: 'Anonymous mask',
+                            price: 4200,
+                            type: 'nickname-flair',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="1em" height="1em" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+     vector-effect="non-scaling-stroke" role="img" aria-label="Mask">
+  <title>Mask</title>
+  <path d="M12 4c-4.4 0-8 1.8-8 4v3c0 4.6 3.6 8.6 8 9
+           c4.4-.4 8-4.4 8-9V8c0-2.2-3.6-4-8-4Z"/>
+  <path d="M7.5 11c.9-1.2 2.7-1.2 3.5 0"/>
+  <path d="M13 11c.9-1.2 2.7-1.2 3.5 0"/>
+  <path d="M8 14c1.4 1 2.6 1 4 0c1.4 1 2.6 1 4 0"/>
+</svg>`
+                        },
+                        {
+                            id: 'flair-rocket',
+                            name: 'Rocket',
+                            description: 'To the moon',
+                            price: 2300,
+                            type: 'nickname-flair',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="1em" height="1em" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+     vector-effect="non-scaling-stroke" role="img" aria-label="Rocket">
+  <title>Rocket</title>
+  <polygon points="12 3 15 8 9 8"/>
+  <rect x="9" y="8" width="6" height="7" rx="3"/>
+  <circle cx="12" cy="11.5" r="1.6"/>
+  <polygon points="9 13 6.5 15 9 16"/>
+  <polygon points="15 13 17.5 15 15 16"/>
+  <polygon points="12 15.5 10.7 19 12 18 13.3 19"/>
+</svg>`
+                        },
+                        {
+                            id: 'flair-shield',
+                            name: 'Shield',
+                            description: 'Supporter of encryption',
+                            price: 1900,
+                            type: 'nickname-flair',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="1em" height="1em" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+     vector-effect="non-scaling-stroke" role="img" aria-label="Shield">
+  <title>Shield</title>
+  <path d="M12 3l7 3v5c0 5-3.3 8.2-7 9.6C8.3 19.2 5 16 5 11V6l7-3Z"/>
+  <path d="M12 5v13"/>
+</svg>`
+                        }
+
+                    ],
+                    special: [
+                        {
+                            id: 'supporter-badge',
+                            name: 'NYM Supporter',
+                            description: 'Special supporter badge with golden messages',
+                            price: 42069,
+                            type: 'supporter',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Trophy">
+  <title>Trophy</title>
+  <path d="M8 21H16"/>
+  <path d="M12 17V21"/>
+  <path d="M7 9h10v2a5 5 0 0 1-5 5a5 5 0 0 1-5-5V9z"/>
+  <path d="M5 9H3a3 3 0 0 0 3 3"/>
+  <path d="M19 9h2a3 3 0 0 1-3 3"/>
+</svg>`
+                        },
+                        {
+                            id: 'cosmetic-aura-gold',
+                            name: 'Gold Aura',
+                            description: 'Golden glow around your messages',
+                            price: 3500,
+                            type: 'cosmetic',
+                            cssClass: 'cosmetic-aura-gold',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Gold Aura">
+  <title>Gold Aura</title>
+  <circle cx="12" cy="12" r="8"/>
+  <circle cx="12" cy="12" r="5"/>
+</svg>`
+                        },
+                        {
+                            id: 'cosmetic-name-glow',
+                            name: 'Name Glow',
+                            description: 'Animated glow on your nickname',
+                            price: 2800,
+                            type: 'cosmetic',
+                            cssClass: 'cosmetic-name-glow',
+                            icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+  width="1em" height="1em" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  vector-effect="non-scaling-stroke" role="img" aria-label="Name Glow">
+  <title>Name Glow</title>
+  <path d="M12 6V12 M9 9H15 M10 7l4 4 M14 7l-4 4"/>
+  <path d="M5 8V10 M4 9H6"/>
+  <path d="M18 14V16 M17 15H19"/>
+</svg>`
+                        }
+                    ]
+                };
+
+                this.userPurchases = new Map();
+                this.shopOwnerLightning = '69420@wallet.yakihonne.com';
+                this.activeShopTab = 'styles';
+                this.activeMessageStyle = null;
+                this.activeFlair = null;
+                this.otherUsersShopItems = new Map();
+                this.activeCosmetics = new Set();
+                this.loadShopActiveCache();
+            }
+
+            // Cache "active items"
+            loadShopActiveCache() {
+                try {
+                    const raw = localStorage.getItem('nym_shop_active_cache');
+                    if (!raw) return;
+                    const cache = JSON.parse(raw);
+                    const ttlMs = 30 * 24 * 60 * 60 * 1000; // 30 days
+                    const now = Date.now();
+                    Object.entries(cache).forEach(([pubkey, entry]) => {
+                        if (entry && entry.items && entry.ts && now - entry.ts < ttlMs) {
+                            this.otherUsersShopItems.set(pubkey, entry.items);
+                        }
+                    });
+                } catch (e) { /* ignore */ }
+            }
+            cacheShopActiveItems(pubkey, items) {
+                try {
+                    const raw = localStorage.getItem('nym_shop_active_cache');
+                    const cache = raw ? JSON.parse(raw) : {};
+                    cache[pubkey] = { items, ts: Date.now() };
+                    localStorage.setItem('nym_shop_active_cache', JSON.stringify(cache));
+                } catch (e) { /* ignore */ }
+            }
+
+            // Build current user's active items object used for broadcast
+            _buildActiveItemsPayload() {
+                return {
+                    style: this.activeMessageStyle || null,
+                    flair: this.activeFlair || null,
+                    supporter: this.userPurchases.has('supporter-badge'),
+                    cosmetics: Array.from(this.activeCosmetics || [])
+                };
+            }
+
+            // Publish current user's active shop items
+            async publishActiveShopItems() {
+                if (!this.pubkey) return;
+
+                const payload = this._buildActiveItemsPayload();
+
+                const evt = {
+                    kind: 30078,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [
+                        ['d', 'nym-shop-active'],
+                        ['title', 'NYM Shop Active Items']
+                    ],
+                    content: JSON.stringify(payload),
+                    pubkey: this.pubkey
+                };
+
+                let signed;
+                if (this.connectionMode === 'extension' && window.nostr) {
+                    signed = await window.nostr.signEvent(evt);
+                } else if (this.privkey) {
+                    signed = window.NostrTools.finalizeEvent(evt, this.privkey);
+                }
+                if (signed) this.sendToRelay(['EVENT', signed]);
+            }
+
+            activateCosmetic(itemId) {
+                // ensure item exists and is cosmetic
+                const item = this.getShopItemById(itemId);
+                if (!item || item.type !== 'cosmetic') return;
+
+                if (this.activeCosmetics.has(itemId)) {
+                    this.activeCosmetics.delete(itemId);
+                    this.displaySystemMessage(`❎ Deactivated ${item.name}`);
+                } else {
+                    this.activeCosmetics.add(itemId);
+                    this.displaySystemMessage(`🟡 Activated ${item.name}`);
+                }
+                // Save & broadcast
+                this.savePurchaseToNostr();
+                this.publishActiveShopItems();
+
+                // Refresh inventory tab if open
+                if (document.getElementById('shopModal').classList.contains('active') &&
+                    this.activeShopTab === 'inventory') {
+                    this.renderInventoryTab(document.getElementById('shopBody'));
+                }
+            }
+
+            async openShop() {
+                const modal = document.getElementById('shopModal');
+                modal.classList.add('active');
+
+                // Load user purchases from Nostr
+                await this.loadUserPurchases();
+
+                // Display default tab
+                this.switchShopTab('styles');
+            }
+
+            closeShop() {
+                const modal = document.getElementById('shopModal');
+                modal.classList.remove('active');
+            }
+
+            switchShopTab(tab, event) {
+                this.activeShopTab = tab;
+
+                // Update tab buttons
+                document.querySelectorAll('.shop-tab').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                if (event && event.target) {
+                    event.target.classList.add('active');
+                } else {
+                    // Fallback if event not provided
+                    document.querySelector(`.shop-tab:nth-child(${['styles', 'flair', 'special', 'inventory'].indexOf(tab) + 1})`).classList.add('active');
+                }
+
+                // Update content
+                const shopBody = document.getElementById('shopBody');
+
+                switch (tab) {
+                    case 'styles':
+                        this.renderStylesTab(shopBody);
+                        break;
+                    case 'flair':
+                        this.renderFlairTab(shopBody);
+                        break;
+                    case 'special':
+                        this.renderSpecialTab(shopBody);
+                        break;
+                    case 'inventory':
+                        this.renderInventoryTab(shopBody);
+                        break;
+                }
+            }
+
+            renderStylesTab(container) {
+                let html = '<div class="shop-category-title">Message Styles</div>';
+                html += '<div class="shop-items">';
+
+                this.shopItems.styles.forEach(item => {
+                    const isPurchased = this.userPurchases.has(item.id);
+                    html += `
+            <div class="shop-item ${isPurchased ? 'purchased' : ''}" onclick="${!isPurchased ? `nym.purchaseItem('${item.id}')` : ''}">
+                <div class="shop-item-icon">${item.icon}</div>
+                <div class="shop-item-name">${item.name}</div>
+                <div class="shop-item-description">${item.description}</div>
+                <div class="shop-item-preview">
+                    <span class="${item.preview}">Preview Message</span>
+                </div>
+                <div class="shop-item-price">
+                    <span class="shop-price-amount">⚡ ${item.price} sats</span>
+                    ${!isPurchased ? '<button class="shop-buy-btn">BUY</button>' : ''}
+                </div>
+            </div>
+        `;
+                });
+
+                html += '</div>';
+                container.innerHTML = html;
+            }
+
+            renderFlairTab(container) {
+                let html = '<div class="shop-category-title">Nickname Flair</div>';
+                html += '<div class="shop-items">';
+
+                this.shopItems.flair.forEach(item => {
+                    const isPurchased = this.userPurchases.has(item.id);
+                    html += `
+            <div class="shop-item ${isPurchased ? 'purchased' : ''}" onclick="${!isPurchased ? `nym.purchaseItem('${item.id}')` : ''}">
+                <div class="shop-item-icon">${item.icon}</div>
+                <div class="shop-item-name">${item.name}</div>
+                <div class="shop-item-description">${item.description}</div>
+                <div class="shop-item-preview">
+                    <span>Your_Nick <span class="flair-badge ${item.id.replace('flair-', 'flair-')}">${item.icon}</span></span>
+                </div>
+                <div class="shop-item-price">
+                    <span class="shop-price-amount">⚡ ${item.price} sats</span>
+                    ${!isPurchased ? '<button class="shop-buy-btn">BUY</button>' : ''}
+                </div>
+            </div>
+        `;
+                });
+
+                html += '</div>';
+                container.innerHTML = html;
+            }
+
+            renderSpecialTab(container) {
+                let html = '<div class="shop-category-title">Special Items</div>';
+                html += '<div class="shop-items">';
+
+                this.shopItems.special.forEach(item => {
+                    const isPurchased = this.userPurchases.has(item.id);
+                    html += `
+            <div class="shop-item ${isPurchased ? 'purchased' : ''}" onclick="${!isPurchased ? `nym.purchaseItem('${item.id}')` : ''}">
+                <div class="shop-item-icon">${item.icon}</div>
+                <div class="shop-item-name">${item.name}</div>
+                <div class="shop-item-description">${item.description}</div>
+                ${item.benefits ? `
+                    <div class="shop-item-preview" style="font-size: 11px; text-align: left;">
+                        ${item.benefits.map(b => `• ${b}`).join('<br>')}
+                    </div>
+                ` : ''}
+                <div class="shop-item-price">
+                    <span class="shop-price-amount">⚡ ${item.price} sats</span>
+                    ${!isPurchased ? '<button class="shop-buy-btn">BUY</button>' : ''}
+                </div>
+            </div>
+        `;
+                });
+
+                html += '</div>';
+                container.innerHTML = html;
+            }
+
+            renderInventoryTab(container) {
+                let html = '<div class="shop-category-title">My Items</div>';
+
+                if (this.userPurchases.size === 0) {
+                    html += '<div style="text-align: center; padding: 40px; color: var(--text-dim);">No items purchased yet</div>';
+                } else {
+                    // Active message style
+                    const activeStyle = this.getActiveMessageStyle();
+                    if (activeStyle) {
+                        html += '<div class="shop-active-items">';
+                        html += '<div class="shop-active-items-title">Active Message Style</div>';
+                        html += `<div class="shop-active-item">${activeStyle.name}</div>`;
+                        html += '</div>';
+                    }
+
+                    // Active flair
+                    const activeFlair = this.getActiveFlair();
+                    if (activeFlair) {
+                        html += '<div class="shop-active-items">';
+                        html += '<div class="shop-active-items-title">Active Nickname Flair</div>';
+                        html += `<div class="shop-active-item">${activeFlair.name} ${activeFlair.icon}</div>`;
+                        html += '</div>';
+                    }
+
+                    // Active cosmetics
+                    if (this.activeCosmetics.size > 0) {
+                        html += '<div class="shop-active-items">';
+                        html += '<div class="shop-active-items-title">Active Cosmetics</div>';
+                        this.activeCosmetics.forEach(id => {
+                            const it = this.getShopItemById(id);
+                            if (it) html += `<div class="shop-active-item">${it.icon} ${it.name}</div>`;
+                        });
+                        html += '</div>';
+                    }
+
+                    // All purchased items with activate buttons
+                    html += '<div class="shop-category-title" style="margin-top: 20px;">All Purchased Items</div>';
+                    html += '<div class="shop-items">';
+
+                    this.userPurchases.forEach((purchase, itemId) => {
+                        const item = this.getShopItemById(itemId);
+                        if (!item) return;
+
+                        html += `
+            <div class="shop-item purchased">
+                <div class="shop-item-icon">${item.icon}</div>
+                <div class="shop-item-name">${item.name}</div>
+                <div class="shop-item-description">${item.description}</div>
+                <div style="font-size: 10px; color: var(--text-dim); margin-top: 10px;">
+                    Purchased: ${new Date(purchase.timestamp * 1000).toLocaleDateString()}
+                </div>
+            `;
+
+                        if (item.type === 'message-style') {
+                            html += `
+                <button class="shop-buy-btn" onclick="nym.activateMessageStyle('${itemId}')" style="margin-top: 10px; width: 100%;">
+                    ${this.activeMessageStyle === itemId ? 'ACTIVE' : 'ACTIVATE'}
+                </button>`;
+                        } else if (item.type === 'nickname-flair') {
+                            html += `
+                <button class="shop-buy-btn" onclick="nym.activateFlair('${itemId}')" style="margin-top: 10px; width: 100%;">
+                    ${this.activeFlair === itemId ? 'ACTIVE' : 'ACTIVATE'}
+                </button>`;
+                        } else if (item.type === 'cosmetic') {
+                            const isOn = this.activeCosmetics.has(itemId);
+                            html += `
+                <button class="shop-buy-btn" onclick="nym.activateCosmetic('${itemId}')" style="margin-top: 10px; width: 100%;">
+                    ${isOn ? 'ON' : 'TURN ON'}
+                </button>`;
+                        } else if (item.type === 'supporter') {
+                            // Supporter has no toggle (always on once owned)
+                            html += `<div class="shop-item-preview"><span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span></div>`;
+                        }
+
+                        html += `</div>`;
+                    });
+
+                    html += '</div>';
+                }
+
+                container.innerHTML = html;
+            }
+
+            getShopItemById(itemId) {
+                const allItems = [
+                    ...this.shopItems.styles,
+                    ...this.shopItems.flair,
+                    ...this.shopItems.special
+                ];
+                return allItems.find(item => item.id === itemId);
+            }
+
+            async purchaseItem(itemId) {
+                const item = this.getShopItemById(itemId);
+                if (!item) return;
+
+                // Show purchase confirmation
+                if (!confirm(`Purchase "${item.name}" for ${item.price} sats?`)) {
+                    return;
+                }
+
+                // Generate Lightning invoice
+                await this.generateShopInvoice(itemId, item.price);
+            }
+
+            async generateShopInvoice(itemId, amount) {
+                const item = this.getShopItemById(itemId);
+
+                // Create a zap modal for payment
+                const zapModal = document.getElementById('zapModal');
+
+                // Update zap modal for shop purchase
+                document.getElementById('zapRecipientInfo').innerHTML = `
+        <div>Purchasing: <strong>${item.name}</strong></div>
+        <div style="font-size: 12px; margin-top: 5px;">Payment to: NYM Shop</div>
+    `;
+
+                // Set amount
+                document.getElementById('zapCustomAmount').value = amount;
+
+                // Update send button
+                document.getElementById('zapSendBtn').onclick = () => {
+                    this.processShopPayment(itemId, amount);
+                };
+
+                // Open zap modal
+                zapModal.classList.add('active');
+            }
+
+            async processShopPayment(itemId, amount) {
+                // This integrates with your existing Lightning payment system
+                // For demonstration, we'll simulate a successful purchase
+
+                // Create purchase record
+                const purchase = {
+                    itemId: itemId,
+                    amount: amount,
+                    timestamp: Math.floor(Date.now() / 1000),
+                    txid: 'shop_' + Math.random().toString(36).substring(7)
+                };
+
+                // Store purchase locally and save to Nostr
+                this.userPurchases.set(itemId, purchase);
+                await this.savePurchaseToNostr(purchase);
+
+                // Auto-activate cosmetics on purchase (quality of life)
+                const item = this.getShopItemById(itemId);
+                if (item?.type === 'cosmetic') {
+                    this.activeCosmetics.add(itemId);
+                }
+                // Publish current active set (style/flair/supporter/cosmetics)
+                this.publishActiveShopItems();
+
+                // Handle ephemeral vs persistent recovery code
+                if (this.connectionMode === 'ephemeral') {
+                    const recoveryCode = this.handlePurchaseStrategy();
+                }
+
+                // Close payment modal and notify
+                this.closeZapModal();
+                this.displaySystemMessage(`✅ Successfully purchased ${item.name}!`);
+
+                // Refresh shop display
+                this.switchShopTab(this.activeShopTab);
+            }
+
+            async savePurchaseToNostr(purchaseJustMade = null) {
+                if (!this.pubkey) return;
+
+                try {
+                    // Merge purchase just made into map before saving
+                    if (purchaseJustMade) {
+                        this.userPurchases.set(purchaseJustMade.itemId, purchaseJustMade);
+                    }
+
+                    // Build full state
+                    const allPurchases = Array.from(this.userPurchases.entries()).map(([id, data]) => ({
+                        id, ...data
+                    }));
+
+                    const purchaseData = {
+                        purchases: allPurchases,
+                        activeStyle: this.activeMessageStyle || null,
+                        activeFlair: this.activeFlair || null,
+                        activeCosmetics: Array.from(this.activeCosmetics || [])
+                    };
+
+                    const purchaseEvent = {
+                        kind: 30078,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [
+                            ["d", "nym-shop-purchases"],
+                            ["title", "NYM Shop Purchases"]
+                        ],
+                        content: JSON.stringify(purchaseData),
+                        pubkey: this.pubkey
+                    };
+
+                    let signedEvent;
+                    if (this.connectionMode === 'extension' && window.nostr) {
+                        signedEvent = await window.nostr.signEvent(purchaseEvent);
+                    } else if (this.privkey) {
+                        signedEvent = window.NostrTools.finalizeEvent(purchaseEvent, this.privkey);
+                    }
+                    if (signedEvent) {
+                        this.sendToRelay(["EVENT", signedEvent]);
+                    }
+                } catch (error) {
+                    console.error('Error saving purchases to Nostr:', error);
+                }
+            }
+
+            async loadUserPurchases() {
+                if (!this.pubkey) return;
+
+                // Request shop purchases from Nostr
+                const subscriptionId = "shop-" + Math.random().toString(36).substring(7);
+                const subscription = [
+                    "REQ",
+                    subscriptionId,
+                    {
+                        kinds: [30078],
+                        authors: [this.pubkey],
+                        "#d": ["nym-shop-purchases"],
+                        limit: 1
+                    }
+                ];
+
+                this.sendToRelay(subscription);
+
+                // Wait for response
+                return new Promise((resolve) => {
+                    setTimeout(() => {
+                        this.sendToRelay(["CLOSE", subscriptionId]);
+                        // After trying to load purchases, publish current active set so others see us
+                        this.publishActiveShopItems();
+                        resolve();
+                    }, 3000);
+                });
+            }
+
+            getUserShopItems(pubkey) {
+                if (pubkey === this.pubkey) {
+                    return {
+                        style: this.activeMessageStyle,
+                        flair: this.activeFlair,
+                        supporter: this.userPurchases.has('supporter-badge'),
+                        cosmetics: Array.from(this.activeCosmetics || [])
+                    };
+                }
+                return this.otherUsersShopItems?.get(pubkey) || null;
+            }
+
+            getFlairForUser(pubkey) {
+                const userItems = this.getUserShopItems(pubkey);
+                if (userItems && userItems.flair) {
+                    const flairItem = this.getShopItemById(userItems.flair);
+                    if (flairItem) {
+                        return `<span class="flair-badge ${userItems.flair.replace('flair-', 'flair-')}">${flairItem.icon}</span>`;
+                    }
+                }
+                return '';
+            }
+
+            activateMessageStyle(styleId) {
+                this.activeMessageStyle = styleId || null;
+                this.savePurchaseToNostr();
+                this.publishActiveShopItems();
+                this.displaySystemMessage(`✅ Activated ${this.getShopItemById(styleId).name}`);
+                this.renderInventoryTab(document.getElementById('shopBody'));
+            }
+
+            activateFlair(flairId) {
+                this.activeFlair = flairId || null;
+                this.savePurchaseToNostr();
+                this.publishActiveShopItems();
+                this.displaySystemMessage(`✅ Activated ${this.getShopItemById(flairId).name}`);
+                this.renderInventoryTab(document.getElementById('shopBody'));
+            }
+
+            getActiveMessageStyle() {
+                if (this.activeMessageStyle) {
+                    return this.getShopItemById(this.activeMessageStyle);
+                }
+                return null;
+            }
+
+            getActiveFlair() {
+                if (this.activeFlair) {
+                    return this.getShopItemById(this.activeFlair);
+                }
+                return null;
+            }
+
+            handlePurchaseStrategy() {
+                if (this.connectionMode === 'ephemeral') {
+                    // Build a self-contained Base64 code so it works across sessions/devices
+                    const payload = {
+                        purchases: Array.from(this.userPurchases.entries()),
+                        activeStyle: this.activeMessageStyle || null,
+                        activeFlair: this.activeFlair || null,
+                        activeCosmetics: Array.from(this.activeCosmetics || []),
+                        ts: Date.now()
+                    };
+                    const code = this.generatePurchaseRecoveryCode(payload);
+
+                    // Also keep a local copy as a fallback
+                    localStorage.setItem('nym_shop_recovery_' + code, JSON.stringify(payload));
+
+                    this.displaySystemMessage(`
+⚠️ EPHEMERAL PURCHASE RECOVERY CODE ⚠️
+Save this code to restore your purchases in a new session:
+${code}
+`);
+                    return code;
+                } else {
+                    this.savePurchaseToNostr();
+                    return null;
+                }
+            }
+
+            generatePurchaseRecoveryCode(payloadObj) {
+                // Generate 16 random bytes → 32 uppercase hex chars
+                const id = (() => {
+                    if (window.crypto?.getRandomValues) {
+                        const u8 = new Uint8Array(16);
+                        window.crypto.getRandomValues(u8);
+                        return Array.from(u8, b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+                    }
+                    // Minimal non-crypto fallback (still produces 32 chars)
+                    let s = '';
+                    while (s.length < 32) s += Math.random().toString(16).slice(2);
+                    return s.slice(0, 32).toUpperCase();
+                })();
+
+                const code = `NYM-${id}`;
+                const json = JSON.stringify(payloadObj);
+                localStorage.setItem('nym_shop_recovery_' + code, json);
+                return code;
+            }
+
+            async restorePurchases(recoveryCode) {
+                if (recoveryCode && recoveryCode.startsWith('NYM-')) {
+                    try {
+                        const stored = localStorage.getItem('nym_shop_recovery_' + recoveryCode);
+                        if (!stored) {
+                            throw new Error('No stored data for code');
+                        }
+
+                        const data = JSON.parse(stored);
+
+                        this.userPurchases.clear();
+                        (data.purchases || []).forEach(([id, purchase]) => this.userPurchases.set(id, purchase));
+                        this.activeMessageStyle = data.activeStyle || null;
+                        this.activeFlair = data.activeFlair || null;
+                        this.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
+
+                        // Save & broadcast so others see it
+                        await this.savePurchaseToNostr();
+                        this.publishActiveShopItems();
+
+                        this.displaySystemMessage('✅ Purchases restored successfully!');
+                        if (document.getElementById('shopModal').classList.contains('active')) {
+                            this.switchShopTab(this.activeShopTab);
+                        }
+                        return true;
+                    } catch (e) {
+                        console.error('Failed to restore NYM code:', e);
+                    }
+                }
+
+                this.displaySystemMessage('❌ Invalid recovery code');
+                return false;
+            }
+
+            handleShopItemBroadcast(event) {
+                const shopItemsTag = event.tags.find(t => t[0] === 'shop-items');
+                if (shopItemsTag) {
+                    try {
+                        const items = JSON.parse(shopItemsTag[1]);
+                        const pubkey = event.pubkey;
+
+                        this.otherUsersShopItems.set(pubkey, items);
+
+                        const messages = document.querySelectorAll(`.message[data-pubkey="${pubkey}"]`);
+                        messages.forEach(msg => {
+                            msg.classList.forEach(cls => {
+                                if (cls.startsWith('style-') || cls === 'supporter-style') {
+                                    msg.classList.remove(cls);
+                                }
+                            });
+
+                            if (items.style) {
+                                msg.classList.add(items.style);
+                            }
+                            if (items.supporter) {
+                                msg.classList.add('supporter-style');
+                            }
+                        });
+
+                        console.log(`Updated shop items for user ${this.getNym(pubkey)}`);
+                    } catch (error) {
+                        console.error('Error parsing shop items:', error);
+                    }
+                }
             }
 
             async handleChannelLink(channelInput, event) {
@@ -13189,6 +14856,13 @@
                         "#k": ["1059"],
                         limit: 500
                     },
+                    // User shop items
+                    {
+                        kinds: [30078],
+                        "#d": ["nym-shop-active"],
+                        limit: 1000,
+                        since: Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60) // last 7 days
+                    },
                     // Reactions for community posts
                     {
                         kinds: [7],
@@ -15626,6 +17300,72 @@
                             this.updateUnreadCount(communityId);
                         }
                     }
+                } else if (event.kind === 30078) {
+                    const dTag = event.tags.find(t => t[0] === 'd');
+                    if (!dTag) return;
+
+                    // Active items broadcast for everyone
+                    if (dTag[1] === 'nym-shop-active') {
+                        try {
+                            const items = JSON.parse(event.content || '{}');
+                            // Normalize cosmetics to array
+                            const normalized = {
+                                style: items.style || null,
+                                flair: items.flair || null,
+                                supporter: !!items.supporter,
+                                cosmetics: Array.isArray(items.cosmetics) ? items.cosmetics : []
+                            };
+                            this.otherUsersShopItems.set(event.pubkey, normalized);
+                            this.cacheShopActiveItems(event.pubkey, normalized);
+
+                            // Update any visible messages from this user
+                            const messages = document.querySelectorAll(`.message[data-pubkey="${event.pubkey}"]`);
+                            messages.forEach(msg => {
+                                // Remove previous styling classes
+                                [...msg.classList].forEach(cls => {
+                                    if (cls.startsWith('style-') || cls.startsWith('cosmetic-') || cls === 'supporter-style') {
+                                        msg.classList.remove(cls);
+                                    }
+                                });
+                                // Add new style
+                                if (normalized.style) msg.classList.add(normalized.style);
+                                if (normalized.supporter) msg.classList.add('supporter-style');
+                                if (Array.isArray(normalized.cosmetics)) {
+                                    normalized.cosmetics.forEach(c => {
+                                        if (c === 'cosmetic-aura-gold') {
+                                            msg.classList.add('cosmetic-aura-gold');
+                                        }
+                                        // Name-glow applies to author element
+                                        if (c === 'cosmetic-name-glow') {
+                                            const auth = msg.querySelector('.message-author');
+                                            if (auth) auth.classList.add('cosmetic-name-glow');
+                                        }
+                                    });
+                                }
+                                // Flair is handled in rendering; we don't re-render the author text here
+                            });
+                        } catch (e) {
+                            console.error('Failed to parse active items event:', e);
+                        }
+                        return;
+                    }
+
+                    // Our purchase record
+                    if (dTag[1] === 'nym-shop-purchases' && event.pubkey === this.pubkey) {
+                        try {
+                            const data = JSON.parse(event.content || '{}');
+                            this.userPurchases.clear();
+                            (data.purchases || []).forEach(p => this.userPurchases.set(p.id, p));
+                            this.activeMessageStyle = data.activeStyle || null;
+                            this.activeFlair = data.activeFlair || null;
+                            this.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
+                            // After loading, broadcast our current active items so others see it
+                            this.publishActiveShopItems();
+                            console.log('Loaded shop purchases + active items');
+                        } catch (error) {
+                            console.error('Error loading shop purchases:', error);
+                        }
+                    }
                 } else if (event.kind === 7) {
                     // Handle reactions (NIP-25)
                     this.handleReaction(event);
@@ -17956,6 +19696,14 @@
                         hour12: this.settings.timeFormat === '12hr'
                     }) : '';
 
+                // ========== SHOP INTEGRATION STARTS HERE ==========
+                // Get user's shop items for styling
+                const userShopItems = this.getUserShopItems(message.pubkey);
+                const flairHtml = this.getFlairForUser(message.pubkey);
+                const supporterBadge = userShopItems?.supporter ?
+                    '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
+                // ========== SHOP INTEGRATION SECTION 1 END ==========
+
                 const messageEl = document.createElement('div');
 
                 // Check if nym is blocked or message contains blocked keywords or is spam
@@ -17990,6 +19738,22 @@
                         classes.push('mentioned');
                     }
 
+                    // ========== SHOP INTEGRATION SECTION 2 START ==========
+                    // Apply shop styles (message-level)
+                    if (userShopItems?.style) {
+                        classes.push(userShopItems.style);
+                    }
+                    if (userShopItems?.supporter) {
+                        classes.push('supporter-style');
+                    }
+                    // Apply cosmetics (message-level glow)
+                    if (Array.isArray(userShopItems?.cosmetics)) {
+                        if (userShopItems.cosmetics.includes('cosmetic-aura-gold')) {
+                            classes.push('cosmetic-aura-gold');
+                        }
+                    }
+                    // ========== SHOP INTEGRATION SECTION 2 END ==========
+
                     messageEl.className = classes.join(' ');
                     messageEl.dataset.messageId = message.id;
                     messageEl.dataset.author = message.author;
@@ -18023,7 +19787,16 @@
                     const formattedContent = this.formatMessageWithQuotes(message.content);
 
                     const baseNym = this.parseNymFromDisplay(message.author);
-                    const displayAuthor = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
+                    // ========== SHOP INTEGRATION SECTION 3 START ==========
+                    const displayAuthorBase = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+                    let displayAuthor = displayAuthorBase; // string used in HTML
+                    let authorExtraClass = '';
+                    // Apply name glow cosmetic on author
+                    if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-name-glow')) {
+                        authorExtraClass = 'cosmetic-name-glow';
+                    }
+                    // ========== SHOP INTEGRATION SECTION 3 END ==========
+
                     const escapedAuthorBase = this.escapeHtml(message.author).split('#')[0] || this.escapeHtml(message.author);
                     const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
@@ -18038,14 +19811,16 @@
                         hour12: this.settings.timeFormat === '12hr'
                     });
 
+                    // ========== SHOP INTEGRATION SECTION 4 START ==========
                     messageEl.innerHTML = `
-    ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass}">
-        ${displayAuthor}${verifiedBadge}:
-    </span>
-    <span class="message-content ${userColorClass}">${formattedContent}</span>
-    ${reactionButton}
-`;
+            ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
+            <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">
+    ${displayAuthor}${verifiedBadge}${supporterBadge}:
+</span>
+            <span class="message-content ${userColorClass}">${formattedContent}</span>
+            ${reactionButton}
+        `;
+                    // ========== SHOP INTEGRATION SECTION 4 END ==========
 
                     const authorSpan = messageEl.querySelector('.message-author');
                     if (authorSpan) {
@@ -18144,22 +19919,23 @@
 
                     images.forEach(img => {
                         if (img.complete) {
-                            // Image already loaded
                             handleImageLoad();
                         } else {
-                            // Wait for image to load
                             img.addEventListener('load', handleImageLoad, { once: true });
                             img.addEventListener('error', handleImageLoad, { once: true });
                         }
                     });
                 } else {
-                    // No images, apply autoscroll immediately
-                    if (this.settings.autoscroll) {
-                        if (isAtBottom || message.isHistorical) {
-                            setTimeout(() => {
-                                container.scrollTop = container.scrollHeight;
-                            }, 0);
-                        }
+                    // No images, just handle scrolling normally
+                    if (this.settings.autoscroll && shouldScroll) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                }
+
+                // Play notification sound for mentions and PMs (but not for historical messages or own messages)
+                if (!message.isHistorical && !message.isOwn && this.settings.sound) {
+                    if (isMentioned || message.isPM) {
+                        this.playNotificationSound();
                     }
                 }
             }
