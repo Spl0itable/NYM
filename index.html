@@ -778,6 +778,7 @@
 
         .zap-modal .modal-content {
             max-width: 400px;
+            z-index: 9500 !important;
         }
 
         .zap-amounts {
@@ -2345,6 +2346,11 @@
         }
 
         @media (max-width: 768px) {
+            .shop-recovery {
+                display: grid !important;
+                margin-left: 15px !important;
+            }
+
             .tutorial-card {
                 max-width: 94vw;
                 padding: 14px;
@@ -2732,7 +2738,7 @@
             width: 100%;
             height: 100%;
             background: rgba(0, 0, 0, 0.9);
-            z-index: 10000;
+            z-index: 900;
             justify-content: center;
             align-items: center;
             backdrop-filter: blur(10px);
@@ -3148,37 +3154,94 @@
             }
         }
 
-        .style-preview-satoshi,
-        .message.style-satoshi .message-content {
+        .style-preview-satoshi {
             position: relative;
-            font-weight: bold;
+            display: inline-block;
+            padding: 10px 15px;
+            color: #FFFFFF;
+            background-color: rgba(247, 147, 26, 0.2);
+            overflow: hidden;
+        }
+
+        .style-preview-satoshi::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: repeating-linear-gradient(0deg,
+                    transparent,
+                    transparent 40px,
+                    transparent 40px,
+                    transparent 80px);
+            background-size: 50px 40px;
+            pointer-events: none;
+            z-index: 0;
+            font-size: 32px;
+            line-height: 40px;
+            color: rgba(247, 147, 26, 0.2);
+            overflow: hidden;
+            white-space: pre-wrap;
+        }
+
+        .style-preview-satoshi::before {
+            content: '₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            font-size: 32px;
+            line-height: 40px;
+            color: rgba(247, 147, 26, 0.2);
+            pointer-events: none;
+            z-index: 0;
+            white-space: pre;
+        }
+
+        .style-preview-satoshi::after {
+            content: attr(data-text);
+            position: relative;
+            z-index: 1;
             background: linear-gradient(135deg, #f7931a 0%, #f9a826 100%);
             -webkit-background-clip: text;
-            background-clip: text;
             -webkit-text-fill-color: transparent;
-            color: #f7931a;
-            isolation: isolate;
-        }
-
-        .style-preview-satoshi {
-            text-shadow: 0 0 20px rgba(247, 147, 26, 0.5);
-        }
-
-        .style-preview-satoshi::before,
-        .message.style-satoshi .message-content::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            z-index: -1;
-            pointer-events: none;
-            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><text x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='system-ui,-apple-system,Segoe UI,Roboto,Arial' font-size='18' fill='%23f7931a' fill-opacity='0.14'>&#x20BF;</text></svg>");
-            background-size: 28px 28px;
-            background-repeat: repeat;
-            background-position: 0 0;
+            font-weight: bold;
+            filter: drop-shadow(0 0 20px rgba(247, 147, 26, 0.2));
         }
 
         .message.style-satoshi .message-content {
-            text-shadow: 0 0 12px rgba(247, 147, 26, 0.35);
+            position: relative;
+            display: inline-block;
+            padding: 10px 15px;
+            color: #FFFFFF;
+            background-color: rgba(247, 147, 26, 0.2);
+            overflow: hidden;
+        }
+
+        .message.style-satoshi .message-content::before {
+            content: '₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿\A₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿ ₿';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            font-size: 32px;
+            line-height: 40px;
+            color: rgba(247, 147, 26, 0.2);
+            pointer-events: none;
+            z-index: 0;
+            white-space: pre;
+        }
+
+        .message.style-satoshi .message-content>* {
+            position: relative;
+            z-index: 1;
+            background: linear-gradient(135deg, #f7931a 0%, #f9a826 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: bold;
         }
 
         .message.style-matrix .message-content {
@@ -3342,6 +3405,35 @@
         .shop-recovery button:hover {
             background: rgba(0, 255, 0, 0.1);
             box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+        }
+
+        .shop-loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+            gap: 20px;
+        }
+
+        .shop-loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent-color);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        .shop-loading-text {
+            color: var(--text-dim);
+            font-size: 14px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
         }
     </style>
 </head>
@@ -3533,9 +3625,9 @@
 
             <div class="shop-header">
                 <div class="shop-title">
-                    <span>SHOP</span><br /><br />
-                    <span style="font-size:12px;">Buy addon packs to change the styling of your messages and
-                        nickname</span>
+                    <span>SHOP<br />
+                        <span style="font-size:12px;">Buy addon packs to change the styling of your messages and
+                            nickname that others will see across all channels.</span></span>
                 </div>
                 <div class="shop-recovery">
                     <input type="text" id="recoveryCodeInput" placeholder="Recovery code">
@@ -10507,7 +10599,7 @@
                     },
                     {
                         title: 'Main Menu',
-                        body: 'Create or join a channel. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start anew.',
+                        body: 'Create or join a channel. Buy addon packs in the shop to change the styling of your messages and nickname. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start anew.',
                         selector: (window.innerWidth > 768 ? '.header-actions' : '.sidebar-actions'),
                         onBefore: () => { if (window.innerWidth <= 768) return ensureSidebarOpenOnMobile(); }
                     },
@@ -11771,11 +11863,11 @@
                 };
 
                 this.userPurchases = new Map();
-                this.shopOwnerLightning = '69420@wallet.yakihonne.com';
                 this.activeShopTab = 'styles';
                 this.activeMessageStyle = null;
                 this.activeFlair = null;
                 this.otherUsersShopItems = new Map();
+                this.shopItemsCache = new Map();
                 this.activeCosmetics = new Set();
                 this.loadShopActiveCache();
             }
@@ -11786,21 +11878,40 @@
                     const raw = localStorage.getItem('nym_shop_active_cache');
                     if (!raw) return;
                     const cache = JSON.parse(raw);
-                    const ttlMs = 30 * 24 * 60 * 60 * 1000; // 30 days
                     const now = Date.now();
-                    Object.entries(cache).forEach(([pubkey, entry]) => {
-                        if (entry && entry.items && entry.ts && now - entry.ts < ttlMs) {
+                    const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+
+                    for (const [pubkey, entry] of Object.entries(cache)) {
+                        if (entry && entry.items && (now - entry.ts < maxAge)) {
                             this.otherUsersShopItems.set(pubkey, entry.items);
+                            // Also store in memory cache with timestamp
+                            this.shopItemsCache.set(pubkey, {
+                                items: entry.items,
+                                timestamp: entry.ts,
+                                eventCreatedAt: entry.eventCreatedAt || 0
+                            });
                         }
-                    });
+                    }
                 } catch (e) { /* ignore */ }
             }
-            cacheShopActiveItems(pubkey, items) {
+
+            cacheShopActiveItems(pubkey, items, eventCreatedAt = 0) {
                 try {
                     const raw = localStorage.getItem('nym_shop_active_cache');
                     const cache = raw ? JSON.parse(raw) : {};
-                    cache[pubkey] = { items, ts: Date.now() };
+                    cache[pubkey] = {
+                        items,
+                        ts: Date.now(),
+                        eventCreatedAt: eventCreatedAt
+                    };
                     localStorage.setItem('nym_shop_active_cache', JSON.stringify(cache));
+
+                    // Also update memory cache
+                    this.shopItemsCache.set(pubkey, {
+                        items: items,
+                        timestamp: Date.now(),
+                        eventCreatedAt: eventCreatedAt
+                    });
                 } catch (e) { /* ignore */ }
             }
 
@@ -11866,6 +11977,15 @@
             async openShop() {
                 const modal = document.getElementById('shopModal');
                 modal.classList.add('active');
+
+                // Show loading state
+                const shopBody = document.getElementById('shopBody');
+                shopBody.innerHTML = `
+        <div class="shop-loading">
+            <div class="shop-loading-spinner"></div>
+            <div class="shop-loading-text">Loading shop items...</div>
+        </div>
+    `;
 
                 // Load user purchases from Nostr
                 await this.loadUserPurchases();
@@ -12088,11 +12208,6 @@
                 const item = this.getShopItemById(itemId);
                 if (!item) return;
 
-                // Show purchase confirmation
-                if (!confirm(`Purchase "${item.name}" for ${item.price} sats?`)) {
-                    return;
-                }
-
                 // Generate Lightning invoice
                 await this.generateShopInvoice(itemId, item.price);
             }
@@ -12100,62 +12215,374 @@
             async generateShopInvoice(itemId, amount) {
                 const item = this.getShopItemById(itemId);
 
+                // Store the purchase context
+                this.currentPurchaseContext = {
+                    type: 'shop',
+                    itemId: itemId,
+                    item: item,
+                    amount: amount
+                };
+
                 // Create a zap modal for payment
                 const zapModal = document.getElementById('zapModal');
 
                 // Update zap modal for shop purchase
                 document.getElementById('zapRecipientInfo').innerHTML = `
         <div>Purchasing: <strong>${item.name}</strong></div>
-        <div style="font-size: 12px; margin-top: 5px;">Payment to: NYM Shop</div>
+        <div style="font-size: 12px; margin-top: 5px; color: var(--warning);">Price: ${amount} sats</div>
     `;
 
-                // Set amount
-                document.getElementById('zapCustomAmount').value = amount;
+                // Hide preset amounts for shop purchases
+                const zapAmountsContainer = document.querySelector('.zap-amounts');
+                if (zapAmountsContainer) {
+                    zapAmountsContainer.style.display = 'none';
+                }
 
-                // Update send button
-                document.getElementById('zapSendBtn').onclick = () => {
-                    this.processShopPayment(itemId, amount);
+                const customFormlabel = document.getElementById('zapAmountSection');
+                if (customFormlabel) {
+                    customFormlabel.style.display = 'none';
+                }
+
+                // Set and lock the custom amount
+                const customAmountInput = document.getElementById('zapCustomAmount');
+                if (customAmountInput) {
+                    customAmountInput.style.display = 'none';
+                }
+
+                // Hide the comment field for shop purchases
+                const commentSection = document.querySelector('.zap-comment');
+                if (commentSection) {
+                    commentSection.style.display = 'none';
+                }
+
+                // Update send button to use existing invoice generation
+                const sendBtn = document.getElementById('zapSendBtn');
+                sendBtn.textContent = 'Generate Invoice';
+                sendBtn.onclick = () => {
+                    this.generateShopPaymentInvoice();
                 };
 
-                // Open zap modal
+                // Open zap modal (will be above shop modal due to z-index fix)
                 zapModal.classList.add('active');
             }
 
-            async processShopPayment(itemId, amount) {
-                // This integrates with your existing Lightning payment system
-                // For demonstration, we'll simulate a successful purchase
+            async generateShopPaymentInvoice() {
+                if (!this.currentPurchaseContext || this.currentPurchaseContext.type !== 'shop') {
+                    return;
+                }
 
-                // Create purchase record
+                const { itemId, item, amount } = this.currentPurchaseContext;
+
+                // Show loading state
+                document.getElementById('zapAmountSection').style.display = 'none';
+                document.getElementById('zapInvoiceSection').style.display = 'block';
+                document.getElementById('zapStatus').className = 'zap-status checking';
+                document.getElementById('zapStatus').innerHTML = '<span class="loader"></span> Generating invoice...';
+
+                try {
+                    // Set up a temporary zap target for the shop
+                    const originalZapTarget = this.currentZapTarget;
+                    this.currentZapTarget = {
+                        recipientPubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
+                        lnAddress: '69420@wallet.yakihonne.com',
+                        messageId: null
+                    };
+
+                    // Create zap request event for shop purchase
+                    const zapRequest = await this.createShopZapRequest(amount, `NYM Shop Purchase: ${item.name}`);
+
+                    // Build the LNURL callback with the zap request
+                    const invoice = await this.fetchShopLightningInvoice(
+                        '69420@wallet.yakihonne.com',
+                        amount,
+                        `NYM Shop Purchase: ${item.name}`,
+                        zapRequest
+                    );
+
+                    if (invoice) {
+                        // Store invoice data for verification
+                        this.currentShopInvoice = {
+                            ...invoice,
+                            itemId: itemId,
+                            item: item,
+                            zapRequestId: zapRequest ? zapRequest.id : null
+                        };
+
+                        // Display invoice using existing function
+                        this.displayZapInvoice(invoice);
+
+                        // Start listening for zap receipt
+                        this.listenForShopZapReceipt(zapRequest);
+
+                        // Also check with verify URL if available
+                        if (invoice.verify) {
+                            this.checkShopPayment(invoice);
+                        }
+                    }
+
+                    // Restore original zap target
+                    this.currentZapTarget = originalZapTarget;
+
+                } catch (error) {
+                    console.error('Failed to generate shop invoice:', error);
+                    document.getElementById('zapStatus').className = 'zap-status error';
+                    document.getElementById('zapStatus').innerHTML = `❌ Failed: ${error.message}`;
+
+                    // Show retry button
+                    setTimeout(() => {
+                        document.getElementById('zapAmountSection').style.display = 'block';
+                        document.getElementById('zapInvoiceSection').style.display = 'none';
+                        document.getElementById('zapSendBtn').style.display = 'block';
+                    }, 3000);
+                }
+            }
+
+            async createShopZapRequest(amountSats, description) {
+                try {
+                    const zapRequest = {
+                        kind: 9734,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [
+                            ['p', 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df'], // Shop is the recipient
+                            ['amount', (parseInt(amountSats) * 1000).toString()], // Amount in millisats
+                            ['relays', ...this.broadcastRelays.slice(0, 5)], // Limit to 5 relays
+                            ['shop-item', this.currentPurchaseContext.itemId], // Custom tag for shop item
+                            ['shop-purchase', 'true'] // Flag this as a shop purchase
+                        ],
+                        content: description || '',
+                        pubkey: this.pubkey
+                    };
+
+                    // Sign the request
+                    let signedEvent;
+                    if (window.nostr && !this.privkey) {
+                        signedEvent = await window.nostr.signEvent(zapRequest);
+                    } else if (this.privkey) {
+                        signedEvent = window.NostrTools.finalizeEvent(zapRequest, this.privkey);
+                    }
+
+                    // Broadcast the zap request to relays
+                    if (signedEvent) {
+                        this.sendToRelay(['EVENT', signedEvent]);
+                    }
+
+                    return signedEvent;
+                } catch (error) {
+                    console.error('Failed to create shop zap request:', error);
+                    return null;
+                }
+            }
+
+            async fetchShopLightningInvoice(lnAddress, amountSats, comment, zapRequest) {
+                try {
+                    const [username, domain] = lnAddress.split('@');
+                    if (!username || !domain) {
+                        throw new Error('Invalid lightning address format');
+                    }
+
+                    // Fetch LNURL endpoint
+                    const lnurlResponse = await fetch(`https://${domain}/.well-known/lnurlp/${username}`);
+                    if (!lnurlResponse.ok) {
+                        throw new Error('Failed to fetch LNURL endpoint');
+                    }
+
+                    const lnurlData = await lnurlResponse.json();
+
+                    // Convert sats to millisats
+                    const amountMillisats = parseInt(amountSats) * 1000;
+
+                    // Check bounds
+                    if (amountMillisats < lnurlData.minSendable || amountMillisats > lnurlData.maxSendable) {
+                        throw new Error(`Amount must be between ${lnurlData.minSendable / 1000} and ${lnurlData.maxSendable / 1000} sats`);
+                    }
+
+                    // Build callback URL
+                    const callbackUrl = new URL(lnurlData.callback);
+                    callbackUrl.searchParams.set('amount', amountMillisats);
+
+                    // Add comment if allowed
+                    if (comment && lnurlData.commentAllowed) {
+                        callbackUrl.searchParams.set('comment', comment.substring(0, lnurlData.commentAllowed));
+                    }
+
+                    // Add nostr zap request params
+                    if (zapRequest && lnurlData.allowsNostr && lnurlData.nostrPubkey) {
+                        callbackUrl.searchParams.set('nostr', JSON.stringify(zapRequest));
+                    }
+
+                    // Fetch invoice
+                    const invoiceResponse = await fetch(callbackUrl.toString());
+                    if (!invoiceResponse.ok) {
+                        throw new Error('Failed to fetch invoice');
+                    }
+
+                    const invoiceData = await invoiceResponse.json();
+
+                    if (invoiceData.pr) {
+                        return {
+                            pr: invoiceData.pr,
+                            successAction: invoiceData.successAction,
+                            verify: invoiceData.verify,
+                            amount: amountSats
+                        };
+                    } else {
+                        throw new Error('No payment request in response');
+                    }
+                } catch (error) {
+                    console.error('Error fetching shop lightning invoice:', error);
+                    throw error;
+                }
+            }
+
+            listenForShopZapReceipt(zapRequest) {
+                if (!zapRequest) return;
+
+                // Store the subscription ID for later cleanup
+                this.shopZapReceiptSubId = "shop-zap-" + Math.random().toString(36).substring(7);
+
+                // Subscribe to zap receipts for the shop
+                const subscription = [
+                    "REQ",
+                    this.shopZapReceiptSubId,
+                    {
+                        kinds: [9735],
+                        "#p": ['d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df'], // Zaps to the shop
+                        since: Math.floor(Date.now() / 1000) - 60, // Last minute
+                        limit: 50
+                    }
+                ];
+
+                this.sendToRelay(subscription);
+
+                // Set timeout to close subscription after 2 minutes
+                setTimeout(() => {
+                    if (this.shopZapReceiptSubId) {
+                        this.sendToRelay(["CLOSE", this.shopZapReceiptSubId]);
+                        this.shopZapReceiptSubId = null;
+                    }
+                }, 120000);
+            }
+
+            async checkShopPayment(invoice) {
+                if (!invoice.verify) {
+                    // No verify URL, just wait for zap receipt event
+                    this.listenForZapReceipt();
+                    return;
+                }
+
+                let checkCount = 0;
+                const maxChecks = 120; // Check for up to 2 minutes for shop purchases
+
+                this.shopPaymentCheckInterval = setInterval(async () => {
+                    checkCount++;
+
+                    try {
+                        const response = await fetch(invoice.verify);
+                        const data = await response.json();
+
+                        if (data.settled || data.paid) {
+                            // Payment confirmed!
+                            clearInterval(this.shopPaymentCheckInterval);
+                            this.shopPaymentCheckInterval = null;
+                            await this.handleShopPaymentSuccess();
+                        } else if (checkCount >= maxChecks) {
+                            // Timeout
+                            clearInterval(this.shopPaymentCheckInterval);
+                            this.shopPaymentCheckInterval = null;
+                            document.getElementById('zapStatus').style.display = 'block';
+                            document.getElementById('zapStatus').className = 'zap-status';
+                            document.getElementById('zapStatus').innerHTML = '⏱️ Payment timeout - please check your wallet';
+                        }
+                    } catch (error) {
+                        console.error('Error checking shop payment:', error);
+                    }
+                }, 1000); // Check every second
+            }
+
+            // Listen for zap receipt events
+            listenForShopZapReceipt() {
+                // Subscribe to zap receipt events (kind 9735) for this specific event
+                const subscription = [
+                    "REQ",
+                    "zap-receipt-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [9735],
+                        "#e": [this.currentZapTarget.messageId],
+                        since: Math.floor(Date.now() / 1000) - 300, // Last 5 minutes
+                        limit: 10
+                    }
+                ];
+
+                this.sendToRelay(subscription);
+
+                // Also close the subscription after 60 seconds
+                setTimeout(() => {
+                    this.sendToRelay(["CLOSE", subscription[1]]);
+                }, 60000);
+            }
+
+            async handleShopPaymentSuccess() {
+                if (!this.currentPurchaseContext || !this.currentShopInvoice) return;
+
+                const { itemId, item, amount } = this.currentPurchaseContext;
+
+                // Clear check intervals and subscriptions
+                if (this.shopPaymentCheckInterval) {
+                    clearInterval(this.shopPaymentCheckInterval);
+                    this.shopPaymentCheckInterval = null;
+                }
+
+                if (this.shopZapReceiptSubId) {
+                    this.sendToRelay(["CLOSE", this.shopZapReceiptSubId]);
+                    this.shopZapReceiptSubId = null;
+                }
+
+                // Show success message
+                document.getElementById('zapInvoiceDisplay').style.display = 'none';
+                document.getElementById('zapStatus').style.display = 'block';
+                document.getElementById('zapStatus').className = 'zap-status paid';
+                document.getElementById('zapStatus').innerHTML = `
+        <div style="font-size: 24px; margin-bottom: 10px;">✅</div>
+        <div>Purchase successful!</div>
+        <div style="font-size: 16px; margin-top: 10px;">${item.name}</div>
+        <div style="font-size: 14px; color: var(--text-dim);">${amount} sats</div>
+    `;
+
+                // Create purchase record with zap event ID if available
                 const purchase = {
                     itemId: itemId,
                     amount: amount,
                     timestamp: Math.floor(Date.now() / 1000),
-                    txid: 'shop_' + Math.random().toString(36).substring(7)
+                    txid: this.currentShopInvoice.zapRequestId || 'shop_' + Date.now()
                 };
 
-                // Store purchase locally and save to Nostr
+                // Store purchase locally
                 this.userPurchases.set(itemId, purchase);
-                await this.savePurchaseToNostr(purchase);
 
-                // Auto-activate cosmetics on purchase (quality of life)
-                const item = this.getShopItemById(itemId);
+                // Auto-activate cosmetics on purchase
                 if (item?.type === 'cosmetic') {
                     this.activeCosmetics.add(itemId);
                 }
-                // Publish current active set (style/flair/supporter/cosmetics)
+
+                // Save to Nostr
+                await this.savePurchaseToNostr(purchase);
+
+                // Publish active items so others see the update
                 this.publishActiveShopItems();
 
-                // Handle ephemeral vs persistent recovery code
-                if (this.connectionMode === 'ephemeral') {
-                    const recoveryCode = this.handlePurchaseStrategy();
-                }
+                // Close modals after delay
+                setTimeout(() => {
+                    this.closeZapModal();
+                    this.closeShop();
 
-                // Close payment modal and notify
-                this.closeZapModal();
-                this.displaySystemMessage(`✅ Successfully purchased ${item.name}!`);
-
-                // Refresh shop display
-                this.switchShopTab(this.activeShopTab);
+                    // Refresh shop display
+                    if (this.activeShopTab) {
+                        setTimeout(() => {
+                            this.openShop();
+                            this.switchShopTab('inventory');
+                        }, 500);
+                    }
+                }, 2000);
             }
 
             async savePurchaseToNostr(purchaseJustMade = null) {
@@ -12303,7 +12730,7 @@
 
                     this.displaySystemMessage(`
 ⚠️ EPHEMERAL PURCHASE RECOVERY CODE ⚠️
-Save this code to restore your purchases in a new session:
+Save this code to restore this purchase in a new session on same device:
 ${code}
 `);
                     return code;
@@ -16073,16 +16500,61 @@ ${code}
                 const modal = document.getElementById('zapModal');
                 modal.classList.remove('active');
 
-                // Clear interval if running
+                // Clear any payment check intervals
                 if (this.zapCheckInterval) {
                     clearInterval(this.zapCheckInterval);
                     this.zapCheckInterval = null;
                 }
+                if (this.shopPaymentCheckInterval) {
+                    clearInterval(this.shopPaymentCheckInterval);
+                    this.shopPaymentCheckInterval = null;
+                }
 
-                // Reset state
+                // Close any shop zap subscriptions
+                if (this.shopZapReceiptSubId) {
+                    this.sendToRelay(["CLOSE", this.shopZapReceiptSubId]);
+                    this.shopZapReceiptSubId = null;
+                }
+
+                // Reset modal state for regular zaps
+                const zapAmountsContainer = document.querySelector('.zap-amounts');
+                if (zapAmountsContainer) {
+                    zapAmountsContainer.style.display = 'grid';
+                }
+
+                const customAmountInput = document.getElementById('zapCustomAmount');
+                customAmountInput.value = '';
+                customAmountInput.readOnly = false;
+                customAmountInput.style.background = '';
+                customAmountInput.style.cursor = '';
+
+                const commentSection = document.querySelector('.zap-comment');
+                if (commentSection) {
+                    commentSection.style.display = 'block';
+                }
+
+                const amountSection = document.getElementById('zapAmountSection');
+                const invoiceSection = document.getElementById('zapInvoiceSection');
+                const sendBtn = document.getElementById('zapSendBtn');
+
+                amountSection.style.display = 'block';
+                invoiceSection.style.display = 'none';
+                sendBtn.style.display = 'block';
+                sendBtn.textContent = 'Generate Invoice';
+
+                // Reset button onclick to default
+                sendBtn.onclick = () => this.generateZapInvoice();
+
+                // Clear contexts
                 this.currentZapTarget = null;
                 this.currentZapInvoice = null;
-                this.zapInvoiceData = null;
+                this.currentPurchaseContext = null;
+                this.currentShopInvoice = null;
+
+                // Clear selected amounts
+                document.querySelectorAll('.zap-amount-btn').forEach(btn => {
+                    btn.classList.remove('selected');
+                });
             }
 
             // Copy invoice to clipboard
@@ -17308,6 +17780,14 @@ ${code}
                     if (dTag[1] === 'nym-shop-active') {
                         try {
                             const items = JSON.parse(event.content || '{}');
+
+                            // Check if we have a cached version with a newer timestamp
+                            const cachedData = this.shopItemsCache.get(event.pubkey);
+                            if (cachedData && cachedData.eventCreatedAt >= event.created_at) {
+                                // We already have newer or same data, skip update to prevent flicker
+                                return;
+                            }
+
                             // Normalize cosmetics to array
                             const normalized = {
                                 style: items.style || null,
@@ -17315,35 +17795,39 @@ ${code}
                                 supporter: !!items.supporter,
                                 cosmetics: Array.isArray(items.cosmetics) ? items.cosmetics : []
                             };
-                            this.otherUsersShopItems.set(event.pubkey, normalized);
-                            this.cacheShopActiveItems(event.pubkey, normalized);
 
-                            // Update any visible messages from this user
-                            const messages = document.querySelectorAll(`.message[data-pubkey="${event.pubkey}"]`);
-                            messages.forEach(msg => {
-                                // Remove previous styling classes
-                                [...msg.classList].forEach(cls => {
-                                    if (cls.startsWith('style-') || cls.startsWith('cosmetic-') || cls === 'supporter-style') {
-                                        msg.classList.remove(cls);
-                                    }
-                                });
-                                // Add new style
-                                if (normalized.style) msg.classList.add(normalized.style);
-                                if (normalized.supporter) msg.classList.add('supporter-style');
-                                if (Array.isArray(normalized.cosmetics)) {
-                                    normalized.cosmetics.forEach(c => {
-                                        if (c === 'cosmetic-aura-gold') {
-                                            msg.classList.add('cosmetic-aura-gold');
-                                        }
-                                        // Name-glow applies to author element
-                                        if (c === 'cosmetic-name-glow') {
-                                            const auth = msg.querySelector('.message-author');
-                                            if (auth) auth.classList.add('cosmetic-name-glow');
+                            // Update cache and store
+                            this.otherUsersShopItems.set(event.pubkey, normalized);
+                            this.cacheShopActiveItems(event.pubkey, normalized, event.created_at);
+
+                            // Only update visible messages if this is actually newer data
+                            if (!cachedData || cachedData.eventCreatedAt < event.created_at) {
+                                const messages = document.querySelectorAll(`.message[data-pubkey="${event.pubkey}"]`);
+                                messages.forEach(msg => {
+                                    // Remove previous styling classes
+                                    [...msg.classList].forEach(cls => {
+                                        if (cls.startsWith('style-') || cls.startsWith('cosmetic-') || cls === 'supporter-style') {
+                                            msg.classList.remove(cls);
                                         }
                                     });
-                                }
-                                // Flair is handled in rendering; we don't re-render the author text here
-                            });
+                                    // Add new style
+                                    if (normalized.style) msg.classList.add(normalized.style);
+                                    if (normalized.supporter) msg.classList.add('supporter-style');
+                                    if (Array.isArray(normalized.cosmetics)) {
+                                        normalized.cosmetics.forEach(c => {
+                                            if (c === 'cosmetic-aura-gold') {
+                                                msg.classList.add('cosmetic-aura-gold');
+                                            }
+                                            // Name-glow applies to author element
+                                            if (c === 'cosmetic-name-glow') {
+                                                const auth = msg.querySelector('.message-author');
+                                                if (auth) auth.classList.add('cosmetic-name-glow');
+                                            }
+                                        });
+                                    }
+                                    // Flair is handled in rendering; we don't re-render the author text here
+                                });
+                            }
                         } catch (e) {
                             console.error('Failed to parse active items event:', e);
                         }
@@ -17370,7 +17854,44 @@ ${code}
                     // Handle reactions (NIP-25)
                     this.handleReaction(event);
                 } else if (event.kind === 9735) {
-                    // Handle zap receipt (NIP-57)
+                    // Check if this is a shop zap receipt
+                    const pTag = event.tags.find(t => t[0] === 'p');
+                    const descriptionTag = event.tags.find(t => t[0] === 'description');
+
+                    if (pTag && pTag[1] === 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df' && this.currentShopInvoice) {
+                        // This is a zap to the shop
+                        try {
+                            if (descriptionTag) {
+                                const zapRequest = JSON.parse(descriptionTag[1]);
+
+                                // Check if this is our shop purchase
+                                const shopPurchaseTag = zapRequest.tags?.find(t => t[0] === 'shop-purchase');
+                                const shopItemTag = zapRequest.tags?.find(t => t[0] === 'shop-item');
+
+                                if (shopPurchaseTag && shopItemTag &&
+                                    zapRequest.pubkey === this.pubkey &&
+                                    shopItemTag[1] === this.currentPurchaseContext?.itemId) {
+
+                                    // This is our shop purchase payment!
+                                    console.log('Shop zap receipt received for item:', shopItemTag[1]);
+
+                                    // Close the subscription
+                                    if (this.shopZapReceiptSubId) {
+                                        this.sendToRelay(["CLOSE", this.shopZapReceiptSubId]);
+                                        this.shopZapReceiptSubId = null;
+                                    }
+
+                                    // Handle successful payment
+                                    await this.handleShopPaymentSuccess();
+                                    return;
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Error parsing shop zap receipt:', e);
+                        }
+                    }
+
+                    // Otherwise, handle as normal zap receipt
                     this.handleZapReceipt(event);
                 } else if (event.kind === 1059) {
                     // Handle NIP-17 gift wrap (NIP-59 + NIP-44)
@@ -25822,7 +26343,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.16.45 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.17.45 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

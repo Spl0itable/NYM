@@ -1,3 +1,7 @@
+## v2.17.45 - 2025-11-07
+
+New: shop to buy addon packs to change the styling of your messages and nickname that others will see across all channels
+
 ## v2.16.45 - 2025-10-31
 
 Hotfix: user context menu not correctly getting the right user for blocking or slapping
