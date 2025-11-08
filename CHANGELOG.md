@@ -1,3 +1,7 @@
+## v2.17.50 - 2025-11-08
+
+Hotfix: small CSS changes
+
 ## v2.17.49 - 2025-11-08
 
 Hotfix: broken slap with trout and other commands in communities and PMs
