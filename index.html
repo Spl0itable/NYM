@@ -20735,6 +20735,24 @@ ${code}
                     }
                 }
 
+                // Apply cosmetics from OTHER users to their messages
+                if (message.pubkey !== this.pubkey && userShopItems?.cosmetics) {
+                    userShopItems.cosmetics.forEach(c => {
+                        if (c === 'cosmetic-redacted') {
+                            const auth = messageEl.querySelector('.message-author');
+                            if (auth) auth.classList.add('cosmetic-redacted');
+
+                            // Apply redacted effect to message content after 10 seconds
+                            const contentEl = messageEl.querySelector('.message-content');
+                            if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
+                                setTimeout(() => {
+                                    contentEl.classList.add('cosmetic-redacted-message');
+                                }, 10000);
+                            }
+                        }
+                    });
+                }
+
                 // Apply blur to images if settings enabled and not own message
                 if (!message.isOwn && this.blurOthersImages) {
                     const images = messageEl.querySelectorAll('img');
