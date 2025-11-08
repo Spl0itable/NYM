@@ -1,3 +1,8 @@
+## v2.17.51 - 2025-11-08
+
+Hotfix: shop purchases not generating recovery code for ephemeral user
+Hotfix: shop zap modal not opening external wallet
+
 ## v2.17.50 - 2025-11-08
 
 Hotfix: small CSS changes

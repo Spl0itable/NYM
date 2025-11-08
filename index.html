@@ -12380,6 +12380,9 @@
                             zapRequestId: zapRequest ? zapRequest.id : null
                         };
 
+                        // Also set currentZapInvoice so openInWallet() works
+                        this.currentZapInvoice = invoice;
+
                         // Display invoice using existing function
                         this.displayZapInvoice(invoice);
 
@@ -12642,6 +12645,24 @@
                 // Publish active items so others see the update
                 this.publishActiveShopItems();
 
+                // **NEW: Generate recovery code for ephemeral users**
+                const recoveryCode = this.handlePurchaseStrategy();
+
+                // **NEW: If ephemeral, show the recovery code in the success message**
+                if (this.connectionMode === 'ephemeral' && recoveryCode) {
+                    document.getElementById('zapStatus').innerHTML = `
+            <div style="font-size: 24px; margin-bottom: 10px;">✅</div>
+            <div>Purchase successful!</div>
+            <div style="font-size: 16px; margin-top: 10px;">${item.name}</div>
+            <div style="font-size: 14px; color: var(--text-dim);">${amount} sats</div>
+            <div style="margin-top: 20px; padding: 15px; background: var(--bg-tertiary); border: 1px solid var(--warning); border-radius: 5px;">
+                <div style="color: var(--warning); font-weight: bold; margin-bottom: 10px;">⚠️ SAVE YOUR RECOVERY CODE</div>
+                <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 10px;">Copy this code to restore your purchase in a new session:</div>
+                <div style="font-family: monospace; color: var(--text-bright); font-size: 14px; word-break: break-all; cursor: pointer;" onclick="navigator.clipboard.writeText('${recoveryCode}'); this.textContent = 'Copied!';" title="Click to copy">${recoveryCode}</div>
+            </div>
+        `;
+                }
+
                 // Close modals after delay
                 setTimeout(() => {
                     this.closeZapModal();
@@ -12875,7 +12896,7 @@ ${code}
                         await this.savePurchaseToNostr();
                         this.publishActiveShopItems();
 
-                        this.displaySystemMessage('✅ Purchases restored successfully!');
+                        this.displaySystemMessage('✅ Shop item restored successfully!');
                         if (document.getElementById('shopModal').classList.contains('active')) {
                             this.switchShopTab(this.activeShopTab);
                         }
@@ -16682,14 +16703,16 @@ ${code}
 
             // Open invoice in wallet
             openInWallet() {
-                if (!this.currentZapInvoice) return;
+                // heck both currentZapInvoice and currentShopInvoice
+                const invoice = this.currentZapInvoice || this.currentShopInvoice;
+                if (!invoice) return;
 
                 // Try multiple methods to open wallet
-                const invoice = this.currentZapInvoice.pr;
+                const invoiceStr = invoice.pr;
 
                 // Check if invoice already has lightning: prefix
-                const invoiceToOpen = invoice.toLowerCase().startsWith('lightning:') ?
-                    invoice : `lightning:${invoice}`;
+                const invoiceToOpen = invoiceStr.toLowerCase().startsWith('lightning:') ?
+                    invoiceStr : `lightning:${invoiceStr}`;
 
                 // Try Flutter bridge first (for NYM native app)
                 if (window.nymOpenExternal) {
@@ -16702,14 +16725,13 @@ ${code}
                 }
 
                 // Also copy to clipboard as fallback (just the raw invoice)
-                navigator.clipboard.writeText(invoice).then(() => {
+                navigator.clipboard.writeText(invoiceStr).then(() => {
                     this.displaySystemMessage('Invoice copied - paste in your wallet');
                 }).catch(err => {
                     console.error('Failed to copy:', err);
                     this.displaySystemMessage('Failed to copy invoice');
                 });
             }
-
 
             // Discovering relays via NIP-66
             async discoverRelays() {
@@ -26824,7 +26846,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.17.50 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.17.51 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
