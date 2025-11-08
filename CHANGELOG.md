@@ -1,3 +1,7 @@
+## v2.17.47 - 2025-11-08
+
+Hotfix: improved publishing message and reaction speed
+
 ## v2.17.46 - 2025-11-08
 
 Hotfix: corrected shop item flair not correctly parsing html and broken slap with trout

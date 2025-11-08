@@ -17162,6 +17162,34 @@ ${code}
                 const messageAge = Date.now() - (event.created_at * 1000);
                 const isHistorical = messageAge > 10000; // Older than 10 seconds
 
+                if (event.pubkey === this.pubkey) {
+                    // For messages (kind 20000, 23333, 4550)
+                    if ([20000, 23333, 4550].includes(event.kind)) {
+                        // Check if message already displayed in DOM
+                        if (document.querySelector(`[data-message-id="${event.id}"]`)) {
+                            return; // Already displayed optimistically, skip
+                        }
+                    }
+
+                    // For reactions (kind 7)
+                    if (event.kind === 7) {
+                        const eTag = event.tags.find(t => t[0] === 'e');
+                        if (eTag) {
+                            const messageId = eTag[1];
+                            const emoji = event.content;
+
+                            // Check if we already have this reaction in state
+                            if (this.reactions.has(messageId)) {
+                                const messageReactions = this.reactions.get(messageId);
+                                if (messageReactions.has(emoji) &&
+                                    messageReactions.get(emoji).has(this.pubkey)) {
+                                    return; // Already added optimistically, skip
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Handle NIP-72 moderation events FIRST (before processing messages)
                 if (event.kind === 5 && event.tags.some(t => t[0] === 'a' && t[1]?.includes('34550:'))) {
                     // Community deletion event
@@ -17506,7 +17534,6 @@ ${code}
                         }
                     }
                 } else if (event.kind === 34550) {
-                    // Handle COMMUNITY DEFINITIONS
                     const dTag = event.tags.find(t => t[0] === 'd');
 
                     if (dTag) {
@@ -17535,7 +17562,7 @@ ${code}
                             createdAt: event.created_at * 1000
                         });
 
-                        // IMPORTANT: Don't show communities to ephemeral users
+                        // Don't show communities to ephemeral users
                         if (this.connectionMode === 'ephemeral') {
                             return; // Skip adding to UI for ephemeral users
                         }
@@ -18302,7 +18329,6 @@ ${code}
                         await this.handleQuickZap(messageId, pubkey, messageEl);
                     };
                 }
-                // DO NOT create a new quick zap button here - only in updateMessageZaps when zaps exist
 
                 // Clear and rebuild reactions
                 reactions.forEach((reactors, emoji) => {
@@ -18331,21 +18357,11 @@ ${code}
                         badge.title = `Click to also react with ${emoji} | ${users}`;
                     }
 
-                    // Add click handler that updates badge immediately
+                    // Add click handler - NO optimistic update here since sendReaction handles it
                     badge.onclick = async (e) => {
                         e.stopPropagation();
                         if (!hasReacted) {
-                            // Immediately update the badge visual state
-                            badge.className = 'reaction-badge user-reacted';
-                            badge.style.background = 'rgba(0, 255, 0, 0.2)';
-                            badge.style.borderColor = 'var(--primary)';
-                            badge.style.boxShadow = '0 0 5px rgba(0, 255, 0, 0.3)';
-
-                            // Update count
-                            const newCount = reactors.size + 1;
-                            badge.innerHTML = `${emoji} ${newCount}`;
-
-                            // Send the reaction
+                            // Just call sendReaction - it handles optimistic updates
                             await this.sendReaction(messageId, emoji);
                         } else {
                             this.displaySystemMessage(`You already reacted with ${emoji}`);
@@ -18650,7 +18666,7 @@ ${code}
                     const targetPubkey = messageEl.dataset.pubkey;
                     if (!targetPubkey) return;
 
-                    // Ensure local state contains this reaction so UI updates immediately
+                    // Ensure local state contains this reaction
                     if (!this.reactions.has(messageId)) {
                         this.reactions.set(messageId, new Map());
                     }
@@ -18658,10 +18674,17 @@ ${code}
                     if (!messageReactions.has(emoji)) {
                         messageReactions.set(emoji, new Map());
                     }
+
+                    // Check if already reacted
                     if (messageReactions.get(emoji).has(this.pubkey)) {
                         return; // Already reacted with this emoji
                     }
+
+                    // ===== OPTIMISTIC UPDATE: Add reaction immediately to local state =====
                     messageReactions.get(emoji).set(this.pubkey, this.nym);
+
+                    // Update UI immediately
+                    this.updateMessageReactions(messageId);
 
                     // Infer original kind directly from the rendered message element/container context
                     const container = document.getElementById('messagesContainer');
@@ -18704,15 +18727,18 @@ ${code}
                     }
 
                     if (signedEvent) {
+                        // Send to relay (async - UI already updated)
                         this.sendToRelay(["EVENT", signedEvent]);
                         this.addToRecentEmojis(emoji);
                     } else {
+                        // Signing failed - revert the optimistic update
                         messageReactions.get(emoji).delete(this.pubkey);
                         this.updateMessageReactions(messageId);
                         this.displaySystemMessage('Failed to sign reaction');
                     }
                 } catch (error) {
                     console.error('Failed to send reaction:', error);
+                    // Revert optimistic update on error
                     const messageReactions = this.reactions.get(messageId);
                     if (messageReactions && messageReactions.has(emoji)) {
                         messageReactions.get(emoji).delete(this.pubkey);
@@ -19640,7 +19666,24 @@ ${code}
                         throw new Error('No signing method available');
                     }
 
-                    // Send to relay
+                    const optimisticMessage = {
+                        id: signedEvent.id, // Use the signed event ID
+                        content: content,
+                        author: this.nym,
+                        pubkey: this.pubkey,
+                        timestamp: new Date(signedEvent.created_at * 1000),
+                        channel: channel,
+                        geohash: geohash,
+                        isOwn: true,
+                        isHistorical: false,
+                        isPM: false,
+                        isCommunity: false
+                    };
+
+                    // Display immediately (optimistic)
+                    this.displayMessage(optimisticMessage);
+
+                    // Send to relay (async - UI already updated)
                     this.sendToRelay(["EVENT", signedEvent]);
 
                     return true;
@@ -19718,6 +19761,23 @@ ${code}
 
                     console.log('Signed community event:', signedEvent);
 
+                    const optimisticMessage = {
+                        id: signedEvent.id,
+                        content: content,
+                        author: this.nym,
+                        pubkey: this.pubkey,
+                        timestamp: new Date(signedEvent.created_at * 1000),
+                        communityId: communityId,
+                        isOwn: true,
+                        isHistorical: false,
+                        isPM: false,
+                        isCommunity: true
+                    };
+
+                    // Display immediately (optimistic)
+                    this.displayMessage(optimisticMessage);
+
+                    // Send to relay (async)
                     this.sendToRelay(["EVENT", signedEvent]);
 
                     console.log('Community message sent successfully');
@@ -20602,8 +20662,6 @@ ${code}
             formatMessage(content) {
                 let formatted = content;
 
-                // First, escape HTML entities EXCEPT for flair HTML that's already in the content
-                // We need to be careful not to double-escape flair HTML
                 formatted = formatted
                     .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
                     .replace(/<(?!span class="flair|\/span|svg|\/svg|path|\/path|title|\/title)/g, '&lt;')
@@ -20642,7 +20700,7 @@ ${code}
                     }
                 );
 
-                // Convert NYM app channel links BEFORE general URLs (IMPORTANT!)
+                // Convert NYM app channel links BEFORE general URLs
                 formatted = formatted.replace(
                     /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
                     (match, prefix, channelId) => {
@@ -20657,7 +20715,6 @@ ${code}
                 );
 
                 // Process mentions and channels together in one pass
-                // Updated regex to handle HTML within mentions
                 formatted = formatted.replace(
                     /(@[^@#\s]*(?:<span class="flair[^"]*"[^>]*>[\s\S]*?<\/span>)?[^@#\s]*#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(?:^|\s)(#[\w\s-]+?)(?=\s|$|[.,!?])/gi,
                     (match, mentionWithSuffix, simpleMention, channel, offset) => {
@@ -26394,7 +26451,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                             nym.settings.sortByProximity = true;
                             localStorage.setItem('nym_sort_proximity', 'true');
 
-                            // IMPORTANT: Re-sort immediately after getting location
+                            // Re-sort immediately after getting location
                             nym.sortChannelsByActivity();
 
                             nym.displaySystemMessage('Location access granted. Geohash channels sorted by proximity.');
@@ -26452,7 +26509,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.17.46 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.17.47 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
