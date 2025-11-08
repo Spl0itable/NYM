@@ -3096,7 +3096,7 @@
         }
 
         .flair-badge {
-            display: inline-block;
+            display: inline-flex;
             margin-left: 5px;
             font-size: 20px;
             vertical-align: middle;
@@ -3310,9 +3310,24 @@
             background: linear-gradient(135deg, rgba(255, 215, 0, 0.05), rgba(255, 215, 0, 0.02));
         }
 
-        .message .message-author.cosmetic-name-glow {
-            color: #88ffe3 !important;
-            text-shadow: 0 0 6px rgba(136, 255, 227, 0.85), 0 0 14px rgba(0, 255, 170, 0.35);
+        .message .message-author.cosmetic-redacted {
+            color: #ffffff !important;
+            opacity: 0.8;
+        }
+
+        .message-content.cosmetic-redacted-message {
+            background: #ffffff !important;
+            color: #ffffff !important;
+            border-radius: 3px;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+
+        .message-content.cosmetic-redacted-message * {
+            color: #ffffff !important;
+            visibility: hidden;
         }
 
         .supporter-badge {
@@ -11619,7 +11634,7 @@
                         {
                             id: 'flair-crown',
                             name: 'Crown',
-                            description: 'Royal golden crown',
+                            description: 'Royal golden crown badge',
                             price: 5000,
                             type: 'nickname-flair',
                             icon: `
@@ -11636,7 +11651,7 @@
                         {
                             id: 'flair-diamond',
                             name: 'Diamond',
-                            description: 'Sparkling diamond',
+                            description: 'Sparkling diamond badge',
                             price: 10000,
                             type: 'nickname-flair',
                             icon: `
@@ -11653,7 +11668,7 @@
                         {
                             id: 'flair-skull',
                             name: 'Skull',
-                            description: 'Badass skull',
+                            description: 'Badass skull badge',
                             price: 1666,
                             type: 'nickname-flair',
                             icon: `
@@ -11673,7 +11688,7 @@
                         {
                             id: 'flair-star',
                             name: 'Star',
-                            description: 'Shining star',
+                            description: 'Shining star badge',
                             price: 2500,
                             type: 'nickname-flair',
                             icon: `
@@ -11688,7 +11703,7 @@
                         {
                             id: 'flair-lightning',
                             name: 'Lightning',
-                            description: 'Electric lightning bolt',
+                            description: 'Electric lightning bolt badge',
                             price: 2100,
                             type: 'nickname-flair',
                             icon: `
@@ -11703,7 +11718,7 @@
                         {
                             id: 'flair-heart',
                             name: 'Heart',
-                            description: 'Loving heart',
+                            description: 'Loving heart badge',
                             price: 1111,
                             type: 'nickname-flair',
                             icon: `
@@ -11724,7 +11739,7 @@
                         {
                             id: 'flair-mask',
                             name: 'Fawkes',
-                            description: 'Anonymous mask',
+                            description: 'Anonymous mask badge',
                             price: 4200,
                             type: 'nickname-flair',
                             icon: `
@@ -11743,7 +11758,7 @@
                         {
                             id: 'flair-rocket',
                             name: 'Rocket',
-                            description: 'To the moon',
+                            description: 'To the moon badge',
                             price: 2300,
                             type: 'nickname-flair',
                             icon: `
@@ -11763,7 +11778,7 @@
                         {
                             id: 'flair-shield',
                             name: 'Shield',
-                            description: 'Supporter of encryption',
+                            description: 'Supporter of encryption badge',
                             price: 1900,
                             type: 'nickname-flair',
                             icon: `
@@ -11816,21 +11831,21 @@
 </svg>`
                         },
                         {
-                            id: 'cosmetic-name-glow',
-                            name: 'Name Glow',
-                            description: 'Animated glow on your nickname',
+                            id: 'cosmetic-redacted',
+                            name: 'Redacted',
+                            description: 'Remove each message after 10 seconds',
                             price: 2800,
                             type: 'cosmetic',
-                            cssClass: 'cosmetic-name-glow',
+                            cssClass: 'cosmetic-redacted',
                             icon: `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
   width="1em" height="1em" fill="none" stroke="currentColor"
   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
-  vector-effect="non-scaling-stroke" role="img" aria-label="Name Glow">
-  <title>Name Glow</title>
-  <path d="M12 6V12 M9 9H15 M10 7l4 4 M14 7l-4 4"/>
-  <path d="M5 8V10 M4 9H6"/>
-  <path d="M18 14V16 M17 15H19"/>
+  vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
+  <title>Redacted</title>
+  <line x1="4" y1="8" x2="20" y2="8"/>
+  <line x1="4" y1="12" x2="16" y2="12"/>
+  <line x1="4" y1="16" x2="18" y2="16"/>
 </svg>`
                         }
                     ]
@@ -12014,10 +12029,17 @@
                             if (c === 'cosmetic-aura-gold') {
                                 msg.classList.add('cosmetic-aura-gold');
                             }
-                            // Name-glow applies to author element
-                            if (c === 'cosmetic-name-glow') {
+                            if (c === 'cosmetic-redacted') {
                                 const auth = msg.querySelector('.message-author');
-                                if (auth) auth.classList.add('cosmetic-name-glow');
+                                if (auth) auth.classList.add('cosmetic-redacted');
+
+                                // Apply redacted effect to message content after 10 seconds
+                                const contentEl = msg.querySelector('.message-content');
+                                if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
+                                    setTimeout(() => {
+                                        contentEl.classList.add('cosmetic-redacted-message');
+                                    }, 10000);
+                                }
                             }
                         });
                     }
@@ -12238,21 +12260,23 @@
             `;
 
                         if (item.type === 'message-style') {
+                            const isActive = this.activeMessageStyle === itemId;
                             html += `
-                <button class="shop-buy-btn" onclick="nym.activateMessageStyle('${itemId}')" style="margin-top: 10px; width: 100%;">
-                    ${this.activeMessageStyle === itemId ? 'ACTIVE' : 'ACTIVATE'}
-                </button>`;
+<button class="shop-buy-btn" onclick="nym.activateMessageStyle('${itemId}')" style="margin-top: 10px; width: 100%;">
+    ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
+</button>`;
                         } else if (item.type === 'nickname-flair') {
+                            const isActive = this.activeFlair === itemId;
                             html += `
-                <button class="shop-buy-btn" onclick="nym.activateFlair('${itemId}')" style="margin-top: 10px; width: 100%;">
-                    ${this.activeFlair === itemId ? 'ACTIVE' : 'ACTIVATE'}
-                </button>`;
+<button class="shop-buy-btn" onclick="nym.activateFlair('${itemId}')" style="margin-top: 10px; width: 100%;">
+    ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
+</button>`;
                         } else if (item.type === 'cosmetic') {
                             const isOn = this.activeCosmetics.has(itemId);
                             html += `
-                <button class="shop-buy-btn" onclick="nym.activateCosmetic('${itemId}')" style="margin-top: 10px; width: 100%;">
-                    ${isOn ? 'ON' : 'TURN ON'}
-                </button>`;
+<button class="shop-buy-btn" onclick="nym.activateCosmetic('${itemId}')" style="margin-top: 10px; width: 100%;">
+    ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
+</button>`;
                         } else if (item.type === 'supporter') {
                             // Supporter has no toggle (always on once owned)
                             html += `<div class="shop-item-preview"><span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span></div>`;
@@ -12790,7 +12814,21 @@
             }
 
             activateMessageStyle(styleId) {
-                this.activeMessageStyle = styleId || null;
+                // Toggle: if already active, deactivate it
+                if (this.activeMessageStyle === styleId) {
+                    this.activeMessageStyle = null;
+                    this.localActiveStyle = null;
+                    localStorage.setItem('nym_active_style', '');
+                    this.savePurchaseToNostr();
+                    this.publishActiveShopItems();
+                    this.displaySystemMessage(`❎ Deactivated ${this.getShopItemById(styleId).name}`);
+                    this.renderInventoryTab(document.getElementById('shopBody'));
+                    this.applyShopStylesToOwnMessages();
+                    return;
+                }
+
+                // Otherwise activate it
+                this.activeMessageStyle = styleId;
 
                 // Cache immediately
                 this.localActiveStyle = this.activeMessageStyle;
@@ -12800,10 +12838,25 @@
                 this.publishActiveShopItems();
                 this.displaySystemMessage(`✅ Activated ${this.getShopItemById(styleId).name}`);
                 this.renderInventoryTab(document.getElementById('shopBody'));
+                this.applyShopStylesToOwnMessages();
             }
 
             activateFlair(flairId) {
-                this.activeFlair = flairId || null;
+                // Toggle: if already active, deactivate it
+                if (this.activeFlair === flairId) {
+                    this.activeFlair = null;
+                    this.localActiveFlair = null;
+                    localStorage.setItem('nym_active_flair', '');
+                    this.savePurchaseToNostr();
+                    this.publishActiveShopItems();
+                    this.displaySystemMessage(`❎ Deactivated ${this.getShopItemById(flairId).name}`);
+                    this.renderInventoryTab(document.getElementById('shopBody'));
+                    this.applyShopStylesToOwnMessages();
+                    return;
+                }
+
+                // Otherwise activate it
+                this.activeFlair = flairId;
 
                 // Cache immediately
                 this.localActiveFlair = this.activeFlair;
@@ -12813,6 +12866,7 @@
                 this.publishActiveShopItems();
                 this.displaySystemMessage(`✅ Activated ${this.getShopItemById(flairId).name}`);
                 this.renderInventoryTab(document.getElementById('shopBody'));
+                this.applyShopStylesToOwnMessages();
             }
 
             getActiveMessageStyle() {
@@ -18006,10 +18060,17 @@ ${code}
                                             if (c === 'cosmetic-aura-gold') {
                                                 msg.classList.add('cosmetic-aura-gold');
                                             }
-                                            // Name-glow applies to author element
-                                            if (c === 'cosmetic-name-glow') {
-                                                const auth = msg.querySelector('.message-author');
-                                                if (auth) auth.classList.add('cosmetic-name-glow');
+                                            if (c === 'cosmetic-redacted') {
+                                                const auth = msgDiv.querySelector('.message-author');
+                                                if (auth) auth.classList.add('cosmetic-redacted');
+
+                                                // Apply redacted effect to message content after 10 seconds
+                                                const contentEl = msgDiv.querySelector('.message-content');
+                                                if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
+                                                    setTimeout(() => {
+                                                        contentEl.classList.add('cosmetic-redacted-message');
+                                                    }, 10000);
+                                                }
                                             }
                                         });
                                     }
@@ -20547,7 +20608,6 @@ ${code}
                         classes.push('mentioned');
                     }
 
-                    // ========== SHOP INTEGRATION SECTION 2 START ==========
                     // Apply shop styles (message-level)
                     if (userShopItems?.style) {
                         classes.push(userShopItems.style);
@@ -20598,9 +20658,8 @@ ${code}
                     const displayAuthorBase = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
                     let displayAuthor = displayAuthorBase; // string used in HTML
                     let authorExtraClass = '';
-                    // Apply name glow cosmetic on author
-                    if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-name-glow')) {
-                        authorExtraClass = 'cosmetic-name-glow';
+                    if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
+                        authorExtraClass = 'cosmetic-redacted';
                     }
 
                     const escapedAuthorBase = this.escapeHtml(message.author).split('#')[0] || this.escapeHtml(message.author);
@@ -20660,9 +20719,17 @@ ${code}
                             if (c === 'cosmetic-aura-gold') {
                                 messageEl.classList.add('cosmetic-aura-gold');
                             }
-                            if (c === 'cosmetic-name-glow') {
+                            if (c === 'cosmetic-redacted') {
                                 const auth = messageEl.querySelector('.message-author');
-                                if (auth) auth.classList.add('cosmetic-name-glow');
+                                if (auth) auth.classList.add('cosmetic-redacted');
+
+                                // Apply redacted effect to message content after 10 seconds
+                                const contentEl = messageEl.querySelector('.message-content');
+                                if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
+                                    setTimeout(() => {
+                                        contentEl.classList.add('cosmetic-redacted-message');
+                                    }, 10000);
+                                }
                             }
                         });
                     }
@@ -26846,7 +26913,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.17.51 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.17.52 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

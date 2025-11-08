@@ -1,3 +1,8 @@
+## v2.17.52 - 2025-11-08
+
+Hotfix: nickname flair badges not vertically aligned to nickname
+New: redacted shop item to hide messages after 10sec
+
 ## v2.17.51 - 2025-11-08
 
 Hotfix: shop purchases not generating recovery code for ephemeral user
