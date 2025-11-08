@@ -3102,7 +3102,7 @@
         .flair-badge {
             display: inline-block;
             margin-left: 5px;
-            font-size: 14px;
+            font-size: 20px;
             vertical-align: middle;
         }
 
@@ -23771,7 +23771,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     this.users.forEach((user, pubkey) => {
                         // Strip HTML from user nym for comparison
                         const cleanNym = this.parseNymFromDisplay(user.nym);
-
                         if (cleanNym === searchNym || cleanNym.toLowerCase() === searchNym.toLowerCase()) {
                             if (searchSuffix) {
                                 if (pubkey.endsWith(searchSuffix)) {
@@ -23799,9 +23798,21 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Create the slap message content  
                 const slapContent = `/me slaps ${targetNym} around a bit with a large trout`;
 
-                // Send the message using the current channel context
+                // Send the message using the appropriate method based on current context
                 try {
-                    await this.publishMessage(slapContent, this.currentChannel, this.currentGeohash);
+                    if (this.inPMMode && this.currentPM) {
+                        // Send as PM
+                        await this.sendPM(slapContent, this.currentPM);
+                    } else if (this.currentCommunity) {
+                        // Send to community channel
+                        await this.publishCommunityMessage(slapContent, this.currentCommunity);
+                    } else if (this.currentGeohash) {
+                        // Send to geohash channel
+                        await this.publishMessage(slapContent, this.currentGeohash, this.currentGeohash);
+                    } else {
+                        // Send to standard ephemeral channel
+                        await this.publishMessage(slapContent, this.currentChannel, '');
+                    }
                 } catch (error) {
                     console.error('Failed to send slap message:', error);
                     this.displaySystemMessage('Failed to send slap: ' + error.message);
@@ -23813,11 +23824,46 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     this.displaySystemMessage('Usage: /me action');
                     return;
                 }
-                await this.publishMessage(`/me ${args}`);
+
+                const content = `/me ${args}`;
+
+                try {
+                    if (this.inPMMode && this.currentPM) {
+                        // Send as PM
+                        await this.sendPM(content, this.currentPM);
+                    } else if (this.currentCommunity) {
+                        // Send to community channel
+                        await this.publishCommunityMessage(content, this.currentCommunity);
+                    } else if (this.currentGeohash) {
+                        // Send to geohash channel
+                        await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+                    } else {
+                        // Send to standard ephemeral channel
+                        await this.publishMessage(content, this.currentChannel, '');
+                    }
+                } catch (error) {
+                    console.error('Failed to send action message:', error);
+                    this.displaySystemMessage('Failed to send message: ' + error.message);
+                }
             }
 
             async cmdShrug() {
-                await this.publishMessage('¯\\_(ツ)_/¯');
+                const content = '¯\\_(ツ)_/¯';
+
+                try {
+                    if (this.inPMMode && this.currentPM) {
+                        await this.sendPM(content, this.currentPM);
+                    } else if (this.currentCommunity) {
+                        await this.publishCommunityMessage(content, this.currentCommunity);
+                    } else if (this.currentGeohash) {
+                        await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+                    } else {
+                        await this.publishMessage(content, this.currentChannel, '');
+                    }
+                } catch (error) {
+                    console.error('Failed to send shrug:', error);
+                    this.displaySystemMessage('Failed to send message: ' + error.message);
+                }
             }
 
             async cmdBold(args) {
@@ -23825,7 +23871,23 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     this.displaySystemMessage('Usage: /bold text');
                     return;
                 }
-                await this.publishMessage(`**${args}**`);
+
+                const content = `**${args}**`;
+
+                try {
+                    if (this.inPMMode && this.currentPM) {
+                        await this.sendPM(content, this.currentPM);
+                    } else if (this.currentCommunity) {
+                        await this.publishCommunityMessage(content, this.currentCommunity);
+                    } else if (this.currentGeohash) {
+                        await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+                    } else {
+                        await this.publishMessage(content, this.currentChannel, '');
+                    }
+                } catch (error) {
+                    console.error('Failed to send bold message:', error);
+                    this.displaySystemMessage('Failed to send message: ' + error.message);
+                }
             }
 
             async cmdItalic(args) {
@@ -23833,15 +23895,23 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     this.displaySystemMessage('Usage: /italic text');
                     return;
                 }
-                await this.publishMessage(`*${args}*`);
-            }
 
-            async cmdCode(args) {
-                if (!args) {
-                    this.displaySystemMessage('Usage: /code text');
-                    return;
+                const content = `*${args}*`;
+
+                try {
+                    if (this.inPMMode && this.currentPM) {
+                        await this.sendPM(content, this.currentPM);
+                    } else if (this.currentCommunity) {
+                        await this.publishCommunityMessage(content, this.currentCommunity);
+                    } else if (this.currentGeohash) {
+                        await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+                    } else {
+                        await this.publishMessage(content, this.currentChannel, '');
+                    }
+                } catch (error) {
+                    console.error('Failed to send italic message:', error);
+                    this.displaySystemMessage('Failed to send message: ' + error.message);
                 }
-                await this.publishMessage(`\`\`\`\n${args}\n\`\`\``);
             }
 
             async cmdStrike(args) {
@@ -23849,7 +23919,47 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     this.displaySystemMessage('Usage: /strike text');
                     return;
                 }
-                await this.publishMessage(`~~${args}~~`);
+
+                const content = `~~${args}~~`;
+
+                try {
+                    if (this.inPMMode && this.currentPM) {
+                        await this.sendPM(content, this.currentPM);
+                    } else if (this.currentCommunity) {
+                        await this.publishCommunityMessage(content, this.currentCommunity);
+                    } else if (this.currentGeohash) {
+                        await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+                    } else {
+                        await this.publishMessage(content, this.currentChannel, '');
+                    }
+                } catch (error) {
+                    console.error('Failed to send strikethrough message:', error);
+                    this.displaySystemMessage('Failed to send message: ' + error.message);
+                }
+            }
+
+            async cmdCode(args) {
+                if (!args) {
+                    this.displaySystemMessage('Usage: /code text');
+                    return;
+                }
+
+                const content = `\`\`\`\n${args}\n\`\`\``;
+
+                try {
+                    if (this.inPMMode && this.currentPM) {
+                        await this.sendPM(content, this.currentPM);
+                    } else if (this.currentCommunity) {
+                        await this.publishCommunityMessage(content, this.currentCommunity);
+                    } else if (this.currentGeohash) {
+                        await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+                    } else {
+                        await this.publishMessage(content, this.currentChannel, '');
+                    }
+                } catch (error) {
+                    console.error('Failed to send code message:', error);
+                    this.displaySystemMessage('Failed to send message: ' + error.message);
+                }
             }
 
             async cmdQuote(args) {
@@ -23858,10 +23968,22 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     return;
                 }
 
-                // Handle both single line and multi-line quotes
-                const lines = args.split('\n');
-                const quotedText = lines.map(line => `> ${line}`).join('\n');
-                await this.publishMessage(quotedText);
+                const content = `> ${args}`;
+
+                try {
+                    if (this.inPMMode && this.currentPM) {
+                        await this.sendPM(content, this.currentPM);
+                    } else if (this.currentCommunity) {
+                        await this.publishCommunityMessage(content, this.currentCommunity);
+                    } else if (this.currentGeohash) {
+                        await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+                    } else {
+                        await this.publishMessage(content, this.currentChannel, '');
+                    }
+                } catch (error) {
+                    console.error('Failed to send quote message:', error);
+                    this.displaySystemMessage('Failed to send message: ' + error.message);
+                }
             }
 
             async cmdBRB(args) {
@@ -26732,7 +26854,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.17.48 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.17.49 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

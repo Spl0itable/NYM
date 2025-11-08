@@ -1,3 +1,7 @@
+## v2.17.49 - 2025-11-08
+
+Hotfix: broken slap with trout and other commands in communities and PMs
+
 ## v2.17.48 - 2025-11-08
 
 Hotfix: improved shop and items loading
