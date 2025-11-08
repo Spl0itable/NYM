@@ -1,3 +1,7 @@
+## v2.17.48 - 2025-11-08
+
+Hotfix: improved shop and items loading
+
 ## v2.17.47 - 2025-11-08
 
 Hotfix: improved publishing message and reaction speed

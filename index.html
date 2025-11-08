@@ -11452,6 +11452,10 @@
                 this.profileFetchQueue = [];
                 this.profileFetchTimer = null;
                 this.profileFetchBatchDelay = 100;
+                this.localActiveStyle = null;
+                this.localActiveFlair = null;
+                this.shopItemsLoaded = false;
+                this.shopPurchasesTimestamp = 0;
                 this.zaps = new Map();
                 this.currentZapTarget = null;
                 this.currentZapInvoice = null;
@@ -11870,6 +11874,22 @@
                 this.shopItemsCache = new Map();
                 this.activeCosmetics = new Set();
                 this.loadShopActiveCache();
+                setTimeout(() => {
+                    const cachedStyle = localStorage.getItem('nym_active_style');
+                    const cachedFlair = localStorage.getItem('nym_active_flair');
+
+                    if (cachedStyle && cachedStyle !== '' && !this.activeMessageStyle) {
+                        this.activeMessageStyle = cachedStyle;
+                        this.localActiveStyle = cachedStyle;
+                        console.log('🎨 Loaded cached style from constructor:', cachedStyle);
+                    }
+
+                    if (cachedFlair && cachedFlair !== '' && !this.activeFlair) {
+                        this.activeFlair = cachedFlair;
+                        this.localActiveFlair = cachedFlair;
+                        console.log('⭐ Loaded cached flair from constructor:', cachedFlair);
+                    }
+                }, 0);
             }
 
             // Cache "active items"
@@ -11931,6 +11951,12 @@
 
                 const payload = this._buildActiveItemsPayload();
 
+                // Cache locally for immediate access
+                this.localActiveStyle = this.activeMessageStyle;
+                this.localActiveFlair = this.activeFlair;
+                localStorage.setItem('nym_active_style', this.activeMessageStyle || '');
+                localStorage.setItem('nym_active_flair', this.activeFlair || '');
+
                 const evt = {
                     kind: 30078,
                     created_at: Math.floor(Date.now() / 1000),
@@ -11949,6 +11975,85 @@
                     signed = window.NostrTools.finalizeEvent(evt, this.privkey);
                 }
                 if (signed) this.sendToRelay(['EVENT', signed]);
+            }
+
+            loadCachedShopItems() {
+                console.log('🔍 loadCachedShopItems() called');
+                console.log('   pubkey:', this.pubkey);
+
+                if (!this.pubkey) {
+                    console.log('   ❌ No pubkey, skipping cache load');
+                    return;
+                }
+
+                // Try to load from localStorage cache first
+                const cachedStyle = localStorage.getItem('nym_active_style');
+                const cachedFlair = localStorage.getItem('nym_active_flair');
+
+                console.log('   cachedStyle from localStorage:', cachedStyle);
+                console.log('   cachedFlair from localStorage:', cachedFlair);
+
+                if (cachedStyle && cachedStyle !== '') {
+                    this.activeMessageStyle = cachedStyle;
+                    this.localActiveStyle = cachedStyle;
+                    console.log('   ✅ Loaded cached message style:', cachedStyle);
+                }
+
+                if (cachedFlair && cachedFlair !== '') {
+                    this.activeFlair = cachedFlair;
+                    this.localActiveFlair = cachedFlair;
+                    console.log('   ✅ Loaded cached flair:', cachedFlair);
+                }
+
+                console.log('   Final state:');
+                console.log('     activeMessageStyle:', this.activeMessageStyle);
+                console.log('     localActiveStyle:', this.localActiveStyle);
+                console.log('     activeFlair:', this.activeFlair);
+                console.log('     localActiveFlair:', this.localActiveFlair);
+
+                // Apply to any existing messages immediately
+                this.applyShopStylesToOwnMessages();
+            }
+
+            applyShopStylesToOwnMessages() {
+                if (!this.pubkey) return;
+
+                const ownMessages = document.querySelectorAll(`.message[data-pubkey="${this.pubkey}"]`);
+
+                ownMessages.forEach(msg => {
+                    // Remove previous styling classes
+                    [...msg.classList].forEach(cls => {
+                        if (cls.startsWith('style-') || cls.startsWith('cosmetic-') || cls === 'supporter-style') {
+                            msg.classList.remove(cls);
+                        }
+                    });
+
+                    // Add active message style
+                    if (this.activeMessageStyle) {
+                        msg.classList.add(this.activeMessageStyle);
+                    }
+
+                    // Add supporter badge if owned
+                    if (this.userPurchases.has('supporter-badge')) {
+                        msg.classList.add('supporter-style');
+                    }
+
+                    // Add active cosmetics
+                    if (this.activeCosmetics && this.activeCosmetics.size > 0) {
+                        this.activeCosmetics.forEach(c => {
+                            if (c === 'cosmetic-aura-gold') {
+                                msg.classList.add('cosmetic-aura-gold');
+                            }
+                            // Name-glow applies to author element
+                            if (c === 'cosmetic-name-glow') {
+                                const auth = msg.querySelector('.message-author');
+                                if (auth) auth.classList.add('cosmetic-name-glow');
+                            }
+                        });
+                    }
+                });
+
+                console.log('Applied shop styles to own messages');
             }
 
             activateCosmetic(itemId) {
@@ -11986,9 +12091,6 @@
             <div class="shop-loading-text">Loading shop items...</div>
         </div>
     `;
-
-                // Load user purchases from Nostr
-                await this.loadUserPurchases();
 
                 // Display default tab
                 this.switchShopTab('styles');
@@ -12606,6 +12708,10 @@
                         activeCosmetics: Array.from(this.activeCosmetics || [])
                     };
 
+                    // Cache to localStorage (CRITICAL)
+                    localStorage.setItem('nym_active_style', this.activeMessageStyle || '');
+                    localStorage.setItem('nym_active_flair', this.activeFlair || '');
+
                     const purchaseEvent = {
                         kind: 30078,
                         created_at: Math.floor(Date.now() / 1000),
@@ -12634,6 +12740,9 @@
             async loadUserPurchases() {
                 if (!this.pubkey) return;
 
+                // Load from local cache immediately
+                this.loadCachedShopItems();
+
                 // Request shop purchases from Nostr
                 const subscriptionId = "shop-" + Math.random().toString(36).substring(7);
                 const subscription = [
@@ -12642,8 +12751,8 @@
                     {
                         kinds: [30078],
                         authors: [this.pubkey],
-                        "#d": ["nym-shop-purchases"],
-                        limit: 1
+                        "#d": ["nym-shop-purchases", "nym-shop-active"],
+                        limit: 10  // Get last 10 events to ensure we have the latest
                     }
                 ];
 
@@ -12653,8 +12762,14 @@
                 return new Promise((resolve) => {
                     setTimeout(() => {
                         this.sendToRelay(["CLOSE", subscriptionId]);
-                        // After trying to load purchases, publish current active set so others see us
+                        this.shopItemsLoaded = true;
+
+                        // After loading, publish current active set so others see us
                         this.publishActiveShopItems();
+
+                        // Apply styles to any messages already displayed
+                        this.applyShopStylesToOwnMessages();
+
                         resolve();
                     }, 3000);
                 });
@@ -12685,6 +12800,11 @@
 
             activateMessageStyle(styleId) {
                 this.activeMessageStyle = styleId || null;
+
+                // Cache immediately
+                this.localActiveStyle = this.activeMessageStyle;
+                localStorage.setItem('nym_active_style', this.activeMessageStyle || '');
+
                 this.savePurchaseToNostr();
                 this.publishActiveShopItems();
                 this.displaySystemMessage(`✅ Activated ${this.getShopItemById(styleId).name}`);
@@ -12693,6 +12813,11 @@
 
             activateFlair(flairId) {
                 this.activeFlair = flairId || null;
+
+                // Cache immediately
+                this.localActiveFlair = this.activeFlair;
+                localStorage.setItem('nym_active_flair', this.activeFlair || '');
+
                 this.savePurchaseToNostr();
                 this.publishActiveShopItems();
                 this.displaySystemMessage(`✅ Activated ${this.getShopItemById(flairId).name}`);
@@ -15337,6 +15462,13 @@ ${code}
                             "#p": [this.pubkey],
                             since: Math.floor(Date.now() / 1000) - 86400,
                             limit: 500
+                        },
+                        // MY shop purchases and active items
+                        {
+                            kinds: [30078],
+                            authors: [this.pubkey],
+                            "#d": ["nym-shop-purchases", "nym-shop-active"],
+                            limit: 100
                         }
                     );
                 }
@@ -17811,6 +17943,40 @@ ${code}
                         try {
                             const items = JSON.parse(event.content || '{}');
 
+                            // For our own events, handle specially
+                            if (event.pubkey === this.pubkey) {
+                                // Check timestamp to ensure we're using the latest
+                                const currentTimestamp = this.shopItemsCache.get(event.pubkey)?.eventCreatedAt || 0;
+
+                                if (event.created_at > currentTimestamp) {
+                                    // This is newer than what we have, update our state
+                                    this.activeMessageStyle = items.style || null;
+                                    this.activeFlair = items.flair || null;
+                                    this.activeCosmetics = new Set(Array.isArray(items.cosmetics) ? items.cosmetics : []);
+
+                                    // Cache locally
+                                    this.localActiveStyle = this.activeMessageStyle;
+                                    this.localActiveFlair = this.activeFlair;
+                                    localStorage.setItem('nym_active_style', this.activeMessageStyle || '');
+                                    localStorage.setItem('nym_active_flair', this.activeFlair || '');
+
+                                    // Update cache timestamp
+                                    this.cacheShopActiveItems(event.pubkey, {
+                                        style: this.activeMessageStyle,
+                                        flair: this.activeFlair,
+                                        supporter: this.userPurchases.has('supporter-badge'),
+                                        cosmetics: Array.from(this.activeCosmetics || [])
+                                    }, event.created_at);
+
+                                    // Apply to our messages
+                                    this.applyShopStylesToOwnMessages();
+
+                                    console.log('Updated own active shop items from newer event');
+                                }
+                                return;
+                            }
+
+                            // For other users
                             // Check if we have a cached version with a newer timestamp
                             const cachedData = this.shopItemsCache.get(event.pubkey);
                             if (cachedData && cachedData.eventCreatedAt >= event.created_at) {
@@ -17867,14 +18033,48 @@ ${code}
                     if (dTag[1] === 'nym-shop-purchases' && event.pubkey === this.pubkey) {
                         try {
                             const data = JSON.parse(event.content || '{}');
+
+                            // Check timestamp to prevent overwriting with older data
+                            const currentTimestamp = this.shopPurchasesTimestamp || 0;
+                            if (event.created_at < currentTimestamp) {
+                                console.log('Ignoring older shop purchases event');
+                                return;
+                            }
+
+                            this.shopPurchasesTimestamp = event.created_at;
                             this.userPurchases.clear();
                             (data.purchases || []).forEach(p => this.userPurchases.set(p.id, p));
-                            this.activeMessageStyle = data.activeStyle || null;
-                            this.activeFlair = data.activeFlair || null;
-                            this.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
+
+                            // Update active items and cache them
+                            if (data.activeStyle !== undefined) {
+                                this.activeMessageStyle = data.activeStyle || null;
+                                this.localActiveStyle = this.activeMessageStyle;
+                                localStorage.setItem('nym_active_style', this.activeMessageStyle || '');
+                            }
+
+                            if (data.activeFlair !== undefined) {
+                                this.activeFlair = data.activeFlair || null;
+                                this.localActiveFlair = this.activeFlair;
+                                localStorage.setItem('nym_active_flair', this.activeFlair || '');
+                            }
+
+                            if (data.activeCosmetics !== undefined) {
+                                this.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
+                            }
+
+                            console.log('✅ Loaded shop purchases from relay:', {
+                                style: this.activeMessageStyle,
+                                flair: this.activeFlair,
+                                purchaseCount: this.userPurchases.size
+                            });
+
                             // After loading, broadcast our current active items so others see it
                             this.publishActiveShopItems();
-                            console.log('Loaded shop purchases + active items');
+
+                            // Apply to our messages immediately
+                            this.applyShopStylesToOwnMessages();
+
+                            console.log('Loaded shop purchases + active items from event');
                         } catch (error) {
                             console.error('Error loading shop purchases:', error);
                         }
@@ -20303,13 +20503,11 @@ ${code}
                         hour12: this.settings.timeFormat === '12hr'
                     }) : '';
 
-                // ========== SHOP INTEGRATION STARTS HERE ==========
                 // Get user's shop items for styling
                 const userShopItems = this.getUserShopItems(message.pubkey);
                 const flairHtml = this.getFlairForUser(message.pubkey);
                 const supporterBadge = userShopItems?.supporter ?
                     '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
-                // ========== SHOP INTEGRATION SECTION 1 END ==========
 
                 const messageEl = document.createElement('div');
 
@@ -20371,7 +20569,6 @@ ${code}
                             classes.push('cosmetic-aura-gold');
                         }
                     }
-                    // ========== SHOP INTEGRATION SECTION 2 END ==========
 
                     messageEl.className = classes.join(' ');
                     messageEl.dataset.messageId = message.id;
@@ -20406,7 +20603,6 @@ ${code}
                     const formattedContent = this.formatMessageWithQuotes(message.content);
 
                     const baseNym = this.parseNymFromDisplay(message.author);
-                    // ========== SHOP INTEGRATION SECTION 3 START ==========
                     const displayAuthorBase = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
                     let displayAuthor = displayAuthorBase; // string used in HTML
                     let authorExtraClass = '';
@@ -20414,7 +20610,6 @@ ${code}
                     if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-name-glow')) {
                         authorExtraClass = 'cosmetic-name-glow';
                     }
-                    // ========== SHOP INTEGRATION SECTION 3 END ==========
 
                     const escapedAuthorBase = this.escapeHtml(message.author).split('#')[0] || this.escapeHtml(message.author);
                     const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
@@ -20430,7 +20625,6 @@ ${code}
                         hour12: this.settings.timeFormat === '12hr'
                     });
 
-                    // ========== SHOP INTEGRATION SECTION 4 START ==========
                     messageEl.innerHTML = `
             ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
             <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">
@@ -20439,7 +20633,6 @@ ${code}
             <span class="message-content ${userColorClass}">${formattedContent}</span>
             ${reactionButton}
         `;
-                    // ========== SHOP INTEGRATION SECTION 4 END ==========
 
                     const authorSpan = messageEl.querySelector('.message-author');
                     if (authorSpan) {
@@ -20449,6 +20642,36 @@ ${code}
                             e.stopPropagation();
                             this.showContextMenu(e, displayAuthor, message.pubkey, message.content, message.id);
                             return false;
+                        });
+                    }
+                }
+
+                // Apply shop styles for own messages (load from cache if needed)
+                if (message.pubkey === this.pubkey) {
+                    // Use cached values if shop items haven't loaded yet
+                    const activeStyle = this.activeMessageStyle || this.localActiveStyle;
+                    const activeFlair = this.activeFlair || this.localActiveFlair;
+
+                    // Debug logging (can be removed after fixing)
+                    if (activeStyle) {
+                        console.log('💅 Applying style to own message:', activeStyle);
+                    }
+
+                    if (activeStyle) {
+                        messageEl.classList.add(activeStyle);
+                    }
+                    if (this.userPurchases.has('supporter-badge')) {
+                        messageEl.classList.add('supporter-style');
+                    }
+                    if (this.activeCosmetics && this.activeCosmetics.size > 0) {
+                        this.activeCosmetics.forEach(c => {
+                            if (c === 'cosmetic-aura-gold') {
+                                messageEl.classList.add('cosmetic-aura-gold');
+                            }
+                            if (c === 'cosmetic-name-glow') {
+                                const auth = messageEl.querySelector('.message-author');
+                                if (auth) auth.classList.add('cosmetic-name-glow');
+                            }
                         });
                     }
                 }
@@ -26509,7 +26732,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.17.47 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.17.48 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
@@ -26838,6 +27061,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     localStorage.setItem('nym_connection_mode', mode);
                 }
 
+                if (mode === 'extension' || mode === 'nsec') {
+                    if (nym.pubkey) {
+                        // Load cached shop items IMMEDIATELY - before any relay connection
+                        nym.loadCachedShopItems();
+                        console.log('Loaded cached shop items before connecting to relays');
+                    }
+                }
+
                 // Connect to relays
                 await nym.connectToRelays();
 
@@ -26850,6 +27081,11 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     setTimeout(() => {
                         nym.loadSyncedSettings();
                     }, 2000);
+
+                    // Load shop purchases from relays (this will also refresh cached items if newer data is found)
+                    setTimeout(async () => {
+                        await nym.loadUserPurchases();
+                    }, 2500);
                 }
 
                 // Request notification permission
