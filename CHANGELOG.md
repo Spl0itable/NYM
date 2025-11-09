@@ -1,3 +1,7 @@
+## v2.18.52 - 2025-11-09
+
+New: GIF selector
+
 ## v2.17.52 - 2025-11-08
 
 Hotfix: nickname flair badges not vertically aligned to nickname
