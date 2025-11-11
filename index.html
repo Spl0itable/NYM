@@ -3576,7 +3576,7 @@
             width: 12px;
             height: 12px;
             border-radius: 50%;
-            background-color: var(--border-dim);
+            background-color: var(--text-dim);
             transition: all 0.3s ease;
         }
 
@@ -3586,7 +3586,7 @@
         }
 
         .step-indicator.completed {
-            background-color: var(--success);
+            background-color: var(--primary);
         }
 
         .key-display {
@@ -28411,7 +28411,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
             const display = document.getElementById('bunkerUriDisplay');
             const originalBg = display.style.backgroundColor;
-            display.style.backgroundColor = 'var(--success)';
+            display.style.backgroundColor = 'var(--primary)';
             setTimeout(() => {
                 display.style.backgroundColor = originalBg;
             }, 500);
