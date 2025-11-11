@@ -1,3 +1,10 @@
+## v2.19.53 - 2025-11-11
+
+New: you can now request deletion of messages from relays
+New: persistent identity account creation in welcome modal
+New: nostr connect / bunker connection method
+Hotfix: redacted shop item now auto deletes messages after 10min after they're hidden after 10 seconds
+
 ## v2.18.53 - 2025-11-11
 
 Hotfix: corrected the PWA manifest to correct app URL

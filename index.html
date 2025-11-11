@@ -3535,6 +3535,193 @@
         .gif-attribution a:hover {
             text-decoration: underline;
         }
+
+        .account-creation-steps {
+            display: none;
+        }
+
+        .step {
+            display: none;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .step.active {
+            display: block;
+        }
+
+        .step-header {
+            color: var(--secondary);
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .step-content {
+            color: var(--text-primary);
+            font-size: 14px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+
+        .step-indicators {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .step-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: var(--border-dim);
+            transition: all 0.3s ease;
+        }
+
+        .step-indicator.active {
+            background-color: var(--secondary);
+            transform: scale(1.3);
+        }
+
+        .step-indicator.completed {
+            background-color: var(--success);
+        }
+
+        .key-display {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-dim);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--text-primary);
+            max-height: 100px;
+            overflow-y: auto;
+        }
+
+        .warning-box {
+            background-color: rgba(255, 152, 0, 0.1);
+            border: 2px solid var(--warning);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            color: var(--warning);
+        }
+
+        .warning-box strong {
+            display: block;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .step-actions {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .step-actions button {
+            flex: 1;
+        }
+
+        .copy-btn {
+            background-color: var(--accent);
+            color: var(--text-primary);
+            border: 1px solid var(--secondary);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            background-color: var(--secondary);
+            transform: translateY(-1px);
+            color: var(--bg);
+        }
+
+        .info-list {
+            list-style: none;
+            padding: 0;
+            margin: 15px 0;
+        }
+
+        .info-list li {
+            padding: 8px 0 8px 25px;
+            position: relative;
+            color: var(--text-dim);
+        }
+
+        .info-list li:before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: var(--secondary);
+            font-weight: bold;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        #bunkerGroup {
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--text-dim);
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        #bunkerQRCode {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 200px;
+            margin: 15px 0;
+        }
+
+        #bunkerQRCode img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        #bunkerUriDisplay {
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        #bunkerUriDisplay:hover {
+            background-color: var(--accent) !important;
+        }
     </style>
 </head>
 
@@ -3550,6 +3737,7 @@
         <div class="context-menu-item" id="ctxPM">Private Message</div>
         <div class="context-menu-item" id="ctxQuote">Quote Message</div>
         <div class="context-menu-item" id="ctxCopyPubkey">Copy Pubkey</div>
+        <div class="context-menu-item danger" id="ctxDeleteMessage">Delete Message</div>
         <div class="context-menu-item danger" id="ctxBlock">Block User</div>
     </div>
 
@@ -3789,9 +3977,154 @@
                     <label class="form-label">Connection Mode</label>
                     <select class="form-select" id="connectionMode">
                         <option value="ephemeral">Ephemeral (Auto-generate temporary keys)</option>
-                        <option value="extension">Use Nostr Extension (Persistent identity)</option>
-                        <option value="nsec">Use NSEC Private Key (Persistent identity)</option>
+                        <option value="create">Create New Account (Persistent Nostr identity)</option>
+                        <option value="extension">Use Nostr Extension (Existing Persistent identity)</option>
+                        <option value="nsec">Use NSEC Private Key (Existing Persistent identity)</option>
+                        <option value="bunker">Nostr Connect / Bunker (Remote signing)</option>
                     </select>
+                </div>
+
+                <!-- Account Creation Multi-Step Flow -->
+                <div id="accountCreationSteps" class="account-creation-steps">
+                    <!-- Step Indicators -->
+                    <div class="step-indicators">
+                        <div class="step-indicator active" id="indicator-0"></div>
+                        <div class="step-indicator" id="indicator-1"></div>
+                        <div class="step-indicator" id="indicator-2"></div>
+                        <div class="step-indicator" id="indicator-3"></div>
+                    </div>
+
+                    <!-- Step 0: Introduction to Nostr -->
+                    <div class="step" id="step-0" style="display: block;">
+                        <div class="step-header">What is Nostr?</div>
+                        <div class="step-content">
+                            <p><strong>Nostr</strong> (Notes and Other Stuff Transmitted by Relays) is a simple, open
+                                protocol for creating censorship-resistant social networks.</p>
+
+                            <ul class="info-list">
+                                <li><strong>Decentralized:</strong> No single company controls your data</li>
+                                <li><strong>Portable Identity:</strong> Your account works across all Nostr apps</li>
+                                <li><strong>Censorship Resistant:</strong> No one can ban or silence you</li>
+                                <li><strong>Cryptographically Secure:</strong> Your identity is backed by public key
+                                    cryptography</li>
+                            </ul>
+
+                            <p>When you create a Nostr account, you're generating a cryptographic key pair that becomes
+                                your unique, portable identity across the entire Nostr network.</p>
+                        </div>
+                        <div class="step-actions">
+                            <button class="send-btn" onclick="nextAccountCreationStep()">Next: Generate Keys</button>
+                        </div>
+                    </div>
+
+                    <!-- Step 1: Key Generation -->
+                    <div class="step" id="step-1">
+                        <div class="step-header">Generate Your Keys</div>
+                        <div class="step-content">
+                            <p>Your Nostr identity consists of two keys:</p>
+
+                            <ul class="info-list">
+                                <li><strong>Public Key (npub):</strong> Like your username - share this with others</li>
+                                <li><strong>Private Key (nsec):</strong> Like your password - NEVER share this with
+                                    anyone!</li>
+                            </ul>
+
+                            <p>Click the button below to generate your unique key pair. This happens entirely in your
+                                browser - we never see or store your keys on any server.</p>
+
+                            <button class="send-btn" onclick="generateAndDisplayKeys(); nextAccountCreationStep();"
+                                style="width: 100%; margin-top: 15px;">
+                                Generate My Keys
+                            </button>
+                        </div>
+                        <div class="step-actions">
+                            <button class="send-btn" style="background-color: var(--bg-tertiary);"
+                                onclick="previousAccountCreationStep()">Back</button>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Display Keys with Security Warning -->
+                    <div class="step" id="step-2">
+                        <div class="step-header">Save Your Private Key</div>
+
+                        <div class="warning-box">
+                            <strong>⚠️ CRITICAL: Save Your Private Key Now!</strong>
+                            <p>Your private key is the ONLY way to access your account. If you lose it, your account is
+                                gone forever. We cannot recover it for you.</p>
+                        </div>
+
+                        <div class="step-content">
+                            <label
+                                style="color: var(--secondary); font-weight: bold; display: block; margin-bottom: 5px;">Your
+                                Private Key (nsec)</label>
+                            <div class="key-display" id="generated-nsec">Generating...</div>
+                            <button class="copy-btn" onclick="copyNsecToClipboard()">📋 Copy Private Key</button>
+
+                            <div style="margin-top: 20px;">
+                                <label
+                                    style="color: var(--text-dim); font-weight: bold; display: block; margin-bottom: 5px;">Your
+                                    Public Key (npub)</label>
+                                <div class="key-display" id="generated-npub">Generating...</div>
+                            </div>
+
+                            <div
+                                style="margin-top: 20px; padding: 15px; background-color: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-dim);">
+                                <p style="color: var(--text-dim); font-size: 13px; margin: 0;">
+                                    <strong>How to store your private key:</strong><br />
+                                    • Write it down on paper and store it safely<br />
+                                    • Use a password manager (recommended)<br />
+                                    • Store it in an encrypted file<br />
+                                    • NEVER share it or post it online<br />
+                                    • NEVER enter it on websites you don't trust
+                                </p>
+                            </div>
+
+                            <label style="display: flex; align-items: center; margin-top: 20px; cursor: pointer;">
+                                <input type="checkbox" id="keySavedCheckbox" style="margin-right: 10px;">
+                                <span style="color: var(--text-primary); font-size: 14px;">I have securely saved my
+                                    private key</span>
+                            </label>
+                        </div>
+
+                        <div class="step-actions">
+                            <button class="send-btn" style="background-color: var(--bg-tertiary);"
+                                onclick="previousAccountCreationStep()">Back</button>
+                            <button class="send-btn"
+                                onclick="if(document.getElementById('keySavedCheckbox').checked) { nextAccountCreationStep(); } else { alert('Please confirm that you have saved your private key'); }">Next:
+                                Choose Nickname</button>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Choose Nickname -->
+                    <div class="step" id="step-3">
+                        <div class="step-header">Choose Your Nickname</div>
+                        <div class="step-content">
+                            <p>Pick a nickname (nym) for your account. This will be stored in your Nostr profile (kind 0
+                                metadata event) and will be visible to others in the network.</p>
+
+                            <div class="form-group" style="margin-top: 20px;">
+                                <label class="form-label">Your Nickname</label>
+                                <input type="text" class="form-input" id="newAccountNym"
+                                    placeholder="Enter your nickname" maxlength="20">
+                                <div class="form-hint">This will be your display name on Nostr</div>
+                            </div>
+
+                            <div
+                                style="margin-top: 20px; padding: 15px; background-color: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-dim);">
+                                <p style="color: var(--text-dim); font-size: 13px; margin: 0;">
+                                    Your nickname will be published as a <strong>kind 0 metadata event</strong> to the
+                                    Nostr network. You can change it later in settings.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="step-actions">
+                            <button class="send-btn" style="background-color: var(--bg-tertiary);"
+                                onclick="previousAccountCreationStep()">Back</button>
+                            <button class="send-btn" onclick="finalizeAccountCreation()">Create Account & Enter
+                                NYM</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- NSEC -->
@@ -3799,6 +4132,43 @@
                     <label class="form-label">Enter your NSEC</label>
                     <input type="password" class="form-input" id="nsecInput" placeholder="nsec1...">
                     <div class="form-hint">Your private key will be stored locally</div>
+                </div>
+
+                <!-- Nostr Connect / Bunker -->
+                <div class="form-group" id="bunkerGroup" style="display:none">
+                    <label class="form-label">Connect with Nostr Bunker</label>
+
+                    <div style="margin-bottom: 15px;">
+                        <button class="copy-btn" onclick="showBunkerPairing()" style="width: 100%;">
+                            Pair with Mobile App (Amber, etc.)
+                        </button>
+                    </div>
+
+                    <div id="bunkerPairingSection" style="display:none; margin-bottom: 20px;">
+                        <div class="step-header" style="font-size: 16px; margin-bottom: 10px;">Scan with your bunker app
+                        </div>
+                        <div id="bunkerQRCode"
+                            style="background: white; padding: 20px; border-radius: 8px; display: flex; justify-content: center; align-items: center; min-height: 200px;">
+                            <div style="color: #333;">Generating QR code...</div>
+                        </div>
+                        <div style="margin-top: 10px; padding: 10px; background-color: var(--bg-secondary); border-radius: 6px; font-family: monospace; font-size: 11px; word-break: break-all; max-height: 80px; overflow-y: auto; cursor: pointer;"
+                            id="bunkerUriDisplay" onclick="copyBunkerUri()"></div>
+                        <div class="form-hint">Open Amber or another NIP-46 compatible app and scan this QR code</div>
+                        <div id="bunkerWaitingStatus"
+                            style="margin-top: 15px; color: var(--warning); text-align: center; display: none;">
+                            <div class="spinner"
+                                style="display: inline-block; width: 16px; height: 16px; border: 2px solid var(--warning); border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px;">
+                            </div>
+                            Waiting for approval...
+                        </div>
+                    </div>
+
+                    <div style="text-align: center; margin: 15px 0; color: var(--text-dim);">— OR —</div>
+
+                    <label class="form-label">Enter Bunker URI</label>
+                    <input type="text" class="form-input" id="bunkerInput"
+                        placeholder="bunker://pubkey?relay=wss://...">
+                    <div class="form-hint">Paste your bunker:// connection string from nsec.app or another signer</div>
                 </div>
 
                 <div class="form-group" id="nymGroup">
@@ -3825,7 +4195,7 @@
                 </div>
             </div>
             <div class="modal-actions" style="margin-bottom:20px;">
-                <button class="send-btn" onclick="initializeNym()">Enter NYM</button>
+                <button class="send-btn" id="enterNymBtn" onclick="initializeNym()">Enter NYM</button>
             </div>
             <span style="color: var(--text-dim);">By entering, you agree to our <a
                     href="https://github.com/Spl0itable/NYM/blob/main/TOS.md" target="_blank" rel="noopener"
@@ -11558,6 +11928,8 @@
                 this.lightningAddress = null;
                 this.userLightningAddresses = new Map();
                 this.userAvatars = new Map();
+                this.nostrConnect = null;
+                this.usingNostrConnect = false;
                 this.profileFetchQueue = [];
                 this.profileFetchTimer = null;
                 this.profileFetchBatchDelay = 100;
@@ -12577,12 +12949,7 @@
                     };
 
                     // Sign the request
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        signedEvent = await window.nostr.signEvent(zapRequest);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(zapRequest, this.privkey);
-                    }
+                    const signedEvent = await this.signEvent(event);
 
                     // Broadcast the zap request to relays
                     if (signedEvent) {
@@ -12862,12 +13229,7 @@
                         pubkey: this.pubkey
                     };
 
-                    let signedEvent;
-                    if (this.connectionMode === 'extension' && window.nostr) {
-                        signedEvent = await window.nostr.signEvent(purchaseEvent);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(purchaseEvent, this.privkey);
-                    }
+                    const signedEvent = await this.signEvent(event);
                     if (signedEvent) {
                         this.sendToRelay(["EVENT", signedEvent]);
                     }
@@ -14963,7 +15325,6 @@ ${code}
                     document.getElementById('contextMenu').classList.remove('active');
                 });
 
-                // Add copy pubkey handler
                 document.getElementById('ctxCopyPubkey').addEventListener('click', async () => {
                     if (this.contextMenuData && this.contextMenuData.pubkey) {
                         try {
@@ -14977,6 +15338,34 @@ ${code}
                     } else {
                         console.error('No pubkey in contextMenuData:', this.contextMenuData);
                         this.displaySystemMessage('No pubkey available to copy');
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+
+                document.getElementById('ctxCopyPubkey').addEventListener('click', async () => {
+                    if (this.contextMenuData && this.contextMenuData.pubkey) {
+                        try {
+                            await navigator.clipboard.writeText(this.contextMenuData.pubkey);
+                            this.displaySystemMessage(`Copied pubkey to clipboard`);
+                        } catch (err) {
+                            console.error('Failed to copy pubkey:', err);
+                            console.log('Pubkey was:', this.contextMenuData.pubkey);
+                            this.displaySystemMessage('Failed to copy pubkey');
+                        }
+                    } else {
+                        console.error('No pubkey in contextMenuData:', this.contextMenuData);
+                        this.displaySystemMessage('No pubkey available to copy');
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+
+                // Add delete message handler
+                document.getElementById('ctxDeleteMessage').addEventListener('click', async () => {
+                    if (this.contextMenuData && this.contextMenuData.messageId && this.contextMenuData.pubkey === this.pubkey) {
+                        if (confirm('Are you sure you want to delete this message? This will send a deletion request to relays.')) {
+                            await this.publishDeletionEvent(this.contextMenuData.messageId);
+                            this.displaySystemMessage('Deletion request sent to relays');
+                        }
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
@@ -15132,6 +15521,14 @@ ${code}
                 // Show/hide React option
                 const reactOption = document.getElementById('ctxReact');
                 reactOption.style.display = messageId ? 'block' : 'none';
+
+                // Show/hide Delete Message option - only for own messages
+                const deleteOption = document.getElementById('ctxDeleteMessage');
+                if (pubkey === this.pubkey && messageId) {
+                    deleteOption.style.display = 'block';
+                } else {
+                    deleteOption.style.display = 'none';
+                }
 
                 // Add active class first to make visible
                 menu.classList.add('active');
@@ -16256,12 +16653,7 @@ ${code}
                     };
 
                     // Sign based on connection mode
-                    let signedEvent;
-                    if (this.connectionMode === 'extension' && window.nostr) {
-                        signedEvent = await window.nostr.signEvent(profileEvent);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(profileEvent, this.privkey);
-                    }
+                    const signedEvent = await this.signEvent(event);
 
                     if (signedEvent) {
                         this.sendToRelay(["EVENT", signedEvent]);
@@ -16412,12 +16804,7 @@ ${code}
                     }
 
                     // Sign the request
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        signedEvent = await window.nostr.signEvent(zapRequest);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(zapRequest, this.privkey);
-                    }
+                    const signedEvent = await this.signEvent(event);
 
                     return signedEvent;
                 } catch (error) {
@@ -19096,12 +19483,7 @@ ${code}
                         pubkey: this.pubkey
                     };
 
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        signedEvent = await window.nostr.signEvent(event);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                    }
+                    const signedEvent = await this.signEvent(event);
 
                     if (signedEvent) {
                         // Send to relay (async - UI already updated)
@@ -19306,6 +19688,14 @@ ${code}
 
                     this.sendToRelay(['EVENT', wrapped]);
 
+                    // Schedule deletion if redacted cosmetic is active
+                    if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                        const eventIdToDelete = wrapped.id;
+                        setTimeout(() => {
+                            this.publishDeletionEvent(eventIdToDelete);
+                        }, 600000); // 10 minutes
+                    }
+
                     // Show locally
                     const conversationKey = this.getPMConversationKey(recipientPubkey);
                     if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
@@ -19363,6 +19753,14 @@ ${code}
                     const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
 
                     this.sendToRelay(['EVENT', wrapped]);
+
+                    // Schedule deletion if redacted cosmetic is active
+                    if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                        const eventIdToDelete = wrapped.id;
+                        setTimeout(() => {
+                            this.publishDeletionEvent(eventIdToDelete);
+                        }, 600000); // 10 minutes
+                    }
 
                     // Show locally
                     const conversationKey = this.getPMConversationKey(recipientPubkey);
@@ -19877,6 +20275,37 @@ ${code}
                 }
             }
 
+            async useNostrConnect(bunkerUri) {
+                try {
+                    this.nostrConnect = new NostrConnectClient();
+
+                    const remotePubkey = await this.nostrConnect.connect(bunkerUri);
+                    this.pubkey = remotePubkey;
+                    this.usingNostrConnect = true;
+
+                    await this.fetchProfileFromRelay(remotePubkey);
+
+                    console.log('Connected via Nostr Connect (NIP-46)');
+                    return { pubkey: remotePubkey };
+
+                } catch (error) {
+                    console.error('Failed to connect via Nostr Connect:', error);
+                    throw error;
+                }
+            }
+
+            async signEvent(event) {
+                if (this.usingNostrConnect && this.nostrConnect) {
+                    return await this.nostrConnect.signEvent(event);
+                } else if (this.connectionMode === 'extension' && window.nostr) {
+                    return await window.nostr.signEvent(event);
+                } else if (this.privkey) {
+                    return window.NostrTools.finalizeEvent(event, this.privkey);
+                } else {
+                    throw new Error('No signing method available');
+                }
+            }
+
             async fetchProfileFromRelay(pubkey) {
                 return new Promise((resolve) => {
                     // Add to queue
@@ -20032,16 +20461,7 @@ ${code}
                     };
 
                     // Sign event
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        // Use extension
-                        signedEvent = await window.nostr.signEvent(event);
-                    } else if (this.privkey) {
-                        // Use finalizeEvent with ephemeral key
-                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                    } else {
-                        throw new Error('No signing method available');
-                    }
+                    const signedEvent = await this.signEvent(event);
 
                     const optimisticMessage = {
                         id: signedEvent.id, // Use the signed event ID
@@ -20062,6 +20482,14 @@ ${code}
 
                     // Send to relay (async - UI already updated)
                     this.sendToRelay(["EVENT", signedEvent]);
+
+                    // Schedule deletion if redacted cosmetic is active
+                    if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                        const eventIdToDelete = signedEvent.id;
+                        setTimeout(() => {
+                            this.publishDeletionEvent(eventIdToDelete);
+                        }, 600000); // 10 minutes
+                    }
 
                     return true;
                 } catch (error) {
@@ -20127,14 +20555,7 @@ ${code}
 
                     console.log('Community event to publish:', event);
 
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        signedEvent = await window.nostr.signEvent(event);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                    } else {
-                        throw new Error('No signing method available');
-                    }
+                    const signedEvent = await this.signEvent(event);
 
                     console.log('Signed community event:', signedEvent);
 
@@ -20157,6 +20578,14 @@ ${code}
                     // Send to relay (async)
                     this.sendToRelay(["EVENT", signedEvent]);
 
+                    // Schedule deletion if redacted cosmetic is active  
+                    if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                        const eventIdToDelete = signedEvent.id;
+                        setTimeout(() => {
+                            this.publishDeletionEvent(eventIdToDelete);
+                        }, 600000); // 10 minutes
+                    }
+
                     console.log('Community message sent successfully');
 
                     return true;
@@ -20164,6 +20593,35 @@ ${code}
                     console.error('Failed to publish community message:', error);
                     this.displaySystemMessage('Failed to send message: ' + error.message);
                     return false;
+                }
+            }
+
+            async publishDeletionEvent(eventId) {
+                try {
+                    if (!this.connected) {
+                        console.log('Not connected - skipping deletion event for:', eventId);
+                        return;
+                    }
+
+                    // Create kind 5 deletion event
+                    const event = {
+                        kind: 5,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [
+                            ['e', eventId]
+                        ],
+                        content: 'Message redacted',
+                        pubkey: this.pubkey
+                    };
+
+                    const signedEvent = await this.signEvent(event);
+
+                    if (signedEvent) {
+                        this.sendToRelay(["EVENT", signedEvent]);
+                        console.log('Deletion event sent for message:', eventId);
+                    }
+                } catch (error) {
+                    console.error('Failed to publish deletion event:', error);
                 }
             }
 
@@ -20190,14 +20648,7 @@ ${code}
                     };
 
                     // Sign event
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        signedEvent = await window.nostr.signEvent(event);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                    } else {
-                        throw new Error('No signing method available');
-                    }
+                    const signedEvent = await this.signEvent(event);
 
                     // Send to relay
                     this.sendToRelay(["EVENT", signedEvent]);
@@ -20251,14 +20702,7 @@ ${code}
                     }
 
                     // Sign event
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        signedEvent = await window.nostr.signEvent(event);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                    } else {
-                        throw new Error('No signing method available');
-                    }
+                    const signedEvent = await this.signEvent(event);
 
                     // Send to relay
                     this.sendToRelay(["EVENT", signedEvent]);
@@ -20455,14 +20899,7 @@ ${code}
                         pubkey: this.pubkey
                     };
 
-                    let signedEvent;
-                    if (window.nostr && !this.privkey) {
-                        signedEvent = await window.nostr.signEvent(uploadEvent);
-                    } else if (this.privkey) {
-                        signedEvent = window.NostrTools.finalizeEvent(uploadEvent, this.privkey);
-                    } else {
-                        throw new Error('No signing method available');
-                    }
+                    const signedEvent = await this.signEvent(event);
 
                     progressFill.style.width = '60%';
 
@@ -23162,15 +23599,7 @@ ${code}
                 };
 
                 // Sign the event
-                let signedEvent;
-                if (window.nostr && !this.privkey) {
-                    signedEvent = await window.nostr.signEvent(kickEvent);
-                } else if (this.privkey) {
-                    signedEvent = window.NostrTools.finalizeEvent(kickEvent, this.privkey);
-                } else {
-                    this.displaySystemMessage('No signing method available');
-                    return;
-                }
+                const signedEvent = await this.signEvent(event);
 
                 // Send the signed event
                 this.sendToRelay(["EVENT", signedEvent]);
@@ -26268,12 +26697,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
 
                 // Sign and send
-                let signedEvent;
-                if (window.nostr && !this.privkey) {
-                    signedEvent = await window.nostr.signEvent(event);
-                } else if (this.privkey) {
-                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                }
+                const signedEvent = await this.signEvent(event);
 
                 if (signedEvent) {
                     this.sendToRelay(["EVENT", signedEvent]);
@@ -26329,12 +26753,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
 
                 // Sign and send
-                let signedEvent;
-                if (window.nostr && !this.privkey) {
-                    signedEvent = await window.nostr.signEvent(event);
-                } else if (this.privkey) {
-                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                }
+                const signedEvent = await this.signEvent(event);
 
                 if (signedEvent) {
                     this.sendToRelay(["EVENT", signedEvent]);
@@ -26360,12 +26779,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     pubkey: this.pubkey
                 };
 
-                let signedEvent;
-                if (window.nostr && !this.privkey) {
-                    signedEvent = await window.nostr.signEvent(event);
-                } else if (this.privkey) {
-                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                }
+                const signedEvent = await this.signEvent(event);
 
                 if (signedEvent) {
                     this.sendToRelay(["EVENT", signedEvent]);
@@ -26853,12 +27267,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
 
                 // Sign and send
-                let signedEvent;
-                if (window.nostr && !this.privkey) {
-                    signedEvent = await window.nostr.signEvent(event);
-                } else if (this.privkey) {
-                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                }
+                const signedEvent = await this.signEvent(event);
 
                 if (signedEvent) {
                     this.sendToRelay(["EVENT", signedEvent]);
@@ -26913,12 +27322,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     pubkey: this.pubkey
                 };
 
-                let signedEvent;
-                if (window.nostr && !this.privkey) {
-                    signedEvent = await window.nostr.signEvent(event);
-                } else if (this.privkey) {
-                    signedEvent = window.NostrTools.finalizeEvent(event, this.privkey);
-                }
+                const signedEvent = await this.signEvent(event);
 
                 if (signedEvent) {
                     this.sendToRelay(["EVENT", signedEvent]);
@@ -26947,6 +27351,288 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
                 // Switch to bar
                 this.switchChannel('bar', '');
+            }
+        }
+
+        // NIP-46 Nostr Connect Client Implementation
+        class NostrConnectClient {
+            constructor() {
+                this.localKeypair = null;
+                this.remotePubkey = null;
+                this.relayUrl = null;
+                this.relay = null;
+                this.pendingRequests = new Map();
+                this.secret = null;
+                this.connected = false;
+                this.connectionTimeout = null;
+            }
+
+            // Helper to convert Uint8Array to hex string
+            bytesToHex(bytes) {
+                if (typeof bytes === 'string') return bytes;
+                return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+            }
+
+            parseBunkerUri(uri) {
+                try {
+                    if (!uri.startsWith('bunker://')) {
+                        throw new Error('Invalid bunker URI format');
+                    }
+
+                    const withoutProtocol = uri.substring(9);
+                    const [pubkeyPart, queryString] = withoutProtocol.split('?');
+
+                    this.remotePubkey = pubkeyPart;
+
+                    const params = new URLSearchParams(queryString);
+                    this.relayUrl = params.get('relay');
+                    this.secret = params.get('secret');
+
+                    if (!this.relayUrl) {
+                        throw new Error('Bunker URI must include relay parameter');
+                    }
+
+                    return {
+                        remotePubkey: this.remotePubkey,
+                        relay: this.relayUrl,
+                        secret: this.secret
+                    };
+                } catch (error) {
+                    console.error('Failed to parse bunker URI:', error);
+                    throw error;
+                }
+            }
+
+            async generateBunkerUri(relayUrl = null) {
+                const sk = window.NostrTools.generateSecretKey();
+                const pk = window.NostrTools.getPublicKey(sk);
+
+                // Convert to hex for compatibility
+                this.localKeypair = {
+                    privkey: this.bytesToHex(sk),
+                    pubkey: pk
+                };
+                this.relayUrl = relayUrl || 'wss://relay.nsec.app';
+                this.secret = this.generateSecret();
+
+                const uri = `bunker://${pk}?relay=${encodeURIComponent(this.relayUrl)}&secret=${this.secret}`;
+                return uri;
+            }
+
+            generateSecret() {
+                const array = new Uint8Array(16);
+                crypto.getRandomValues(array);
+                return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+            }
+
+            async connect(bunkerUri) {
+                return new Promise(async (resolve, reject) => {
+                    try {
+                        const parsed = this.parseBunkerUri(bunkerUri);
+
+                        const sk = window.NostrTools.generateSecretKey();
+                        const pk = window.NostrTools.getPublicKey(sk);
+
+                        // Convert to hex for compatibility
+                        this.localKeypair = {
+                            privkey: this.bytesToHex(sk),
+                            pubkey: pk
+                        };
+
+                        await this.connectToRelay();
+
+                        const connectResponse = await this.sendRequest('connect', [pk, this.secret || '']);
+
+                        if (connectResponse === 'ack') {
+                            this.connected = true;
+                            console.log('Nostr Connect: Connected successfully');
+                            resolve(this.remotePubkey);
+                        } else {
+                            throw new Error('Connection rejected by remote signer');
+                        }
+
+                    } catch (error) {
+                        console.error('Nostr Connect: Connection failed', error);
+                        reject(error);
+                    }
+                });
+            }
+
+            async connectToRelay() {
+                return new Promise((resolve, reject) => {
+                    try {
+                        this.relay = new WebSocket(this.relayUrl);
+
+                        this.relay.onopen = () => {
+                            console.log('Nostr Connect: Relay connected');
+
+                            const subId = 'nip46-' + Math.random().toString(36).substring(7);
+                            const filter = {
+                                kinds: [24133],
+                                "#p": [this.localKeypair.pubkey],
+                                authors: [this.remotePubkey]
+                            };
+
+                            this.relay.send(JSON.stringify(['REQ', subId, filter]));
+                            resolve();
+                        };
+
+                        this.relay.onerror = (error) => {
+                            console.error('Nostr Connect: Relay error', error);
+                            reject(error);
+                        };
+
+                        this.relay.onmessage = async (msg) => {
+                            await this.handleRelayMessage(msg);
+                        };
+
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+            }
+
+            async handleRelayMessage(msg) {
+                try {
+                    const data = JSON.parse(msg.data);
+
+                    if (data[0] === 'EVENT') {
+                        const event = data[2];
+
+                        if (event.kind === 24133) {
+                            console.log('Nostr Connect: Received event', event);
+
+                            // Use NIP-44 decryption
+                            const conversationKey = window.NostrTools.nip44.getConversationKey(
+                                this.localKeypair.privkey,
+                                event.pubkey
+                            );
+                            const decrypted = window.NostrTools.nip44.decrypt(
+                                event.content,
+                                conversationKey
+                            );
+
+                            console.log('Nostr Connect: Decrypted response', decrypted);
+
+                            const response = JSON.parse(decrypted);
+
+                            const requestId = response.id;
+                            if (this.pendingRequests.has(requestId)) {
+                                const { resolve, reject } = this.pendingRequests.get(requestId);
+
+                                if (response.error) {
+                                    reject(new Error(response.error));
+                                } else {
+                                    resolve(response.result);
+                                }
+
+                                this.pendingRequests.delete(requestId);
+                            }
+                        }
+                    } else if (data[0] === 'OK') {
+                        console.log('Nostr Connect: Event published OK', data);
+                    }
+                } catch (error) {
+                    console.error('Nostr Connect: Error handling message', error);
+                    console.error('Message data:', msg.data);
+                }
+            }
+
+            async sendRequest(method, params = []) {
+                return new Promise(async (resolve, reject) => {
+                    try {
+                        const requestId = this.generateRequestId();
+
+                        const request = {
+                            id: requestId,
+                            method: method,
+                            params: params
+                        };
+
+                        console.log('Nostr Connect: Sending request', request);
+
+                        // Use NIP-44 encryption
+                        const conversationKey = window.NostrTools.nip44.getConversationKey(
+                            this.localKeypair.privkey,
+                            this.remotePubkey
+                        );
+                        const encrypted = window.NostrTools.nip44.encrypt(
+                            JSON.stringify(request),
+                            conversationKey
+                        );
+
+                        const event = {
+                            kind: 24133,
+                            created_at: Math.floor(Date.now() / 1000),
+                            tags: [['p', this.remotePubkey]],
+                            content: encrypted,
+                            pubkey: this.localKeypair.pubkey
+                        };
+
+                        const signedEvent = window.NostrTools.finalizeEvent(event, this.localKeypair.privkey);
+
+                        this.relay.send(JSON.stringify(['EVENT', signedEvent]));
+                        console.log('Nostr Connect: Request sent', method);
+
+                        this.pendingRequests.set(requestId, { resolve, reject });
+
+                        setTimeout(() => {
+                            if (this.pendingRequests.has(requestId)) {
+                                this.pendingRequests.delete(requestId);
+                                reject(new Error('Request timeout'));
+                            }
+                        }, 30000);
+
+                    } catch (error) {
+                        console.error('Nostr Connect: Error sending request', error);
+                        reject(error);
+                    }
+                });
+            }
+
+            generateRequestId() {
+                return Math.random().toString(36).substring(2) + Date.now().toString(36);
+            }
+
+            async getPublicKey() {
+                return await this.sendRequest('get_public_key');
+            }
+
+            async signEvent(event) {
+                const unsignedEvent = {
+                    kind: event.kind,
+                    created_at: event.created_at,
+                    tags: event.tags,
+                    content: event.content,
+                    pubkey: event.pubkey
+                };
+
+                const result = await this.sendRequest('sign_event', [JSON.stringify(unsignedEvent)]);
+                return JSON.parse(result);
+            }
+
+            async nip04Encrypt(thirdPartyPubkey, plaintext) {
+                return await this.sendRequest('nip04_encrypt', [thirdPartyPubkey, plaintext]);
+            }
+
+            async nip04Decrypt(thirdPartyPubkey, ciphertext) {
+                return await this.sendRequest('nip04_decrypt', [thirdPartyPubkey, ciphertext]);
+            }
+
+            async nip44Encrypt(thirdPartyPubkey, plaintext) {
+                return await this.sendRequest('nip44_encrypt', [thirdPartyPubkey, plaintext]);
+            }
+
+            async nip44Decrypt(thirdPartyPubkey, ciphertext) {
+                return await this.sendRequest('nip44_decrypt', [thirdPartyPubkey, ciphertext]);
+            }
+
+            disconnect() {
+                if (this.relay) {
+                    this.relay.close();
+                }
+                this.connected = false;
+                this.pendingRequests.clear();
             }
         }
 
@@ -27194,7 +27880,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.18.53 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.19.53 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
@@ -27355,6 +28041,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             const savedMode = localStorage.getItem('nym_connection_mode');
             const savedRelay = localStorage.getItem('nym_relay_url');
             const savedNsec = localStorage.getItem('nym_nsec');
+            const savedBunkerUri = localStorage.getItem('nym_bunker_uri');
 
             // Saved NSEC restore
             if (savedNsec) {
@@ -27405,6 +28092,38 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     document.getElementById('setupModal').classList.add('active');
                 }
                 return;
+            }
+
+            // Bunker mode restore
+            if (savedBunkerUri && savedConnectionMode === 'bunker') {
+                try {
+                    const setupModal = document.getElementById('setupModal');
+                    setupModal.classList.remove('active');
+
+                    nym.displaySystemMessage('Reconnecting with Nostr Connect bunker...');
+                    await nym.useNostrConnect(savedBunkerUri);
+
+                    await nym.connectToRelays();
+
+                    if (nym.connected) {
+                        await nym.fetchProfileFromRelay(nym.pubkey);
+                    }
+
+                    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+                        Notification.requestPermission();
+                    }
+
+                    nym.displaySystemMessage(`Welcome back to NYM, ${nym.nym}!`);
+                    nym.displaySystemMessage(`Your Nostr Connect identity has been restored.`);
+                    nym.displaySystemMessage(`Type /help for available commands.`);
+
+                    await routeToUrlChannel();
+                    window.maybeStartTutorial(false);
+                    return;
+                } catch (error) {
+                    console.error('Failed to restore bunker connection:', error);
+                    localStorage.removeItem('nym_bunker_uri');
+                }
             }
 
             // Extension mode restore
@@ -27510,6 +28229,36 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
                     // Store NSEC securely
                     localStorage.setItem('nym_nsec', nsecValue);
+                } else if (mode === 'bunker') {
+                    let bunkerUri = document.getElementById('bunkerInput').value.trim();
+
+                    if (!bunkerUri && window.tempBunkerConnection) {
+                        bunkerUri = window.tempBunkerConnection.uri;
+                    }
+
+                    if (!bunkerUri) {
+                        const savedBunker = localStorage.getItem('nym_bunker_uri');
+                        if (savedBunker) {
+                            bunkerUri = savedBunker;
+                        }
+                    }
+
+                    if (!bunkerUri) {
+                        throw new Error('Please provide a bunker URI or complete pairing');
+                    }
+
+                    await nym.useNostrConnect(bunkerUri);
+
+                    const nymInput = document.getElementById('nymInput').value.trim();
+                    if (nymInput) {
+                        nym.nym = nymInput;
+                    } else if (!nym.nym || nym.nym === 'Loading profile...') {
+                        nym.nym = nym.generateRandomNym();
+                    }
+
+                    document.getElementById('currentNym').textContent = nym.nym;
+
+                    localStorage.setItem('nym_bunker_uri', bunkerUri);
                 }
 
                 // If nym is still not generated, generate it now
@@ -27576,11 +28325,216 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
         }
 
+        // Nostr Connect / Bunker pairing functions
+        async function showBunkerPairing() {
+            const pairingSection = document.getElementById('bunkerPairingSection');
+            const qrContainer = document.getElementById('bunkerQRCode');
+            const uriDisplay = document.getElementById('bunkerUriDisplay');
+            const waitingStatus = document.getElementById('bunkerWaitingStatus');
+
+            pairingSection.style.display = 'block';
+            waitingStatus.style.display = 'none';
+
+            try {
+                const tempClient = new NostrConnectClient();
+                const relayUrl = 'wss://relay.nsec.app';
+                const uri = await tempClient.generateBunkerUri(relayUrl);
+
+                uriDisplay.textContent = uri;
+
+                qrContainer.innerHTML = '';
+
+                const qrImg = document.createElement('img');
+                qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(uri)}`;
+                qrImg.style.maxWidth = '200px';
+                qrContainer.appendChild(qrImg);
+
+                window.tempBunkerConnection = {
+                    uri: uri,
+                    client: tempClient
+                };
+
+                waitingStatus.style.display = 'block';
+                await tempClient.connectToRelay();
+
+                console.log('Bunker pairing ready. Waiting for user to scan and approve...');
+
+            } catch (error) {
+                console.error('Failed to generate bunker pairing:', error);
+                alert('Failed to generate pairing QR code: ' + error.message);
+            }
+        }
+
+        function copyBunkerUri() {
+            const uri = document.getElementById('bunkerUriDisplay').textContent;
+            navigator.clipboard.writeText(uri);
+
+            const display = document.getElementById('bunkerUriDisplay');
+            const originalBg = display.style.backgroundColor;
+            display.style.backgroundColor = 'var(--success)';
+            setTimeout(() => {
+                display.style.backgroundColor = originalBg;
+            }, 500);
+        }
+
+        async function createNewAccount(nickname) {
+            // Generate keys
+            await nym.generateKeypair();
+
+            // Encode nsec for storage
+            const nsecEncoded = window.NostrTools.nip19.nsecEncode(nym.privkey);
+
+            // Store nsec
+            localStorage.setItem('nym_nsec', nsecEncoded);
+            localStorage.setItem('nym_connection_mode', 'nsec');
+
+            // Set nickname
+            nym.nym = nickname || nym.generateRandomNym();
+            document.getElementById('currentNym').textContent = nym.nym;
+
+            // Connect to relays first
+            await nym.connectToRelays();
+
+            // Publish kind 0 metadata event
+            await nym.saveToNostrProfile();
+
+            return nsecEncoded;
+        }
+
+        let currentStep = 0;
+        const totalSteps = 4;
+
+        function nextAccountCreationStep() {
+            if (currentStep < totalSteps - 1) {
+                hideStep(currentStep);
+                currentStep++;
+                showStep(currentStep);
+                updateStepIndicator();
+            }
+        }
+
+        function previousAccountCreationStep() {
+            if (currentStep > 0) {
+                hideStep(currentStep);
+                currentStep--;
+                showStep(currentStep);
+                updateStepIndicator();
+            }
+        }
+
+        function showStep(stepIndex) {
+            document.getElementById(`step-${stepIndex}`).style.display = 'block';
+        }
+
+        function hideStep(stepIndex) {
+            document.getElementById(`step-${stepIndex}`).style.display = 'none';
+        }
+
+        function updateStepIndicator() {
+            for (let i = 0; i < totalSteps; i++) {
+                const indicator = document.getElementById(`indicator-${i}`);
+                if (i === currentStep) {
+                    indicator.classList.add('active');
+                } else if (i < currentStep) {
+                    indicator.classList.add('completed');
+                    indicator.classList.remove('active');
+                } else {
+                    indicator.classList.remove('active', 'completed');
+                }
+            }
+        }
+
+        async function generateAndDisplayKeys() {
+            // Generate the keypair
+            await nym.generateKeypair();
+
+            // Encode keys for display
+            const nsecEncoded = window.NostrTools.nip19.nsecEncode(nym.privkey);
+            const npubEncoded = window.NostrTools.nip19.npubEncode(nym.pubkey);
+
+            // Display in the UI
+            document.getElementById('generated-nsec').textContent = nsecEncoded;
+            document.getElementById('generated-npub').textContent = npubEncoded;
+
+            // Store temporarily
+            window.tempNsec = nsecEncoded;
+        }
+
+        function copyNsecToClipboard() {
+            const nsec = document.getElementById('generated-nsec').textContent;
+            navigator.clipboard.writeText(nsec);
+
+            // Visual feedback
+            const btn = event.target;
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied!';
+            setTimeout(() => {
+                btn.textContent = originalText;
+            }, 2000);
+        }
+
+        async function finalizeAccountCreation() {
+            const nickname = document.getElementById('newAccountNym').value.trim();
+
+            if (!nickname) {
+                alert('Please enter a nickname');
+                return;
+            }
+
+            try {
+                // Use the stored nsec
+                nym.privkey = nym.decodeNsec(window.tempNsec);
+                nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
+                nym.nym = nickname;
+                nym.connectionMode = 'nsec';
+
+                // Store permanently
+                localStorage.setItem('nym_nsec', window.tempNsec);
+                localStorage.setItem('nym_connection_mode', 'nsec');
+
+                document.getElementById('currentNym').textContent = nym.nym;
+
+                // Connect to relays
+                await nym.connectToRelays();
+
+                // Publish profile (kind 0 event)
+                await nym.saveToNostrProfile();
+
+                // Clear temp
+                delete window.tempNsec;
+
+                // Close modal
+                closeModal('setupModal');
+
+                // Welcome messages
+                nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Your Nostr account has been created.`);
+                nym.displaySystemMessage(`Your persistent identity is now active. Make sure you've saved your private key!`);
+                nym.displaySystemMessage(`Type /help for available commands.`);
+
+                // Route to channel
+                await routeToUrlChannel();
+
+                // Start tutorial
+                window.maybeStartTutorial(false);
+
+            } catch (error) {
+                console.error('Account creation failed:', error);
+                alert('Failed to create account: ' + error.message);
+            }
+        }
+
         // Disconnect/logout function
         function disconnectNym() {
             // Clear saved connection
             localStorage.removeItem('nym_connection_mode');
             localStorage.removeItem('nym_relay_url');
+            localStorage.removeItem('nym_bunker_uri');
+
+            if (nym.nostrConnect) {
+                nym.nostrConnect.disconnect();
+                nym.nostrConnect = null;
+                nym.usingNostrConnect = false;
+            }
 
             // Disconnect from relay
             if (nym && nym.ws) {
@@ -27656,6 +28610,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Hide all special groups first
                 nsecGroup.style.display = 'none';
                 autoEphemeralGroup.style.display = 'none'; // Hide auto-ephemeral by default
+                const bunkerGroup = document.getElementById('bunkerGroup');
+                if (bunkerGroup) bunkerGroup.style.display = 'none';
 
                 switch (mode) {
                     case 'ephemeral':
@@ -27678,6 +28634,43 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                             nsecInput.value = savedNsec;
                         }
                         break;
+                    case 'create':
+                        // Hide standard groups
+                        nsecGroup.style.display = 'none';
+                        nymGroup.style.display = 'none';
+                        autoEphemeralGroup.style.display = 'none';
+
+                        // Show account creation steps
+                        document.getElementById('accountCreationSteps').style.display = 'block';
+                        document.getElementById('enterNymBtn').style.display = 'none';
+
+                        // Reset to first step
+                        currentStep = 0;
+                        for (let i = 0; i < totalSteps; i++) {
+                            hideStep(i);
+                        }
+                        showStep(0);
+                        updateStepIndicator();
+                        break;
+                    case 'bunker':
+                        nsecGroup.style.display = 'none';
+                        autoEphemeralGroup.style.display = 'none';
+                        const bunkerGroup = document.getElementById('bunkerGroup');
+                        if (bunkerGroup) bunkerGroup.style.display = 'block';
+                        hint.textContent = 'Will use your Nostr profile from the bunker';
+                        nymInput.placeholder = 'Override profile name (optional)';
+
+                        const savedBunker = localStorage.getItem('nym_bunker_uri');
+                        if (savedBunker) {
+                            document.getElementById('bunkerInput').value = savedBunker;
+                        }
+                        break;
+
+                        // Reset account creation UI when switching modes
+                        if (mode !== 'create') {
+                            document.getElementById('accountCreationSteps').style.display = 'none';
+                            document.getElementById('enterNymBtn').style.display = 'block';
+                        }
                 }
             });
 
