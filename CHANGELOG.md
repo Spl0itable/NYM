@@ -1,3 +1,7 @@
+## v2.19.54 - 2025-11-11
+
+Hotfix: bunker url connection and restore
+
 ## v2.19.53 - 2025-11-11
 
 New: you can now request deletion of messages from relays

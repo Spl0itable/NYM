@@ -2621,6 +2621,7 @@
             border-top-color: var(--primary);
             border-radius: 50%;
             animation: spin 1s linear infinite;
+            vertical-align: middle;
         }
 
         @keyframes spin {
@@ -27442,12 +27443,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         await this.connectToRelay();
 
                         const connectResponse = await this.sendRequest('connect', [pk, this.secret || '']);
+                        console.log('Nostr Connect: Received connect response', connectResponse);
 
                         if (connectResponse === 'ack') {
                             this.connected = true;
                             console.log('Nostr Connect: Connected successfully');
                             resolve(this.remotePubkey);
                         } else {
+                            console.log('Nostr Connect: Unexpected response, expected "ack" but got', connectResponse);
                             throw new Error('Connection rejected by remote signer');
                         }
 
@@ -27517,16 +27520,38 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                             const response = JSON.parse(decrypted);
 
                             const requestId = response.id;
+                            console.log('Nostr Connect: Processing response', { requestId, result: response.result, hasPending: this.pendingRequests.has(requestId) });
+
                             if (this.pendingRequests.has(requestId)) {
                                 const { resolve, reject } = this.pendingRequests.get(requestId);
 
+                                // Handle auth_url response
+                                if (response.result === 'auth_url' && response.error) {
+                                    console.log('Nostr Connect: Auth required, opening popup', response.error);
+                                    // Open the auth URL in a popup
+                                    const width = 500;
+                                    const height = 700;
+                                    const left = (window.screen.width - width) / 2;
+                                    const top = (window.screen.height - height) / 2;
+                                    window.open(
+                                        response.error,
+                                        'nostr-connect-auth',
+                                        `width=${width},height=${height},left=${left},top=${top},popup=yes`
+                                    );
+                                    return;
+                                }
+
                                 if (response.error) {
+                                    console.log('Nostr Connect: Rejecting with error', response.error);
                                     reject(new Error(response.error));
                                 } else {
+                                    console.log('Nostr Connect: Resolving with result', response.result);
                                     resolve(response.result);
                                 }
 
                                 this.pendingRequests.delete(requestId);
+                            } else {
+                                console.log('Nostr Connect: No pending request found for', requestId);
                             }
                         }
                     } else if (data[0] === 'OK') {
@@ -27880,7 +27905,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.19.53 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.19.54 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
@@ -28095,7 +28120,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             // Bunker mode restore
-            if (savedBunkerUri && savedConnectionMode === 'bunker') {
+            if (savedBunkerUri && savedMode === 'bunker') {
                 try {
                     const setupModal = document.getElementById('setupModal');
                     setupModal.classList.remove('active');
@@ -28163,12 +28188,19 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         }
 
         async function initializeNym() {
+            // Show loading state on button
+            const enterBtn = document.getElementById('enterNymBtn');
+            const originalBtnText = enterBtn.innerHTML;
+            enterBtn.disabled = true;
+            enterBtn.innerHTML = '<span class="loader"></span> Connecting...';
+
             try {
                 // Check if running in NYMApp shell
                 const isNYMApp = navigator.userAgent.includes('NYMApp');
 
                 const mode = document.getElementById('connectionMode').value;
                 nym.connectionMode = mode; // Store connection mode
+
 
                 // Get or generate nym first
                 const nymInput = document.getElementById('nymInput').value.trim();
@@ -28304,6 +28336,10 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     Notification.requestPermission();
                 }
 
+                // Restore button state
+                enterBtn.disabled = false;
+                enterBtn.innerHTML = originalBtnText;
+
                 // Close setup modal
                 closeModal('setupModal');
 
@@ -28321,9 +28357,13 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
             } catch (error) {
                 console.error('Initialization failed:', error);
+                // Restore button state on error
+                enterBtn.disabled = false;
+                enterBtn.innerHTML = originalBtnText;
                 alert('Failed to initialize: ' + error.message);
             }
         }
+
 
         // Nostr Connect / Bunker pairing functions
         async function showBunkerPairing() {
