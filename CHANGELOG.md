@@ -1,3 +1,7 @@
+## v2.18.53 - 2025-11-11
+
+Hotfix: corrected the PWA manifest to correct app URL
+
 ## v2.18.52 - 2025-11-09
 
 New: GIF selector
