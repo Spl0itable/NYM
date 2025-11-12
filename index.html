@@ -3,7 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>NYM</title>
     <meta name="description"
         content="NYM App - Nostr Ynstant Messenger. Ephemeral anonymous messaging. Bridged with Bitchat geohash channels.">
@@ -2453,7 +2454,7 @@
             }
 
             .input-container {
-                position: fixed;
+                position: sticky;
                 bottom: 0;
                 left: 0;
                 right: 0;
@@ -2463,12 +2464,41 @@
                 background: var(--bg-secondary);
                 border-top: 2px solid var(--border);
                 z-index: 500;
+                margin-top: auto;
             }
 
             .messages-container {
-                padding-bottom: 120px;
+                height: calc(100dvh - 60px);
+                padding-bottom: 0;
                 padding-left: 5px;
                 padding-right: 5px;
+                overflow-y: auto;
+                overflow-x: hidden;
+            }
+
+            .main-container {
+                display: flex;
+                flex-direction: column;
+                height: 100dvh;
+                overflow: hidden;
+            }
+
+            .messages-section {
+                display: flex;
+                flex-direction: column;
+                flex: 1;
+                min-height: 0;
+                overflow: hidden;
+            }
+
+            @supports not (height: 100dvh) {
+                .messages-container {
+                    height: calc(100vh - 60px);
+                }
+
+                .main-container {
+                    height: 100vh;
+                }
             }
 
             .message-input {
@@ -27905,7 +27935,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.19.54 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.19.55 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

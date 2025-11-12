@@ -1,3 +1,7 @@
+## v2.19.55 - 2025-11-13
+
+Hotfix: message input container no longer overlaps channel messages
+
 ## v2.19.54 - 2025-11-11
 
 Hotfix: bunker url connection and restore
