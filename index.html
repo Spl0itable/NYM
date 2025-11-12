@@ -2450,30 +2450,37 @@
             }
 
             .main-content {
-                margin-left: 0;
+                height: 100vh;
+                height: 100dvh;
+                max-height: 100vh;
+                max-height: 100dvh;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
             }
 
             .input-container {
-                position: sticky;
-                bottom: 0;
-                left: 0;
-                right: 0;
+                position: relative;
+                bottom: auto;
+                left: auto;
+                right: auto;
                 padding: 10px;
                 flex-direction: column;
                 gap: 10px;
                 background: var(--bg-secondary);
                 border-top: 2px solid var(--border);
                 z-index: 500;
-                margin-top: auto;
+                flex-shrink: 0;
             }
 
             .messages-container {
-                height: calc(100dvh - 60px);
-                padding-bottom: 0;
-                padding-left: 5px;
-                padding-right: 5px;
+                flex: 1;
+                min-height: 0;
                 overflow-y: auto;
                 overflow-x: hidden;
+                padding-left: 5px;
+                padding-right: 5px;
+                padding-bottom: 10px;
             }
 
             .main-container {
@@ -2526,6 +2533,7 @@
             .chat-header {
                 padding: 15px 10px;
                 padding-top: 30px;
+                flex-shrink: 0;
             }
 
             .input-wrapper {
@@ -27935,7 +27943,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.19.55 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.19.56 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
@@ -28922,6 +28930,20 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     });
                 }
             }, 60000); // Check every minute
+
+            // Auto-scroll to bottom when input is focused on mobile
+            const messageInput = document.getElementById('messageInput');
+            const messagesContainer = document.getElementById('messagesContainer');
+
+            if (messageInput && messagesContainer) {
+                messageInput.addEventListener('focus', function () {
+                    if (window.innerWidth <= 768) {
+                        setTimeout(() => {
+                            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                        }, 300);
+                    }
+                });
+            }
         });
 
         // Parse URL for channel routing

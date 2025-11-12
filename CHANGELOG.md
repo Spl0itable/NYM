@@ -1,3 +1,7 @@
+## v2.19.56 - 2025-11-13
+
+Hotfix: better autoscroll on mobile
+
 ## v2.19.55 - 2025-11-13
 
 Hotfix: message input container no longer overlaps channel messages
