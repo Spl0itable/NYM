@@ -3412,11 +3412,15 @@
             text-shadow: 0 0 10px rgba(255, 215, 0, 0.3);
         }
 
+        .shop-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 15px;
+        }
+
         .shop-recovery {
-            margin-top: 10px;
-            display: flex;
-            gap: 10px;
-            align-items: center;
+            width: 100%;
+            margin-left: 0 !important;
         }
 
         .shop-recovery input {
@@ -3761,6 +3765,21 @@
         #bunkerUriDisplay:hover {
             background-color: var(--accent) !important;
         }
+
+        .context-menu-item.report {
+            color: var(--warning);
+        }
+
+        .context-menu-item.report:hover {
+            background: rgba(255, 255, 0, 0.1);
+            color: var(--warning);
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            color: var(--primary);
+            font-size: 20px;
+        }
     </style>
 </head>
 
@@ -3776,8 +3795,61 @@
         <div class="context-menu-item" id="ctxPM">Private Message</div>
         <div class="context-menu-item" id="ctxQuote">Quote Message</div>
         <div class="context-menu-item" id="ctxCopyPubkey">Copy Pubkey</div>
+        <div class="context-menu-item report" id="ctxReport">Report</div>
         <div class="context-menu-item danger" id="ctxDeleteMessage">Delete Message</div>
         <div class="context-menu-item danger" id="ctxBlock">Block User</div>
+    </div>
+
+    <!-- Report Modal -->
+    <div class="modal" id="reportModal" style="display: none;">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2>Report User/Content</h2>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 15px; color: var(--text-dim);">
+                    Reporting: <span id="reportTargetNym" style="color: var(--primary);"></span>
+                </p>
+
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 10px; color: var(--text);">Report Type:</label>
+                    <select id="reportType"
+                        style="width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px;">
+                        <option value="nudity">Nudity - depictions of nudity, porn, etc.</option>
+                        <option value="malware">Malware - virus, trojan, spyware, etc.</option>
+                        <option value="profanity">Profanity - hateful speech, etc.</option>
+                        <option value="illegal">Illegal - content that may be illegal</option>
+                        <option value="spam">Spam</option>
+                        <option value="impersonation">Impersonation - pretending to be someone else</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 10px; color: var(--text);">Additional Details
+                        (optional):</label>
+                    <textarea id="reportDetails" rows="4"
+                        style="width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px; resize: vertical;"
+                        placeholder="Provide any additional context for this report..."></textarea>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="display: flex; align-items: center; color: var(--text); cursor: pointer;">
+                        <input type="checkbox" id="reportMessage" style="margin-right: 8px;">
+                        Report specific message (if unchecked, reports the user profile)
+                    </label>
+                </div>
+
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button onclick="nym.closeReportModal()"
+                        style="padding: 10px 20px; background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text); cursor: pointer; border-radius: 4px;">Cancel</button>
+                    <button onclick="nym.submitReport()"
+                        style="padding: 10px 20px; background: var(--warning); border: 1px solid var(--warning); color: #000; cursor: pointer; border-radius: 4px; font-weight: bold;">Submit
+                        Report</button>
+
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="container">
@@ -15312,6 +15384,14 @@ ${code}
                     }
                 }
 
+                // Add report handler
+                document.getElementById('ctxReport').addEventListener('click', () => {
+                    if (this.contextMenuData) {
+                        this.openReportModal();
+                    }
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+
                 // Add the click handler for slap
                 slapOption.addEventListener('click', () => {
                     if (this.contextMenuData) {
@@ -15408,6 +15488,84 @@ ${code}
                     }
                     document.getElementById('contextMenu').classList.remove('active');
                 });
+            }
+
+            openReportModal() {
+                if (!this.contextMenuData) return;
+
+                const modal = document.getElementById('reportModal');
+                const targetNym = document.getElementById('reportTargetNym');
+                const reportMessageCheckbox = document.getElementById('reportMessage');
+
+                const baseNym = this.contextMenuData.nym;
+                const suffix = this.getPubkeySuffix(this.contextMenuData.pubkey);
+                const fullNym = `${baseNym}#${suffix}`;
+
+                targetNym.textContent = fullNym;
+
+                // Enable message reporting only if there's a messageId
+                if (this.contextMenuData.messageId) {
+                    reportMessageCheckbox.disabled = false;
+                    reportMessageCheckbox.checked = true;
+                } else {
+                    reportMessageCheckbox.disabled = true;
+                    reportMessageCheckbox.checked = false;
+                }
+
+                modal.style.display = 'flex';
+            }
+
+            closeReportModal() {
+                const modal = document.getElementById('reportModal');
+                modal.style.display = 'none';
+
+                // Reset form
+                document.getElementById('reportType').value = 'nudity';
+                document.getElementById('reportDetails').value = '';
+                document.getElementById('reportMessage').checked = true;
+            }
+
+            async submitReport() {
+                if (!this.contextMenuData) return;
+
+                const reportType = document.getElementById('reportType').value;
+                const reportDetails = document.getElementById('reportDetails').value;
+                const reportMessage = document.getElementById('reportMessage').checked;
+
+                const pubkey = this.contextMenuData.pubkey;
+                const messageId = this.contextMenuData.messageId;
+
+                try {
+                    // Create NIP-56 kind 1984 report event
+                    const event = {
+                        kind: 1984,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [],
+                        content: reportDetails || '',
+                        pubkey: this.pubkey
+                    };
+
+                    // Add p tag (always required for user reports)
+                    event.tags.push(['p', pubkey, reportType]);
+
+                    // Add e tag if reporting a specific message
+                    if (reportMessage && messageId) {
+                        event.tags.push(['e', messageId, reportType]);
+                    }
+
+                    // Sign and publish the event
+                    const signedEvent = await this.signEvent(event);
+
+                    if (signedEvent) {
+                        this.sendToRelay(["EVENT", signedEvent]);
+                        this.displaySystemMessage(`Report submitted successfully`);
+                        this.closeReportModal();
+                    }
+
+                } catch (err) {
+                    console.error('Failed to submit report:', err);
+                    this.displaySystemMessage('Failed to submit report');
+                }
             }
 
             showContextMenu(e, nym, pubkey, content = null, messageId = null) {
@@ -27943,7 +28101,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.19.56 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.20.56 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

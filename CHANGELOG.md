@@ -1,3 +1,7 @@
+## v2.20.56 - 2025-11-13
+
+New: added kind 1984 reporting
+
 ## v2.19.56 - 2025-11-13
 
 Hotfix: better autoscroll on mobile
