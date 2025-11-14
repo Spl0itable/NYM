@@ -1,3 +1,8 @@
+## v2.21.56 - 2025-11-14
+
+New: you can now change the pinned landing channel on app load
+Hotfix: old private messages showed users as active
+
 ## v2.20.56 - 2025-11-13
 
 New: added kind 1984 reporting

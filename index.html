@@ -4426,6 +4426,19 @@
                     <div class="form-hint">Automatically sign in with ephemeral mode on app restart</div>
                 </div>
 
+                <div class="form-group">
+                    <label class="form-label">Pinned Landing Channel</label>
+                    <div style="position: relative;">
+                        <input type="text" class="form-control" id="pinnedLandingChannelSearch"
+                            placeholder="Type to search or select a channel..." autocomplete="off"
+                            style="padding: 8px 12px; border: 1px solid var(--border); background: var(--background-alt); color: var(--text); border-radius: 4px; font-size: 14px; width: 100%;" />
+                        <input type="hidden" id="pinnedLandingChannelValue" />
+                        <div id="pinnedLandingChannelDropdown"
+                            style="display: none; position: absolute; top: 100%; left: 0; right: 0; max-height: 300px; overflow-y: auto; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; margin-top: 4px; z-index: 1000; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                        </div>
+                    </div>
+                    <div class="form-hint">Channel to load when you first open or reload the app</div>
+                </div>
 
                 <div class="form-group">
                     <label class="form-label">Blur Images from Others</label>
@@ -11916,6 +11929,15 @@
                 this.currentCommunity = null;
                 this.processedModerationEvents = new Set();
                 this.settings = this.loadSettings();
+                this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'ephemeral', channel: 'bar' };
+                if (this.pinnedLandingChannel.type === 'geohash') {
+                    this.currentChannel = this.pinnedLandingChannel.geohash;
+                    this.currentGeohash = this.pinnedLandingChannel.geohash;
+                } else if (this.pinnedLandingChannel.type === 'community') {
+                    this.currentCommunity = this.pinnedLandingChannel.communityId;
+                } else {
+                    this.currentChannel = this.pinnedLandingChannel.channel || 'bar';
+                }
                 this.commandHistory = [];
                 this.historyIndex = -1;
                 this.connected = false;
@@ -15977,11 +15999,37 @@ ${code}
                     document.getElementById('sendBtn').disabled = false;
                     this.connected = true;
 
-                    // Set initial channel label for #bar
-                    document.getElementById('currentChannel').innerHTML = '#bar <span style="font-size: 12px; color: var(--text-dim);">(Ephemeral)</span>';
+                    // Set initial channel label to pinned landing channel
+                    const channelLabel = this.isValidGeohash(this.currentChannel) ? this.currentChannel : `#${this.currentChannel}`;
+                    const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
+                    document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
+
 
                     // Start subscriptions on all connected relays
                     this.subscribeToAllRelays();
+
+                    // Switch to the pinned landing channel based on type
+                    setTimeout(() => {
+                        const pinned = this.pinnedLandingChannel || { type: 'ephemeral', channel: 'bar' };
+
+                        if (pinned.type === 'community') {
+                            // Give communities time to load, then switch
+                            setTimeout(() => {
+                                if (this.communityChannels.has(pinned.communityId)) {
+                                    this.switchToCommunity(pinned.communityId);
+                                } else {
+                                    // Community not available, fallback to bar
+                                    console.log('Pinned community not found, falling back to #bar');
+                                    this.switchChannel('bar', '');
+                                }
+                            }, 1000);
+                        } else if (pinned.type === 'geohash') {
+                            this.switchChannel(pinned.geohash, pinned.geohash);
+                        } else {
+                            // Ephemeral channel
+                            this.switchChannel(pinned.channel || 'bar', '');
+                        }
+                    }, 100);
 
                     // Update status to show we're connected
                     this.updateConnectionStatus();
@@ -17708,7 +17756,8 @@ ${code}
                         userJoinedChannels: Array.from(this.userJoinedChannels),
                         lightningAddress: this.lightningAddress,
                         dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
-                        dmTTLSeconds: this.settings.dmTTLSeconds || 86400
+                        dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
+                        pinnedLandingChannel: this.pinnedLandingChannel || { type: 'ephemeral', channel: 'bar' }
                     };
 
                     const settingsEvent = {
@@ -17954,18 +18003,19 @@ ${code}
                                 if (profile.name || profile.username || profile.display_name) {
                                     const profileName = (profile.name || profile.username || profile.display_name).substring(0, 20);
                                     if (!this.users.has(pubkey) || this.users.get(pubkey).nym.startsWith('anon-')) {
+                                        const existingUser = this.users.get(pubkey);
                                         this.users.set(pubkey, {
                                             nym: profileName,
                                             pubkey,
-                                            lastSeen: Date.now(),
-                                            status: 'online',
-                                            channels: new Set()
+                                            lastSeen: existingUser?.lastSeen || 0,
+                                            status: existingUser?.status || 'online',
+                                            channels: existingUser?.channels || new Set()
                                         });
                                     } else {
                                         // Update existing user name without discarding channels/status
                                         const u = this.users.get(pubkey);
                                         u.nym = profileName;
-                                        u.lastSeen = Date.now();
+                                        // Don't update lastSeen - only channel messages should update presence
                                         this.users.set(pubkey, u);
                                     }
 
@@ -18908,12 +18958,13 @@ ${code}
                         if (profile.name || profile.username || profile.display_name) {
                             const profileName = profile.name || profile.username || profile.display_name;
                             if (!this.users.has(pubkey) || this.users.get(pubkey).nym.startsWith('anon-')) {
+                                const existingUser = this.users.get(pubkey);
                                 this.users.set(pubkey, {
                                     nym: profileName.substring(0, 20),
                                     pubkey: pubkey,
-                                    lastSeen: Date.now(),
-                                    status: 'online',
-                                    channels: new Set()
+                                    lastSeen: existingUser?.lastSeen || 0,
+                                    status: existingUser?.status || 'online',
+                                    channels: existingUser?.channels || new Set()
                                 });
                             }
                         }
@@ -19117,6 +19168,13 @@ ${code}
                         if (lightningInput) {
                             lightningInput.value = settings.lightningAddress;
                         }
+                    }
+
+                    // Restore pinned landing channel
+                    if (settings.pinnedLandingChannel) {
+                        this.pinnedLandingChannel = settings.pinnedLandingChannel;
+                        this.settings.pinnedLandingChannel = settings.pinnedLandingChannel;
+                        localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(settings.pinnedLandingChannel));
                     }
 
                     // Update UI elements if settings modal is open
@@ -26506,6 +26564,20 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             loadSettings() {
+                let pinnedLandingChannel;
+                try {
+                    const saved = localStorage.getItem('nym_pinned_landing_channel');
+                    pinnedLandingChannel = saved ? JSON.parse(saved) : { type: 'ephemeral', channel: 'bar' };
+                } catch (e) {
+                    // Fallback for old string format
+                    const saved = localStorage.getItem('nym_pinned_landing_channel');
+                    if (saved) {
+                        pinnedLandingChannel = { type: 'ephemeral', channel: saved };
+                    } else {
+                        pinnedLandingChannel = { type: 'ephemeral', channel: 'bar' };
+                    }
+                }
+
                 return {
                     theme: localStorage.getItem('nym_theme') || 'bitchat',
                     sound: localStorage.getItem('nym_sound') || 'beep',
@@ -26514,7 +26586,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     sortByProximity: localStorage.getItem('nym_sort_proximity') === 'true',
                     timeFormat: localStorage.getItem('nym_time_format') || '24hr',
                     dmForwardSecrecyEnabled: localStorage.getItem('nym_dm_fwdsec_enabled') === 'true',
-                    dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10)
+                    dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
+                    pinnedLandingChannel: pinnedLandingChannel
                 };
             }
 
@@ -27952,6 +28025,147 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 autoEphemeralSettingGroup.style.display = 'none';
             }
 
+            // Initialize pinned landing channel searchable dropdown
+            const pinnedSearchInput = document.getElementById('pinnedLandingChannelSearch');
+            const pinnedValueInput = document.getElementById('pinnedLandingChannelValue');
+            const pinnedDropdown = document.getElementById('pinnedLandingChannelDropdown');
+
+            if (pinnedSearchInput && pinnedValueInput && pinnedDropdown) {
+                // Get current pinned value
+                const currentPinned = nym.pinnedLandingChannel || { type: 'ephemeral', channel: 'bar' };
+
+                // Build all channel options
+                const channelOptions = [];
+
+                // Add common ephemeral channels
+                nym.commonChannels.forEach(channel => {
+                    channelOptions.push({
+                        group: 'Common Ephemeral Channels',
+                        label: `#${channel}`,
+                        value: { type: 'ephemeral', channel: channel },
+                        searchText: channel.toLowerCase()
+                    });
+                });
+
+                // Add geohash channels
+                Array.from(nym.channels.entries())
+                    .filter(([key, val]) => nym.isValidGeohash(key))
+                    .forEach(([geohash]) => {
+                        const location = nym.getGeohashLocation(geohash);
+                        channelOptions.push({
+                            group: 'Geohash Channels',
+                            label: location ? `${geohash} (${location})` : geohash,
+                            value: { type: 'geohash', geohash: geohash },
+                            searchText: (geohash + ' ' + (location || '')).toLowerCase()
+                        });
+                    });
+
+                // Add community channels
+                nym.communityChannels.forEach((community, communityId) => {
+                    channelOptions.push({
+                        group: 'Community Channels',
+                        label: `#${community.name} (Community)`,
+                        value: { type: 'community', communityId: communityId, name: community.name },
+                        searchText: community.name.toLowerCase()
+                    });
+                });
+
+                // Add user joined channels (excluding already listed ones)
+                Array.from(nym.userJoinedChannels)
+                    .filter(ch => !nym.isValidGeohash(ch) && !nym.commonChannels.includes(ch))
+                    .forEach(channel => {
+                        channelOptions.push({
+                            group: 'User Joined Channels',
+                            label: `#${channel}`,
+                            value: { type: 'ephemeral', channel: channel },
+                            searchText: channel.toLowerCase()
+                        });
+                    });
+
+                // Set current value
+                const currentOption = channelOptions.find(opt =>
+                    JSON.stringify(opt.value) === JSON.stringify(currentPinned)
+                );
+                if (currentOption) {
+                    pinnedSearchInput.value = currentOption.label;
+                    pinnedValueInput.value = JSON.stringify(currentOption.value);
+                } else {
+                    pinnedSearchInput.value = '#bar';
+                    pinnedValueInput.value = JSON.stringify({ type: 'ephemeral', channel: 'bar' });
+                }
+
+                // Function to render filtered options
+                const renderOptions = (filter = '') => {
+                    const filterLower = filter.toLowerCase().replace(/^#/, '');
+                    const filtered = filter
+                        ? channelOptions.filter(opt => opt.searchText.includes(filterLower))
+                        : channelOptions;
+
+                    if (filtered.length === 0) {
+                        pinnedDropdown.innerHTML = '<div style="padding: 8px 12px; color: var(--text-dim);">No channels found</div>';
+                        return;
+                    }
+
+                    // Group options
+                    const grouped = {};
+                    filtered.forEach(opt => {
+                        if (!grouped[opt.group]) grouped[opt.group] = [];
+                        grouped[opt.group].push(opt);
+                    });
+
+                    // Render grouped options
+                    let html = '';
+                    Object.keys(grouped).forEach(groupName => {
+                        html += `<div style="padding: 6px 12px; font-size: 11px; font-weight: bold; color: var(--text-dim); text-transform: uppercase; background: var(--background); margin-top: 4px;">${groupName}</div>`;
+                        grouped[groupName].forEach(opt => {
+                            html += `<div class="channel-dropdown-option" data-value='${JSON.stringify(opt.value)}' style="padding: 8px 12px; cursor: pointer; color: var(--text);">${opt.label}</div>`;
+                        });
+                    });
+
+                    pinnedDropdown.innerHTML = html;
+
+                    // Add click handlers
+                    pinnedDropdown.querySelectorAll('.channel-dropdown-option').forEach(option => {
+                        option.addEventListener('mouseenter', function () {
+                            this.style.background = 'var(--background)';
+                        });
+                        option.addEventListener('mouseleave', function () {
+                            this.style.background = 'transparent';
+                        });
+                        option.addEventListener('click', function () {
+                            const valueData = JSON.parse(this.dataset.value);
+                            pinnedSearchInput.value = this.textContent;
+                            pinnedValueInput.value = this.dataset.value;
+                            pinnedDropdown.style.display = 'none';
+                        });
+                    });
+                };
+
+                // Show dropdown on focus
+                pinnedSearchInput.addEventListener('focus', () => {
+                    renderOptions(pinnedSearchInput.value);
+                    pinnedDropdown.style.display = 'block';
+                });
+
+                // Filter on input
+                pinnedSearchInput.addEventListener('input', () => {
+                    renderOptions(pinnedSearchInput.value);
+                    pinnedDropdown.style.display = 'block';
+                });
+
+                // Hide dropdown on blur (with delay for click to register)
+                pinnedSearchInput.addEventListener('blur', () => {
+                    setTimeout(() => {
+                        pinnedDropdown.style.display = 'none';
+                    }, 200);
+                });
+
+                // Prevent dropdown from closing when clicking inside it
+                pinnedDropdown.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                });
+            }
+
             document.getElementById('themeSelect').value = nym.settings.theme;
             document.getElementById('soundSelect').value = nym.settings.sound;
             document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
@@ -28030,6 +28244,24 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 }
             }
 
+            // Save pinned landing channel
+            const pinnedValueInput = document.getElementById('pinnedLandingChannelValue');
+            if (pinnedValueInput && pinnedValueInput.value) {
+                try {
+                    const pinnedLandingChannel = JSON.parse(pinnedValueInput.value);
+                    nym.pinnedLandingChannel = pinnedLandingChannel;
+                    nym.settings.pinnedLandingChannel = pinnedLandingChannel;
+                    localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(pinnedLandingChannel));
+                } catch (e) {
+                    console.error('Failed to save pinned landing channel:', e);
+                    // Fallback to default
+                    const defaultChannel = { type: 'ephemeral', channel: 'bar' };
+                    nym.pinnedLandingChannel = defaultChannel;
+                    nym.settings.pinnedLandingChannel = defaultChannel;
+                    localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(defaultChannel));
+                }
+            }
+
             // Handle proximity sorting
             if (sortByProximity) {
                 if (!nym.userLocation) {
@@ -28101,7 +28333,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.20.56 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.21.56 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
