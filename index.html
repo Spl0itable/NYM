@@ -11959,6 +11959,10 @@
                 this.failedRelays = new Map();
                 this.relayRetryDelay = 15 * 60 * 1000;
                 this.floodTracking = new Map();
+                this.recentMessages = new Map(); // Track recent messages for similarity detection
+                this.channelMessageRates = new Map(); // Track overall channel message rates
+                this.pubkeyFirstSeen = new Map(); // Track when pubkeys were first seen
+                this.channelNewPubkeys = new Map(); // Track burst of new pubkeys per channel
                 this.activeReactionPicker = null;
                 this.activeReactionPickerButton = null;
                 this.usingExtension = false;
@@ -13293,10 +13297,10 @@
                 // Publish active items so others see the update
                 this.publishActiveShopItems();
 
-                // **NEW: Generate recovery code for ephemeral users**
+                // Generate recovery code for ephemeral users
                 const recoveryCode = this.handlePurchaseStrategy();
 
-                // **NEW: If ephemeral, show the recovery code in the success message**
+                // If ephemeral, show the recovery code in the success message
                 if (this.connectionMode === 'ephemeral' && recoveryCode) {
                     document.getElementById('zapStatus').innerHTML = `
             <div style="font-size: 24px; margin-bottom: 10px;">✅</div>
@@ -18296,7 +18300,19 @@ ${code}
                         return;
                     }
 
-                    if (this.isSpamMessage(event.content)) {
+                    if (this.isSpamMessage(event.content, geohash, event.pubkey, isHistorical)) {
+                        return;
+                    }
+
+                    // Detect burst of brand new pubkeys (bot attack signature)
+                    if (!isHistorical && this.isNewPubkeyBurst(event.pubkey, geohash)) {
+                        console.log('Bot attack detected: burst of new pubkeys');
+                        return;
+                    }
+
+                    // Check channel-wide flooding (catches spam regardless of unique pubkeys)
+                    if (!isHistorical && this.isChannelFlooding(geohash)) {
+                        console.log('Channel-wide flooding detected');
                         return;
                     }
 
@@ -18308,6 +18324,8 @@ ${code}
                     // Only track flood for new messages in this channel
                     if (!isHistorical) {
                         this.trackMessage(event.pubkey, geohash, isHistorical);
+                        // Track for similarity detection AFTER all spam checks pass
+                        this.trackMessageForSimilarity(event.content, geohash, event.pubkey);
                     }
 
                     // Track notification state for this channel
@@ -18389,7 +18407,19 @@ ${code}
                         return;
                     }
 
-                    if (this.isSpamMessage(event.content)) {
+                    if (this.isSpamMessage(event.content, channel, event.pubkey, isHistorical)) {
+                        return;
+                    }
+
+                    // Detect burst of brand new pubkeys (bot attack signature)
+                    if (!isHistorical && this.isNewPubkeyBurst(event.pubkey, channel)) {
+                        console.log('Bot attack detected: burst of new pubkeys');
+                        return;
+                    }
+
+                    // Check channel-wide flooding (catches spam regardless of unique pubkeys)
+                    if (!isHistorical && this.isChannelFlooding(channel)) {
+                        console.log('Channel-wide flooding detected');
                         return;
                     }
 
@@ -18401,6 +18431,8 @@ ${code}
                     // Only track flood for new messages in this channel
                     if (!isHistorical) {
                         this.trackMessage(event.pubkey, channel, isHistorical);
+                        // Track for similarity detection AFTER all spam checks pass
+                        this.trackMessageForSimilarity(event.content, channel, event.pubkey);
                     }
 
                     // Track notification state for this channel
@@ -18641,12 +18673,28 @@ ${code}
 
                         const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
 
+                        // Calculate message age FIRST (needed for spam checks)
+                        const messageAge = Date.now() - (event.created_at * 1000);
+                        const isHistorical = messageAge > 10000;
+
                         // Check if user is blocked globally
                         if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content)) {
                             return;
                         }
 
-                        if (this.isSpamMessage(event.content)) {
+                        if (this.isSpamMessage(event.content, communityId, event.pubkey, isHistorical)) {
+                            return;
+                        }
+
+                        // Detect burst of brand new pubkeys (bot attack signature)
+                        if (!isHistorical && this.isNewPubkeyBurst(event.pubkey, communityId)) {
+                            console.log('Bot attack detected: burst of new pubkeys');
+                            return;
+                        }
+
+                        // Check channel-wide flooding (catches spam regardless of unique pubkeys)
+                        if (!isHistorical && this.isChannelFlooding(communityId)) {
+                            console.log('Community-wide flooding detected');
                             return;
                         }
 
@@ -18660,9 +18708,6 @@ ${code}
                             });
                         }
 
-                        const messageAge = Date.now() - (event.created_at * 1000);
-                        const isHistorical = messageAge > 10000;
-
                         // Check flooding
                         if (!isHistorical && this.isFlooding(event.pubkey, communityId)) {
                             return;
@@ -18670,6 +18715,8 @@ ${code}
 
                         if (!isHistorical) {
                             this.trackMessage(event.pubkey, communityId, isHistorical);
+                            // Track for similarity detection AFTER all spam checks pass
+                            this.trackMessageForSimilarity(event.content, communityId, event.pubkey);
                         }
 
                         const message = {
@@ -18974,7 +19021,7 @@ ${code}
                 }
             }
 
-            isSpamMessage(content) {
+            isSpamMessage(content, channel = null, pubkey = null, isHistorical = false) {
                 // Check if spam filter is disabled
                 if (this.spamFilterEnabled === false) return false;
 
@@ -18989,6 +19036,18 @@ ${code}
 
                 // Block non-nym community messages
                 if (trimmed.includes('["client","chorus"]')) return true;
+
+                // Check for spam patterns (applies to all messages)
+                if (this.hasSpamPatterns(trimmed)) {
+                    console.log('Spam pattern detected in message');
+                    return true;
+                }
+
+                // Check for similar messages ONLY for non-historical messages
+                if (!isHistorical && channel && pubkey && this.isSimilarToRecentMessages(trimmed, channel, pubkey)) {
+                    console.log('Similar message detected - likely spam');
+                    return true;
+                }
 
                 // Check if it's a URL (contains :// or starts with www.)
                 if (trimmed.includes('://') || trimmed.startsWith('www.')) return false;
@@ -19821,6 +19880,297 @@ ${code}
                         // Unblock after timeout
                         tracking.blocked = false;
                         tracking.blockedUntil = null;
+                    }
+                }
+
+                return false;
+            }
+
+            // Calculate Levenshtein distance for string similarity
+            levenshteinDistance(str1, str2) {
+                const matrix = [];
+
+                for (let i = 0; i <= str2.length; i++) {
+                    matrix[i] = [i];
+                }
+
+                for (let j = 0; j <= str1.length; j++) {
+                    matrix[0][j] = j;
+                }
+
+                for (let i = 1; i <= str2.length; i++) {
+                    for (let j = 1; j <= str1.length; j++) {
+                        if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+                            matrix[i][j] = matrix[i - 1][j - 1];
+                        } else {
+                            matrix[i][j] = Math.min(
+                                matrix[i - 1][j - 1] + 1,
+                                matrix[i][j - 1] + 1,
+                                matrix[i - 1][j] + 1
+                            );
+                        }
+                    }
+                }
+
+                return matrix[str2.length][str1.length];
+            }
+
+            // Check if message is similar to recent messages from DIFFERENT pubkeys
+            // This catches bot spam using unique keypairs per message
+            isSimilarToRecentMessages(content, channel, currentPubkey) {
+                const now = Date.now();
+                const lookbackWindow = 30000; // Look back 30 seconds
+                const similarityThreshold = 0.80; // 80% similar is considered spam
+                const minLength = 20; // Check messages with 20+ chars
+
+                // Clean the message for comparison
+                const cleaned = content.toLowerCase().trim().replace(/\s+/g, ' ');
+
+                // Skip very short messages (too many false positives)
+                if (cleaned.length < minLength) {
+                    return false;
+                }
+
+                // Get recent messages for this channel
+                const channelKey = channel;
+                if (!this.recentMessages.has(channelKey)) {
+                    this.recentMessages.set(channelKey, []);
+                    return false;
+                }
+
+                const recent = this.recentMessages.get(channelKey);
+
+                // Clean up old messages
+                const validMessages = recent.filter(msg => now - msg.timestamp < lookbackWindow);
+                this.recentMessages.set(channelKey, validMessages);
+
+                // Check similarity against recent messages from DIFFERENT pubkeys only
+                // (same pubkey repetition is already handled by existing flood detection)
+                for (const msg of validMessages) {
+                    // Only check messages from DIFFERENT pubkeys
+                    if (msg.pubkey === currentPubkey) {
+                        continue;
+                    }
+
+                    const distance = this.levenshteinDistance(cleaned, msg.content);
+                    const maxLength = Math.max(cleaned.length, msg.content.length);
+                    const similarity = 1 - (distance / maxLength);
+
+                    // If ANY message from a different pubkey is very similar, it's spam
+                    if (similarity >= similarityThreshold) {
+                        console.log(`Similar message from different pubkey: ${similarity.toFixed(2)} similarity`);
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            // Track message for similarity detection (call AFTER spam checks pass)
+            trackMessageForSimilarity(content, channel, pubkey) {
+                const now = Date.now();
+                const cleaned = content.toLowerCase().trim().replace(/\s+/g, ' ');
+
+                const channelKey = channel;
+                if (!this.recentMessages.has(channelKey)) {
+                    this.recentMessages.set(channelKey, []);
+                }
+
+                const recent = this.recentMessages.get(channelKey);
+
+                // Add this message to recent messages
+                recent.push({
+                    content: cleaned,
+                    timestamp: now,
+                    pubkey: pubkey
+                });
+
+                // Limit to last 100 messages per channel
+                if (recent.length > 100) {
+                    recent.shift();
+                }
+            }
+
+            // Purge spam messages from stored messages (run on startup)
+            purgeSpamFromStorage() {
+                let totalPurged = 0;
+
+                // Iterate through all stored message channels
+                for (const [channelKey, messages] of this.messages.entries()) {
+                    const originalCount = messages.length;
+
+                    // Filter out spam messages
+                    const cleanedMessages = messages.filter(msg => {
+                        if (!msg.content) return true; // Keep messages without content
+
+                        // Check if message is spam
+                        const isSpam = this.isSpamMessage(
+                            msg.content,
+                            msg.channel || msg.communityId,
+                            msg.pubkey,
+                            true // treat as historical
+                        );
+
+                        if (isSpam) {
+                            console.log(`[STORAGE PURGE] Removing spam from ${channelKey}: "${msg.content.substring(0, 60)}..."`);
+                        }
+
+                        return !isSpam; // Keep non-spam messages
+                    });
+
+                    // Update storage with cleaned messages
+                    if (cleanedMessages.length < originalCount) {
+                        this.messages.set(channelKey, cleanedMessages);
+                        totalPurged += (originalCount - cleanedMessages.length);
+                    }
+                }
+
+                if (totalPurged > 0) {
+                    console.log(`[STORAGE PURGE] Removed ${totalPurged} spam messages from storage`);
+                }
+            }
+
+            // Check for spam patterns in content
+            hasSpamPatterns(content) {
+                const text = content.trim();
+                const preview = text.length > 100 ? text.substring(0, 100) + '...' : text;
+
+                // Check for excessive repetition of characters (e.g., "aaaaaaa", "!!!!!!")
+                // Increased threshold and whitelist common patterns
+                const repeatedChars = /(.)\1{14,}/; // 15+ repeated chars
+                if (repeatedChars.test(text)) {
+                    const match = text.match(repeatedChars);
+                    const repeatedChar = match[0][0];
+
+                    // Whitelist common legitimate patterns
+                    const whitelistChars = [' ', '\n', '\t', '-', '=', '_', '*', '.', '•', '·'];
+                    if (whitelistChars.includes(repeatedChar)) {
+                        // Allow markdown dividers, spacing, etc.
+                        return false;
+                    }
+
+                    // Whitelist Portuguese laughter patterns (k, h, a, e, r, s)
+                    if (/[khaersKHAERS]/.test(repeatedChar) && match[0].length < 25) {
+                        // Allow "kkkkkk", "hahaha", "rsrsrs", etc. up to 24 chars
+                        return false;
+                    }
+
+                    console.log(`[SPAM PATTERN] Excessive character repetition detected: "${match[0].substring(0, 20)}..." in message: "${preview}"`);
+                    return true;
+                }
+
+                // Check for excessive caps (>80% caps in messages longer than 30 chars)
+                // Only check if message contains Latin alphabet letters
+                if (text.length > 30) {
+                    const letterCount = (text.match(/[a-zA-Z]/g) || []).length;
+                    // Only check caps if message has significant Latin alphabet content (>10 letters)
+                    if (letterCount > 10) {
+                        const capsCount = (text.match(/[A-Z]/g) || []).length;
+                        if (capsCount / letterCount > 0.8) {
+                            const capsPercent = ((capsCount / letterCount) * 100).toFixed(1);
+                            console.log(`[SPAM PATTERN] Excessive caps detected: ${capsPercent}% caps in message: "${preview}"`);
+                            return true;
+                        }
+                    }
+                }
+
+                // Check for very low entropy (repeated words) - only for longer messages
+                const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+                if (words.length >= 15) { // Only check longer messages (15+ words)
+                    // Filter out very short words for better entropy calculation
+                    const significantWords = words.filter(w => w.length > 2);
+                    if (significantWords.length >= 10) {
+                        const uniqueWords = new Set(significantWords);
+                        const uniqueRatio = uniqueWords.size / significantWords.length;
+                        if (uniqueRatio < 0.20) { // Less than 20% unique (more strict)
+                            const uniquePercent = (uniqueRatio * 100).toFixed(1);
+                            console.log(`[SPAM PATTERN] Low entropy detected: ${uniquePercent}% unique words (${uniqueWords.size}/${significantWords.length}) in message: "${preview}"`);
+                            return true;
+                        }
+                    }
+                }
+
+                // Check for excessive emojis (>60% of content)
+                const emojiPattern = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu;
+                const emojiCount = (text.match(emojiPattern) || []).length;
+                if (text.length > 20 && emojiCount / text.length > 0.6) {
+                    const emojiPercent = ((emojiCount / text.length) * 100).toFixed(1);
+                    console.log(`[SPAM PATTERN] Excessive emojis detected: ${emojiPercent}% emojis (${emojiCount}/${text.length} chars) in message: "${preview}"`);
+                    return true;
+                }
+
+                return false;
+            }
+
+            // Check if channel is experiencing a message burst
+            // This catches bot spam regardless of unique pubkeys
+            isChannelFlooding(channel) {
+                const now = Date.now();
+                const burstWindow = 10000; // 10 seconds
+                const burstThreshold = 25; // More than 25 messages in 10 seconds
+
+                const channelKey = channel;
+                if (!this.channelMessageRates.has(channelKey)) {
+                    this.channelMessageRates.set(channelKey, []);
+                }
+
+                const timestamps = this.channelMessageRates.get(channelKey);
+
+                // Clean up old timestamps
+                const recentTimestamps = timestamps.filter(ts => now - ts < burstWindow);
+                this.channelMessageRates.set(channelKey, recentTimestamps);
+
+                // Add current timestamp
+                recentTimestamps.push(now);
+
+                // Check if we've exceeded the threshold
+                if (recentTimestamps.length > burstThreshold) {
+                    console.log(`Channel flooding detected: ${recentTimestamps.length} messages in ${burstWindow}ms`);
+                    return true;
+                }
+
+                return false;
+            }
+
+            // Detect burst of brand new pubkeys (bot attack signature)
+            // If many never-before-seen pubkeys appear rapidly, it's likely a bot
+            isNewPubkeyBurst(pubkey, channel) {
+                const now = Date.now();
+                const burstWindow = 10000; // 10 seconds
+                const newPubkeyBurstThreshold = 8; // More than 8 brand new pubkeys in 10 seconds
+
+                const channelKey = channel;
+                if (!this.channelNewPubkeys) {
+                    this.channelNewPubkeys = new Map();
+                }
+
+                if (!this.channelNewPubkeys.has(channelKey)) {
+                    this.channelNewPubkeys.set(channelKey, []);
+                }
+
+                const newPubkeys = this.channelNewPubkeys.get(channelKey);
+
+                // Clean up old entries
+                const recentNew = newPubkeys.filter(entry => now - entry.timestamp < burstWindow);
+                this.channelNewPubkeys.set(channelKey, recentNew);
+
+                // Check if this pubkey is new to this channel
+                const isNewToChannel = !this.pubkeyFirstSeen.has(pubkey);
+
+                if (isNewToChannel) {
+                    // Track this new pubkey
+                    this.pubkeyFirstSeen.set(pubkey, now);
+
+                    // Add to channel's new pubkey list
+                    recentNew.push({
+                        pubkey: pubkey,
+                        timestamp: now
+                    });
+
+                    // Check if we're seeing a burst of new pubkeys
+                    if (recentNew.length > newPubkeyBurstThreshold) {
+                        console.log(`New pubkey burst detected: ${recentNew.length} new pubkeys in ${burstWindow}ms`);
+                        return true;
                     }
                 }
 
@@ -21250,6 +21600,13 @@ ${code}
                         console.log(`Filtering banned user message in community ${message.communityId}`);
                         return;
                     }
+                }
+
+                // SPAM FILTER: Check for spam patterns even in stored messages
+                // This catches messages that were stored before spam filtering was added
+                if (message.content && this.isSpamMessage(message.content, message.channel || message.communityId, message.pubkey, message.isHistorical)) {
+                    console.log(`[DISPLAY BLOCKED] Spam message filtered in displayMessage(). Author: ${message.author}, Preview: "${message.content.substring(0, 60)}..."`);
+                    return;
                 }
 
                 // Handle PM messages differently
@@ -28333,7 +28690,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.21.56 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.21.57 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
@@ -29043,6 +29400,11 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             nym.initialize();
+
+            // Purge any spam messages from storage (run once on app load)
+            setTimeout(() => {
+                nym.purgeSpamFromStorage();
+            }, 1000); // Wait 1 second for app to initialize
 
             // Pre-connect to a broadcast relay for instant connection
             async function preConnect() {
