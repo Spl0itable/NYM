@@ -3236,7 +3236,7 @@
             position: relative;
             display: inline-block;
             padding: 10px 15px;
-            color: #FFFFFF;
+            color: #FFFFFF !important;
             background-color: rgba(247, 147, 26, 0.2);
             overflow: hidden;
         }
@@ -28389,7 +28389,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.22.56 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.22.57 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

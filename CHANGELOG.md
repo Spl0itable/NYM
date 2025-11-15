@@ -1,3 +1,7 @@
+## v2.22.57 - 2025-11-15
+
+Hotfix: css change for satoshi message style
+
 ## v2.22.56 - 2025-11-15
 
 New: PoW (NIP-13) added to settings
