@@ -1,7 +1,3 @@
-## v2.21.57 - 2025-11-15
-
-Hotfix: enhanced spam detection
-
 ## v2.21.56 - 2025-11-14
 
 New: you can now change the pinned landing channel on app load
