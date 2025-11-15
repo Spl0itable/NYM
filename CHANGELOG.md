@@ -1,3 +1,7 @@
+## v2.22.56 - 2025-11-15
+
+New: PoW (NIP-13) added to settings
+
 ## v2.21.56 - 2025-11-14
 
 New: you can now change the pinned landing channel on app load

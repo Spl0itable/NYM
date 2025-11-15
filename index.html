@@ -4360,6 +4360,19 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Proof of Work Difficulty:</label>
+                    <select class="form-select" id="powDifficultySelect">
+                        <option value="0" selected>Disabled</option>
+                        <option value="8">Very Low (8 bits)</option>
+                        <option value="12">Low (12 bits)</option>
+                        <option value="16">Medium (16 bits)</option>
+                        <option value="20">High (20 bits)</option>
+                        <option value="24">Very High (24 bits)</option>
+                    </select>
+                    <div class="form-hint">Enable for anti-spam to require messages have a minimum PoW</div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Disappearing PM (forward secrecy)</label>
                     <select class="form-select" id="dmForwardSecrecySelect">
                         <option value="false">Disabled</option>
@@ -11904,6 +11917,8 @@
                 this.pubkey = null;
                 this.privkey = null;
                 this.nym = null;
+                this.powDifficulty = 12;
+                this.enablePow = false;
                 this.connectionMode = 'ephemeral';
                 this.originalProfile = null;
                 this.currentChannel = 'bar';
@@ -12504,6 +12519,18 @@
                         console.log('⭐ Loaded cached flair from constructor:', cachedFlair);
                     }
                 }, 0);
+            }
+
+            // NIP-13: Validate proof of work
+            validatePow(event, minimumDifficulty = 0) {
+                if (minimumDifficulty === 0) return true;
+
+                const pow = NostrTools.nip13.getPow(event.id);
+
+                // Check if event has a nonce tag (optional but recommended)
+                const nonceTag = event.tags?.find(t => t[0] === 'nonce');
+
+                return pow >= minimumDifficulty;
             }
 
             // Cache "active items"
@@ -18284,6 +18311,11 @@ ${code}
                 }
 
                 if (event.kind === 20000) {
+                    // Validate PoW (NIP-13)
+                    if (this.enablePow && !this.validatePow(event, this.powDifficulty)) {
+                        return;
+                    }
+
                     // Handle geohash channel messages
                     const nymTag = event.tags.find(t => t[0] === 'n');
                     const geohashTag = event.tags.find(t => t[0] === 'g');
@@ -18377,6 +18409,11 @@ ${code}
                         }
                     }
                 } else if (event.kind === 23333) {
+                    // Validate PoW (NIP-13)
+                    if (this.enablePow && !this.validatePow(event, this.powDifficulty)) {
+                        return;
+                    }
+
                     // Handle standard channel messages
                     const nymTag = event.tags.find(t => t[0] === 'n');
                     const channelTag = event.tags.find(t => t[0] === 'd');
@@ -18616,6 +18653,11 @@ ${code}
                         }
                     }
                 } else if (event.kind === 4550) {
+                    // Validate PoW (NIP-13)
+                    if (this.enablePow && !this.validatePow(event, this.powDifficulty)) {
+                        return;
+                    }
+
                     // Handle COMMUNITY POSTS
                     const aTag = event.tags.find(t => t[0] === 'a');
 
@@ -20707,7 +20749,7 @@ ${code}
                         tags.push(['d', channel]);
                     }
 
-                    const event = {
+                    let event = {
                         kind: kind,
                         created_at: Math.floor(Date.now() / 1000),
                         tags: tags,
@@ -20715,7 +20757,12 @@ ${code}
                         pubkey: this.pubkey
                     };
 
-                    // Sign event
+                    // Mine PoW if enabled (NIP-13)
+                    if (this.enablePow && this.powDifficulty > 0) {
+                        event = NostrTools.nip13.minePow(event, this.powDifficulty);
+                    }
+
+                    // Sign event (after mining PoW)
                     const signedEvent = await this.signEvent(event);
 
                     const optimisticMessage = {
@@ -20797,7 +20844,7 @@ ${code}
                         throw new Error('Message contains blocked keywords');
                     }
 
-                    const event = {
+                    let event = {
                         kind: 4550,
                         created_at: Math.floor(Date.now() / 1000),
                         tags: [
@@ -20807,6 +20854,11 @@ ${code}
                         content: content,
                         pubkey: this.pubkey
                     };
+
+                    // Mine PoW if enabled (NIP-13)
+                    if (this.enablePow && this.powDifficulty > 0) {
+                        event = NostrTools.nip13.minePow(event, this.powDifficulty);
+                    }
 
                     console.log('Community event to publish:', event);
 
@@ -26631,6 +26683,10 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 localStorage.setItem('nym_autoscroll', this.settings.autoscroll);
                 localStorage.setItem('nym_timestamps', this.settings.showTimestamps);
                 localStorage.setItem('nym_sort_proximity', this.settings.sortByProximity);
+                const powDifficulty = parseInt(document.getElementById('powDifficultySelect').value);
+                this.powDifficulty = powDifficulty;
+                this.enablePow = powDifficulty > 0;
+                localStorage.setItem('nym_pow_difficulty', powDifficulty.toString());
             }
 
             loadBlockedUsers() {
@@ -28333,7 +28389,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.21.56 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.22.56 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
