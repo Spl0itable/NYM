@@ -1,3 +1,7 @@
+## v2.22.58 - 2025-11-18
+
+Hotfix: broken image uploader
+
 ## v2.22.57 - 2025-11-15
 
 Hotfix: css change for satoshi message style

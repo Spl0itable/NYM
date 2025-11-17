@@ -21206,7 +21206,7 @@ ${code}
                         pubkey: this.pubkey
                     };
 
-                    const signedEvent = await this.signEvent(event);
+                    const signedEvent = await this.signEvent(uploadEvent);
 
                     progressFill.style.width = '60%';
 
@@ -28389,7 +28389,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.22.57 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.22.58 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
