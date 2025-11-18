@@ -13109,7 +13109,7 @@
                     };
 
                     // Sign the request
-                    const signedEvent = await this.signEvent(event);
+                    const signedEvent = await this.signEvent(zapRequest);
 
                     // Broadcast the zap request to relays
                     if (signedEvent) {
@@ -13389,7 +13389,7 @@
                         pubkey: this.pubkey
                     };
 
-                    const signedEvent = await this.signEvent(event);
+                    const signedEvent = await this.signEvent(purchaseEvent);
                     if (signedEvent) {
                         this.sendToRelay(["EVENT", signedEvent]);
                     }
@@ -16925,7 +16925,7 @@ ${code}
                     };
 
                     // Sign based on connection mode
-                    const signedEvent = await this.signEvent(event);
+                    const signedEvent = await this.signEvent(profileEvent);
 
                     if (signedEvent) {
                         this.sendToRelay(["EVENT", signedEvent]);
@@ -17076,7 +17076,7 @@ ${code}
                     }
 
                     // Sign the request
-                    const signedEvent = await this.signEvent(event);
+                    const signedEvent = await this.signEvent(zapRequest);
 
                     return signedEvent;
                 } catch (error) {
@@ -23906,7 +23906,7 @@ ${code}
                 };
 
                 // Sign the event
-                const signedEvent = await this.signEvent(event);
+                const signedEvent = await this.signEvent(kickEvent);
 
                 // Send the signed event
                 this.sendToRelay(["EVENT", signedEvent]);
@@ -28389,7 +28389,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.22.58 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.22.59 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

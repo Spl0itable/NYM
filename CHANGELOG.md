@@ -1,3 +1,7 @@
+## v2.22.59 - 2025-11-18
+
+Hotfix: other broken variables
+
 ## v2.22.58 - 2025-11-18
 
 Hotfix: broken image uploader
