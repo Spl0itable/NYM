@@ -1,3 +1,8 @@
+## v2.23.59 - 2025-12-08
+
+New: geohash channels connect to similar geolocated relays as bitchat
+New: partial interop for bitchat <> nym private messages
+
 ## v2.22.59 - 2025-11-18
 
 Hotfix: other broken variables
