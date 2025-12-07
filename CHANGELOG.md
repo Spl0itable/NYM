@@ -1,4 +1,8 @@
-## v2.23.59 - 2025-12-08
+## v2.23.60 - 2025-12-07
+
+Hotfix: complete bitchat interop for PMs
+
+## v2.23.59 - 2025-12-06
 
 New: geohash channels connect to similar geolocated relays as bitchat
 New: partial interop for bitchat <> nym private messages

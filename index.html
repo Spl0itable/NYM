@@ -1063,6 +1063,17 @@
             min-width: 50px;
         }
 
+        .delivery-status {
+            flex-basis: 100%;
+            text-align: right;
+            font-size: 10px;
+            margin-top: 2px;
+            padding-right: 4px;
+        }
+        .delivery-status.sent { color: var(--text-dim); }
+        .delivery-status.delivered { color: #4CAF50; }
+        .delivery-status.read { color: #2196F3; }
+
         .message-author {
             color: var(--secondary);
             min-width: 120px;
@@ -2583,6 +2594,14 @@
 
             .message-content img {
                 max-width: 100%;
+            }
+
+            .delivery-status {
+                display: block;
+                width: 100%;
+                text-align: right;
+                margin-top: 4px;
+                flex-basis: auto;
             }
 
             .emoji-picker,
@@ -19423,8 +19442,6 @@ ${code}
                     // Otherwise, handle as normal zap receipt
                     this.handleZapReceipt(event);
                 } else if (event.kind === 1059) {
-                    // Handle NIP-17 gift wrap (NIP-59 + NIP-44)
-                    console.log('Received gift wrap from:', event.pubkey?.substring(0, 8), 'tags:', JSON.stringify(event.tags));
                     await this.handleGiftWrapDM(event);
                 } else if (event.kind === 10000) {
                     // Handle mute list of users/keywords
@@ -20364,10 +20381,6 @@ ${code}
                     while (b64.length % 4) b64 += '=';
                     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
-                    // Log first 50 bytes as hex for format comparison
-                    const hexDump = Array.from(bytes.subarray(0, 50)).map(b => b.toString(16).padStart(2, '0')).join(' ');
-                    console.log('bitchat1 hex (first 50 bytes):', hexDump);
-
                     // Parse header
                     const version = bytes[0];
                     const type = bytes[1];
@@ -20410,51 +20423,66 @@ ${code}
             }
 
             // Encode message in Bitchat's bitchat1: format
-            encodeBitchatMessage(content, debug = false) {
+            encodeBitchatMessage(content, recipientPubkey = null) {
                 const now = Date.now();
-                const uuid = this.generateUUID(); // Already uppercase from generateUUID
+                const messageID = this.generateUUID();
                 const messageBytes = new TextEncoder().encode(content);
+                const messageIDBytes = new TextEncoder().encode(messageID);
+
+                const tlvParts = [];
+
+                // MESSAGE_ID field (type 0x00)
+                tlvParts.push(0x00);
+                tlvParts.push(messageIDBytes.length & 0xFF);
+                for (const b of messageIDBytes) tlvParts.push(b);
+
+                // CONTENT field (type 0x01)
+                tlvParts.push(0x01);
+                tlvParts.push(messageBytes.length & 0xFF);
+                for (const b of messageBytes) tlvParts.push(b);
+
+                const noisePayload = [];
+                noisePayload.push(0x01); // PRIVATE_MESSAGE
+                for (const b of tlvParts) noisePayload.push(b);
 
                 const parts = [];
 
-                // Header (3 bytes)
+                // Header bytes 0-2
                 parts.push(0x01); // version 1
-                parts.push(0x11); // type 17 (0x11) - private message
+                parts.push(0x11); // type = NOISE_ENCRYPTED
                 parts.push(0x07); // TTL 7
 
-                // Timestamp (8 bytes, big endian milliseconds)
+                // Timestamp bytes 3-10 (8 bytes, big endian milliseconds)
                 const ts = BigInt(now);
                 for (let i = 7; i >= 0; i--) {
                     parts.push(Number((ts >> BigInt(i * 8)) & 0xFFn));
                 }
 
-                // Payload length field - Bitchat uses 0x00 0x00
-                parts.push(0x00);
-                parts.push(0x00);
+                // Flags byte 11
+                // 0x01 = HAS_RECIPIENT, 0x02 = HAS_SIGNATURE, 0x04 = IS_COMPRESSED
+                const hasRecipient = !!recipientPubkey;
+                const flags = hasRecipient ? 0x01 : 0x00;
+                parts.push(flags);
 
-                // Sender ID (8 bytes) - derive from our pubkey for consistency
-                // Bitchat uses consistent sender IDs, not random
-                const senderIdBytes = [];
+                // Payload length bytes 12-13 (2 bytes, big-endian)
+                const payloadLen = noisePayload.length;
+                parts.push((payloadLen >> 8) & 0xFF);
+                parts.push(payloadLen & 0xFF);
+
+                // Sender ID bytes 14-21 (first 8 bytes of our pubkey)
                 for (let i = 0; i < 8; i++) {
-                    senderIdBytes.push(parseInt(this.pubkey.substring(i * 2, i * 2 + 2), 16));
+                    parts.push(parseInt(this.pubkey.substring(i * 2, i * 2 + 2), 16));
                 }
-                for (const b of senderIdBytes) parts.push(b);
 
-                // Payload section - match Bitchat's actual format
-                // Format: 0xC5 + 0x01 + 0x00 + '$' + UUID + 0x01 + msgLen + message
-                parts.push(0xC5); // Bitchat uses 0xC5 (197) as marker/flags
-                parts.push(0x01); // Type byte (from Bitchat hex analysis)
-                parts.push(0x00); // Additional byte (from Bitchat hex analysis)
+                // Recipient ID bytes 22-29 (if HAS_RECIPIENT flag set)
+                if (hasRecipient) {
+                    for (let i = 0; i < 8; i++) {
+                        parts.push(parseInt(recipientPubkey.substring(i * 2, i * 2 + 2), 16));
+                    }
+                }
 
-                // UUID with '$' prefix (Bitchat format)
-                parts.push(0x24); // '$' character
-                const uuidBytes = new TextEncoder().encode(uuid);
-                for (const b of uuidBytes) parts.push(b);
-
-                // Message: type(0x01) + length(1 byte) + content
-                parts.push(0x01); // message type
-                parts.push(messageBytes.length & 0xFF); // message length (1 byte)
-                for (const b of messageBytes) parts.push(b);
+                // Payload (NoisePayload)
+                for (const b of noisePayload) parts.push(b);
 
                 // Pad to next block size (256, 512, 1024, 2048) with 0xBE
                 const blockSizes = [256, 512, 1024, 2048];
@@ -20468,10 +20496,87 @@ ${code}
                 const base64 = btoa(String.fromCharCode(...bytes));
                 const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
+                return { content: 'bitchat1:' + base64url, messageId: messageID };
+            }
+
+            // Encode a Bitchat receipt (DELIVERED=0x03 or READ_RECEIPT=0x02)
+            encodeBitchatReceipt(messageId, receiptType, recipientPubkey) {
+                const messageIdBytes = new TextEncoder().encode(messageId);
+
+                // NoisePayload for receipts: [type][raw messageId] (no TLV wrapper!)
+                // Bitchat sends receipts with just the UUID string directly
+                const noisePayload = [];
+                noisePayload.push(receiptType); // 0x02=READ_RECEIPT, 0x03=DELIVERED
+                for (const b of messageIdBytes) noisePayload.push(b);
+
+                // BitchatPacket header
+                const parts = [];
+                const now = Date.now();
+
+                parts.push(0x01); // version
+                parts.push(0x11); // type = NOISE_ENCRYPTED
+                parts.push(0x07); // TTL
+
+                // Timestamp (8 bytes big-endian)
+                const ts = BigInt(now);
+                for (let i = 7; i >= 0; i--) {
+                    parts.push(Number((ts >> BigInt(i * 8)) & 0xFFn));
+                }
+
+                // Flags (include recipient)
+                parts.push(0x01); // HAS_RECIPIENT
+
+                // Payload length
+                const payloadLen = noisePayload.length;
+                parts.push((payloadLen >> 8) & 0xFF);
+                parts.push(payloadLen & 0xFF);
+
+                // Sender ID (first 8 bytes of our pubkey)
+                for (let i = 0; i < 8; i++) {
+                    parts.push(parseInt(this.pubkey.substring(i * 2, i * 2 + 2), 16));
+                }
+
+                // Recipient ID
+                for (let i = 0; i < 8; i++) {
+                    parts.push(parseInt(recipientPubkey.substring(i * 2, i * 2 + 2), 16));
+                }
+
+                // Payload
+                for (const b of noisePayload) parts.push(b);
+
+                // Pad to block size
+                const blockSizes = [256, 512, 1024, 2048];
+                let targetSize = blockSizes.find(s => s >= parts.length) || 2048;
+                while (parts.length < targetSize) {
+                    parts.push(0xBE);
+                }
+
+                const bytes = new Uint8Array(parts);
+                const base64 = btoa(String.fromCharCode(...bytes));
+                const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
                 return 'bitchat1:' + base64url;
             }
 
-            // Bitchat-compatible encryption using XChaCha20-Poly1305 with HKDF
+            // Send a receipt (DELIVERED or READ) back to a Bitchat user
+            async sendBitchatReceipt(messageId, receiptType, recipientPubkey) {
+                if (!this.privkey || !this.bitchatUsers.has(recipientPubkey)) return;
+
+                const receiptContent = this.encodeBitchatReceipt(messageId, receiptType, recipientPubkey);
+
+                const now = Math.floor(Date.now() / 1000);
+                const rumor = {
+                    kind: 14,
+                    created_at: now,
+                    tags: [],
+                    content: receiptContent,
+                    pubkey: this.pubkey
+                };
+
+                const wrapped = this.bitchatWrapEvent(rumor, this.privkey, recipientPubkey, null);
+                this.sendToRelay(['EVENT', wrapped]);
+            }
+
             // Key derivation: HKDF(full compressed shared point 33 bytes, empty salt, "nip44-v2" info)
             encryptBitchat(plaintext, senderPrivateKey, recipientPublicKey) {
                 const NT = window.NostrTools;
@@ -20517,25 +20622,17 @@ ${code}
                     pubkey: NT.getPublicKey(senderPrivateKey)
                 };
                 rumor.id = NT.getEventHash(rumor);
-                console.log('Bitchat rumor structure:', JSON.stringify({
-                    kind: rumor.kind,
-                    tags: rumor.tags,
-                    contentPreview: rumor.content?.substring(0, 30),
-                    pubkey: rumor.pubkey?.substring(0, 8)
-                }));
 
-                // Seal (kind 13) - use ephemeral key like Bitchat does
-                const sealEphSk = NT.generateSecretKey();
-                const sealEphPk = NT.getPublicKey(sealEphSk);
-                const sealedContent = this.encryptBitchat(JSON.stringify(rumor), sealEphSk, recipientPublicKey);
+                // Bitchat decrypts seal using ECDH(recipient_privkey, seal.pubkey)
+                const senderPubkey = NT.getPublicKey(senderPrivateKey);
+                const sealedContent = this.encryptBitchat(JSON.stringify(rumor), senderPrivateKey, recipientPublicKey);
                 const sealUnsigned = {
                     kind: 13,
                     content: sealedContent,
                     created_at: this.randomNow(),
                     tags: []
                 };
-                const seal = NT.finalizeEvent(sealUnsigned, sealEphSk);
-                console.log('Seal created - pubkey:', seal.pubkey.substring(0, 8), 'content starts with v2:', seal.content.startsWith('v2:'));
+                const seal = NT.finalizeEvent(sealUnsigned, senderPrivateKey);
 
                 // GiftWrap (kind 1059) with different ephemeral keypair
                 const wrapEphSk = NT.generateSecretKey();
@@ -20548,41 +20645,6 @@ ${code}
                     tags: [['p', recipientPublicKey]],
                     pubkey: wrapEphPk
                 };
-                console.log('GiftWrap - ephPubkey:', wrapEphPk.substring(0, 8), 'recipient p tag:', recipientPublicKey.substring(0, 8));
-
-                // DEBUG: Test that we can decrypt what we just encrypted (simulating recipient)
-                // This tests if our encryption is compatible with our decryption logic
-                try {
-                    const testDecrypt = (content, senderPubkey, recipientPrivkey) => {
-                        if (content.startsWith('v2:')) content = content.slice(3);
-                        content = content.replace(/-/g, '+').replace(/_/g, '/');
-                        while (content.length % 4) content += '=';
-                        const payload = Uint8Array.from(atob(content), c => c.charCodeAt(0));
-                        const info = new TextEncoder().encode('nip44-v2');
-                        const nonce = payload.subarray(0, 24);
-                        const ciphertextWithTag = payload.subarray(24);
-
-                        for (const prefix of ['02', '03']) {
-                            try {
-                                const sharedPoint = NT._secp256k1.getSharedSecret(recipientPrivkey, prefix + senderPubkey);
-                                const prk = NT._hkdfExtract(NT._sha256, sharedPoint, new Uint8Array(0));
-                                const key = NT._hkdfExpand(NT._sha256, prk, info, 32);
-                                const plaintext = NT._xchacha20poly1305(key, nonce).decrypt(ciphertextWithTag);
-                                return new TextDecoder().decode(plaintext);
-                            } catch (e) {}
-                        }
-                        throw new Error('Test decrypt failed');
-                    };
-                    // Generate a test recipient keypair to simulate Bitchat
-                    const testPriv = NT.generateSecretKey();
-                    const testPub = NT.getPublicKey(testPriv);
-                    const testPlaintext = 'test123';
-                    const testEncrypted = this.encryptBitchat(testPlaintext, wrapEphSk, testPub);
-                    const testDecrypted = testDecrypt(testEncrypted, wrapEphPk, testPriv);
-                    console.log('Self-test encryption:', testDecrypted === testPlaintext ? 'PASSED' : 'FAILED');
-                } catch (e) {
-                    console.log('Self-test encryption: FAILED -', e.message);
-                }
 
                 return NT.finalizeEvent(wrapUnsigned, wrapEphSk);
             }
@@ -20669,43 +20731,26 @@ ${code}
                 // Local key available (ephemeral/nsec)
                 if (this.privkey) {
                     const NT = window.NostrTools;
-                    // Use Bitchat format for known Bitchat users, standard NIP-44 otherwise
                     const useBitchatFormat = this.bitchatUsers.has(recipientPubkey);
-                    console.log('Sending DM - useBitchatFormat:', useBitchatFormat, 'recipient:', recipientPubkey.substring(0, 8));
-
                     let wrapped;
+                    let bitchatMessageId = null;
                     if (useBitchatFormat) {
                         // Use Bitchat v2: encryption with bitchat1: message format
                         // Bitchat sends rumor with EMPTY tags (no p tag in rumor)
-                        const bitchatContent = this.encodeBitchatMessage(content);
-                        // Debug: log SENT structure for comparison with received
-                        const sentStruct = this.decodeBitchatStructure(bitchatContent);
-                        console.log('SENDING Bitchat message structure:', sentStruct);
+                        const encoded = this.encodeBitchatMessage(content, recipientPubkey);
+                        bitchatMessageId = encoded.messageId;
 
                         const bitchatRumor = {
                             kind: 14,
                             created_at: now,
                             tags: [],  // Bitchat uses empty tags in rumor!
-                            content: bitchatContent,
+                            content: encoded.content,
                             pubkey: this.pubkey
                         };
                         wrapped = this.bitchatWrapEvent(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
                     } else {
                         wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
                     }
-                    console.log('Wrapped event kind:', wrapped.kind, 'content starts with v2:', wrapped.content?.startsWith('v2:'));
-                    console.log('Wrapped event - full p tag pubkey:', wrapped.tags?.[0]?.[1]);
-
-                    // Compare with received gift wrap structure
-                    console.log('OUR gift wrap structure:', {
-                        kind: wrapped.kind,
-                        pubkey: wrapped.pubkey?.substring(0, 16),
-                        created_at: wrapped.created_at,
-                        tags: wrapped.tags,
-                        content_length: wrapped.content?.length,
-                        content_preview: wrapped.content?.substring(0, 50),
-                        sig_length: wrapped.sig?.length
-                    });
 
                     this.sendToRelay(['EVENT', wrapped]);
 
@@ -20730,7 +20775,9 @@ ${code}
                         isPM: true,
                         conversationKey,
                         conversationPubkey: recipientPubkey,
-                        eventKind: 1059
+                        eventKind: 1059,
+                        bitchatMessageId,  // For tracking delivery/read receipts
+                        deliveryStatus: 'sent'  // sent -> delivered -> read
                     });
 
                     this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
@@ -20866,10 +20913,11 @@ ${code}
                     };
 
                     // Parse Bitchat message format: bitchat1:<base64url payload>
-                    // Payload contains header, UUID, type+length+message, and padding (0xBE bytes)
+                    // Returns { type, content } where type is NoisePayloadType
+                    // NoisePayloadType: 0x01=PRIVATE_MESSAGE, 0x02=READ_RECEIPT, 0x03=DELIVERED
                     const parseBitchatMessage = (content) => {
                         if (!content.startsWith('bitchat1:')) {
-                            return content; // Not bitchat format, return as-is
+                            return { type: 0x01, content }; // Not bitchat format, treat as message
                         }
 
                         try {
@@ -20880,33 +20928,79 @@ ${code}
 
                             const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
-                            // Strip trailing padding (0xBE bytes)
+                            // Parse BitchatPacket header to find NoisePayloadType
+                            // Header: version(1) + type(1) + TTL(1) + timestamp(8) + flags(1) + payloadLen(2) = 14 bytes
+                            // Then: senderID(8) + recipientID(8 if HAS_RECIPIENT) + payload
+                            const flags = bytes[11];
+                            const hasRecipient = (flags & 0x01) !== 0;
+                            const payloadStart = 14 + 8 + (hasRecipient ? 8 : 0); // header + senderID + recipientID?
+
+                            const noisePayloadType = bytes[payloadStart];
+
+                            // For receipts (READ_RECEIPT=0x02, DELIVERED=0x03), extract messageId
+                            // Bitchat sends receipts as: [NoisePayloadType][raw messageId string] (no TLV!)
+                            if (noisePayloadType !== 0x01) {
+                                let pos = payloadStart + 1;
+                                let end = bytes.length;
+                                while (end > 0 && bytes[end - 1] === 0xBE) end--;
+
+                                let messageId = null;
+                                // Check if it's TLV format (starts with 0x00) or raw string
+                                if (pos < end && bytes[pos] === 0x00 && pos + 2 < end) {
+                                    // TLV format: [0x00][len][messageID]
+                                    const idLen = bytes[pos + 1];
+                                    if (pos + 2 + idLen <= end) {
+                                        try {
+                                            messageId = new TextDecoder().decode(bytes.subarray(pos + 2, pos + 2 + idLen));
+                                        } catch (e) {}
+                                    }
+                                } else {
+                                    // Raw string format (Bitchat sends UUIDs directly)
+                                    // UUID format: 8-4-4-4-12 = 36 chars (e.g., "07DFE7B7-151D-40D8-BA38-B93...")
+                                    try {
+                                        const rawBytes = bytes.subarray(pos, Math.min(pos + 36, end));
+                                        messageId = new TextDecoder().decode(rawBytes);
+                                        // Validate it looks like a UUID
+                                        if (!/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(messageId)) {
+                                            messageId = null;
+                                        }
+                                    } catch (e) {}
+                                }
+                                return { type: noisePayloadType, content: null, messageId };
+                            }
+
+                            // For PRIVATE_MESSAGE, extract the content and messageId from TLV
+                            // TLV format after NoisePayloadType: [0x00][len][messageID][0x01][len][content]
+                            let pos = payloadStart + 1; // Skip NoisePayloadType byte
+                            let messageContent = null;
+                            let messageId = null;
+
+                            // Strip trailing padding (0xBE bytes) for bounds checking
                             let end = bytes.length;
                             while (end > 0 && bytes[end - 1] === 0xBE) end--;
 
-                            // Find the message - look for 01 XX pattern where XX is length
-                            // The message is typically after a UUID (36 chars ASCII)
-                            for (let i = end - 1; i >= 2; i--) {
-                                if (bytes[i - 2] === 0x01) {
-                                    const msgLen = bytes[i - 1];
-                                    if (i + msgLen - 2 <= end && msgLen > 0 && msgLen < 256) {
-                                        const msgBytes = bytes.subarray(i, i + msgLen);
-                                        // Check if it looks like valid UTF-8 text
-                                        try {
-                                            const msg = new TextDecoder().decode(msgBytes);
-                                            if (/^[\x20-\x7E\u0080-\uFFFF]+$/.test(msg)) {
-                                                return msg;
-                                            }
-                                        } catch (e) {}
-                                    }
+                            // Parse TLV fields
+                            while (pos < end - 2) {
+                                const fieldType = bytes[pos];
+                                const fieldLen = bytes[pos + 1];
+                                if (pos + 2 + fieldLen > end) break;
+
+                                if (fieldType === 0x00) { // MESSAGE_ID field
+                                    try {
+                                        messageId = new TextDecoder().decode(bytes.subarray(pos + 2, pos + 2 + fieldLen));
+                                    } catch (e) {}
+                                } else if (fieldType === 0x01) { // CONTENT field
+                                    try {
+                                        messageContent = new TextDecoder().decode(bytes.subarray(pos + 2, pos + 2 + fieldLen));
+                                    } catch (e) {}
                                 }
+                                pos += 2 + fieldLen;
                             }
 
-                            // Fallback: return the non-padding portion as text
-                            return new TextDecoder().decode(bytes.subarray(0, end));
+                            return { type: noisePayloadType, content: messageContent || '', messageId };
                         } catch (e) {
                             console.warn('Failed to parse bitchat1 format:', e);
-                            return content;
+                            return { type: 0x01, content };
                         }
                     };
 
@@ -20988,9 +21082,14 @@ ${code}
                     const isOwn = !!this.pubkey && senderPubkey === this.pubkey;
 
                     // Track if this user uses Bitchat format (for replies)
-                    if (isBitchatFormat(event.content) && !isOwn) {
+                    const isBitchatUser = isBitchatFormat(event.content) || rumor.content?.startsWith('bitchat1:');
+                    if (isBitchatUser && !isOwn) {
                         this.bitchatUsers.add(senderPubkey);
-                        console.log('Added Bitchat user:', senderPubkey.substring(0, 8), 'rumor.pubkey. Wrap pubkey:', event.pubkey.substring(0, 8));
+                    }
+
+                    // Fetch profile for any PM sender we don't have (await to get nickname)
+                    if (!isOwn && !this.users.has(senderPubkey)) {
+                        await this.fetchProfileDirect(senderPubkey);
                     }
 
                     // Determine the peer for the conversation
@@ -21012,13 +21111,43 @@ ${code}
 
                     const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
                     // Parse bitchat1: format if present to extract actual message
-                    const messageContent = parseBitchatMessage(rumor.content);
+                    const parsed = parseBitchatMessage(rumor.content);
 
-                    // Debug: log received Bitchat message structure for comparison
-                    if (rumor.content?.startsWith('bitchat1:')) {
-                        const struct = this.decodeBitchatStructure(rumor.content);
-                        console.log('RECEIVED Bitchat message structure:', struct);
+                    // Handle delivery receipts (0x03) and read receipts (0x02)
+                    if (parsed.type === 0x02 || parsed.type === 0x03) {
+                        const receiptType = parsed.type === 0x02 ? 'read' : 'delivered';
+                        const receiptId = parsed.messageId?.toUpperCase();
+
+                        if (receiptId) {
+                            for (const [convKey, messages] of this.pmMessages) {
+                                const msg = messages.find(m => m.bitchatMessageId?.toUpperCase() === receiptId);
+                                if (msg && msg.isOwn) {
+                                    const statusOrder = { sent: 0, delivered: 1, read: 2 };
+                                    if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
+                                        msg.deliveryStatus = receiptType;
+                                        // Update in-place without re-rendering to avoid flicker
+                                        const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
+                                        if (msgEl) {
+                                            let statusEl = msgEl.querySelector('.delivery-status');
+                                            if (!statusEl) {
+                                                statusEl = document.createElement('span');
+                                                msgEl.appendChild(statusEl);
+                                            }
+                                            statusEl.className = `delivery-status ${receiptType}`;
+                                            statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
+                                            statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        return;
                     }
+
+                    if (parsed.type !== 0x01) return;
+
+                    const messageContent = parsed.content;
 
                     // Get sender name from kind 0 profile (not from rumor tags)
                     const senderName = this.getNymFromPubkey(senderPubkey);
@@ -21034,12 +21163,18 @@ ${code}
                         conversationKey,
                         conversationPubkey: peerPubkey,
                         eventKind: 1059,
-                        isHistorical: (Date.now() / 1000 - tsSec) > 10
+                        isHistorical: (Date.now() / 1000 - tsSec) > 10,
+                        bitchatMessageId: parsed.messageId  // For sending read receipts
                     };
 
                     list.push(msg);
                     list.sort((a, b) => a.timestamp - b.timestamp);
                     this.pmMessages.set(conversationKey, list);
+
+                    // Send DELIVERED receipt back to Bitchat user
+                    if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
+                        this.sendBitchatReceipt(parsed.messageId, 0x03, senderPubkey); // 0x03 = DELIVERED
+                    }
 
                     // Use sender's profile name for conversation
                     const peerName = this.getNymFromPubkey(peerPubkey);
@@ -21048,6 +21183,10 @@ ${code}
 
                     if (this.inPMMode && this.currentPM === peerPubkey) {
                         this.displayMessage(msg);
+                        // Send READ receipt if viewing the conversation
+                        if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
+                            this.sendBitchatReceipt(parsed.messageId, 0x02, senderPubkey); // 0x02 = READ
+                        }
                     } else if (!msg.isHistorical && !isOwn) {
                         // Only notify for messages from others
                         this.updateUnreadCount(conversationKey);
@@ -21130,6 +21269,19 @@ ${code}
                 } catch (_) { }
             }
 
+            // Direct profile fetch for PM senders - uses sendToRelay and existing kind 0 handler
+            async fetchProfileDirect(pubkey) {
+                const subId = 'pm-profile-' + Math.random().toString(36).slice(2);
+                const req = ["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }];
+
+                try { this.sendToRelay(req); } catch (_) { }
+
+                // Wait for the main handleRelayMessage kind 0 handler to process response
+                await new Promise(resolve => setTimeout(resolve, 1500));
+
+                try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+            }
+
             updatePMNicknameFromProfile(pubkey, profileName) {
                 if (!profileName) return;
                 const clean = this.parseNymFromDisplay(profileName).substring(0, 20);
@@ -21150,6 +21302,22 @@ ${code}
                     if (pmNameEl) {
                         pmNameEl.innerHTML = `@${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span> ${verifiedBadge}`;
                     }
+                }
+
+                // Update displayed messages from this user
+                const suffix = this.getPubkeySuffix(pubkey);
+                const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+                    ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+                    : '';
+                const flairHtml = this.getFlairForUser(pubkey);
+                document.querySelectorAll(`.message[data-pubkey="${pubkey}"] .message-author`).forEach(el => {
+                    el.innerHTML = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${verifiedBadge}${flairHtml}:`;
+                });
+
+                // Update any visible notification banner from this user
+                const notif = document.querySelector(`.notification[data-pubkey="${pubkey}"] .notification-title`);
+                if (notif) {
+                    notif.textContent = `PM from ${clean}#${suffix}`;
                 }
             }
 
@@ -21501,10 +21669,9 @@ ${code}
                 const pubkeys = Array.from(pubkeyMap.keys());
                 const resolvers = pubkeyMap;
 
-                console.log(`Batching profile fetch for ${pubkeys.length} pubkeys`);
+                // Fetch profiles for pubkeys
 
                 const timeout = setTimeout(() => {
-                    console.log('Profile batch fetch timeout');
                     resolvers.forEach(resolveList => {
                         resolveList.forEach(resolve => resolve());
                     });
@@ -21533,12 +21700,29 @@ ${code}
                                     console.log('Stored complete profile with fields:', Object.keys(profile));
                                 }
 
-                                // Get name
+                                // Get name for own profile
                                 if (event.pubkey === this.pubkey && (profile.name || profile.username || profile.display_name)) {
                                     const profileName = profile.name || profile.username || profile.display_name;
                                     this.nym = profileName.substring(0, 20);
                                     document.getElementById('currentNym').textContent = this.nym;
                                     console.log('Profile loaded:', this.nym);
+                                }
+
+                                // Store and update for OTHER users (Bitchat users, PM contacts)
+                                if (event.pubkey !== this.pubkey && (profile.name || profile.username || profile.display_name)) {
+                                    const profileName = (profile.name || profile.username || profile.display_name).substring(0, 20);
+                                    // Store in users map
+                                    if (!this.users.has(event.pubkey) || this.users.get(event.pubkey).nym.startsWith('anon')) {
+                                        this.users.set(event.pubkey, {
+                                            nym: profileName,
+                                            pubkey: event.pubkey,
+                                            lastSeen: 0,
+                                            status: 'online',
+                                            channels: new Set()
+                                        });
+                                    }
+                                    // Update PM nickname displays
+                                    this.updatePMNicknameFromProfile(event.pubkey, profileName);
                                 }
 
                                 // Get lightning address
@@ -22406,13 +22590,24 @@ ${code}
                         hour12: this.settings.timeFormat === '12hr'
                     });
 
+                    // Delivery status checkmarks for own PM messages
+                    let deliveryCheckmark = '';
+                    if (message.isOwn && message.isPM && message.deliveryStatus) {
+                        if (message.deliveryStatus === 'read') {
+                            deliveryCheckmark = '<span class="delivery-status read" title="Read">✓✓</span>';
+                        } else if (message.deliveryStatus === 'delivered') {
+                            deliveryCheckmark = '<span class="delivery-status delivered" title="Delivered">✓</span>';
+                        } else if (message.deliveryStatus === 'sent') {
+                            deliveryCheckmark = '<span class="delivery-status sent" title="Sent">○</span>';
+                        }
+                    }
+
                     messageEl.innerHTML = `
             ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-            <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">
-    ${displayAuthor}${verifiedBadge}${supporterBadge}:
-</span>
+            <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}:</span>
             <span class="message-content ${userColorClass}">${formattedContent}</span>
             ${reactionButton}
+            ${deliveryCheckmark}
         `;
 
                     const authorSpan = messageEl.querySelector('.message-author');
@@ -22432,11 +22627,6 @@ ${code}
                     // Use cached values if shop items haven't loaded yet
                     const activeStyle = this.activeMessageStyle || this.localActiveStyle;
                     const activeFlair = this.activeFlair || this.localActiveFlair;
-
-                    // Debug logging (can be removed after fixing)
-                    if (activeStyle) {
-                        console.log('💅 Applying style to own message:', activeStyle);
-                    }
 
                     if (activeStyle) {
                         messageEl.classList.add(activeStyle);
@@ -27266,6 +27456,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // In-app notification (fallback)
                 const notifEl = document.createElement('div');
                 notifEl.className = 'notification';
+                if (channelInfo && channelInfo.pubkey) {
+                    notifEl.dataset.pubkey = channelInfo.pubkey;
+                }
                 notifEl.innerHTML = `
         <div class="notification-title">${this.escapeHtml(titleToShow)}</div>
         <div class="notification-body">${this.escapeHtml(body)}</div>
@@ -29267,7 +29460,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.23.59 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.23.60 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
