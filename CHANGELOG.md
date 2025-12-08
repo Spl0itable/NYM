@@ -1,3 +1,7 @@
+## v2.23.61 - 2025-12-07
+
+Hotfix: lowered the price of some shop items
+
 ## v2.23.60 - 2025-12-07
 
 Hotfix: complete bitchat interop for PMs
