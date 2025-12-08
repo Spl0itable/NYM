@@ -4416,6 +4416,15 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Read Receipts</label>
+                    <select class="form-select" id="readReceiptsSelect">
+                        <option value="true">Enabled</option>
+                        <option value="false">Disabled</option>
+                    </select>
+                    <div class="form-hint">When enabled, senders will see when you've read their private messages (✓✓).</div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Notification Sound</label>
                     <select class="form-select" id="soundSelect">
                         <option value="beep">Classic Beep</option>
@@ -12218,6 +12227,7 @@
                 this.messages = new Map();
                 this.pmMessages = new Map();
                 this.bitchatUsers = new Set();
+                this.nymUsers = new Set();  // Track users who support NYM delivery receipts
                 this.users = new Map();
                 this.channelUsers = new Map();
                 this.channels = new Map();
@@ -18250,6 +18260,7 @@ ${code}
                         lightningAddress: this.lightningAddress,
                         dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
                         dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
+                        readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,  // Default true
                         pinnedLandingChannel: this.pinnedLandingChannel || { type: 'ephemeral', channel: 'bar' }
                     };
 
@@ -19711,6 +19722,11 @@ ${code}
                         this.settings.dmTTLSeconds = isFinite(ttl) && ttl > 0 ? ttl : 86400;
                         localStorage.setItem('nym_dm_ttl_seconds', String(this.settings.dmTTLSeconds));
                     }
+                    // Restore read receipts setting (default true if not set)
+                    if (settings.readReceiptsEnabled !== undefined) {
+                        this.settings.readReceiptsEnabled = settings.readReceiptsEnabled !== false;
+                        localStorage.setItem('nym_read_receipts_enabled', String(this.settings.readReceiptsEnabled));
+                    }
 
                     // If modal open, reflect values
                     if (document.getElementById('settingsModal').classList.contains('active')) {
@@ -19721,6 +19737,11 @@ ${code}
                             dmEnabledSel.value = this.settings.dmForwardSecrecyEnabled ? 'true' : 'false';
                             dmTtlSel.value = String(this.settings.dmTTLSeconds || 86400);
                             dmTtlGroup.style.display = this.settings.dmForwardSecrecyEnabled ? 'block' : 'none';
+                        }
+                        // Also update read receipts select if modal is open
+                        const readReceiptsSel = document.getElementById('readReceiptsSelect');
+                        if (readReceiptsSel) {
+                            readReceiptsSel.value = this.settings.readReceiptsEnabled !== false ? 'true' : 'false';
                         }
                     }
                 } catch (error) {
@@ -20559,8 +20580,14 @@ ${code}
             }
 
             // Send a receipt (DELIVERED or READ) back to a Bitchat user
+            // receiptType: 0x02 = READ_RECEIPT, 0x03 = DELIVERED
             async sendBitchatReceipt(messageId, receiptType, recipientPubkey) {
                 if (!this.privkey || !this.bitchatUsers.has(recipientPubkey)) return;
+
+                // Skip READ receipts (0x02) if user has disabled them in settings
+                if (receiptType === 0x02 && this.settings?.readReceiptsEnabled === false) {
+                    return;
+                }
 
                 const receiptContent = this.encodeBitchatReceipt(messageId, receiptType, recipientPubkey);
 
@@ -20575,6 +20602,77 @@ ${code}
 
                 const wrapped = this.bitchatWrapEvent(rumor, this.privkey, recipientPubkey, null);
                 this.sendToRelay(['EVENT', wrapped]);
+            }
+
+            // NYM receipt types: 'delivered' or 'read'
+            // Uses NIP-17 gift wrap with a special rumor format for receipts
+            // Format: rumor with kind 14, content empty, tags include ['x', messageId] and ['receipt', type]
+            async sendNymReceipt(messageId, receiptType, recipientPubkey) {
+                if (!this.privkey) return;
+
+                // Skip READ receipts if user has disabled them in settings
+                if (receiptType === 'read' && this.settings?.readReceiptsEnabled === false) {
+                    return;
+                }
+
+                const now = Math.floor(Date.now() / 1000);
+                const rumor = {
+                    kind: 14,
+                    created_at: now,
+                    tags: [
+                        ['p', recipientPubkey],
+                        ['x', messageId],  // Reference to original message
+                        ['receipt', receiptType]  // 'delivered' or 'read'
+                    ],
+                    content: '',  // Empty content for receipts
+                    pubkey: this.pubkey
+                };
+
+                // Wrap using standard NIP-59 format
+                const wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, null);
+                this.sendToRelay(['EVENT', wrapped]);
+            }
+
+            // Check if a rumor is a NYM receipt
+            isNymReceipt(rumor) {
+                if (!rumor || !rumor.tags) return false;
+                return rumor.tags.some(t => Array.isArray(t) && t[0] === 'receipt' && (t[1] === 'delivered' || t[1] === 'read'));
+            }
+
+            // Extract receipt info from a NYM receipt rumor
+            parseNymReceipt(rumor) {
+                if (!rumor || !rumor.tags) return null;
+
+                let messageId = null;
+                let receiptType = null;
+
+                for (const tag of rumor.tags) {
+                    if (Array.isArray(tag)) {
+                        if (tag[0] === 'x' && tag[1]) {
+                            messageId = tag[1];
+                        } else if (tag[0] === 'receipt' && tag[1]) {
+                            receiptType = tag[1];
+                        }
+                    }
+                }
+
+                if (messageId && receiptType) {
+                    return { messageId, receiptType };
+                }
+                return null;
+            }
+
+            // Check if a rumor is a NYM message (has 'x' tag for message ID)
+            isNymMessage(rumor) {
+                if (!rumor || !rumor.tags) return false;
+                return rumor.tags.some(t => Array.isArray(t) && t[0] === 'x' && t[1] && !this.isNymReceipt(rumor));
+            }
+
+            // Extract NYM message ID from rumor
+            getNymMessageId(rumor) {
+                if (!rumor || !rumor.tags) return null;
+                const xTag = rumor.tags.find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
+                return xTag ? xTag[1] : null;
             }
 
             // Key derivation: HKDF(full compressed shared point 33 bytes, empty salt, "nip44-v2" info)
@@ -20713,11 +20811,15 @@ ${code}
             async sendNIP17PM(content, recipientPubkey) {
                 const now = Math.floor(Date.now() / 1000);
 
+                // Generate message ID for delivery receipts (NYM format)
+                const nymMessageId = this.generateUUID();
+
                 const rumor = {
                     kind: 14,
                     created_at: now,
                     tags: [
-                        ['p', recipientPubkey]
+                        ['p', recipientPubkey],
+                        ['x', nymMessageId]  // NYM message ID for delivery receipts
                     ],
                     content,
                     pubkey: this.pubkey
@@ -20749,6 +20851,7 @@ ${code}
                         };
                         wrapped = this.bitchatWrapEvent(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
                     } else {
+                        // Use NYM format with message ID tag for delivery receipts
                         wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
                     }
 
@@ -20776,7 +20879,8 @@ ${code}
                         conversationKey,
                         conversationPubkey: recipientPubkey,
                         eventKind: 1059,
-                        bitchatMessageId,  // For tracking delivery/read receipts
+                        bitchatMessageId,  // For tracking Bitchat delivery/read receipts
+                        nymMessageId: useBitchatFormat ? null : nymMessageId,  // For tracking NYM delivery/read receipts
                         deliveryStatus: 'sent'  // sent -> delivered -> read
                     });
 
@@ -20843,7 +20947,9 @@ ${code}
                         isPM: true,
                         conversationKey,
                         conversationPubkey: recipientPubkey,
-                        eventKind: 1059
+                        eventKind: 1059,
+                        nymMessageId,  // For tracking NYM delivery/read receipts
+                        deliveryStatus: 'sent'  // sent -> delivered -> read
                     });
 
                     this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
@@ -21087,6 +21193,12 @@ ${code}
                         this.bitchatUsers.add(senderPubkey);
                     }
 
+                    // Track if this user uses NYM format with delivery receipts (has 'x' tag)
+                    const isNymUser = this.isNymMessage(rumor) || this.isNymReceipt(rumor);
+                    if (isNymUser && !isOwn) {
+                        this.nymUsers.add(senderPubkey);
+                    }
+
                     // Fetch profile for any PM sender we don't have (await to get nickname)
                     if (!isOwn && !this.users.has(senderPubkey)) {
                         await this.fetchProfileDirect(senderPubkey);
@@ -21110,10 +21222,44 @@ ${code}
                     if (list.some(m => m.id === event.id)) return;
 
                     const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
+
+                    // Handle NYM delivery/read receipts (tag-based format)
+                    if (this.isNymReceipt(rumor)) {
+                        const nymReceipt = this.parseNymReceipt(rumor);
+                        if (nymReceipt && nymReceipt.messageId) {
+                            const receiptId = nymReceipt.messageId.toUpperCase();
+                            const receiptType = nymReceipt.receiptType;
+
+                            for (const [convKey, messages] of this.pmMessages) {
+                                const msg = messages.find(m => m.nymMessageId?.toUpperCase() === receiptId);
+                                if (msg && msg.isOwn) {
+                                    const statusOrder = { sent: 0, delivered: 1, read: 2 };
+                                    if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
+                                        msg.deliveryStatus = receiptType;
+                                        // Update in-place without re-rendering to avoid flicker
+                                        const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
+                                        if (msgEl) {
+                                            let statusEl = msgEl.querySelector('.delivery-status');
+                                            if (!statusEl) {
+                                                statusEl = document.createElement('span');
+                                                msgEl.appendChild(statusEl);
+                                            }
+                                            statusEl.className = `delivery-status ${receiptType}`;
+                                            statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
+                                            statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        return;
+                    }
+
                     // Parse bitchat1: format if present to extract actual message
                     const parsed = parseBitchatMessage(rumor.content);
 
-                    // Handle delivery receipts (0x03) and read receipts (0x02)
+                    // Handle Bitchat delivery receipts (0x03) and read receipts (0x02)
                     if (parsed.type === 0x02 || parsed.type === 0x03) {
                         const receiptType = parsed.type === 0x02 ? 'read' : 'delivered';
                         const receiptId = parsed.messageId?.toUpperCase();
@@ -21152,6 +21298,9 @@ ${code}
                     // Get sender name from kind 0 profile (not from rumor tags)
                     const senderName = this.getNymFromPubkey(senderPubkey);
 
+                    // Extract NYM message ID from rumor tags
+                    const nymMsgId = this.getNymMessageId(rumor);
+
                     const msg = {
                         id: event.id,                                  // keep outer id for reactions/zaps
                         author: isOwn ? this.nym : senderName,
@@ -21164,7 +21313,8 @@ ${code}
                         conversationPubkey: peerPubkey,
                         eventKind: 1059,
                         isHistorical: (Date.now() / 1000 - tsSec) > 10,
-                        bitchatMessageId: parsed.messageId  // For sending read receipts
+                        bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
+                        nymMessageId: nymMsgId  // For sending NYM read receipts
                     };
 
                     list.push(msg);
@@ -21174,6 +21324,11 @@ ${code}
                     // Send DELIVERED receipt back to Bitchat user
                     if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
                         this.sendBitchatReceipt(parsed.messageId, 0x03, senderPubkey); // 0x03 = DELIVERED
+                    }
+
+                    // Send DELIVERED receipt back to NYM user
+                    if (!isOwn && nymMsgId && this.nymUsers.has(senderPubkey)) {
+                        this.sendNymReceipt(nymMsgId, 'delivered', senderPubkey);
                     }
 
                     // Use sender's profile name for conversation
@@ -21186,6 +21341,10 @@ ${code}
                         // Send READ receipt if viewing the conversation
                         if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
                             this.sendBitchatReceipt(parsed.messageId, 0x02, senderPubkey); // 0x02 = READ
+                        }
+                        // Send READ receipt for NYM users
+                        if (!isOwn && nymMsgId && this.nymUsers.has(senderPubkey)) {
+                            this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
                         }
                     } else if (!msg.isHistorical && !isOwn) {
                         // Only notify for messages from others
@@ -21457,6 +21616,21 @@ ${code}
 
                 // Load PM messages
                 this.loadPMMessages(conversationKey);
+
+                // Send READ receipts for all unread messages from this peer
+                const pmMsgs = this.pmMessages.get(conversationKey) || [];
+                for (const msg of pmMsgs) {
+                    if (!msg.isOwn) {
+                        // Send Bitchat READ receipt if applicable
+                        if (msg.bitchatMessageId && this.bitchatUsers.has(msg.pubkey)) {
+                            this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
+                        }
+                        // Send NYM READ receipt if applicable
+                        if (msg.nymMessageId && this.nymUsers.has(msg.pubkey)) {
+                            this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey);
+                        }
+                    }
+                }
 
                 // Close mobile sidebar on mobile
                 if (window.innerWidth <= 768) {
@@ -27710,6 +27884,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     timeFormat: localStorage.getItem('nym_time_format') || '24hr',
                     dmForwardSecrecyEnabled: localStorage.getItem('nym_dm_fwdsec_enabled') === 'true',
                     dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
+                    readReceiptsEnabled: localStorage.getItem('nym_read_receipts_enabled') !== 'false',  // Enabled by default
                     pinnedLandingChannel: pinnedLandingChannel
                 };
             }
@@ -29324,6 +29499,12 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 };
             }
 
+            // Fill in read receipts toggle
+            const readReceiptsSel = document.getElementById('readReceiptsSelect');
+            if (readReceiptsSel) {
+                readReceiptsSel.value = nym.settings.readReceiptsEnabled !== false ? 'true' : 'false';
+            }
+
             document.getElementById('settingsModal').classList.add('active');
         }
 
@@ -29360,6 +29541,11 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             // Persist locally
             localStorage.setItem('nym_dm_fwdsec_enabled', String(nym.settings.dmForwardSecrecyEnabled));
             localStorage.setItem('nym_dm_ttl_seconds', String(nym.settings.dmTTLSeconds));
+
+            // Read and save read receipts setting
+            const readReceiptsEnabled = document.getElementById('readReceiptsSelect').value === 'true';
+            nym.settings.readReceiptsEnabled = readReceiptsEnabled;
+            localStorage.setItem('nym_read_receipts_enabled', String(readReceiptsEnabled));
 
             // Only handle auto-ephemeral if currently in ephemeral mode
             if (nym.connectionMode === 'ephemeral') {
@@ -29460,7 +29646,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.23.61 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.24.61 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>

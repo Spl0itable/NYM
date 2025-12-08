@@ -1,3 +1,7 @@
+## v2.24.61 - 2025-12-07
+
+New: toggle on/off read receipts in PMs
+
 ## v2.23.61 - 2025-12-07
 
 Hotfix: lowered the price of some shop items
