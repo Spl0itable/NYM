@@ -1,3 +1,7 @@
+## v2.24.62 - 2025-12-07
+
+Hotfix: removed dead nostr.band
+
 ## v2.24.61 - 2025-12-07
 
 New: toggle on/off read receipts in PMs
