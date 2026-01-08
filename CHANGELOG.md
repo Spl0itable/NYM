@@ -1,3 +1,8 @@
+## v2.24.63 - 2026-01-09
+
+Hotfix: improved relay connection
+Hotfix: improved PM deduplication
+
 ## v2.24.62 - 2025-12-07
 
 Hotfix: removed dead nostr.band

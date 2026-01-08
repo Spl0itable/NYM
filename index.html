@@ -12224,6 +12224,7 @@
                 this.currentPM = null;
                 this.messages = new Map();
                 this.pmMessages = new Map();
+                this.processedPMEventIds = new Set(); // Early deduplication for PMs
                 this.bitchatUsers = new Set();
                 this.nymUsers = new Set();  // Track users who support NYM delivery receipts
                 this.users = new Map();
@@ -16473,20 +16474,60 @@ ${code}
                         }
                     }
 
-                    // If not already connected, try to connect to broadcast relays one by one
+                    // If not already connected, try to connect to broadcast relays in parallel for speed
                     if (!initialConnected) {
-                        for (const relayUrl of this.broadcastRelays) {
-                            if (!this.shouldRetryRelay(relayUrl)) {
-                                continue;
-                            }
+                        // Get first 5 available relays for parallel connection attempt
+                        const initialRelays = this.broadcastRelays
+                            .filter(url => this.shouldRetryRelay(url))
+                            .slice(0, 5);
 
-                            try {
-                                await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000);
+                        if (initialRelays.length > 0) {
+                            // Create connection promises that resolve with relay URL on success
+                            const connectionPromises = initialRelays.map(relayUrl =>
+                                this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000)
+                                    .then(() => relayUrl)
+                                    .catch(err => {
+                                        this.trackRelayFailure(relayUrl);
+                                        return null;
+                                    })
+                            );
+
+                            // Wait for first successful connection (Promise.any-like behavior)
+                            const firstSuccessful = await new Promise((resolve) => {
+                                let pending = connectionPromises.length;
+                                connectionPromises.forEach(p => {
+                                    p.then(result => {
+                                        if (result) resolve(result);
+                                        else {
+                                            pending--;
+                                            if (pending === 0) resolve(null);
+                                        }
+                                    });
+                                });
+                            });
+
+                            if (firstSuccessful) {
                                 initialConnected = true;
-                                connectedRelayUrl = relayUrl;
-                                break;
-                            } catch (err) {
-                                this.trackRelayFailure(relayUrl);
+                                connectedRelayUrl = firstSuccessful;
+                            }
+                        }
+
+                        // If parallel attempt failed, fall back to sequential for remaining relays
+                        if (!initialConnected) {
+                            const remainingRelays = this.broadcastRelays.slice(5);
+                            for (const relayUrl of remainingRelays) {
+                                if (!this.shouldRetryRelay(relayUrl)) {
+                                    continue;
+                                }
+
+                                try {
+                                    await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000);
+                                    initialConnected = true;
+                                    connectedRelayUrl = relayUrl;
+                                    break;
+                                } catch (err) {
+                                    this.trackRelayFailure(relayUrl);
+                                }
                             }
                         }
                     }
@@ -16499,6 +16540,20 @@ ${code}
                     document.getElementById('messageInput').disabled = false;
                     document.getElementById('sendBtn').disabled = false;
                     this.connected = true;
+
+                    // Process any queued messages that were waiting for connection
+                    if (this.messageQueue.length > 0) {
+                        const queuedMessages = [...this.messageQueue];
+                        this.messageQueue = [];
+                        queuedMessages.forEach(msg => {
+                            try {
+                                const parsed = JSON.parse(msg);
+                                this.sendToRelay(parsed);
+                            } catch (e) {
+                                console.error('Failed to process queued message:', e);
+                            }
+                        });
+                    }
 
                     // Set initial channel label to pinned landing channel
                     const channelLabel = this.isValidGeohash(this.currentChannel) ? this.currentChannel : `#${this.currentChannel}`;
@@ -16680,34 +16735,27 @@ ${code}
                 }
                 relay.subscriptions.add(subId);
 
-                // Build filters array
+                // Build filters array - Order: Geohash, Ephemeral, then Communities
                 const filters = [
+                    // 1. GEOHASH CHANNELS
                     // Messages in geohash channels
                     {
                         kinds: [20000],
                         limit: 500,
                         since: Math.floor(Date.now() / 1000) - 86400
                     },
-                    // Messages in standard channels
-                    {
-                        kinds: [23333],
-                        limit: 500,
-                        since: Math.floor(Date.now() / 1000) - 86400
-                    },
-                    // Messages in communities
-                    {
-                        kinds: [4550],
-                        limit: 500
-                    },
-                    // Moderation events
-                    {
-                        kinds: [1984],
-                        limit: 500
-                    },
                     // Reactions for geohash channels
                     {
                         kinds: [7],
                         "#k": ["20000"],
+                        limit: 500,
+                        since: Math.floor(Date.now() / 1000) - 86400
+                    },
+
+                    // 2. EPHEMERAL CHANNELS
+                    // Messages in standard/ephemeral channels
+                    {
+                        kinds: [23333],
                         limit: 500,
                         since: Math.floor(Date.now() / 1000) - 86400
                     },
@@ -16717,6 +16765,31 @@ ${code}
                         "#k": ["23333"],
                         limit: 500,
                         since: Math.floor(Date.now() / 1000) - 86400
+                    },
+
+                    // 3. COMMUNITIES (for persistent identities)
+                    // Messages in communities
+                    {
+                        kinds: [4550],
+                        limit: 500
+                    },
+                    // All public community definitions
+                    {
+                        kinds: [34550],
+                        limit: 500
+                    },
+                    // Reactions for community posts
+                    {
+                        kinds: [7],
+                        "#k": ["4550"],
+                        limit: 500
+                    },
+
+                    // 4. OTHER
+                    // Moderation events
+                    {
+                        kinds: [1984],
+                        limit: 500
                     },
                     // Reactions for PMs
                     {
@@ -16730,27 +16803,11 @@ ${code}
                         "#d": ["nym-shop-active"],
                         limit: 1000
                     },
-                    // Reactions for community posts
-                    {
-                        kinds: [7],
-                        "#k": ["4550"],
-                        limit: 500
-                    },
-                    // Community reports
-                    {
-                        kinds: [1984],
-                        limit: 500
-                    },
                     // Zap receipts
                     {
                         kinds: [9735],
                         limit: 500,
                         since: Math.floor(Date.now() / 1000) - 86400
-                    },
-                    // All public community definitions
-                    {
-                        kinds: [34550],
-                        limit: 500
                     }
                 ];
 
@@ -20980,6 +21037,18 @@ ${code}
                         }
                     }
 
+                    // Early deduplication - check before expensive decryption
+                    if (this.processedPMEventIds.has(event.id)) {
+                        return; // Already processed this event
+                    }
+                    this.processedPMEventIds.add(event.id);
+
+                    // Limit Set size to prevent memory leaks (keep last 5000 events)
+                    if (this.processedPMEventIds.size > 5000) {
+                        const idsArray = Array.from(this.processedPMEventIds);
+                        this.processedPMEventIds = new Set(idsArray.slice(-2500));
+                    }
+
                     // Bitchat uses XChaCha20-Poly1305 with HKDF key derivation
                     // Format: v2: + base64url(nonce(24) || ciphertext || tag(16))
                     // Key: HKDF(full compressed shared point 33 bytes, salt=empty, info="nip44-v2")
@@ -21765,8 +21834,9 @@ ${code}
                     this.pubkey = pk;
                     this.usingExtension = true;
 
-                    // Fetch profile from kind 0 event
-                    await this.fetchProfileFromRelay(pk);
+                    // Queue profile fetch - will be processed after relay connection
+                    // Don't await here to avoid 3-second timeout when not connected
+                    this.fetchProfileFromRelay(pk);
 
                     return { pubkey: pk };
                 } catch (error) {
@@ -21782,7 +21852,9 @@ ${code}
                     this.pubkey = remotePubkey;
                     this.usingNostrConnect = true;
 
-                    await this.fetchProfileFromRelay(remotePubkey);
+                    // Queue profile fetch - will be processed after relay connection
+                    // Don't await here to avoid 3-second timeout when not connected
+                    this.fetchProfileFromRelay(remotePubkey);
 
                     console.log('Connected via Nostr Connect (NIP-46)');
                     return { pubkey: remotePubkey };
@@ -27231,7 +27303,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     const aIsGeo = !!a.dataset.geohash && a.dataset.geohash !== '';
                     const bIsGeo = !!b.dataset.geohash && b.dataset.geohash !== '';
 
-                    // PRIORITY: If proximity sorting is enabled, sort ALL geohash channels by distance first
+                    // If proximity sorting is enabled, sort ALL geohash channels by distance first
                     if (this.settings.sortByProximity && this.userLocation) {
                         // If both are geohash, sort by distance
                         if (aIsGeo && bIsGeo) {
@@ -27261,7 +27333,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         if (!aIsGeo && bIsGeo) return 1;
                     }
 
-                    // Default: sort by unread count for non-geo or when proximity is off
+                    // Default: sort by unread count
                     const aChannel = a.dataset.community || (a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel);
                     const bChannel = b.dataset.community || (b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel);
 
@@ -29644,7 +29716,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         function showAbout() {
             const connectedRelays = nym.relayPool.size;
             nym.displaySystemMessage(`
-        ═══ NYM - Nostr Ynstant Messenger v2.24.62 ═══<br/>
+        ═══ NYM - Nostr Ynstant Messenger v2.24.63 ═══<br/>
         Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
         Connected Relays: ${connectedRelays} relays<br/>
         Your nym: ${nym.nym || 'Not set'}<br/>
@@ -29869,8 +29941,15 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
                     await nym.connectToRelays();
 
-                    if (nym.connected) {
+                    // Fetch profile after connection if not already loaded
+                    if (nym.connected && (!nym.nym || nym.nym === 'Loading profile...')) {
                         await nym.fetchProfileFromRelay(nym.pubkey);
+                    }
+
+                    // Fallback to random nym if profile wasn't found
+                    if (!nym.nym || nym.nym === 'Loading profile...') {
+                        nym.nym = nym.generateRandomNym();
+                        document.getElementById('currentNym').textContent = nym.nym;
                     }
 
                     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -29899,10 +29978,18 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     nym.displaySystemMessage('Reconnecting with Nostr extension...');
                     await nym.useExtension();
 
-                    await nym.connectToRelay(savedRelay);
+                    // Connect to all relays, not just one
+                    await nym.connectToRelays();
 
-                    if (nym.connected) {
+                    // Fetch profile after connection if not already loaded
+                    if (nym.connected && (!nym.nym || nym.nym === 'Loading profile...')) {
                         await nym.fetchProfileFromRelay(nym.pubkey);
+                    }
+
+                    // Fallback to random nym if profile wasn't found
+                    if (!nym.nym || nym.nym === 'Loading profile...') {
+                        nym.nym = nym.generateRandomNym();
+                        document.getElementById('currentNym').textContent = nym.nym;
                     }
 
                     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -29986,14 +30073,15 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     nym.privkey = nym.decodeNsec(nsecValue);
                     nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
 
-                    // Fetch existing profile BEFORE setting nym
-                    await nym.fetchProfileFromRelay(nym.pubkey);
+                    // Queue profile fetch - will be processed after relay connection
+                    // Don't await here to avoid 3-second timeout when not connected
+                    nym.fetchProfileFromRelay(nym.pubkey);
 
-                    // Only use input nym if provided, otherwise use profile name or generate
+                    // Use input nym if provided, otherwise set placeholder for now
                     if (nymInput) {
                         nym.nym = nymInput;
-                    } else if (!nym.nym || nym.nym === 'Loading profile...') {
-                        nym.nym = nym.generateRandomNym();
+                    } else {
+                        nym.nym = 'Loading profile...';
                     }
 
                     document.getElementById('currentNym').textContent = nym.nym;
@@ -30055,9 +30143,17 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await nym.connectToRelays();
 
                 // Fetch profile after connection for persistent modes
-                if ((mode === 'extension' || mode === 'nsec') && nym.connected) {
-                    // Fetch profile
-                    await nym.fetchProfileFromRelay(nym.pubkey);
+                if ((mode === 'extension' || mode === 'nsec' || mode === 'bunker') && nym.connected) {
+                    // Fetch profile if not already loaded
+                    if (!nym.nym || nym.nym === 'Loading profile...') {
+                        await nym.fetchProfileFromRelay(nym.pubkey);
+                    }
+
+                    // Fallback to random nym if profile wasn't found
+                    if (!nym.nym || nym.nym === 'Loading profile...') {
+                        nym.nym = nym.generateRandomNym();
+                        document.getElementById('currentNym').textContent = nym.nym;
+                    }
 
                     // Load synced settings (give relays time to respond)
                     setTimeout(() => {
