@@ -1,3 +1,7 @@
+## v2.25.63 - 2026-01-09
+
+New: separated file types for better performance
+
 ## v2.24.63 - 2026-01-09
 
 Hotfix: improved relay connection
