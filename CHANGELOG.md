@@ -1,7 +1,3 @@
-## v2.25.68 - 2026-01-14
-
-Hotfix: improved autoscroll on channel load
-
 ## v2.25.67 - 2026-01-14
 
 Hotfix: removed since filter on REQs
