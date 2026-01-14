@@ -1,3 +1,7 @@
+## v2.25.67 - 2026-01-14
+
+Hotfix: removed since filter on REQs
+
 ## v2.25.66 - 2026-01-14
 
 Hotfix: dedupe cache tweak

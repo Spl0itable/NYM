@@ -5531,39 +5531,30 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         relay.subscriptions.add(subId);
 
-        // Build filters array - Order: Geohash, Ephemeral, then Communities
+        // Build filters array
         const filters = [
-            // 1. GEOHASH CHANNELS
             // Messages in geohash channels
             {
                 kinds: [20000],
                 limit: 500,
-                since: Math.floor(Date.now() / 1000) - 86400
             },
             // Reactions for geohash channels
             {
                 kinds: [7],
                 "#k": ["20000"],
                 limit: 500,
-                since: Math.floor(Date.now() / 1000) - 86400
             },
-
-            // 2. EPHEMERAL CHANNELS
             // Messages in standard/ephemeral channels
             {
                 kinds: [23333],
                 limit: 500,
-                since: Math.floor(Date.now() / 1000) - 86400
             },
             // Reactions for standard channels
             {
                 kinds: [7],
                 "#k": ["23333"],
                 limit: 500,
-                since: Math.floor(Date.now() / 1000) - 86400
             },
-
-            // 3. COMMUNITIES (for persistent identities)
             // Messages in communities
             {
                 kinds: [4550],
@@ -5580,8 +5571,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 "#k": ["4550"],
                 limit: 500
             },
-
-            // 4. OTHER
             // Moderation events
             {
                 kinds: [1984],
@@ -5603,7 +5592,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             {
                 kinds: [9735],
                 limit: 500,
-                since: Math.floor(Date.now() / 1000) - 86400
             }
         ];
 
@@ -5614,7 +5602,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     kinds: [1059],
                     "#p": [this.pubkey],
                     limit: 500,
-                    since: this.lastPMSyncTime - 60 // Small buffer for clock drift
                 },
                 // Profile/community definitions by me
                 {
@@ -5626,7 +5613,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 {
                     kinds: [7],
                     "#p": [this.pubkey],
-                    since: Math.floor(Date.now() / 1000) - 86400,
                     limit: 500
                 },
                 // MY shop purchases and active items
@@ -18514,7 +18500,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.25.66 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.25.67 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
