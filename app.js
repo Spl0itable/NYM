@@ -10556,13 +10556,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displaySystemMessage('Start of private message');
         }
 
-        // Scroll to bottom
-        if (this.settings.autoscroll) {
-            // Use setTimeout to ensure DOM has updated
-            setTimeout(() => {
-                container.scrollTop = container.scrollHeight;
-            }, 0);
-        }
+        // Scroll to bottom after all images have loaded
+        this.scrollToBottomAfterImagesLoad(container);
     }
 
     openUserPM(nym, pubkey) {
@@ -11763,46 +11758,27 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.updateMessageZaps(message.id);
         }
 
-        // Track scroll position before adding images
-        const scrollBeforeImages = container.scrollTop;
-        const heightBeforeImages = container.scrollHeight;
-        const isAtBottom = shouldScroll;
-
-        // Wait for any images in the message to load
+        // Handle scrolling for images - check position at load time, not render time
         const images = messageEl.querySelectorAll('img');
         if (images.length > 0) {
-            let loadedImages = 0;
-            const totalImages = images.length;
-
             const handleImageLoad = () => {
-                loadedImages++;
-                if (loadedImages === totalImages) {
-                    // All images loaded
-                    if (this.settings.autoscroll && isAtBottom) {
-                        // Scroll to bottom if we were at bottom before
-                        container.scrollTop = container.scrollHeight;
-                    } else if (!isAtBottom) {
-                        // Maintain scroll position for older messages
-                        const heightAfterImages = container.scrollHeight;
-                        const heightDiff = heightAfterImages - heightBeforeImages;
-                        container.scrollTop = scrollBeforeImages + heightDiff;
-                    }
+                const isNearBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100;
+                if (this.settings.autoscroll && isNearBottom) {
+                    container.scrollTop = container.scrollHeight;
                 }
             };
 
             images.forEach(img => {
-                if (img.complete) {
-                    handleImageLoad();
-                } else {
+                if (!img.complete) {
                     img.addEventListener('load', handleImageLoad, { once: true });
                     img.addEventListener('error', handleImageLoad, { once: true });
                 }
             });
-        } else {
-            // No images, just handle scrolling normally
-            if (this.settings.autoscroll && shouldScroll) {
-                container.scrollTop = container.scrollHeight;
-            }
+        }
+
+        // Handle scrolling for messages without images
+        if (this.settings.autoscroll && shouldScroll) {
+            container.scrollTop = container.scrollHeight;
         }
 
         // Play notification sound for mentions and PMs (but not for historical messages or own messages)
@@ -11811,6 +11787,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.playSound(this.settings.sound);
             }
         }
+    }
+
+    scrollToBottomAfterImagesLoad(container) {
+        if (!this.settings.autoscroll) return;
+        container.scrollTop = container.scrollHeight;
     }
 
     pruneChannelMessages(channelKey, maxMessages = 500) {
@@ -15496,11 +15477,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             this.displaySystemMessage(`This is a ${community.isPrivate ? 'private' : 'public'} community`);
         }
 
-        if (this.settings.autoscroll) {
-            setTimeout(() => {
-                container.scrollTop = container.scrollHeight;
-            }, 0);
-        }
+        // Scroll to bottom after all images have loaded
+        this.scrollToBottomAfterImagesLoad(container);
     }
 
     loadChannelMessages(displayName) {
@@ -15562,12 +15540,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             this.displaySystemMessage(`Joined ${displayName}`);
         }
 
-        // Scroll to bottom after rendering
-        if (this.settings.autoscroll) {
-            setTimeout(() => {
-                container.scrollTop = container.scrollHeight;
-            }, 0);
-        }
+        // Scroll to bottom after all images have loaded
+        this.scrollToBottomAfterImagesLoad(container);
     }
 
     displayAllChannelMessages(storageKey) {
@@ -15599,10 +15573,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             if (index < channelMessages.length) {
                 requestAnimationFrame(renderBatch);
             } else {
-                // Finished loading all
-                if (this.settings.autoscroll) {
-                    container.scrollTop = container.scrollHeight;
-                }
+                // Finished loading all - scroll to bottom after images load
+                this.scrollToBottomAfterImagesLoad(container);
             }
         };
 
@@ -18500,7 +18472,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.25.67 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.25.68 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
