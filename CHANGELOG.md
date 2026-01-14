@@ -1,3 +1,7 @@
+## v2.25.64 - 2026-01-14
+
+Hotfix: changed the way NYM handles read receipts
+
 ## v2.25.63 - 2026-01-09
 
 New: separated file types for better performance

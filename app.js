@@ -9456,7 +9456,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     // NYM receipt types: 'delivered' or 'read'
     // Uses NIP-17 gift wrap with a special rumor format for receipts
-    // Format: rumor with kind 14, content empty, tags include ['x', messageId] and ['receipt', type]
+    // Format: rumor with kind 69420 (custom), content empty, tags include ['x', messageId] and ['receipt', type]
+    // Using kind 69420 instead of 14 to avoid showing blank DMs in other NIP-17 clients
     async sendNymReceipt(messageId, receiptType, recipientPubkey) {
         if (!this.privkey) return;
 
@@ -9467,7 +9468,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const now = Math.floor(Date.now() / 1000);
         const rumor = {
-            kind: 14,
+            kind: 69420,
             created_at: now,
             tags: [
                 ['p', recipientPubkey],
@@ -10031,7 +10032,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             // Validate rumor and identity
-            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15)) {
+            // Accept kind 14 (DM), kind 15 (file), and kind 69420 (NYM receipt)
+            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420)) {
                 console.warn('DM rejected: invalid rumor kind', rumor?.kind);
                 return;
             }
@@ -18511,7 +18513,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.25.63 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.25.64 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
