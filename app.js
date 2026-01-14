@@ -12029,23 +12029,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                     // Check if this is a geohash channel
                     if (this.geohashRegex && this.geohashRegex.test(sanitized)) {
-                        // Get geohash channel info if available
-                        const geohashChannelInfo = this.getGeohashChannelInfo(sanitized);
-                        const isActive = this.activeGeohashChannels.has(sanitized);
+                        const isActive = this.currentGeohash === sanitized;
                         const classes = ['channel-reference', 'geohash-reference'];
                         if (isActive) classes.push('active-channel');
 
-                        let displayText = channel;
-                        if (geohashChannelInfo && geohashChannelInfo.name) {
-                            displayText = `#${geohashChannelInfo.name}`;
-                        }
-
+                        const location = this.getGeohashLocation(sanitized);
                         let title = `Geohash Channel: ${sanitized}`;
-                        if (geohashChannelInfo && geohashChannelInfo.description) {
-                            title += ` - ${geohashChannelInfo.description}`;
+                        if (location) {
+                            title += ` - ${location}`;
                         }
 
-                        return `${offset || ''}<span class="${classes.join(' ')}" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('g:${sanitized}', event); return false;">${displayText}</span>`;
+                        return `${offset || ''}<span class="${classes.join(' ')}" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('g:${sanitized}', event); return false;">${channel}</span>`;
                     }
 
                     // Check if it's a standard channel
@@ -18513,7 +18507,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.25.64 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.25.65 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

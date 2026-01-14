@@ -1,3 +1,7 @@
+## v2.25.65 - 2026-01-14
+
+Hotfix: incorrect functions for geohash channel info
+
 ## v2.25.64 - 2026-01-14
 
 Hotfix: changed the way NYM handles read receipts
