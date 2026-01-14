@@ -1020,6 +1020,7 @@ class NYM {
         this.messages = new Map();
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set(); // Early deduplication for PMs
+        this.lastPMSyncTime = Math.floor(Date.now() / 1000) - 604800; // 7 days ago initially
         this.bitchatUsers = new Set();
         this.nymUsers = new Set();  // Track users who support NYM delivery receipts
         this.users = new Map();
@@ -5612,7 +5613,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 {
                     kinds: [1059],
                     "#p": [this.pubkey],
-                    limit: 500
+                    limit: 500,
+                    since: this.lastPMSyncTime - 60 // Small buffer for clock drift
                 },
                 // Profile/community definitions by me
                 {
@@ -9838,6 +9840,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 return; // Already processed this event
             }
             this.processedPMEventIds.add(event.id);
+
+            // Update lastPMSyncTime to track newest received PM
+            if (event.created_at && event.created_at > this.lastPMSyncTime) {
+                this.lastPMSyncTime = event.created_at;
+            }
 
             // Limit Set size to prevent memory leaks (keep last 5000 events)
             if (this.processedPMEventIds.size > 5000) {
@@ -18507,7 +18514,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.25.65 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.25.66 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -19485,10 +19492,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // Clear event deduplication if too large
-        if (nym.eventDeduplication.size > 5000) {
-            nym.eventDeduplication.clear();
-            console.log('Cleared event deduplication cache');
+        // Prune event deduplication if too large (keep recent entries for proper deduplication)
+        if (nym.eventDeduplication.size > 10000) {
+            const entriesToDelete = nym.eventDeduplication.size - 7500;
+            let deleted = 0;
+            for (const key of nym.eventDeduplication.keys()) {
+                if (deleted >= entriesToDelete) break;
+                nym.eventDeduplication.delete(key);
+                deleted++;
+            }
+            console.log(`Pruned event deduplication cache: kept ${nym.eventDeduplication.size} entries`);
         }
     }, 60000);
 

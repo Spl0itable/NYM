@@ -1,3 +1,7 @@
+## v2.25.66 - 2026-01-14
+
+Hotfix: dedupe cache tweak
+
 ## v2.25.65 - 2026-01-14
 
 Hotfix: incorrect functions for geohash channel info
