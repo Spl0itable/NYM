@@ -1,3 +1,9 @@
+## v2.25.68 - 2026-01-15
+
+Hotfix: removed unnecessary console logging
+Hotfix: pre-renders channels for faster navifation
+Hotfix: tracks event IDs to not reload on reconnection
+
 ## v2.25.67 - 2026-01-14
 
 Hotfix: removed since filter on REQs

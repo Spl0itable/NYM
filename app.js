@@ -1018,11 +1018,16 @@ class NYM {
         this.currentGeohash = '';
         this.currentPM = null;
         this.messages = new Map();
+        this.prerenderedChannels = new Map();
+        this.prerenderedChannelVersions = new Map();
+        this.prerenderQueue = [];
+        this.isPrerenderingActive = false;
         this.pmMessages = new Map();
-        this.processedPMEventIds = new Set(); // Early deduplication for PMs
-        this.lastPMSyncTime = Math.floor(Date.now() / 1000) - 604800; // 7 days ago initially
+        this.processedPMEventIds = new Set();
+        this.processedMessageEventIds = new Set();
+        this.lastPMSyncTime = Math.floor(Date.now() / 1000) - 604800;
         this.bitchatUsers = new Set();
-        this.nymUsers = new Set();  // Track users who support NYM delivery receipts
+        this.nymUsers = new Set();
         this.users = new Map();
         this.channelUsers = new Map();
         this.channels = new Map();
@@ -1203,7 +1208,6 @@ class NYM {
             navigator.userAgent.includes('Flutter');
 
         if (this.isFlutterWebView) {
-            console.log('Running in Flutter WebView - using enhanced connection monitoring');
         }
         this.shopItems = {
             styles: [
@@ -1607,13 +1611,11 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
             if (cachedStyle && cachedStyle !== '' && !this.activeMessageStyle) {
                 this.activeMessageStyle = cachedStyle;
                 this.localActiveStyle = cachedStyle;
-                console.log('🎨 Loaded cached style from constructor:', cachedStyle);
             }
 
             if (cachedFlair && cachedFlair !== '' && !this.activeFlair) {
                 this.activeFlair = cachedFlair;
                 this.localActiveFlair = cachedFlair;
-                console.log('⭐ Loaded cached flair from constructor:', cachedFlair);
             }
         }, 0);
     }
@@ -1716,11 +1718,8 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
     }
 
     loadCachedShopItems() {
-        console.log('🔍 loadCachedShopItems() called');
-        console.log('   pubkey:', this.pubkey);
 
         if (!this.pubkey) {
-            console.log('   ❌ No pubkey, skipping cache load');
             return;
         }
 
@@ -1728,26 +1727,17 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         const cachedStyle = localStorage.getItem('nym_active_style');
         const cachedFlair = localStorage.getItem('nym_active_flair');
 
-        console.log('   cachedStyle from localStorage:', cachedStyle);
-        console.log('   cachedFlair from localStorage:', cachedFlair);
 
         if (cachedStyle && cachedStyle !== '') {
             this.activeMessageStyle = cachedStyle;
             this.localActiveStyle = cachedStyle;
-            console.log('   ✅ Loaded cached message style:', cachedStyle);
         }
 
         if (cachedFlair && cachedFlair !== '') {
             this.activeFlair = cachedFlair;
             this.localActiveFlair = cachedFlair;
-            console.log('   ✅ Loaded cached flair:', cachedFlair);
         }
 
-        console.log('   Final state:');
-        console.log('     activeMessageStyle:', this.activeMessageStyle);
-        console.log('     localActiveStyle:', this.localActiveStyle);
-        console.log('     activeFlair:', this.activeFlair);
-        console.log('     localActiveFlair:', this.localActiveFlair);
 
         // Apply to any existing messages immediately
         this.applyShopStylesToOwnMessages();
@@ -1798,7 +1788,6 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
             }
         });
 
-        console.log('Applied shop styles to own messages');
     }
 
     activateCosmetic(itemId) {
@@ -2176,7 +2165,6 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
             this.currentZapTarget = originalZapTarget;
 
         } catch (error) {
-            console.error('Failed to generate shop invoice:', error);
             document.getElementById('zapStatus').className = 'zap-status error';
             document.getElementById('zapStatus').innerHTML = `❌ Failed: ${error.message}`;
 
@@ -2215,7 +2203,6 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
 
             return signedEvent;
         } catch (error) {
-            console.error('Failed to create shop zap request:', error);
             return null;
         }
     }
@@ -2276,7 +2263,6 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
                 throw new Error('No payment request in response');
             }
         } catch (error) {
-            console.error('Error fetching shop lightning invoice:', error);
             throw error;
         }
     }
@@ -2341,7 +2327,6 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
                     document.getElementById('zapStatus').innerHTML = '⏱️ Payment timeout - please check your wallet';
                 }
             } catch (error) {
-                console.error('Error checking shop payment:', error);
             }
         }, 1000); // Check every second
     }
@@ -2491,7 +2476,6 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
                 this.sendToRelay(["EVENT", signedEvent]);
             }
         } catch (error) {
-            console.error('Error saving purchases to Nostr:', error);
         }
     }
 
@@ -2699,7 +2683,6 @@ ${code}
                 }
                 return true;
             } catch (e) {
-                console.error('Failed to restore NYM code:', e);
             }
         }
 
@@ -2732,9 +2715,7 @@ ${code}
                     }
                 });
 
-                console.log(`Updated shop items for user ${this.getNym(pubkey)}`);
             } catch (error) {
-                console.error('Error parsing shop items:', error);
             }
         }
     }
@@ -2830,7 +2811,6 @@ ${code}
                 // Check if canvas container exists
                 const canvasContainer = document.getElementById('geohashGlobeCanvas');
                 if (!canvasContainer || !canvasContainer.parentElement) {
-                    console.error('Globe container not found');
                     return;
                 }
 
@@ -2883,14 +2863,12 @@ ${code}
             this.globeResizeHandler = null;
         }
 
-        console.log('Geohash explorer closed and resources cleaned up');
     }
 
     initializeGlobe() {
         const container = document.getElementById('geohashGlobeCanvas');
 
         if (!container) {
-            console.error('Globe container not found');
             return;
         }
 
@@ -2938,12 +2916,6 @@ ${code}
 
         // Get geohash channels
         this.updateGeohashChannels();
-
-        console.log('Geohash channels to plot:', this.geohashChannels.map(ch => ({
-            geohash: ch.geohash,
-            lat: ch.lat,
-            lng: ch.lng
-        })));
 
         // Calculate optimal distance based on screen size
         const isMobile = window.innerWidth <= 768;
@@ -3024,7 +2996,6 @@ ${code}
             const pos = polar2Cartesian(channel.lat, channel.lng, POINT_ALTITUDE);
             sphere.position.set(pos.x, pos.y, pos.z);
 
-            console.log(`Geohash ${channel.geohash}: lat=${channel.lat.toFixed(4)}, lng=${channel.lng.toFixed(4)} -> pos=(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
 
             // Store channel data on the mesh
             sphere.userData = {
@@ -3061,17 +3032,14 @@ ${code}
 
             pointsGroup.add(sphere);
 
-            console.log(`User location: lat=${this.userLocation.lat.toFixed(4)}, lng=${this.userLocation.lng.toFixed(4)} -> pos=(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
         } else if (this.settings.sortByProximity && navigator.geolocation) {
             // If proximity sorting is enabled but location not yet loaded, try to get it now
-            console.log('Proximity sorting enabled, attempting to get location for globe...');
             navigator.geolocation.getCurrentPosition(
                 (position) => {
                     this.userLocation = {
                         lat: position.coords.latitude,
                         lng: position.coords.longitude
                     };
-                    console.log('Got location for globe, updating...');
 
                     // Add the yellow dot now that we have location
                     const geometry = new THREE.SphereGeometry(3, 16, 16);
@@ -3091,10 +3059,8 @@ ${code}
 
                     pointsGroup.add(sphere);
 
-                    console.log(`User location added: lat=${this.userLocation.lat.toFixed(4)}, lng=${this.userLocation.lng.toFixed(4)}`);
                 },
                 (error) => {
-                    console.log('Could not get location for globe:', error);
                 }
             );
         }
@@ -3219,7 +3185,6 @@ ${code}
                             const clickedChannel = this.geohashChannels.find(ch => ch.geohash === geohash);
 
                             if (clickedChannel) {
-                                console.log('Clicked on channel:', clickedChannel.geohash, 'at', clickedChannel.lat, clickedChannel.lng);
                                 this.selectGeohashChannel(clickedChannel);
                             }
                         }
@@ -3384,7 +3349,6 @@ ${code}
         // Start animation
         animate();
 
-        console.log('Globe initialized with', this.geohashChannels.length, 'clickable points');
     }
 
     addGeohashChannelToGlobe(geohash) {
@@ -3430,7 +3394,6 @@ ${code}
                     isJoined: this.channels.has(geohash)
                 });
             } catch (e) {
-                console.error('Error decoding geohash:', geohash, e);
             }
         });
     }
@@ -3500,21 +3463,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 locationInfoItem.innerHTML = `<strong>Location:</strong> ${locationInfo}`;
             }
         } catch (error) {
-            console.error('Error fetching location:', error);
             const locationInfoItem = document.getElementById('locationInfoItem');
             if (locationInfoItem) {
                 locationInfoItem.innerHTML = `<strong>Location:</strong> Unknown`;
             }
         }
 
-        console.log('Selected geohash channel:', channel.geohash, 'at', channel.lat, channel.lng);
     }
 
     joinSelectedGeohash() {
         if (this.selectedGeohash) {
             const geohash = this.selectedGeohash.toLowerCase();
 
-            console.log('Joining geohash channel:', geohash);
 
             // Close the explorer modal
             this.closeGeohashExplorer();
@@ -3551,7 +3511,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 infoPanel.style.display = 'none';
             }
 
-            console.log('Globe view reset');
         }
     }
 
@@ -3653,7 +3612,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 btn.classList.remove('copied');
             }, 2000);
         }).catch(err => {
-            console.error('Failed to copy:', err);
             this.displaySystemMessage('Failed to copy URL');
         });
     }
@@ -3677,7 +3635,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.displaySystemMessage('Channel link copied for Nostr sharing');
             closeModal('shareModal');
         }).catch(err => {
-            console.error('Failed to copy:', err);
             this.displaySystemMessage('Failed to copy for Nostr');
         });
     }
@@ -3736,7 +3693,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             return `${latStr}, ${lngStr}`;
         } catch (e) {
-            console.error('Error decoding geohash:', e);
             return '';
         }
     }
@@ -3758,7 +3714,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Decode geohash to get center coordinates
             const coords = this.decodeGeohash(geohash);
             if (!coords || typeof coords.lat !== 'number' || typeof coords.lng !== 'number') {
-                console.error('Failed to decode geohash:', geohash);
                 return [];
             }
 
@@ -3774,7 +3729,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Return the N closest relays
             return relaysWithDistance.slice(0, count);
         } catch (error) {
-            console.error('Error finding closest relays for geohash:', error);
             return [];
         }
     }
@@ -3805,7 +3759,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Find closest relays for this geohash
         const closestRelays = this.getClosestRelaysForGeohash(geohash, this.geoRelayCount);
         if (closestRelays.length === 0) {
-            console.warn('No geo relays found for geohash:', geohash);
             return;
         }
 
@@ -4202,9 +4155,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Visibility change detection
             this.setupVisibilityMonitoring();
 
-            console.log('NYM initialized successfully');
         } catch (error) {
-            console.error('Failed to initialize NYM:', error);
             this.showNotification('Error', 'Failed to initialize: ' + error.message);
         }
     }
@@ -4213,7 +4164,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Track when app becomes visible/hidden
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
-                console.log('App became visible, checking connection health...');
                 const delay = this.isFlutterWebView ? 200 : 500;
                 setTimeout(() => {
                     this.checkConnectionHealth();
@@ -4226,7 +4176,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     setTimeout(() => this.resubscribeAllRelays(), 250);
                 }, delay);
             } else {
-                console.log('App hidden');
                 // Stop monitoring when app goes to background
                 if (this.reconnectionInterval) {
                     clearInterval(this.reconnectionInterval);
@@ -4237,7 +4186,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Also listen for page focus (for desktop)
         window.addEventListener('focus', () => {
-            console.log('Window focused, checking connection health...');
             const delay = this.isFlutterWebView ? 200 : 500;
             setTimeout(() => {
                 this.checkConnectionHealth();
@@ -4255,7 +4203,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // For Flutter WebView, also check on resume event
         if (this.isFlutterWebView) {
             window.addEventListener('resume', () => {
-                console.log('App resumed, checking connection...');
                 setTimeout(() => {
                     this.checkConnectionHealth();
 
@@ -4469,14 +4416,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Only start if disconnected and visible
             if (!this.connected && !document.hidden) {
-                console.log('Starting active reconnection monitoring (app is visible)...');
                 this.reconnectionInterval = setInterval(() => {
                     // Only attempt if still visible
                     if (!document.hidden && !this.connected && navigator.onLine) {
                         this.attemptReconnection();
                     } else if (document.hidden) {
                         // Stop monitoring if app goes to background
-                        console.log('App backgrounded, pausing reconnection monitoring');
                         clearInterval(this.reconnectionInterval);
                         this.reconnectionInterval = null;
                     }
@@ -4486,7 +4431,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const stopMonitoring = () => {
             if (this.reconnectionInterval) {
-                console.log('Stopping reconnection monitoring');
                 clearInterval(this.reconnectionInterval);
                 this.reconnectionInterval = null;
             }
@@ -4518,13 +4462,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async attemptReconnection() {
         // Prevent multiple simultaneous reconnection attempts
         if (this.isReconnecting) {
-            console.log('Reconnection already in progress, skipping...');
             return;
         }
 
         // Check if we've exceeded max attempts
         if (this.reconnectionAttempts >= this.maxReconnectionAttempts) {
-            console.log('Max reconnection attempts reached. Manual reconnection required.');
             this.updateConnectionStatus('Disconnected - Click to reconnect');
             return;
         }
@@ -4532,7 +4474,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.isReconnecting = true;
         this.reconnectionAttempts++;
 
-        console.log(`Attempting automatic reconnection (attempt ${this.reconnectionAttempts}/${this.maxReconnectionAttempts})...`);
         this.updateConnectionStatus(`Reconnecting (${this.reconnectionAttempts}/${this.maxReconnectionAttempts})...`);
 
         try {
@@ -4680,7 +4621,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.displaySystemMessage(`@${nym} cannot receive zaps (no lightning address set)`);
                     }
                 } catch (error) {
-                    console.error('Error fetching lightning address:', error);
                     this.displaySystemMessage(`Failed to check if @${nym} can receive zaps`);
                 }
             }
@@ -4770,12 +4710,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     await navigator.clipboard.writeText(this.contextMenuData.pubkey);
                     this.displaySystemMessage(`Copied pubkey to clipboard`);
                 } catch (err) {
-                    console.error('Failed to copy pubkey:', err);
-                    console.log('Pubkey was:', this.contextMenuData.pubkey);
                     this.displaySystemMessage('Failed to copy pubkey');
                 }
             } else {
-                console.error('No pubkey in contextMenuData:', this.contextMenuData);
                 this.displaySystemMessage('No pubkey available to copy');
             }
             document.getElementById('contextMenu').classList.remove('active');
@@ -4787,12 +4724,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     await navigator.clipboard.writeText(this.contextMenuData.pubkey);
                     this.displaySystemMessage(`Copied pubkey to clipboard`);
                 } catch (err) {
-                    console.error('Failed to copy pubkey:', err);
-                    console.log('Pubkey was:', this.contextMenuData.pubkey);
                     this.displaySystemMessage('Failed to copy pubkey');
                 }
             } else {
-                console.error('No pubkey in contextMenuData:', this.contextMenuData);
                 this.displaySystemMessage('No pubkey available to copy');
             }
             document.getElementById('contextMenu').classList.remove('active');
@@ -4883,7 +4817,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
 
         } catch (err) {
-            console.error('Failed to submit report:', err);
             this.displaySystemMessage('Failed to submit report');
         }
     }
@@ -5346,7 +5279,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         const parsed = JSON.parse(msg);
                         this.sendToRelay(parsed);
                     } catch (e) {
-                        console.error('Failed to process queued message:', e);
                     }
                 });
             }
@@ -5371,7 +5303,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             this.switchToCommunity(pinned.communityId);
                         } else {
                             // Community not available, fallback to bar
-                            console.log('Pinned community not found, falling back to #bar');
                             this.switchChannel('bar', '');
                         }
                     }, 1000);
@@ -5867,7 +5798,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 };
 
             } catch (error) {
-                console.error(`Connection failed for ${relayUrl}:`, error);
                 this.blacklistedRelays.add(relayUrl);
                 this.blacklistTimestamps.set(relayUrl, Date.now());
                 this.trackRelayFailure(relayUrl);
@@ -6069,7 +5999,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 throw new Error('No payment request in response');
             }
         } catch (error) {
-            console.error('Error fetching lightning invoice:', error);
             throw error;
         }
     }
@@ -6243,10 +6172,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             if (signedEvent) {
                 this.sendToRelay(["EVENT", signedEvent]);
-                console.log('Profile saved to Nostr, preserved fields:', Object.keys(profileToSave));
             }
         } catch (error) {
-            console.error('Failed to save profile:', error);
         }
     }
 
@@ -6350,7 +6277,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const oldAddress = localStorage.getItem('nym_lightning_address');
         if (oldAddress) {
             localStorage.removeItem('nym_lightning_address');
-            console.log('Cleaned up old lightning address format');
         }
     }
 
@@ -6358,7 +6284,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async createZapRequest(amountSats, comment) {
         try {
             if (!this.currentZapTarget) {
-                console.error('No target for zap request');
                 return null;
             }
 
@@ -6394,7 +6319,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             return signedEvent;
         } catch (error) {
-            console.error('Failed to create zap request:', error);
             return null;
         }
     }
@@ -6444,7 +6368,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.checkZapPayment(invoice);
             }
         } catch (error) {
-            console.error('Failed to generate invoice:', error);
             document.getElementById('zapStatus').className = 'zap-status';
             document.getElementById('zapStatus').innerHTML = `Failed: ${error.message}`;
         }
@@ -6483,9 +6406,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 correctLevel: QRCode.CorrectLevel.L
             });
 
-            console.log('Generated QR code for invoice:', invoice.pr.substring(0, 50) + '...');
         } catch (err) {
-            console.error('QRCode generation failed:', err);
             // Fallback if QRCode library not loaded
             qrContainer.innerHTML = `
     <div style="display: inline-block; padding: 20px; border: 5px solid white; background: white; color: black; text-align: center; border-radius: 10px;">
@@ -6531,7 +6452,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     document.getElementById('zapStatus').innerHTML = 'Payment timeout - please check your wallet';
                 }
             } catch (error) {
-                console.error('Error checking payment:', error);
             }
         }, 1000); // Check every second
     }
@@ -6767,7 +6687,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.displaySystemMessage(`@${author} cannot receive zaps (no lightning address set)`);
             }
         } catch (error) {
-            console.error('Error fetching lightning address:', error);
             this.displaySystemMessage(`Failed to check if @${author} can receive zaps`);
         }
     }
@@ -6847,7 +6766,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 btn.textContent = originalText;
             }, 2000);
         }).catch(err => {
-            console.error('Failed to copy:', err);
             this.displaySystemMessage('Failed to copy invoice');
         });
     }
@@ -6867,11 +6785,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Try Flutter bridge first (for NYM native app)
         if (window.nymOpenExternal) {
-            console.log('Using nymOpenExternal for:', invoiceToOpen);
             window.nymOpenExternal(invoiceToOpen);
         } else {
             // Fallback to standard window.open (for regular browsers)
-            console.log('Fallback to window.open for:', invoiceToOpen);
             window.open(invoiceToOpen, '_blank');
         }
 
@@ -6879,7 +6795,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         navigator.clipboard.writeText(invoiceStr).then(() => {
             this.displaySystemMessage('Invoice copied - paste in your wallet');
         }).catch(err => {
-            console.error('Failed to copy:', err);
             this.displaySystemMessage('Failed to copy invoice');
         });
     }
@@ -6901,7 +6816,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 try {
                     await this.fetchRelaysFromMonitor(monitorRelay);
                 } catch (error) {
-                    console.error(`Failed to fetch from monitor ${monitorRelay}:`, error);
                 }
             }
 
@@ -6911,7 +6825,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.lastRelayDiscovery = now;
 
         } catch (error) {
-            console.error('Failed to discover relays:', error);
             // Fall back to broadcast relays if discovery fails
             if (this.discoveredRelays.size === 0) {
                 this.broadcastRelays.forEach(relay => this.discoveredRelays.add(relay));
@@ -6954,7 +6867,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         resolve();
                     }
                 } catch (e) {
-                    console.error('Failed to parse monitor message:', e);
                 }
             };
 
@@ -6981,7 +6893,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.discoveredRelays.add(relayUrl);
             }
         } catch (error) {
-            console.error('Failed to parse relay metadata:', error);
         }
     }
 
@@ -6995,7 +6906,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
         } catch (error) {
-            console.error('Failed to load cached relays:', error);
         }
     }
 
@@ -7007,7 +6917,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             };
             localStorage.setItem('nym_discovered_relays', JSON.stringify(data));
         } catch (error) {
-            console.error('Failed to save cached relays:', error);
         }
     }
 
@@ -7055,7 +6964,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // For ephemeral users, only sync lightning address
             if (this.connectionMode === 'ephemeral') {
                 if (!this.lightningAddress) {
-                    console.log('Ephemeral user - no lightning address to sync');
                     return;
                 }
 
@@ -7078,7 +6986,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (this.privkey) {
                     const signedSettingsEvent = window.NostrTools.finalizeEvent(settingsEvent, this.privkey);
                     this.sendToRelay(["EVENT", signedSettingsEvent]);
-                    console.log('Lightning address synced for ephemeral user (kind 30078)');
                 }
                 return; // Don't sync anything else for ephemeral users
             }
@@ -7157,14 +7064,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             if (signedMuteEvent) {
                 this.sendToRelay(["EVENT", signedMuteEvent]);
-                console.log('Mute list synced to Nostr (kind 10000):', {
-                    blockedUsers: this.blockedUsers.size,
-                    blockedKeywords: this.blockedKeywords.size
-                });
             }
 
         } catch (error) {
-            console.error('Failed to save synced settings:', error);
         }
     }
 
@@ -7290,7 +7192,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             .filter(([url, relay]) => relay.type !== 'nosflare' && relay.ws && relay.ws.readyState === WebSocket.OPEN);
 
         if (readableRelays.length === 0) {
-            console.log('No readable relays connected yet');
             return;
         }
 
@@ -7437,6 +7338,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async handleEvent(event) {
+        // Early deduplication for channel messages to prevent re-processing on reconnect
+        if ([20000, 23333, 4550].includes(event.kind)) {
+            if (this.processedMessageEventIds.has(event.id)) {
+                return; // Already processed this message
+            }
+            this.processedMessageEventIds.add(event.id);
+
+            // Prune if too large (keep last 5000 event IDs)
+            if (this.processedMessageEventIds.size > 5000) {
+                const idsArray = Array.from(this.processedMessageEventIds);
+                this.processedMessageEventIds = new Set(idsArray.slice(-4000));
+            }
+        }
+
         const messageAge = Date.now() - (event.created_at * 1000);
         const isHistorical = messageAge > 10000; // Older than 10 seconds
 
@@ -7518,7 +7433,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.communityModerators.get(communityId).has(event.pubkey);
 
                 if (!isFromAdmin && !isFromMod) {
-                    console.log('Ignoring moderation event from non-admin/mod');
                     return;
                 }
 
@@ -7985,14 +7899,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // CHECK IF USER IS BANNED BEFORE PROCESSING
                 if (this.communityBans.has(communityId) &&
                     this.communityBans.get(communityId).has(event.pubkey)) {
-                    console.log(`Blocked message from banned user ${event.pubkey} in community ${communityId}`);
                     return; // Don't process messages from banned users AT ALL
                 }
 
                 // ALSO CHECK IF USER IS GLOBALLY BLOCKED
                 const nymForCheck = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
                 if (this.blockedUsers.has(event.pubkey) || this.isNymBlocked(nymForCheck)) {
-                    console.log(`Blocked message from globally blocked user ${event.pubkey}`);
                     return;
                 }
 
@@ -8090,9 +8002,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             this.showNotification(nym, message.content, channelInfo);
                         }
                     }
-                } else if (!message.isOwn && !isHistorical && !exists) {
+                } else if (!exists) {
+                    // Message is for different community
                     // Update unread count for other communities
-                    this.updateUnreadCount(communityId);
+                    if (!message.isOwn && !isHistorical) {
+                        this.updateUnreadCount(communityId);
+                    }
+                    // Invalidate pre-render cache for this community since it has new messages
+                    this.invalidatePrerender(communityId);
                 }
             }
         } else if (event.kind === 30078) {
@@ -8132,7 +8049,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             // Apply to our messages
                             this.applyShopStylesToOwnMessages();
 
-                            console.log('Updated own active shop items from newer event');
                         }
                         return;
                     }
@@ -8192,7 +8108,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         });
                     }
                 } catch (e) {
-                    console.error('Failed to parse active items event:', e);
                 }
                 return;
             }
@@ -8205,7 +8120,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     // Check timestamp to prevent overwriting with older data
                     const currentTimestamp = this.shopPurchasesTimestamp || 0;
                     if (event.created_at < currentTimestamp) {
-                        console.log('Ignoring older shop purchases event');
                         return;
                     }
 
@@ -8230,21 +8144,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
                     }
 
-                    console.log('✅ Loaded shop purchases from relay:', {
-                        style: this.activeMessageStyle,
-                        flair: this.activeFlair,
-                        purchaseCount: this.userPurchases.size
-                    });
-
                     // After loading, broadcast our current active items so others see it
                     this.publishActiveShopItems();
 
                     // Apply to our messages immediately
                     this.applyShopStylesToOwnMessages();
 
-                    console.log('Loaded shop purchases + active items from event');
                 } catch (error) {
-                    console.error('Error loading shop purchases:', error);
                 }
             }
         } else if (event.kind === 7) {
@@ -8270,7 +8176,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             shopItemTag[1] === this.currentPurchaseContext?.itemId) {
 
                             // This is our shop purchase payment!
-                            console.log('Shop zap receipt received for item:', shopItemTag[1]);
 
                             // Close the subscription
                             if (this.shopZapReceiptSubId) {
@@ -8284,7 +8189,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         }
                     }
                 } catch (e) {
-                    console.error('Error parsing shop zap receipt:', e);
                 }
             }
 
@@ -8430,10 +8334,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                 lng: position.coords.longitude
                             };
                             this.sortChannelsByActivity();
-                            console.log('Location restored for proximity sorting');
                         },
                         (error) => {
-                            console.log('Location access denied during settings restore');
                             this.settings.sortByProximity = false;
                             localStorage.setItem('nym_sort_proximity', 'false');
                         }
@@ -8583,7 +8485,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
         } catch (error) {
-            console.error('Failed to parse synced settings:', error);
         }
     }
 
@@ -9117,7 +9018,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.displaySystemMessage('Failed to sign reaction');
             }
         } catch (error) {
-            console.error('Failed to send reaction:', error);
             // Revert optimistic update on error
             const messageReactions = this.reactions.get(messageId);
             if (messageReactions && messageReactions.has(emoji)) {
@@ -9276,7 +9176,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 totalBytes: bytes.length
             };
         } catch (e) {
-            console.error('Failed to decode bitchat1:', e);
             return null;
         }
     }
@@ -9961,7 +9860,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                     return { type: noisePayloadType, content: messageContent || '', messageId };
                 } catch (e) {
-                    console.warn('Failed to parse bitchat1 format:', e);
                     return { type: 0x01, content };
                 }
             };
@@ -10027,17 +9925,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Validate rumor and identity
             // Accept kind 14 (DM), kind 15 (file), and kind 69420 (NYM receipt)
             if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420)) {
-                console.warn('DM rejected: invalid rumor kind', rumor?.kind);
                 return;
             }
             if (typeof rumor.content !== 'string') {
-                console.warn('DM rejected: rumor content not string');
                 return;
             }
             // Note: Bitchat uses ephemeral key for seal, so seal.pubkey may differ from rumor.pubkey
             // We only require rumor.pubkey to be present (the actual sender identity)
             if (!rumor.pubkey) {
-                console.warn('DM rejected: no rumor pubkey');
                 return;
             }
 
@@ -10215,7 +10110,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         } catch (err) {
             // Log decryption failures for debugging
-            console.warn('Failed to unwrap gift wrap DM:', err.message, 'event.pubkey:', event.pubkey?.substring(0, 8));
         }
     }
 
@@ -10232,7 +10126,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const wrapped = await this.sendNIP17PM(content, recipientPubkey);
             return !!wrapped;
         } catch (error) {
-            console.error('Failed to send PM:', error);
             this.displaySystemMessage('Failed to send PM: ' + error.message);
             return false;
         }
@@ -10511,7 +10404,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             pmMessages = pmMessages.slice(-maxPMMessages);
             // Update the stored messages
             this.pmMessages.set(conversationKey, pmMessages);
-            console.log(`Pruned PM conversation from ${originalCount} to ${maxPMMessages} messages`);
         }
 
         // Filter messages that are part of this specific conversation
@@ -10605,11 +10497,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.privkey = sk;
             this.pubkey = pk;
 
-            console.log('Generated ephemeral keypair');
 
             return { privkey: sk, pubkey: pk };
         } catch (error) {
-            console.error('Failed to generate keypair:', error);
             throw error;
         }
     }
@@ -10646,11 +10536,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Don't await here to avoid 3-second timeout when not connected
             this.fetchProfileFromRelay(remotePubkey);
 
-            console.log('Connected via Nostr Connect (NIP-46)');
             return { pubkey: remotePubkey };
 
         } catch (error) {
-            console.error('Failed to connect via Nostr Connect:', error);
             throw error;
         }
     }
@@ -10731,7 +10619,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         // Store complete original profile for non-ephemeral connections
                         if (event.pubkey === this.pubkey && this.connectionMode !== 'ephemeral') {
                             this.originalProfile = profile;
-                            console.log('Stored complete profile with fields:', Object.keys(profile));
                         }
 
                         // Get name for own profile
@@ -10739,7 +10626,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             const profileName = profile.name || profile.username || profile.display_name;
                             this.nym = profileName.substring(0, 20);
                             document.getElementById('currentNym').textContent = this.nym;
-                            console.log('Profile loaded:', this.nym);
                         }
 
                         // Store and update for OTHER users (Bitchat users, PM contacts)
@@ -10767,7 +10653,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             this.updateLightningAddressDisplay();
                         }
                     } catch (e) {
-                        console.error('Failed to parse profile:', e);
                     }
 
                     // Resolve all promises for this pubkey
@@ -10875,7 +10760,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             return true;
         } catch (error) {
-            console.error('Failed to publish message:', error);
             this.displaySystemMessage('Failed to send message: ' + error.message);
             return false;
         }
@@ -10883,7 +10767,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     async publishCommunityMessage(content, communityId) {
         try {
-            console.log('Publishing community message:', { communityId, content });
 
             if (!this.connected) {
                 throw new Error('Not connected to relay');
@@ -10891,12 +10774,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const community = this.communityChannels.get(communityId);
             if (!community) {
-                console.error('Community not found:', communityId);
-                console.log('Available communities:', Array.from(this.communityChannels.keys()));
                 throw new Error('Community not found');
             }
 
-            console.log('Community found:', community);
 
             // CHECK IF USER IS BANNED
             if (this.communityBans.has(communityId) &&
@@ -10940,11 +10820,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 event = NostrTools.nip13.minePow(event, this.powDifficulty);
             }
 
-            console.log('Community event to publish:', event);
 
             const signedEvent = await this.signEvent(event);
 
-            console.log('Signed community event:', signedEvent);
 
             const optimisticMessage = {
                 id: signedEvent.id,
@@ -10973,11 +10851,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 }, 600000); // 10 minutes
             }
 
-            console.log('Community message sent successfully');
 
             return true;
         } catch (error) {
-            console.error('Failed to publish community message:', error);
             this.displaySystemMessage('Failed to send message: ' + error.message);
             return false;
         }
@@ -10986,7 +10862,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     async publishDeletionEvent(eventId) {
         try {
             if (!this.connected) {
-                console.log('Not connected - skipping deletion event for:', eventId);
                 return;
             }
 
@@ -11005,10 +10880,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             if (signedEvent) {
                 this.sendToRelay(["EVENT", signedEvent]);
-                console.log('Deletion event sent for message:', eventId);
             }
         } catch (error) {
-            console.error('Failed to publish deletion event:', error);
         }
     }
 
@@ -11042,7 +10915,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             return true;
         } catch (error) {
-            console.error('Failed to create channel:', error);
             return false;
         }
     }
@@ -11124,7 +10996,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             return communityId;
         } catch (error) {
-            console.error('Failed to create community channel:', error);
             this.displaySystemMessage('Failed to create community: ' + error.message);
             return null;
         }
@@ -11140,7 +11011,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Filter out communities with spaces in the name
         if (name.includes(' ')) {
-            console.log(`Community "${name}" has spaces in name, not adding to sidebar`);
             // Still store it in communityChannels map but don't display
             if (!this.communityChannels.has(communityId)) {
                 this.communityChannels.set(communityId, {
@@ -11153,7 +11023,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Check if already exists
         if (document.querySelector(`[data-community="${communityId}"]`)) {
-            console.log('Community channel already exists:', communityId);
             return;
         }
 
@@ -11325,7 +11194,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 throw new Error(`Upload failed: ${response.status}`);
             }
         } catch (error) {
-            console.error('Image upload failed:', error);
             this.displaySystemMessage('Failed to upload image: ' + error.message);
         } finally {
             setTimeout(() => {
@@ -11379,7 +11247,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (message.isCommunity && message.communityId) {
             if (this.communityBans.has(message.communityId) &&
                 this.communityBans.get(message.communityId).has(message.pubkey)) {
-                console.log(`Filtering banned user message in community ${message.communityId}`);
                 return;
             }
         }
@@ -11483,6 +11350,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Message is for different channel, update unread count but don't display
                 if (!message.isOwn && !exists && !message.isHistorical) {
                     this.updateUnreadCount(storageKey);
+                }
+                // Invalidate pre-render cache for this channel since it has new messages
+                if (!exists) {
+                    this.invalidatePrerender(storageKey);
                 }
                 return;
             }
@@ -13196,7 +13067,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 await this.sendPM(content, this.currentPM);
             } else if (this.currentCommunity) {
                 // Send to community (kind 4550)
-                console.log('Sending to community:', this.currentCommunity);
                 await this.publishCommunityMessage(content, this.currentCommunity);
             } else if (this.currentGeohash) {
                 // Send to geohash channel (kind 20000)
@@ -14003,7 +13873,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const kicks = this.communityTemporaryKicks.get(this.currentCommunity);
                 if (kicks.has(targetPubkey)) {
                     kicks.delete(targetPubkey);
-                    console.log(`Kick expired for ${fullNym} in ${community.name}`);
                 }
             }
         }, 15 * 60 * 1000);
@@ -14162,7 +14031,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     this.handleNostrEvent(event);
                 },
                 oneose: () => {
-                    console.log(`Re-subscribed to messages from unbanned user ${fullNym}`);
                 }
             });
         }
@@ -14837,7 +14705,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await this.publishMessage(slapContent, this.currentChannel, '');
             }
         } catch (error) {
-            console.error('Failed to send slap message:', error);
             this.displaySystemMessage('Failed to send slap: ' + error.message);
         }
     }
@@ -14865,7 +14732,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
-            console.error('Failed to send action message:', error);
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }
     }
@@ -14884,7 +14750,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
-            console.error('Failed to send shrug:', error);
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }
     }
@@ -14908,7 +14773,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
-            console.error('Failed to send bold message:', error);
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }
     }
@@ -14932,7 +14796,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
-            console.error('Failed to send italic message:', error);
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }
     }
@@ -14956,7 +14819,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
-            console.error('Failed to send strikethrough message:', error);
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }
     }
@@ -14980,7 +14842,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
-            console.error('Failed to send code message:', error);
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }
     }
@@ -15004,7 +14865,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
-            console.error('Failed to send quote message:', error);
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }
     }
@@ -15315,7 +15175,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         if (geohash) {
             // Geohash channel - add location info and label
             const location = this.getGeohashLocation(geohash);
-            console.log(`Getting location for geohash ${geohash}: ${location}`);
 
             if (location) {
                 fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a></font>`;
@@ -15329,7 +15188,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         );
                         fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a> (${distance.toFixed(1)}km)</font>`;
                     } catch (e) {
-                        console.error('Distance calculation error:', e);
                     }
                 }
             } else {
@@ -15432,13 +15290,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         if (window.innerWidth <= 768) {
             this.closeSidebar();
         }
-
-        console.log('Switched to community. Current state:', {
-            currentCommunity: this.currentCommunity,
-            currentChannel: this.currentChannel,
-            currentGeohash: this.currentGeohash,
-            inPMMode: this.inPMMode
-        });
     }
 
     loadCommunityMessages(communityId) {
@@ -15446,7 +15297,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         // Check if we're loading the same community
         if (container.dataset.lastCommunity === communityId) {
-            console.log('Same community, not clearing messages');
             return;
         }
 
@@ -15460,11 +15310,32 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         const community = this.communityChannels.get(communityId);
         if (!community) return;
 
-        // Get the ban list for this community BEFORE displaying messages
-        const bannedUsers = this.communityBans.get(communityId) || new Set();
-
         // Community messages would be stored under the community ID
         const communityMessages = this.messages.get(communityId) || [];
+
+        // Try to use pre-rendered content for instant display
+        const prerenderedContent = this.getPrerenderedContent(communityId);
+        if (prerenderedContent && communityMessages.length > 0) {
+            // Clone all children from the pre-rendered container
+            const fragment = document.createDocumentFragment();
+            Array.from(prerenderedContent.children).forEach(child => {
+                fragment.appendChild(child.cloneNode(true));
+            });
+
+            container.appendChild(fragment);
+
+            // Scroll to bottom after rendering
+            if (this.settings.autoscroll) {
+                setTimeout(() => {
+                    container.scrollTop = container.scrollHeight;
+                }, 0);
+            }
+            return;
+        }
+
+        // Fall back to standard rendering if no pre-rendered content
+        // Get the ban list for this community BEFORE displaying messages
+        const bannedUsers = this.communityBans.get(communityId) || new Set();
 
         // Filter out messages from banned users AND globally blocked users
         const filteredMessages = communityMessages.filter(msg => {
@@ -15501,6 +15372,13 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 container.scrollTop = container.scrollHeight;
             }, 0);
         }
+
+        // Queue this community for pre-rendering in case we switch away and back
+        if (communityMessages.length > 0 && !this.prerenderedChannels.has(communityId)) {
+            setTimeout(() => {
+                this.prerenderCommunity(communityId);
+            }, 1000);
+        }
     }
 
     loadChannelMessages(displayName) {
@@ -15509,7 +15387,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         // Check if we're loading the same channel
         if (container.dataset.lastChannel === storageKey) {
-            console.log('Same channel, not clearing messages');
             return;
         }
 
@@ -15522,6 +15399,43 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         let channelMessages = this.messages.get(storageKey) || [];
 
+        // Try to use pre-rendered content for instant display
+        const prerenderedContent = this.getPrerenderedContent(storageKey);
+        if (prerenderedContent && channelMessages.length > 0) {
+            // Clone all children from the pre-rendered container
+            const fragment = document.createDocumentFragment();
+            Array.from(prerenderedContent.children).forEach(child => {
+                const clone = child.cloneNode(true);
+
+                // Re-attach onclick handler for "Load More" button
+                if (clone.dataset.loadMore === 'true') {
+                    const originalCount = channelMessages.length;
+                    clone.onclick = () => {
+                        if (originalCount > 500) {
+                            if (confirm(`Loading ${originalCount} messages may slow down your browser. Continue?`)) {
+                                this.displayAllChannelMessages(storageKey);
+                            }
+                        } else {
+                            this.displayAllChannelMessages(storageKey);
+                        }
+                    };
+                }
+
+                fragment.appendChild(clone);
+            });
+
+            container.appendChild(fragment);
+
+            // Scroll to bottom after rendering
+            if (this.settings.autoscroll) {
+                setTimeout(() => {
+                    container.scrollTop = container.scrollHeight;
+                }, 0);
+            }
+            return;
+        }
+
+        // Fall back to standard rendering if no pre-rendered content
         // Limit display to prevent freezing
         const maxDisplayMessages = 500;
         const originalCount = channelMessages.length;
@@ -15568,6 +15482,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 container.scrollTop = container.scrollHeight;
             }, 0);
         }
+
+        // Queue this channel for pre-rendering in case we switch away and back
+        if (channelMessages.length > 0 && !this.prerenderedChannels.has(storageKey)) {
+            // Schedule pre-rendering after a short delay
+            setTimeout(() => {
+                this.prerenderChannel(storageKey);
+            }, 1000);
+        }
     }
 
     displayAllChannelMessages(storageKey) {
@@ -15609,13 +15531,381 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         requestAnimationFrame(renderBatch);
     }
 
+    // Pre-render a channel's messages into an off-screen container
+    prerenderChannel(storageKey) {
+        const channelMessages = this.messages.get(storageKey) || [];
+
+        // Don't pre-render empty channels or channels with very few messages
+        if (channelMessages.length < 1) {
+            return null;
+        }
+
+        // Check if we already have a valid pre-render for this channel
+        const currentVersion = channelMessages.length;
+        const cachedVersion = this.prerenderedChannelVersions.get(storageKey);
+
+        if (cachedVersion === currentVersion && this.prerenderedChannels.has(storageKey)) {
+            return this.prerenderedChannels.get(storageKey);
+        }
+
+        // Create an off-screen container
+        const container = document.createElement('div');
+        container.className = 'prerendered-channel-container';
+        container.dataset.storageKey = storageKey;
+        // Properly detect geohash by validating the hash portion (after #)
+        const possibleGeohash = storageKey.startsWith('#') ? storageKey.substring(1) : '';
+        container.dataset.isGeohash = possibleGeohash && this.isValidGeohash(possibleGeohash) ? 'true' : 'false';
+        container.style.display = 'none';
+
+        // Sort messages by timestamp
+        const sortedMessages = [...channelMessages].sort((a, b) => a.timestamp - b.timestamp);
+
+        // Limit to last 500 messages
+        const maxDisplayMessages = 500;
+        const messagesToDisplay = sortedMessages.slice(-maxDisplayMessages);
+
+        // If we have more messages than we're displaying, add a "load more" notice
+        if (channelMessages.length > maxDisplayMessages) {
+            const loadMoreDiv = document.createElement('div');
+            loadMoreDiv.className = 'system-message';
+            loadMoreDiv.style.cssText = 'cursor: pointer; color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
+            loadMoreDiv.textContent = `Showing most recent ${maxDisplayMessages} messages (${channelMessages.length - maxDisplayMessages} older messages available)`;
+            loadMoreDiv.dataset.loadMore = 'true';
+            loadMoreDiv.dataset.storageKey = storageKey;
+            container.appendChild(loadMoreDiv);
+        }
+
+        // Render messages directly to the container
+        messagesToDisplay.forEach(msg => {
+            if (!this.blockedUsers.has(msg.author) && !msg.blocked) {
+                const messageEl = this.createMessageElement(msg);
+                if (messageEl) {
+                    container.appendChild(messageEl);
+                }
+            }
+        });
+
+        // Store the pre-rendered container and its version
+        this.prerenderedChannels.set(storageKey, container);
+        this.prerenderedChannelVersions.set(storageKey, currentVersion);
+
+        return container;
+    }
+
+    // Create a message element without appending to DOM (for pre-rendering)
+    createMessageElement(message) {
+        // Check if message is from a blocked user
+        if (message.blocked || this.blockedUsers.has(message.pubkey) || this.isNymBlocked(message.author)) {
+            return null;
+        }
+
+        // Check for blocked keywords or spam
+        if (this.hasBlockedKeyword(message.content) || this.isSpamMessage(message.content)) {
+            return null;
+        }
+
+        const time = this.settings.showTimestamps ?
+            message.timestamp.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: this.settings.timeFormat === '12hr'
+            }) : '';
+
+        const userShopItems = this.getUserShopItems(message.pubkey);
+        const flairHtml = this.getFlairForUser(message.pubkey);
+        const supporterBadge = userShopItems?.supporter ?
+            '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
+
+        const messageEl = document.createElement('div');
+
+        // Check if nym is flooding
+        const channelToCheck = message.communityId || message.geohash || message.channel;
+        if (!message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
+            messageEl.className = 'message flooded';
+        }
+
+        const isMentioned = !message.isOwn && this.isMentioned(message.content);
+
+        // Check for action messages
+        if (message.content.startsWith('/me ')) {
+            messageEl.className = 'action-message';
+            const cleanAuthor = this.parseNymFromDisplay(message.author);
+            const authorFlairHtml = this.getFlairForUser(message.pubkey);
+            const authorWithFlair = `${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
+            const actionContent = message.content.substring(4);
+            const formattedAction = this.formatMessage(actionContent);
+            messageEl.innerHTML = `* ${authorWithFlair} ${formattedAction}`;
+        } else {
+            const classes = ['message'];
+
+            if (message.isOwn) {
+                classes.push('self');
+            } else if (message.isPM) {
+                classes.push('pm');
+            } else if (isMentioned) {
+                classes.push('mentioned');
+            }
+
+            if (userShopItems?.style) {
+                classes.push(userShopItems.style);
+            }
+            if (userShopItems?.supporter) {
+                classes.push('supporter-style');
+            }
+            if (Array.isArray(userShopItems?.cosmetics)) {
+                if (userShopItems.cosmetics.includes('cosmetic-aura-gold')) {
+                    classes.push('cosmetic-aura-gold');
+                }
+            }
+
+            messageEl.className = classes.join(' ');
+            messageEl.dataset.messageId = message.id;
+            messageEl.dataset.author = message.author;
+            messageEl.dataset.pubkey = message.pubkey;
+            messageEl.dataset.timestamp = message.timestamp.getTime();
+
+            const authorClass = message.isOwn ? 'self' : '';
+            const userColorClass = this.getUserColorClass(message.pubkey);
+
+            const verifiedBadge = this.isVerifiedDeveloper(message.pubkey) ?
+                `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
+
+            const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
+            const isMobile = window.innerWidth <= 768;
+
+            const reactionButton = isValidEventId && !isMobile ? `
+    <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
+        <svg viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+            <circle cx="9" cy="9" r="1"></circle>
+            <circle cx="15" cy="9" r="1"></circle>
+        </svg>
+    </button>
+` : '';
+
+            const formattedContent = this.formatMessageWithQuotes(message.content);
+            const baseNym = this.parseNymFromDisplay(message.author);
+            const displayAuthorBase = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            let displayAuthor = displayAuthorBase;
+            let authorExtraClass = '';
+            if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
+                authorExtraClass = 'cosmetic-redacted';
+            }
+
+            const fullTimestamp = message.timestamp.toLocaleString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: this.settings.timeFormat === '12hr'
+            });
+
+            let deliveryCheckmark = '';
+            if (message.isOwn && message.isPM && message.deliveryStatus) {
+                if (message.deliveryStatus === 'read') {
+                    deliveryCheckmark = '<span class="delivery-status read" title="Read">✓✓</span>';
+                } else if (message.deliveryStatus === 'delivered') {
+                    deliveryCheckmark = '<span class="delivery-status delivered" title="Delivered">✓</span>';
+                } else if (message.deliveryStatus === 'sent') {
+                    deliveryCheckmark = '<span class="delivery-status sent" title="Sent">○</span>';
+                }
+            }
+
+            messageEl.innerHTML = `
+    ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
+    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}:</span>
+    <span class="message-content ${userColorClass}">${formattedContent}</span>
+    ${reactionButton}
+    ${deliveryCheckmark}
+`;
+        }
+
+        return messageEl;
+    }
+
+    // Pre-render a community's messages into an off-screen container
+    prerenderCommunity(communityId) {
+        const communityMessages = this.messages.get(communityId) || [];
+        const community = this.communityChannels.get(communityId);
+
+        // Don't pre-render empty communities or if community doesn't exist
+        if (communityMessages.length < 1 || !community) {
+            return null;
+        }
+
+        // Check if we already have a valid pre-render for this community
+        const currentVersion = communityMessages.length;
+        const cachedVersion = this.prerenderedChannelVersions.get(communityId);
+
+        if (cachedVersion === currentVersion && this.prerenderedChannels.has(communityId)) {
+            return this.prerenderedChannels.get(communityId);
+        }
+
+        // Create an off-screen container
+        const container = document.createElement('div');
+        container.className = 'prerendered-channel-container';
+        container.dataset.storageKey = communityId;
+        container.dataset.isCommunity = 'true';
+        container.style.display = 'none';
+
+        // Get the ban list and filters for this community
+        const bannedUsers = this.communityBans.get(communityId) || new Set();
+
+        // Filter messages according to community rules
+        const filteredMessages = communityMessages.filter(msg => {
+            // Check if author is banned from THIS community
+            if (bannedUsers.has(msg.pubkey)) {
+                return false;
+            }
+            // Check if author is globally blocked (by pubkey or nym)
+            if (this.blockedUsers.has(msg.pubkey) || this.isNymBlocked(msg.author) || msg.blocked) {
+                return false;
+            }
+            // Check if message contains blocked keywords for this community
+            if (this.hasCommunityBlockedKeyword && this.hasCommunityBlockedKeyword(msg.content, communityId)) {
+                return false;
+            }
+            // Check if message contains globally blocked keywords
+            if (this.hasBlockedKeyword(msg.content)) {
+                return false;
+            }
+            return true;
+        });
+
+        // Sort messages by timestamp
+        const sortedMessages = [...filteredMessages].sort((a, b) => a.timestamp - b.timestamp);
+
+        // Limit to last 500 messages
+        const maxDisplayMessages = 500;
+        const messagesToDisplay = sortedMessages.slice(-maxDisplayMessages);
+
+        // Render messages directly to the container
+        messagesToDisplay.forEach(msg => {
+            const messageEl = this.createMessageElement(msg);
+            if (messageEl) {
+                container.appendChild(messageEl);
+            }
+        });
+
+        // Store the pre-rendered container and its version
+        this.prerenderedChannels.set(communityId, container);
+        this.prerenderedChannelVersions.set(communityId, currentVersion);
+
+        return container;
+    }
+
+    // Invalidate pre-rendered content for a channel (call when new messages arrive)
+    invalidatePrerender(storageKey) {
+        // Simply remove the cached version so it will be re-rendered on next access
+        this.prerenderedChannelVersions.delete(storageKey);
+
+        // Queue this channel for re-prerendering if it has messages
+        if (this.messages.has(storageKey) && this.messages.get(storageKey).length > 0) {
+            if (!this.prerenderQueue.includes(storageKey)) {
+                this.prerenderQueue.push(storageKey);
+                this.startBackgroundPrerendering();
+            }
+        }
+    }
+
+    // Queue all channels with messages for pre-rendering
+    queueChannelsForPrerender() {
+        this.prerenderQueue = [];
+
+        // Add all channels that have messages
+        for (const [storageKey, messages] of this.messages) {
+            if (messages.length > 0) {
+                // Don't include the current channel/community (it's already rendered)
+                const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                if (storageKey !== currentKey && storageKey !== this.currentCommunity) {
+                    this.prerenderQueue.push(storageKey);
+                }
+            }
+        }
+
+        // Sort by unread count (prioritize channels with unread messages)
+        this.prerenderQueue.sort((a, b) => {
+            const unreadA = this.unreadCounts.get(a) || 0;
+            const unreadB = this.unreadCounts.get(b) || 0;
+            return unreadB - unreadA;
+        });
+    }
+
+    // Start background pre-rendering using requestIdleCallback
+    startBackgroundPrerendering() {
+        if (this.isPrerenderingActive || this.prerenderQueue.length === 0) {
+            return;
+        }
+
+        this.isPrerenderingActive = true;
+        this.processNextPrerenderItem();
+    }
+
+    // Process one channel from the prerender queue
+    processNextPrerenderItem() {
+        if (this.prerenderQueue.length === 0) {
+            this.isPrerenderingActive = false;
+            return;
+        }
+
+        const storageKey = this.prerenderQueue.shift();
+
+        // Skip if this is the current channel or community
+        const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+        if (storageKey === currentKey || storageKey === this.currentCommunity) {
+            this.processNextPrerenderItem();
+            return;
+        }
+
+        // Use requestIdleCallback if available, otherwise setTimeout
+        const scheduleNext = (callback) => {
+            if (typeof requestIdleCallback === 'function') {
+                requestIdleCallback(callback, { timeout: 1000 });
+            } else {
+                setTimeout(callback, 50);
+            }
+        };
+
+        scheduleNext(() => {
+            try {
+                // Community channels use prerenderCommunity, all others use prerenderChannel
+                if (this.communityChannels.has(storageKey)) {
+                    this.prerenderCommunity(storageKey);
+                } else {
+                    this.prerenderChannel(storageKey);
+                }
+            } catch (err) {
+                // Silently handle pre-render errors
+            }
+
+            // Continue with next item
+            scheduleNext(() => this.processNextPrerenderItem());
+        });
+    }
+
+    // Get pre-rendered content for a channel (returns container or null)
+    getPrerenderedContent(storageKey) {
+        const channelMessages = this.messages.get(storageKey) || [];
+        const currentVersion = channelMessages.length;
+        const cachedVersion = this.prerenderedChannelVersions.get(storageKey);
+
+        // Check if cache is valid
+        if (cachedVersion === currentVersion && this.prerenderedChannels.has(storageKey)) {
+            return this.prerenderedChannels.get(storageKey);
+        }
+
+        return null;
+    }
+
     addChannel(channel, geohash = '') {
         const list = document.getElementById('channelList');
         const key = geohash || channel;
 
         // Don't add blocked channels
         if (this.isChannelBlocked(channel, geohash)) {
-            console.log(`Channel ${key} is blocked, not adding to list`);
             return;
         }
 
@@ -15874,7 +16164,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             try {
                 return JSON.parse(saved);
             } catch (error) {
-                console.error('Failed to load user-joined channels:', error);
                 return [];
             }
         }
@@ -15917,7 +16206,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 const joinedChannels = JSON.parse(savedJoined);
                 joinedChannels.forEach(key => this.userJoinedChannels.add(key));
             } catch (error) {
-                console.error('Failed to load joined channels set:', error);
             }
         }
 
@@ -15957,7 +16245,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     this.displaySystemMessage(`Restored ${regularChannelCount} previously joined channels`);
                 }
             } catch (error) {
-                console.error('Failed to load user channels:', error);
             }
         }
     }
@@ -16107,7 +16394,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                         // Return distance comparison (don't fall through to unread count)
                         return distA - distB;
                     } catch (e) {
-                        console.error('Error calculating distance:', e);
                         // Fall through to unread count if error
                     }
                 }
@@ -16333,7 +16619,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
             this.displayGifs(data.data);
         } catch (error) {
-            console.error('Error loading trending GIFs:', error);
             resultsDiv.innerHTML = '<div class="gif-error">Failed to load GIFs</div>';
         }
     }
@@ -16354,7 +16639,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 this.displayGifs(data.data);
             }
         } catch (error) {
-            console.error('Error searching GIFs:', error);
             resultsDiv.innerHTML = '<div class="gif-error">Failed to search GIFs</div>';
         }
     }
@@ -16477,7 +16761,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     };
                 }
             } catch (error) {
-                console.error('Failed to create browser notification:', error);
             }
         }
 
@@ -16889,7 +17172,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                                 resolve();
                             }
                         } catch (e) {
-                            console.error('Failed to parse blocked user metadata:', e);
                         }
                     }
                 } else if (type === 'EOSE' && data[0] === subId) {
@@ -17136,7 +17418,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         // Only admin can update community definition
         if (community.admin !== this.pubkey) {
-            console.log('Only admin can update community definition');
             return;
         }
 
@@ -17183,7 +17464,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         if (signedEvent) {
             this.sendToRelay(["EVENT", signedEvent]);
-            console.log('Updated community definition with ban list');
         }
     }
 
@@ -17209,7 +17489,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         if (signedEvent) {
             this.sendToRelay(["EVENT", signedEvent]);
-            console.log(`Published ${action} event for user ${targetPubkey} in community ${communityId}`);
         }
     }
 
@@ -17631,7 +17910,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     this.handleNostrEvent(event);
                 },
                 oneose: () => {
-                    console.log(`Re-subscribed to messages from unbanned user ${fullNym}`);
                 }
             });
         }
@@ -17824,7 +18102,6 @@ class NostrConnectClient {
                 secret: this.secret
             };
         } catch (error) {
-            console.error('Failed to parse bunker URI:', error);
             throw error;
         }
     }
@@ -17868,19 +18145,15 @@ class NostrConnectClient {
                 await this.connectToRelay();
 
                 const connectResponse = await this.sendRequest('connect', [pk, this.secret || '']);
-                console.log('Nostr Connect: Received connect response', connectResponse);
 
                 if (connectResponse === 'ack') {
                     this.connected = true;
-                    console.log('Nostr Connect: Connected successfully');
                     resolve(this.remotePubkey);
                 } else {
-                    console.log('Nostr Connect: Unexpected response, expected "ack" but got', connectResponse);
                     throw new Error('Connection rejected by remote signer');
                 }
 
             } catch (error) {
-                console.error('Nostr Connect: Connection failed', error);
                 reject(error);
             }
         });
@@ -17892,7 +18165,6 @@ class NostrConnectClient {
                 this.relay = new WebSocket(this.relayUrl);
 
                 this.relay.onopen = () => {
-                    console.log('Nostr Connect: Relay connected');
 
                     const subId = 'nip46-' + Math.random().toString(36).substring(7);
                     const filter = {
@@ -17906,7 +18178,6 @@ class NostrConnectClient {
                 };
 
                 this.relay.onerror = (error) => {
-                    console.error('Nostr Connect: Relay error', error);
                     reject(error);
                 };
 
@@ -17928,7 +18199,6 @@ class NostrConnectClient {
                 const event = data[2];
 
                 if (event.kind === 24133) {
-                    console.log('Nostr Connect: Received event', event);
 
                     // Use NIP-44 decryption
                     const conversationKey = window.NostrTools.nip44.getConversationKey(
@@ -17940,19 +18210,16 @@ class NostrConnectClient {
                         conversationKey
                     );
 
-                    console.log('Nostr Connect: Decrypted response', decrypted);
 
                     const response = JSON.parse(decrypted);
 
                     const requestId = response.id;
-                    console.log('Nostr Connect: Processing response', { requestId, result: response.result, hasPending: this.pendingRequests.has(requestId) });
 
                     if (this.pendingRequests.has(requestId)) {
                         const { resolve, reject } = this.pendingRequests.get(requestId);
 
                         // Handle auth_url response
                         if (response.result === 'auth_url' && response.error) {
-                            console.log('Nostr Connect: Auth required, opening popup', response.error);
                             // Open the auth URL in a popup
                             const width = 500;
                             const height = 700;
@@ -17967,24 +18234,18 @@ class NostrConnectClient {
                         }
 
                         if (response.error) {
-                            console.log('Nostr Connect: Rejecting with error', response.error);
                             reject(new Error(response.error));
                         } else {
-                            console.log('Nostr Connect: Resolving with result', response.result);
                             resolve(response.result);
                         }
 
                         this.pendingRequests.delete(requestId);
                     } else {
-                        console.log('Nostr Connect: No pending request found for', requestId);
                     }
                 }
             } else if (data[0] === 'OK') {
-                console.log('Nostr Connect: Event published OK', data);
             }
         } catch (error) {
-            console.error('Nostr Connect: Error handling message', error);
-            console.error('Message data:', msg.data);
         }
     }
 
@@ -17999,7 +18260,6 @@ class NostrConnectClient {
                     params: params
                 };
 
-                console.log('Nostr Connect: Sending request', request);
 
                 // Use NIP-44 encryption
                 const conversationKey = window.NostrTools.nip44.getConversationKey(
@@ -18022,7 +18282,6 @@ class NostrConnectClient {
                 const signedEvent = window.NostrTools.finalizeEvent(event, this.localKeypair.privkey);
 
                 this.relay.send(JSON.stringify(['EVENT', signedEvent]));
-                console.log('Nostr Connect: Request sent', method);
 
                 this.pendingRequests.set(requestId, { resolve, reject });
 
@@ -18034,7 +18293,6 @@ class NostrConnectClient {
                 }, 30000);
 
             } catch (error) {
-                console.error('Nostr Connect: Error sending request', error);
                 reject(error);
             }
         });
@@ -18420,7 +18678,6 @@ async function saveSettings() {
             nym.settings.pinnedLandingChannel = pinnedLandingChannel;
             localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(pinnedLandingChannel));
         } catch (e) {
-            console.error('Failed to save pinned landing channel:', e);
             // Fallback to default
             const defaultChannel = { type: 'ephemeral', channel: 'bar' };
             nym.pinnedLandingChannel = defaultChannel;
@@ -18500,7 +18757,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.25.67 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.25.68 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18650,7 +18907,6 @@ async function checkSavedConnection() {
 
             return; // Exit early
         } catch (error) {
-            console.error('Failed to auto-start ephemeral session:', error);
             // Clear the preference and show setup modal
             localStorage.removeItem('nym_auto_ephemeral');
             document.getElementById('setupModal').classList.add('active');
@@ -18705,7 +18961,6 @@ async function checkSavedConnection() {
 
             return;
         } catch (error) {
-            console.error('Failed to restore connection:', error);
             localStorage.removeItem('nym_nsec');
             localStorage.removeItem('nym_connection_mode');
             localStorage.removeItem('nym_relay_url');
@@ -18748,7 +19003,6 @@ async function checkSavedConnection() {
             window.maybeStartTutorial(false);
             return;
         } catch (error) {
-            console.error('Failed to restore bunker connection:', error);
             localStorage.removeItem('nym_bunker_uri');
         }
     }
@@ -18788,7 +19042,6 @@ async function checkSavedConnection() {
             window.maybeStartTutorial(false);
 
         } catch (error) {
-            console.error('Failed to restore connection:', error);
             localStorage.removeItem('nym_connection_mode');
             localStorage.removeItem('nym_relay_url');
             document.getElementById('setupModal').classList.add('active');
@@ -18919,7 +19172,6 @@ async function initializeNym() {
             if (nym.pubkey) {
                 // Load cached shop items IMMEDIATELY - before any relay connection
                 nym.loadCachedShopItems();
-                console.log('Loaded cached shop items before connecting to relays');
             }
         }
 
@@ -18974,8 +19226,14 @@ async function initializeNym() {
         // Start tutorial if not seen yet
         window.maybeStartTutorial(false);
 
+        // Start background pre-rendering of channels after a delay
+        // This allows initial messages to load first
+        setTimeout(() => {
+            nym.queueChannelsForPrerender();
+            nym.startBackgroundPrerendering();
+        }, 5000);
+
     } catch (error) {
-        console.error('Initialization failed:', error);
         // Restore button state on error
         enterBtn.disabled = false;
         enterBtn.innerHTML = originalBtnText;
@@ -19016,10 +19274,8 @@ async function showBunkerPairing() {
         waitingStatus.style.display = 'block';
         await tempClient.connectToRelay();
 
-        console.log('Bunker pairing ready. Waiting for user to scan and approve...');
 
     } catch (error) {
-        console.error('Failed to generate bunker pairing:', error);
         alert('Failed to generate pairing QR code: ' + error.message);
     }
 }
@@ -19177,7 +19433,6 @@ async function finalizeAccountCreation() {
         window.maybeStartTutorial(false);
 
     } catch (error) {
-        console.error('Account creation failed:', error);
         alert('Failed to create account: ' + error.message);
     }
 }
@@ -19240,15 +19495,12 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const relayUrl of nym.broadcastRelays) {
             try {
                 await nym.connectToRelay(relayUrl, 'broadcast');
-                console.log(`Pre-connected to ${relayUrl}`);
                 nym.updateConnectionStatus('Ready');
                 return; // Stop after first successful connection
             } catch (err) {
-                console.log(`Failed to pre-connect to ${relayUrl}, trying next...`);
             }
         }
         // If all failed, just log it - the main connection flow will try again
-        console.log('Pre-connection failed, will retry during initialization');
     }
 
     preConnect();
@@ -19344,19 +19596,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check if proximity sorting was enabled
     setTimeout(() => {
         if (nym.settings.sortByProximity === true) {
-            console.log('Proximity sorting is enabled, requesting location...');
             navigator.geolocation.getCurrentPosition(
                 (position) => {
                     nym.userLocation = {
                         lat: position.coords.latitude,
                         lng: position.coords.longitude
                     };
-                    console.log('Got user location:', nym.userLocation);
                     // Re-sort channels with location
                     nym.sortChannelsByActivity();
                 },
                 (error) => {
-                    console.error('Location error:', error);
                     nym.settings.sortByProximity = false;
                     localStorage.setItem('nym_sort_proximity', 'false');
                 }
@@ -19474,7 +19723,6 @@ document.addEventListener('DOMContentLoaded', () => {
             // Prune inactive channels to 500 messages max
             if (messages.length > 500) {
                 nym.messages.set(channel, messages.slice(-500));
-                console.log(`Background pruned ${channel} to 500 messages`);
             }
         });
 
@@ -19487,7 +19735,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 nym.eventDeduplication.delete(key);
                 deleted++;
             }
-            console.log(`Pruned event deduplication cache: kept ${nym.eventDeduplication.size} entries`);
         }
     }, 60000);
 
@@ -19541,7 +19788,6 @@ function parseUrlChannel() {
 
         // Store for use after initialization
         window.pendingChannel = channelFromUrl;
-        console.log('Channel from URL:', channelFromUrl);
     }
 }
 
