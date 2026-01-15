@@ -11891,34 +11891,20 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         }
                     });
 
-                    // Check if this is a geohash channel
+                    // Check if this is a geohash channel - show modal to let user choose GEO or EPH
                     if (this.geohashRegex && this.geohashRegex.test(sanitized)) {
                         const isActive = this.currentGeohash === sanitized;
                         const classes = ['channel-reference', 'geohash-reference'];
                         if (isActive) classes.push('active-channel');
 
                         const location = this.getGeohashLocation(sanitized);
-                        let title = `Geohash Channel: ${sanitized}`;
+                        let title = `Click to choose channel type: GEO or EPH`;
                         if (location) {
-                            title += ` - ${location}`;
+                            title += ` (${location})`;
                         }
 
-                        return `${offset || ''}<span class="${classes.join(' ')}" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('g:${sanitized}', event); return false;">${channel}</span>`;
-                    }
-
-                    // Check if it's a standard channel
-                    if (this.channels.has(sanitized)) {
-                        // Standard channel reference
-                        const isActive = this.channels.has(sanitized);
-                        const classes = ['channel-reference'];
-                        if (isActive) classes.push('active-channel');
-
-                        // Check if this channel is also joined by user
-                        if (this.userJoinedChannels && this.userJoinedChannels.has(sanitized)) {
-                            classes.push('joined-channel');
-                        }
-
-                        return `${offset || ''}<span class="${classes.join(' ')}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('e:${sanitized}', event); return false;">${channel}</span>`;
+                        // Show options modal instead of directly navigating - user can choose GEO or EPH
+                        return `${offset || ''}<span class="${classes.join(' ')}" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.showChannelOptions('${sanitized}'); return false;">${channel}</span>`;
                     }
 
                     // If we have community matches, use the first one
@@ -11934,8 +11920,20 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         return `${offset || ''}<span class="${classes.join(' ')}" title="Community: ${community.name}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('c:${id}', event); return false;">#${community.name}</span>`;
                     }
 
-                    // No matching channel found - return as regular text
-                    return match;
+                    // Standard/EPH channel - always link any valid hashtag
+                    const classes = ['channel-reference'];
+
+                    // Check if this is the current channel
+                    if (this.currentChannel === sanitized) {
+                        classes.push('active-channel');
+                    }
+
+                    // Check if this channel is joined by user
+                    if (this.userJoinedChannels && this.userJoinedChannels.has(sanitized)) {
+                        classes.push('joined-channel');
+                    }
+
+                    return `${offset || ''}<span class="${classes.join(' ')}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('e:${sanitized}', event); return false;">${channel}</span>`;
                 }
             }
         );
@@ -15142,6 +15140,13 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             !previousCommunity;
 
         if (isSameChannel) {
+            // Still ensure the sidebar active state is correct (for initialization)
+            document.querySelectorAll('.channel-item').forEach(item => {
+                const isActive = item.dataset.channel === channel &&
+                    item.dataset.geohash === geohash &&
+                    !item.dataset.community;
+                item.classList.toggle('active', isActive);
+            });
             return; // Don't reload the same channel
         }
 
@@ -15200,6 +15205,11 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         }
 
         document.getElementById('currentChannel').innerHTML = fullTitle;
+
+        // Ensure channel exists in sidebar before updating active state
+        if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]:not([data-community])`)) {
+            this.addChannel(channel, geohash);
+        }
 
         // Update active state
         document.querySelectorAll('.channel-item').forEach(item => {
@@ -15914,6 +15924,15 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             item.className = 'channel-item list-item';
             item.dataset.channel = channel;
             item.dataset.geohash = geohash;
+
+            // Check if this is the current active channel
+            const isCurrentChannel = !this.inPMMode &&
+                !this.currentCommunity &&
+                this.currentChannel === channel &&
+                (this.currentGeohash || '') === geohash;
+            if (isCurrentChannel) {
+                item.classList.add('active');
+            }
 
             const displayName = geohash ? `#${geohash}` : `#${channel}`;
             const badge = geohash ? '<span class="geohash-badge">GEO</span>' : '<span class="std-badge">EPH</span>';
@@ -18757,7 +18776,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.25.68 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.25.69 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

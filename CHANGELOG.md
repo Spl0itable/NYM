@@ -1,3 +1,8 @@
+## v2.25.69 - 2026-01-15
+
+Hotfix: broken multiple channel hashtag modal
+Hotfix: show correct active channel for pinned channel
+
 ## v2.25.68 - 2026-01-15
 
 Hotfix: removed unnecessary console logging
