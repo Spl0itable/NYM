@@ -1,3 +1,7 @@
+## v2.26.69 - 2026-01-16
+
+New: P2P file sharing
+
 ## v2.25.69 - 2026-01-15
 
 Hotfix: broken multiple channel hashtag modal
