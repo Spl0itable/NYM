@@ -1,3 +1,7 @@
+## v2.26.70 - 2026-01-16
+
+Hotfix: performance improvement
+
 ## v2.26.69 - 2026-01-16
 
 New: P2P file sharing

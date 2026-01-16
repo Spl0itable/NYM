@@ -1018,10 +1018,16 @@ class NYM {
         this.currentGeohash = '';
         this.currentPM = null;
         this.messages = new Map();
-        this.prerenderedChannels = new Map();
-        this.prerenderedChannelVersions = new Map();
-        this.prerenderQueue = [];
-        this.isPrerenderingActive = false;
+        this.virtualScroll = {
+            bufferSize: 30,
+            windowSize: 100,
+            messageHeightEstimate: 42,
+            currentStartIndex: 0,
+            currentEndIndex: 0,
+            isScrolling: false,
+            isLoading: false,
+            scrollTimeout: null
+        };
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
         this.processedMessageEventIds = new Set();
@@ -6599,7 +6605,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
-    // Parse amount from bolt11 invoice (simplified)
+    // Parse amount from bolt11 invoice
     parseAmountFromBolt11(bolt11) {
         const match = bolt11.match(/lnbc(\d+)([munp])/i);
         if (match) {
@@ -8072,8 +8078,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (!message.isOwn && !isHistorical) {
                         this.updateUnreadCount(communityId);
                     }
-                    // Invalidate pre-render cache for this community since it has new messages
-                    this.invalidatePrerender(communityId);
                 }
             }
         } else if (event.kind === 30078) {
@@ -10457,71 +10461,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     loadPMMessages(conversationKey) {
         const container = document.getElementById('messagesContainer');
-        container.innerHTML = '';
 
-        let pmMessages = this.pmMessages.get(conversationKey) || [];
-
-        // Limit PM messages to prevent memory issues
-        const maxPMMessages = 500;
-        const originalCount = pmMessages.length;
-
-        // If we have too many messages, prune the stored array
-        if (pmMessages.length > maxPMMessages) {
-            // Keep only the most recent messages
-            pmMessages = pmMessages.slice(-maxPMMessages);
-            // Update the stored messages
-            this.pmMessages.set(conversationKey, pmMessages);
-        }
-
-        // Filter messages that are part of this specific conversation
-        const filteredMessages = pmMessages.filter(msg => {
-            // Check if message is from blocked user
-            if (this.blockedUsers.has(msg.author) || msg.blocked) {
-                return false;
-            }
-
-            // Check if message content is spam
-            if (this.isSpamMessage(msg.content)) {
-                return false;
-            }
-
-            // Ensure the message is between the current user and the PM recipient only
-            return msg.conversationKey === conversationKey &&
-                (msg.pubkey === this.pubkey || msg.pubkey === this.currentPM);
-        });
-
-        // Sort messages by timestamp
-        filteredMessages.sort((a, b) => a.timestamp - b.timestamp);
-
-        // If we pruned messages, show a notice
-        if (originalCount > maxPMMessages) {
-            const loadMoreDiv = document.createElement('div');
-            loadMoreDiv.className = 'system-message';
-            loadMoreDiv.style.cssText = 'cursor: pointer; color: var(--text-dim); font-size: 12px;';
-            loadMoreDiv.textContent = `Showing most recent ${maxPMMessages} messages (${originalCount - maxPMMessages} older messages hidden for performance)`;
-            container.appendChild(loadMoreDiv);
-        }
-
-        // Display only these filtered messages
-        filteredMessages.forEach(msg => {
-            // Double-check this is a PM before displaying
-            if (msg.isPM && msg.conversationKey === conversationKey) {
-                // Use displayMessage to properly handle reactions
-                this.displayMessage(msg);
-            }
-        });
+        // Get filtered messages
+        const filteredMessages = this.getFilteredPMMessages(conversationKey);
 
         if (filteredMessages.length === 0) {
+            container.innerHTML = '';
             this.displaySystemMessage('Start of private message');
+            return;
         }
 
-        // Scroll to bottom
-        if (this.settings.autoscroll) {
-            // Use setTimeout to ensure DOM has updated
-            setTimeout(() => {
-                container.scrollTop = container.scrollHeight;
-            }, 0);
-        }
+        // Use virtual scrolling for efficient rendering (isPM = true)
+        this.renderMessagesWithVirtualScroll(container, conversationKey, true, true);
     }
 
     openUserPM(nym, pubkey) {
@@ -12040,10 +11991,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Message is for different channel, update unread count but don't display
                 if (!message.isOwn && !exists && !message.isHistorical) {
                     this.updateUnreadCount(storageKey);
-                }
-                // Invalidate pre-render cache for this channel since it has new messages
-                if (!exists) {
-                    this.invalidatePrerender(storageKey);
                 }
                 return;
             }
@@ -16063,72 +16010,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         // Community messages would be stored under the community ID
         const communityMessages = this.messages.get(communityId) || [];
 
-        // Try to use pre-rendered content for instant display
-        const prerenderedContent = this.getPrerenderedContent(communityId);
-        if (prerenderedContent && communityMessages.length > 0) {
-            // Clone all children from the pre-rendered container
-            const fragment = document.createDocumentFragment();
-            Array.from(prerenderedContent.children).forEach(child => {
-                fragment.appendChild(child.cloneNode(true));
-            });
-
-            container.appendChild(fragment);
-
-            // Scroll to bottom after rendering
-            if (this.settings.autoscroll) {
-                setTimeout(() => {
-                    container.scrollTop = container.scrollHeight;
-                }, 0);
-            }
+        if (communityMessages.length === 0) {
+            this.displaySystemMessage(`Welcome to #${community.name}`);
+            this.displaySystemMessage(`This is a ${community.isPrivate ? 'private' : 'public'} community`);
             return;
         }
 
-        // Fall back to standard rendering if no pre-rendered content
-        // Get the ban list for this community BEFORE displaying messages
-        const bannedUsers = this.communityBans.get(communityId) || new Set();
-
-        // Filter out messages from banned users AND globally blocked users
-        const filteredMessages = communityMessages.filter(msg => {
-            // Check if author is banned from THIS community
-            if (bannedUsers.has(msg.pubkey)) {
-                return false;
-            }
-            // Check if author is globally blocked (by pubkey or nym)
-            if (this.blockedUsers.has(msg.pubkey) || this.isNymBlocked(msg.author) || msg.blocked) {
-                return false;
-            }
-            // Check if message contains blocked keywords for this community
-            if (this.hasCommunityBlockedKeyword(msg.content, communityId)) {
-                return false;
-            }
-            // Check if message contains globally blocked keywords
-            if (this.hasBlockedKeyword(msg.content)) {
-                return false;
-            }
-            return true;
-        });
-
-        filteredMessages.forEach(msg => {
-            this.displayMessage(msg);
-        });
-
-        if (filteredMessages.length === 0) {
-            this.displaySystemMessage(`Welcome to #${community.name}`);
-            this.displaySystemMessage(`This is a ${community.isPrivate ? 'private' : 'public'} community`);
-        }
-
-        if (this.settings.autoscroll) {
-            setTimeout(() => {
-                container.scrollTop = container.scrollHeight;
-            }, 0);
-        }
-
-        // Queue this community for pre-rendering in case we switch away and back
-        if (communityMessages.length > 0 && !this.prerenderedChannels.has(communityId)) {
-            setTimeout(() => {
-                this.prerenderCommunity(communityId);
-            }, 1000);
-        }
+        // Use virtual scrolling for efficient rendering
+        this.renderMessagesWithVirtualScroll(container, communityId, true);
     }
 
     loadChannelMessages(displayName) {
@@ -16147,109 +16036,26 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         // Clear community marker since we're in a regular channel
         delete container.dataset.lastCommunity;
 
-        let channelMessages = this.messages.get(storageKey) || [];
-
-        // Try to use pre-rendered content for instant display
-        const prerenderedContent = this.getPrerenderedContent(storageKey);
-        if (prerenderedContent && channelMessages.length > 0) {
-            // Clone all children from the pre-rendered container
-            const fragment = document.createDocumentFragment();
-            Array.from(prerenderedContent.children).forEach(child => {
-                const clone = child.cloneNode(true);
-
-                // Re-attach onclick handler for "Load More" button
-                if (clone.dataset.loadMore === 'true') {
-                    const originalCount = channelMessages.length;
-                    clone.onclick = () => {
-                        if (originalCount > 500) {
-                            if (confirm(`Loading ${originalCount} messages may slow down your browser. Continue?`)) {
-                                this.displayAllChannelMessages(storageKey);
-                            }
-                        } else {
-                            this.displayAllChannelMessages(storageKey);
-                        }
-                    };
-                }
-
-                fragment.appendChild(clone);
-            });
-
-            container.appendChild(fragment);
-
-            // Scroll to bottom after rendering
-            if (this.settings.autoscroll) {
-                setTimeout(() => {
-                    container.scrollTop = container.scrollHeight;
-                }, 0);
-            }
-            return;
-        }
-
-        // Fall back to standard rendering if no pre-rendered content
-        // Limit display to prevent freezing
-        const maxDisplayMessages = 500;
-        const originalCount = channelMessages.length;
-
-        // Sort messages by timestamp
-        channelMessages.sort((a, b) => a.timestamp - b.timestamp);
-
-        // Get only the most recent messages for display
-        const messagesToDisplay = channelMessages.slice(-maxDisplayMessages);
-
-        // If we have more messages than we're displaying, show a notice
-        if (originalCount > maxDisplayMessages) {
-            const loadMoreDiv = document.createElement('div');
-            loadMoreDiv.className = 'system-message';
-            loadMoreDiv.style.cssText = 'cursor: pointer; color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
-            loadMoreDiv.textContent = `Showing most recent ${maxDisplayMessages} messages (${originalCount - maxDisplayMessages} older messages available)`;
-            loadMoreDiv.onclick = () => {
-                // Load all messages (with a warning)
-                if (originalCount > 500) {
-                    if (confirm(`Loading ${originalCount} messages may slow down your browser. Continue?`)) {
-                        this.displayAllChannelMessages(storageKey);
-                    }
-                } else {
-                    this.displayAllChannelMessages(storageKey);
-                }
-            };
-            container.appendChild(loadMoreDiv);
-        }
-
-        // Display messages, filtering out blocked users
-        messagesToDisplay.forEach(msg => {
-            if (!this.blockedUsers.has(msg.author) && !msg.blocked) {
-                this.displayMessage(msg);
-            }
-        });
+        const channelMessages = this.messages.get(storageKey) || [];
 
         if (channelMessages.length === 0) {
             this.displaySystemMessage(`Joined ${displayName}`);
+            return;
         }
 
-        // Scroll to bottom after rendering
-        if (this.settings.autoscroll) {
-            setTimeout(() => {
-                container.scrollTop = container.scrollHeight;
-            }, 0);
-        }
-
-        // Queue this channel for pre-rendering in case we switch away and back
-        if (channelMessages.length > 0 && !this.prerenderedChannels.has(storageKey)) {
-            // Schedule pre-rendering after a short delay
-            setTimeout(() => {
-                this.prerenderChannel(storageKey);
-            }, 1000);
-        }
+        // Use virtual scrolling for efficient rendering
+        this.renderMessagesWithVirtualScroll(container, storageKey, true);
     }
 
     displayAllChannelMessages(storageKey) {
         const container = document.getElementById('messagesContainer');
         container.innerHTML = '';
 
-        const channelMessages = this.messages.get(storageKey) || [];
+        // Get filtered messages using the shared filter function
+        const filteredMessages = this.getFilteredMessages(storageKey);
 
         // Show loading indicator for large sets
-        if (channelMessages.length > 1000) {
+        if (filteredMessages.length > 1000) {
             this.displaySystemMessage('Loading all messages...');
         }
 
@@ -16258,17 +16064,15 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         const batchSize = 50;
 
         const renderBatch = () => {
-            const batch = channelMessages.slice(index, index + batchSize);
+            const batch = filteredMessages.slice(index, index + batchSize);
 
             batch.forEach(msg => {
-                if (!this.blockedUsers.has(msg.author) && !msg.blocked) {
-                    this.displayMessage(msg);
-                }
+                this.displayMessage(msg);
             });
 
             index += batchSize;
 
-            if (index < channelMessages.length) {
+            if (index < filteredMessages.length) {
                 requestAnimationFrame(renderBatch);
             } else {
                 // Finished loading all
@@ -16281,373 +16085,354 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         requestAnimationFrame(renderBatch);
     }
 
-    // Pre-render a channel's messages into an off-screen container
-    prerenderChannel(storageKey) {
-        const channelMessages = this.messages.get(storageKey) || [];
-
-        // Don't pre-render empty channels or channels with very few messages
-        if (channelMessages.length < 1) {
-            return null;
+    // Initialize virtual scroll for a container
+    initVirtualScroll(container, storageKey) {
+        // Remove any existing scroll listener
+        if (container._virtualScrollHandler) {
+            container.removeEventListener('scroll', container._virtualScrollHandler);
         }
 
-        // Check if we already have a valid pre-render for this channel
-        const currentVersion = channelMessages.length;
-        const cachedVersion = this.prerenderedChannelVersions.get(storageKey);
+        // Create scroll handler with debouncing
+        container._virtualScrollHandler = () => {
+            if (this.virtualScroll.scrollTimeout) {
+                clearTimeout(this.virtualScroll.scrollTimeout);
+            }
 
-        if (cachedVersion === currentVersion && this.prerenderedChannels.has(storageKey)) {
-            return this.prerenderedChannels.get(storageKey);
+            this.virtualScroll.scrollTimeout = setTimeout(() => {
+                this.handleVirtualScroll(container, storageKey);
+            }, 16); // ~60fps
+        };
+
+        container.addEventListener('scroll', container._virtualScrollHandler, { passive: true });
+    }
+
+    // Handle scroll events for virtual scrolling
+    handleVirtualScroll(container, storageKey) {
+        // Prevent re-entrant calls while loading
+        if (this.virtualScroll.isLoading) {
+            return;
         }
 
-        // Create an off-screen container
-        const container = document.createElement('div');
-        container.className = 'prerendered-channel-container';
-        container.dataset.storageKey = storageKey;
-        // Properly detect geohash by validating the hash portion (after #)
-        const possibleGeohash = storageKey.startsWith('#') ? storageKey.substring(1) : '';
-        container.dataset.isGeohash = possibleGeohash && this.isValidGeohash(possibleGeohash) ? 'true' : 'false';
-        container.style.display = 'none';
+        // Get context from container
+        const isPM = container.dataset.virtualScrollIsPM === 'true';
+        const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
 
-        // Sort messages by timestamp
-        const sortedMessages = [...channelMessages].sort((a, b) => a.timestamp - b.timestamp);
+        if (messages.length <= this.virtualScroll.windowSize) {
+            return; // No need for virtual scrolling with few messages
+        }
 
-        // Limit to last 500 messages
-        const maxDisplayMessages = 500;
-        const messagesToDisplay = sortedMessages.slice(-maxDisplayMessages);
+        const scrollTop = container.scrollTop;
+        const containerHeight = container.clientHeight;
+        const scrollHeight = container.scrollHeight;
 
-        // If we have more messages than we're displaying, add a "load more" notice
-        if (channelMessages.length > maxDisplayMessages) {
+        // Check if scrolled near top (load older messages)
+        if (scrollTop < 200 && this.virtualScroll.currentStartIndex > 0) {
+            this.virtualScroll.isLoading = true;
+            try {
+                this.loadOlderMessages(container, storageKey, isPM);
+            } finally {
+                // Use setTimeout to allow scroll position to settle before allowing more loads
+                setTimeout(() => {
+                    this.virtualScroll.isLoading = false;
+                }, 100);
+            }
+            return;
+        }
+
+        // Check if scrolled near bottom (load newer messages)
+        const distanceFromBottom = scrollHeight - scrollTop - containerHeight;
+        if (distanceFromBottom < 200 && this.virtualScroll.currentEndIndex < messages.length - 1) {
+            this.virtualScroll.isLoading = true;
+            try {
+                this.loadNewerMessages(container, storageKey, isPM);
+            } finally {
+                setTimeout(() => {
+                    this.virtualScroll.isLoading = false;
+                }, 100);
+            }
+        }
+    }
+
+    // Load older messages when scrolling up
+    loadOlderMessages(container, storageKey, isPM = false) {
+        const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
+        if (messages.length === 0 || this.virtualScroll.currentStartIndex <= 0) return;
+
+        const loadCount = Math.min(this.virtualScroll.bufferSize, this.virtualScroll.currentStartIndex);
+        const newStartIndex = this.virtualScroll.currentStartIndex - loadCount;
+
+        // Remember scroll position
+        const scrollHeightBefore = container.scrollHeight;
+        const scrollTopBefore = container.scrollTop;
+
+        // Get messages to prepend
+        const messagesToAdd = messages.slice(newStartIndex, this.virtualScroll.currentStartIndex);
+
+        // Create fragment and prepend
+        const fragment = document.createDocumentFragment();
+        const hint = container.querySelector('.virtual-scroll-hint');
+
+        messagesToAdd.forEach(msg => {
+            this.displayMessageToFragment(msg, fragment);
+        });
+
+        // Insert after the hint (or after spacer if no hint, or at beginning)
+        if (hint && hint.nextSibling) {
+            container.insertBefore(fragment, hint.nextSibling);
+        } else if (hint) {
+            // Hint is the last element before messages, insert after it
+            container.insertBefore(fragment, hint.nextSibling);
+        } else {
+            const topSpacer = container.querySelector('.virtual-scroll-spacer-top');
+            if (topSpacer && topSpacer.nextSibling) {
+                container.insertBefore(fragment, topSpacer.nextSibling);
+            } else {
+                container.insertBefore(fragment, container.firstChild);
+            }
+        }
+
+        // Update start index
+        this.virtualScroll.currentStartIndex = newStartIndex;
+
+        // Update or remove the hint
+        if (hint) {
+            if (newStartIndex <= 0) {
+                // All messages loaded, remove the hint
+                hint.remove();
+            } else {
+                // Update hint text
+                hint.textContent = `↑ Scroll up for ${newStartIndex} older messages`;
+            }
+        }
+
+        // Maintain scroll position - add the height difference to keep view stable
+        const scrollHeightAfter = container.scrollHeight;
+        container.scrollTop = scrollTopBefore + (scrollHeightAfter - scrollHeightBefore);
+
+        // Remove excess messages from bottom if needed
+        this.trimMessagesFromBottom(container, storageKey);
+
+        // Update spacers
+        this.updateVirtualScrollSpacers(container, storageKey, isPM);
+    }
+
+    // Load newer messages when scrolling down
+    loadNewerMessages(container, storageKey, isPM = false) {
+        const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
+        if (messages.length === 0 || this.virtualScroll.currentEndIndex >= messages.length - 1) return;
+
+        const loadCount = Math.min(
+            this.virtualScroll.bufferSize,
+            messages.length - 1 - this.virtualScroll.currentEndIndex
+        );
+        const newEndIndex = this.virtualScroll.currentEndIndex + loadCount;
+
+        // Get messages to append
+        const messagesToAdd = messages.slice(this.virtualScroll.currentEndIndex + 1, newEndIndex + 1);
+
+        // Create fragment and append
+        const fragment = document.createDocumentFragment();
+        const bottomSpacer = container.querySelector('.virtual-scroll-spacer-bottom');
+
+        messagesToAdd.forEach(msg => {
+            this.displayMessageToFragment(msg, fragment);
+        });
+
+        // Insert before bottom spacer (or at end if no spacer)
+        if (bottomSpacer) {
+            container.insertBefore(fragment, bottomSpacer);
+        } else {
+            container.appendChild(fragment);
+        }
+
+        // Update end index
+        this.virtualScroll.currentEndIndex = newEndIndex;
+
+        // Remove excess messages from top if needed
+        this.trimMessagesFromTop(container, storageKey);
+
+        // Update spacers
+        this.updateVirtualScrollSpacers(container, storageKey, isPM);
+    }
+
+    // Display a message to a document fragment (for batch operations)
+    displayMessageToFragment(message, fragment) {
+        const tempContainer = document.createElement('div');
+        const originalContainer = document.getElementById('messagesContainer');
+
+        // Temporarily set a fake container
+        document.body.appendChild(tempContainer);
+        tempContainer.id = 'tempMessageContainer';
+        tempContainer.style.display = 'none';
+
+        // Store original and swap
+        const originalId = originalContainer.id;
+        originalContainer.id = 'messagesContainer_backup';
+        tempContainer.id = 'messagesContainer';
+
+        // Display the message
+        this.displayMessage(message);
+
+        // Move rendered element to fragment
+        while (tempContainer.firstChild) {
+            fragment.appendChild(tempContainer.firstChild);
+        }
+
+        // Restore original container
+        tempContainer.id = 'tempMessageContainer';
+        originalContainer.id = originalId;
+        document.body.removeChild(tempContainer);
+    }
+
+    // Trim excess messages from top of container
+    trimMessagesFromTop(container, storageKey) {
+        const messages = container.querySelectorAll('.message[data-message-id]');
+        const maxMessages = this.virtualScroll.windowSize;
+
+        if (messages.length > maxMessages) {
+            const toRemove = messages.length - maxMessages;
+            for (let i = 0; i < toRemove; i++) {
+                messages[i].remove();
+            }
+            this.virtualScroll.currentStartIndex += toRemove;
+        }
+    }
+
+    // Trim excess messages from bottom of container
+    trimMessagesFromBottom(container, storageKey) {
+        const messages = container.querySelectorAll('.message[data-message-id]');
+        const maxMessages = this.virtualScroll.windowSize;
+
+        if (messages.length > maxMessages) {
+            const toRemove = messages.length - maxMessages;
+            for (let i = messages.length - 1; i >= messages.length - toRemove; i--) {
+                messages[i].remove();
+            }
+            this.virtualScroll.currentEndIndex -= toRemove;
+        }
+    }
+
+    // Update spacer heights to maintain scroll position
+    updateVirtualScrollSpacers(container, storageKey, isPM = false) {
+        const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
+        const avgHeight = this.virtualScroll.messageHeightEstimate;
+
+        let topSpacer = container.querySelector('.virtual-scroll-spacer-top');
+        let bottomSpacer = container.querySelector('.virtual-scroll-spacer-bottom');
+
+        // Create spacers if they don't exist
+        if (!topSpacer) {
+            topSpacer = document.createElement('div');
+            topSpacer.className = 'virtual-scroll-spacer-top';
+            container.insertBefore(topSpacer, container.firstChild);
+        }
+
+        if (!bottomSpacer) {
+            bottomSpacer = document.createElement('div');
+            bottomSpacer.className = 'virtual-scroll-spacer-bottom';
+            container.appendChild(bottomSpacer);
+        }
+
+        // Calculate spacer heights
+        const topHeight = this.virtualScroll.currentStartIndex * avgHeight;
+        const bottomHeight = (messages.length - 1 - this.virtualScroll.currentEndIndex) * avgHeight;
+
+        topSpacer.style.height = `${Math.max(0, topHeight)}px`;
+        bottomSpacer.style.height = `${Math.max(0, bottomHeight)}px`;
+    }
+
+    // Get filtered messages for a storage key (applies block filters)
+    getFilteredMessages(storageKey) {
+        const messages = this.messages.get(storageKey) || [];
+        const isCommunity = this.communityChannels.has(storageKey);
+        const bannedUsers = isCommunity ? (this.communityBans.get(storageKey) || new Set()) : new Set();
+
+        return messages.filter(msg => {
+            if (bannedUsers.has(msg.pubkey)) return false;
+            if (this.blockedUsers.has(msg.pubkey) || this.isNymBlocked(msg.author) || msg.blocked) return false;
+            if (isCommunity && this.hasCommunityBlockedKeyword(msg.content, storageKey)) return false;
+            if (this.hasBlockedKeyword(msg.content)) return false;
+            if (this.isSpamMessage(msg.content)) return false;
+            return true;
+        }).sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    // Get filtered PM messages for a conversation key
+    getFilteredPMMessages(conversationKey) {
+        const pmMessages = this.pmMessages.get(conversationKey) || [];
+
+        return pmMessages.filter(msg => {
+            // Check if message is from blocked user
+            if (this.blockedUsers.has(msg.pubkey) || msg.blocked) return false;
+            // Check if message content is spam
+            if (this.isSpamMessage(msg.content)) return false;
+            // Ensure the message is between the current user and the PM recipient only
+            if (msg.conversationKey !== conversationKey) return false;
+            if (msg.pubkey !== this.pubkey && msg.pubkey !== this.currentPM) return false;
+            return true;
+        }).sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    // Render initial messages with virtual scrolling
+    // isPM: if true, uses pmMessages with conversationKey instead of messages with storageKey
+    renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false) {
+        const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
+        const windowSize = this.virtualScroll.windowSize;
+
+        // Store context for scroll handlers
+        container.dataset.virtualScrollKey = storageKey;
+        container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
+
+        // Clear container
+        container.innerHTML = '';
+
+        if (messages.length === 0) {
+            return;
+        }
+
+        // For virtual scrolling, start from the end (most recent messages)
+        const startIndex = Math.max(0, messages.length - windowSize);
+        const endIndex = messages.length - 1;
+
+        this.virtualScroll.currentStartIndex = startIndex;
+        this.virtualScroll.currentEndIndex = endIndex;
+
+        // Add top spacer if there are older messages
+        if (startIndex > 0) {
+            const topSpacer = document.createElement('div');
+            topSpacer.className = 'virtual-scroll-spacer-top';
+            topSpacer.style.height = `${startIndex * this.virtualScroll.messageHeightEstimate}px`;
+            container.appendChild(topSpacer);
+
+            // Add "scroll up for more" indicator
             const loadMoreDiv = document.createElement('div');
-            loadMoreDiv.className = 'system-message';
-            loadMoreDiv.style.cssText = 'cursor: pointer; color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
-            loadMoreDiv.textContent = `Showing most recent ${maxDisplayMessages} messages (${channelMessages.length - maxDisplayMessages} older messages available)`;
-            loadMoreDiv.dataset.loadMore = 'true';
-            loadMoreDiv.dataset.storageKey = storageKey;
+            loadMoreDiv.className = 'system-message virtual-scroll-hint';
+            loadMoreDiv.style.cssText = 'color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
+            loadMoreDiv.textContent = `↑ Scroll up for ${startIndex} older messages`;
             container.appendChild(loadMoreDiv);
         }
 
-        // Render messages directly to the container
-        messagesToDisplay.forEach(msg => {
-            if (!this.blockedUsers.has(msg.author) && !msg.blocked) {
-                const messageEl = this.createMessageElement(msg);
-                if (messageEl) {
-                    container.appendChild(messageEl);
-                }
-            }
+        // Render visible messages
+        const messagesToRender = messages.slice(startIndex, endIndex + 1);
+        messagesToRender.forEach(msg => {
+            this.displayMessage(msg);
         });
 
-        // Store the pre-rendered container and its version
-        this.prerenderedChannels.set(storageKey, container);
-        this.prerenderedChannelVersions.set(storageKey, currentVersion);
+        // Add bottom spacer (will be 0 height when at bottom)
+        const bottomSpacer = document.createElement('div');
+        bottomSpacer.className = 'virtual-scroll-spacer-bottom';
+        bottomSpacer.style.height = '0px';
+        container.appendChild(bottomSpacer);
 
-        return container;
-    }
+        // Initialize virtual scroll handler
+        this.initVirtualScroll(container, storageKey);
 
-    // Create a message element without appending to DOM (for pre-rendering)
-    createMessageElement(message) {
-        // Check if message is from a blocked user
-        if (message.blocked || this.blockedUsers.has(message.pubkey) || this.isNymBlocked(message.author)) {
-            return null;
+        // Scroll to bottom if requested
+        if (scrollToBottom && this.settings.autoscroll) {
+            setTimeout(() => {
+                container.scrollTop = container.scrollHeight;
+            }, 0);
         }
-
-        // Check for blocked keywords or spam
-        if (this.hasBlockedKeyword(message.content) || this.isSpamMessage(message.content)) {
-            return null;
-        }
-
-        const time = this.settings.showTimestamps ?
-            message.timestamp.toLocaleTimeString('en-US', {
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: this.settings.timeFormat === '12hr'
-            }) : '';
-
-        const userShopItems = this.getUserShopItems(message.pubkey);
-        const flairHtml = this.getFlairForUser(message.pubkey);
-        const supporterBadge = userShopItems?.supporter ?
-            '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
-
-        const messageEl = document.createElement('div');
-
-        // Check if nym is flooding
-        const channelToCheck = message.communityId || message.geohash || message.channel;
-        if (!message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
-            messageEl.className = 'message flooded';
-        }
-
-        const isMentioned = !message.isOwn && this.isMentioned(message.content);
-
-        // Check for action messages
-        if (message.content.startsWith('/me ')) {
-            messageEl.className = 'action-message';
-            const cleanAuthor = this.parseNymFromDisplay(message.author);
-            const authorFlairHtml = this.getFlairForUser(message.pubkey);
-            const authorWithFlair = `${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
-            const actionContent = message.content.substring(4);
-            const formattedAction = this.formatMessage(actionContent);
-            messageEl.innerHTML = `* ${authorWithFlair} ${formattedAction}`;
-        } else {
-            const classes = ['message'];
-
-            if (message.isOwn) {
-                classes.push('self');
-            } else if (message.isPM) {
-                classes.push('pm');
-            } else if (isMentioned) {
-                classes.push('mentioned');
-            }
-
-            if (userShopItems?.style) {
-                classes.push(userShopItems.style);
-            }
-            if (userShopItems?.supporter) {
-                classes.push('supporter-style');
-            }
-            if (Array.isArray(userShopItems?.cosmetics)) {
-                if (userShopItems.cosmetics.includes('cosmetic-aura-gold')) {
-                    classes.push('cosmetic-aura-gold');
-                }
-            }
-
-            messageEl.className = classes.join(' ');
-            messageEl.dataset.messageId = message.id;
-            messageEl.dataset.author = message.author;
-            messageEl.dataset.pubkey = message.pubkey;
-            messageEl.dataset.timestamp = message.timestamp.getTime();
-
-            const authorClass = message.isOwn ? 'self' : '';
-            const userColorClass = this.getUserColorClass(message.pubkey);
-
-            const verifiedBadge = this.isVerifiedDeveloper(message.pubkey) ?
-                `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
-
-            const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
-            const isMobile = window.innerWidth <= 768;
-
-            const reactionButton = isValidEventId && !isMobile ? `
-    <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
-        <svg viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-            <circle cx="9" cy="9" r="1"></circle>
-            <circle cx="15" cy="9" r="1"></circle>
-        </svg>
-    </button>
-` : '';
-
-            const formattedContent = this.formatMessageWithQuotes(message.content);
-            const baseNym = this.parseNymFromDisplay(message.author);
-            const displayAuthorBase = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
-            let displayAuthor = displayAuthorBase;
-            let authorExtraClass = '';
-            if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
-                authorExtraClass = 'cosmetic-redacted';
-            }
-
-            const fullTimestamp = message.timestamp.toLocaleString('en-US', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: this.settings.timeFormat === '12hr'
-            });
-
-            let deliveryCheckmark = '';
-            if (message.isOwn && message.isPM && message.deliveryStatus) {
-                if (message.deliveryStatus === 'read') {
-                    deliveryCheckmark = '<span class="delivery-status read" title="Read">✓✓</span>';
-                } else if (message.deliveryStatus === 'delivered') {
-                    deliveryCheckmark = '<span class="delivery-status delivered" title="Delivered">✓</span>';
-                } else if (message.deliveryStatus === 'sent') {
-                    deliveryCheckmark = '<span class="delivery-status sent" title="Sent">○</span>';
-                }
-            }
-
-            messageEl.innerHTML = `
-    ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}:</span>
-    <span class="message-content ${userColorClass}">${formattedContent}</span>
-    ${reactionButton}
-    ${deliveryCheckmark}
-`;
-        }
-
-        return messageEl;
-    }
-
-    // Pre-render a community's messages into an off-screen container
-    prerenderCommunity(communityId) {
-        const communityMessages = this.messages.get(communityId) || [];
-        const community = this.communityChannels.get(communityId);
-
-        // Don't pre-render empty communities or if community doesn't exist
-        if (communityMessages.length < 1 || !community) {
-            return null;
-        }
-
-        // Check if we already have a valid pre-render for this community
-        const currentVersion = communityMessages.length;
-        const cachedVersion = this.prerenderedChannelVersions.get(communityId);
-
-        if (cachedVersion === currentVersion && this.prerenderedChannels.has(communityId)) {
-            return this.prerenderedChannels.get(communityId);
-        }
-
-        // Create an off-screen container
-        const container = document.createElement('div');
-        container.className = 'prerendered-channel-container';
-        container.dataset.storageKey = communityId;
-        container.dataset.isCommunity = 'true';
-        container.style.display = 'none';
-
-        // Get the ban list and filters for this community
-        const bannedUsers = this.communityBans.get(communityId) || new Set();
-
-        // Filter messages according to community rules
-        const filteredMessages = communityMessages.filter(msg => {
-            // Check if author is banned from THIS community
-            if (bannedUsers.has(msg.pubkey)) {
-                return false;
-            }
-            // Check if author is globally blocked (by pubkey or nym)
-            if (this.blockedUsers.has(msg.pubkey) || this.isNymBlocked(msg.author) || msg.blocked) {
-                return false;
-            }
-            // Check if message contains blocked keywords for this community
-            if (this.hasCommunityBlockedKeyword && this.hasCommunityBlockedKeyword(msg.content, communityId)) {
-                return false;
-            }
-            // Check if message contains globally blocked keywords
-            if (this.hasBlockedKeyword(msg.content)) {
-                return false;
-            }
-            return true;
-        });
-
-        // Sort messages by timestamp
-        const sortedMessages = [...filteredMessages].sort((a, b) => a.timestamp - b.timestamp);
-
-        // Limit to last 500 messages
-        const maxDisplayMessages = 500;
-        const messagesToDisplay = sortedMessages.slice(-maxDisplayMessages);
-
-        // Render messages directly to the container
-        messagesToDisplay.forEach(msg => {
-            const messageEl = this.createMessageElement(msg);
-            if (messageEl) {
-                container.appendChild(messageEl);
-            }
-        });
-
-        // Store the pre-rendered container and its version
-        this.prerenderedChannels.set(communityId, container);
-        this.prerenderedChannelVersions.set(communityId, currentVersion);
-
-        return container;
-    }
-
-    // Invalidate pre-rendered content for a channel (call when new messages arrive)
-    invalidatePrerender(storageKey) {
-        // Simply remove the cached version so it will be re-rendered on next access
-        this.prerenderedChannelVersions.delete(storageKey);
-
-        // Queue this channel for re-prerendering if it has messages
-        if (this.messages.has(storageKey) && this.messages.get(storageKey).length > 0) {
-            if (!this.prerenderQueue.includes(storageKey)) {
-                this.prerenderQueue.push(storageKey);
-                this.startBackgroundPrerendering();
-            }
-        }
-    }
-
-    // Queue all channels with messages for pre-rendering
-    queueChannelsForPrerender() {
-        this.prerenderQueue = [];
-
-        // Add all channels that have messages
-        for (const [storageKey, messages] of this.messages) {
-            if (messages.length > 0) {
-                // Don't include the current channel/community (it's already rendered)
-                const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-                if (storageKey !== currentKey && storageKey !== this.currentCommunity) {
-                    this.prerenderQueue.push(storageKey);
-                }
-            }
-        }
-
-        // Sort by unread count (prioritize channels with unread messages)
-        this.prerenderQueue.sort((a, b) => {
-            const unreadA = this.unreadCounts.get(a) || 0;
-            const unreadB = this.unreadCounts.get(b) || 0;
-            return unreadB - unreadA;
-        });
-    }
-
-    // Start background pre-rendering using requestIdleCallback
-    startBackgroundPrerendering() {
-        if (this.isPrerenderingActive || this.prerenderQueue.length === 0) {
-            return;
-        }
-
-        this.isPrerenderingActive = true;
-        this.processNextPrerenderItem();
-    }
-
-    // Process one channel from the prerender queue
-    processNextPrerenderItem() {
-        if (this.prerenderQueue.length === 0) {
-            this.isPrerenderingActive = false;
-            return;
-        }
-
-        const storageKey = this.prerenderQueue.shift();
-
-        // Skip if this is the current channel or community
-        const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-        if (storageKey === currentKey || storageKey === this.currentCommunity) {
-            this.processNextPrerenderItem();
-            return;
-        }
-
-        // Use requestIdleCallback if available, otherwise setTimeout
-        const scheduleNext = (callback) => {
-            if (typeof requestIdleCallback === 'function') {
-                requestIdleCallback(callback, { timeout: 1000 });
-            } else {
-                setTimeout(callback, 50);
-            }
-        };
-
-        scheduleNext(() => {
-            try {
-                // Community channels use prerenderCommunity, all others use prerenderChannel
-                if (this.communityChannels.has(storageKey)) {
-                    this.prerenderCommunity(storageKey);
-                } else {
-                    this.prerenderChannel(storageKey);
-                }
-            } catch (err) {
-                // Silently handle pre-render errors
-            }
-
-            // Continue with next item
-            scheduleNext(() => this.processNextPrerenderItem());
-        });
-    }
-
-    // Get pre-rendered content for a channel (returns container or null)
-    getPrerenderedContent(storageKey) {
-        const channelMessages = this.messages.get(storageKey) || [];
-        const currentVersion = channelMessages.length;
-        const cachedVersion = this.prerenderedChannelVersions.get(storageKey);
-
-        // Check if cache is valid
-        if (cachedVersion === currentVersion && this.prerenderedChannels.has(storageKey)) {
-            return this.prerenderedChannels.get(storageKey);
-        }
-
-        return null;
     }
 
     addChannel(channel, geohash = '') {
@@ -19520,7 +19305,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.26.69 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.26.70 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -19988,13 +19773,6 @@ async function initializeNym() {
 
         // Start tutorial if not seen yet
         window.maybeStartTutorial(false);
-
-        // Start background pre-rendering of channels after a delay
-        // This allows initial messages to load first
-        setTimeout(() => {
-            nym.queueChannelsForPrerender();
-            nym.startBackgroundPrerendering();
-        }, 5000);
 
     } catch (error) {
         // Restore button state on error
