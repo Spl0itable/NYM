@@ -1,3 +1,7 @@
+## v2.26.72 - 2026-01-16
+
+Hotfix: reconnection logic improvement
+
 ## v2.26.71 - 2026-01-16
 
 Hotfix: better relay and subscription management

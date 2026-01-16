@@ -1086,7 +1086,8 @@ class NYM {
         this.pinnedChannels = new Set();
         this.reactions = new Map();
         this.failedRelays = new Map();
-        this.relayRetryDelay = 15 * 60 * 1000;
+        this.relayRetryDelay = 2 * 60 * 1000;
+        this.previouslyConnectedRelays = new Set();
         this.floodTracking = new Map();
         this.activeReactionPicker = null;
         this.activeReactionPickerButton = null;
@@ -4193,6 +4194,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (document.visibilityState === 'visible') {
                 const delay = this.isFlutterWebView ? 200 : 500;
                 setTimeout(() => {
+                    // Clear failed relays and blacklist to allow immediate reconnection
+                    this.clearRelayBlocksForReconnection();
+
                     this.checkConnectionHealth();
 
                     if (!this.connected && navigator.onLine) {
@@ -4215,6 +4219,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         window.addEventListener('focus', () => {
             const delay = this.isFlutterWebView ? 200 : 500;
             setTimeout(() => {
+                // Clear failed relays and blacklist to allow immediate reconnection
+                this.clearRelayBlocksForReconnection();
+
                 this.checkConnectionHealth();
 
                 // If disconnected, immediately start reconnection attempts
@@ -4231,6 +4238,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.isFlutterWebView) {
             window.addEventListener('resume', () => {
                 setTimeout(() => {
+                    // Clear failed relays and blacklist to allow immediate reconnection
+                    this.clearRelayBlocksForReconnection();
+
                     this.checkConnectionHealth();
 
                     // If disconnected, immediately start reconnection attempts
@@ -4242,6 +4252,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     setTimeout(() => this.resubscribeAllRelays(), 250);
                 }, 200);
             });
+        }
+    }
+
+    // Clear relay blocks (failed list, blacklist, reconnecting set) to allow fresh reconnection attempts
+    clearRelayBlocksForReconnection() {
+        // Clear failed relays so they can be retried immediately
+        this.failedRelays.clear();
+
+        // Clear blacklist and timestamps
+        this.blacklistedRelays.clear();
+        this.blacklistTimestamps.clear();
+
+        // Clear reconnecting set to allow fresh attempts
+        if (this.reconnectingRelays) {
+            this.reconnectingRelays.clear();
         }
     }
 
@@ -4324,7 +4349,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         let connectedCount = 0;
 
-        for (const relayUrl of this.broadcastRelays) {
+        // Prioritize previously connected relays for faster reconnection
+        const relaysToConnect = [...this.broadcastRelays];
+        if (this.previouslyConnectedRelays && this.previouslyConnectedRelays.size > 0) {
+            relaysToConnect.sort((a, b) => {
+                const aWasConnected = this.previouslyConnectedRelays.has(a);
+                const bWasConnected = this.previouslyConnectedRelays.has(b);
+                if (aWasConnected && !bWasConnected) return -1;
+                if (!aWasConnected && bWasConnected) return 1;
+                return 0;
+            });
+        }
+
+        for (const relayUrl of relaysToConnect) {
             if (!this.relayPool.has(relayUrl) ||
                 (this.relayPool.get(relayUrl).ws &&
                     this.relayPool.get(relayUrl).ws.readyState !== WebSocket.OPEN)) {
@@ -5944,14 +5981,28 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     reject(error);
                 };
 
-                ws.onclose = () => {
+                ws.onclose = (event) => {
                     clearTimeout(verificationTimeout);
                     clearTimeout(connectionTimeout);
 
-                    // If connection closed before opening, blacklist it
-                    if (ws.readyState !== WebSocket.OPEN) {
+                    // Track if this relay was previously successfully connected
+                    const wasConnected = this.relayPool.has(relayUrl) &&
+                        this.relayPool.get(relayUrl).ws === ws;
+
+                    // Only blacklist on actual connection failures, not normal closes
+                    const isConnectionFailure = !wasConnected && event.code !== 1000 && event.code !== 1001;
+
+                    if (isConnectionFailure) {
                         this.blacklistedRelays.add(relayUrl);
                         this.blacklistTimestamps.set(relayUrl, Date.now());
+                    }
+
+                    // Track previously connected relays for prioritized reconnection
+                    if (wasConnected) {
+                        if (!this.previouslyConnectedRelays) {
+                            this.previouslyConnectedRelays = new Set();
+                        }
+                        this.previouslyConnectedRelays.add(relayUrl);
                     }
 
                     // Immediately remove from pool and update status
@@ -5962,7 +6013,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.updateConnectionStatus();
 
                     // Reconnect ALL relay types (broadcast, nosflare, AND read relays)
-                    if (this.connected && !this.blacklistedRelays.has(relayUrl)) {
+                    // For previously connected relays, always attempt reconnection (no blacklist check)
+                    if (this.connected && (wasConnected || !this.blacklistedRelays.has(relayUrl))) {
                         // Track disconnections
                         if (!this.reconnectingRelays) {
                             this.reconnectingRelays = new Set();
@@ -5976,10 +6028,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.reconnectingRelays.add(relayUrl);
 
                         // Implement exponential backoff for reconnection
+                        // Use faster reconnection for previously connected relays
                         const attemptReconnect = (attempt = 0) => {
                             const maxAttempts = 10;
-                            const baseDelay = 5000;
-                            const maxDelay = 60000;
+                            // Faster initial delay for previously connected relays (1s vs 5s)
+                            const baseDelay = wasConnected ? 1000 : 5000;
+                            const maxDelay = wasConnected ? 30000 : 60000;
 
                             // Calculate exponential backoff delay
                             const delay = Math.min(baseDelay * Math.pow(1.5, attempt), maxDelay);
@@ -19591,7 +19645,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.26.71 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.26.72 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
