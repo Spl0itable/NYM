@@ -1,3 +1,7 @@
+## v2.26.71 - 2026-01-16
+
+Hotfix: better relay and subscription management
+
 ## v2.26.70 - 2026-01-16
 
 Hotfix: performance improvement
