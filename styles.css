@@ -3774,3 +3774,305 @@ body.theme-ghost::before {
     color: var(--primary);
     font-size: 20px;
 }
+
+.p2p-modal-content {
+    max-width: 500px;
+    width: 90%;
+}
+
+.p2p-transfers-list {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.p2p-empty-state {
+    text-align: center;
+    color: var(--text-dim);
+    padding: 30px;
+    font-style: italic;
+}
+
+.p2p-transfer-item {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    margin-bottom: 10px;
+}
+
+.p2p-transfer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.p2p-transfer-filename {
+    color: var(--primary);
+    font-weight: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 250px;
+}
+
+.p2p-transfer-size {
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
+.p2p-transfer-peer {
+    color: var(--secondary);
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+
+.p2p-transfer-progress {
+    height: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.p2p-transfer-progress-fill {
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+.p2p-transfer-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+}
+
+.p2p-transfer-status-text {
+    color: var(--text-dim);
+}
+
+.p2p-transfer-status-text.connecting {
+    color: var(--warning);
+}
+
+.p2p-transfer-status-text.transferring {
+    color: var(--secondary);
+}
+
+.p2p-transfer-status-text.complete {
+    color: var(--primary);
+}
+
+.p2p-transfer-status-text.error {
+    color: var(--danger);
+}
+
+.p2p-transfer-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.p2p-transfer-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--font-mono);
+}
+
+.p2p-transfer-btn:hover {
+    background: var(--primary);
+    color: var(--bg);
+}
+
+.p2p-transfer-btn.cancel {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+.p2p-transfer-btn.cancel:hover {
+    background: var(--danger);
+    color: var(--bg);
+}
+
+.file-offer {
+    background: var(--bg-secondary);
+    border: 1px solid var(--primary);
+    border-radius: 6px;
+    padding: 12px;
+    margin: 8px 0;
+    max-width: 350px;
+}
+
+.file-offer-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.file-offer-icon {
+    width: 40px;
+    height: 40px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.file-offer-icon svg {
+    width: 24px;
+    height: 24px;
+    stroke: var(--primary);
+    fill: none;
+}
+
+.file-offer-info {
+    flex: 1;
+    overflow: hidden;
+}
+
+.file-offer-name {
+    color: var(--primary);
+    font-weight: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-offer-meta {
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
+.file-offer-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.file-offer-btn {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--primary);
+    color: var(--primary);
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    transition: all 0.2s;
+}
+
+.file-offer-btn:hover {
+    background: var(--primary);
+    color: var(--bg);
+}
+
+.file-offer-btn.downloading {
+    border-color: var(--secondary);
+    color: var(--secondary);
+    cursor: default;
+}
+
+.file-offer-btn.downloading:hover {
+    background: transparent;
+    color: var(--secondary);
+}
+
+.file-offer-progress {
+    margin-top: 10px;
+}
+
+.file-offer-progress-bar {
+    height: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.file-offer-progress-fill {
+    height: 100%;
+    background: var(--secondary);
+    transition: width 0.2s ease;
+    width: 0%;
+}
+
+.file-offer-progress-text {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 4px;
+}
+
+.p2p-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-left: 8px;
+}
+
+.p2p-indicator-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-dim);
+}
+
+.p2p-indicator-dot.active {
+    background: var(--primary);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.file-offer-seeding {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--primary);
+    font-size: 11px;
+    margin-top: 8px;
+}
+
+.file-offer-seeding-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--primary);
+    animation: pulse 1.5s infinite;
+}
+
+.file-offer-icon.audio svg {
+    stroke: var(--purple);
+}
+
+.file-offer-icon.video svg {
+    stroke: var(--danger);
+}
+
+.file-offer-icon.archive svg {
+    stroke: var(--warning);
+}
+
+.file-offer-icon.document svg {
+    stroke: var(--secondary);
+}

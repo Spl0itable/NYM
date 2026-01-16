@@ -1081,6 +1081,21 @@ class NYM {
         this.usingExtension = false;
         this.contextMenuTarget = null;
         this.contextMenuData = null;
+        this.p2pConnections = new Map();
+        this.p2pDataChannels = new Map();
+        this.p2pFileOffers = new Map();
+        this.p2pActiveTransfers = new Map();
+        this.p2pPendingFiles = new Map();
+        this.p2pReceivedChunks = new Map();
+        this.p2pSignalingSubscriptions = new Set();
+        this.p2pIceServers = [
+            { urls: 'stun:stun.cloudflare.com:3478' },
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' }
+        ];
+        this.P2P_SIGNALING_KIND = 25051;
+        this.P2P_CHUNK_SIZE = 16384;
         this.awayMessages = new Map();
         this.recentEmojis = [];
         this.allEmojis = {
@@ -5552,6 +5567,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     authors: [this.pubkey],
                     "#d": ["nym-shop-purchases", "nym-shop-active"],
                     limit: 100
+                },
+                // P2P signaling addressed to me
+                {
+                    kinds: [25051],
+                    "#p": [this.pubkey],
+                    since: Math.floor(Date.now() / 1000) - 120, // Last 2 minutes
+                    limit: 50
                 }
             );
         }
@@ -7149,7 +7171,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         } catch (_) { }
 
-        const wideFanout = evt && (evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 4550 || evt.kind === 1984 || evt.kind === 34550 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059);
+        const wideFanout = evt && (evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 4550 || evt.kind === 1984 || evt.kind === 34550 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051);
 
         if (wideFanout) {
             // Send to every connected relay for maximum propagation
@@ -7599,6 +7621,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.addChannelToList(geohash, geohash);
             }
 
+            // Check if this is a P2P file offer
+            const offerTag = event.tags.find(t => t[0] === 'offer');
+            let fileOffer = null;
+            if (offerTag) {
+                try {
+                    fileOffer = JSON.parse(offerTag[1]);
+                    this.p2pFileOffers.set(fileOffer.offerId, fileOffer);
+                } catch (e) {
+                    console.error('Error parsing file offer:', e);
+                }
+            }
+
             const message = {
                 id: event.id,
                 author: nym,
@@ -7608,7 +7642,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 channel: geohash ? geohash : 'unknown',
                 geohash: geohash,
                 isOwn: event.pubkey === this.pubkey,
-                isHistorical: isHistorical
+                isHistorical: isHistorical,
+                isFileOffer: !!fileOffer,
+                fileOffer: fileOffer
             };
 
             // Don't display duplicate of own messages
@@ -7697,6 +7733,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.addChannelToList(channel, '');
             }
 
+            // Check if this is a P2P file offer
+            const offerTag23333 = event.tags.find(t => t[0] === 'offer');
+            let fileOffer23333 = null;
+            if (offerTag23333) {
+                try {
+                    fileOffer23333 = JSON.parse(offerTag23333[1]);
+                    this.p2pFileOffers.set(fileOffer23333.offerId, fileOffer23333);
+                } catch (e) {
+                    console.error('Error parsing file offer:', e);
+                }
+            }
+
             const message = {
                 id: event.id,
                 author: nym,
@@ -7706,7 +7754,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 channel: channel,
                 geohash: '',
                 isOwn: event.pubkey === this.pubkey,
-                isHistorical: isHistorical
+                isHistorical: isHistorical,
+                isFileOffer: !!fileOffer23333,
+                fileOffer: fileOffer23333
             };
 
             // Don't display duplicate of own messages
@@ -7932,6 +7982,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const messageAge = Date.now() - (event.created_at * 1000);
                 const isHistorical = messageAge > 10000;
 
+                // Check if this is a P2P file offer
+                const offerTag4550 = event.tags.find(t => t[0] === 'offer');
+                let fileOffer4550 = null;
+                if (offerTag4550) {
+                    try {
+                        fileOffer4550 = JSON.parse(offerTag4550[1]);
+                        this.p2pFileOffers.set(fileOffer4550.offerId, fileOffer4550);
+                    } catch (e) {
+                        console.error('Error parsing file offer:', e);
+                    }
+                }
+
                 // Check flooding
                 if (!isHistorical && this.isFlooding(event.pubkey, communityId)) {
                     return;
@@ -7952,7 +8014,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     isCommunity: true,
                     communityId: communityId,
                     isOwn: event.pubkey === this.pubkey,
-                    isHistorical: isHistorical
+                    isHistorical: isHistorical,
+                    isFileOffer: !!fileOffer4550,
+                    fileOffer: fileOffer4550
                 };
 
                 // Store message - Only store if not from banned user
@@ -8231,6 +8295,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } catch (e) {
                 // Ignore profile parse errors
             }
+        } else if (event.kind === this.P2P_SIGNALING_KIND) {
+            // Handle P2P signaling (WebRTC SDP/ICE)
+            this.handleP2PSignalingEvent(event);
         }
     }
 
@@ -11202,6 +11269,629 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
+    // Initialize P2P signaling subscription for the current user
+    initP2PSignaling() {
+        if (!this.pubkey) return;
+
+        const subId = 'p2p-sig-' + Math.random().toString(36).substring(2, 10);
+        const filter = {
+            kinds: [this.P2P_SIGNALING_KIND],
+            '#p': [this.pubkey],
+            since: Math.floor(Date.now() / 1000) - 60 // Last minute
+        };
+
+        this.sendToRelay(['REQ', subId, filter]);
+        this.p2pSignalingSubscriptions.add(subId);
+    }
+
+    // Handle incoming P2P signaling events
+    handleP2PSignalingEvent(event) {
+        try {
+            const data = JSON.parse(event.content);
+            const senderPubkey = event.pubkey;
+
+            if (data.type === 'offer') {
+                this.handleP2POffer(senderPubkey, data);
+            } else if (data.type === 'answer') {
+                this.handleP2PAnswer(senderPubkey, data);
+            } else if (data.type === 'ice-candidate') {
+                this.handleP2PIceCandidate(senderPubkey, data);
+            }
+        } catch (e) {
+            console.error('P2P signaling error:', e);
+        }
+    }
+
+    // Share a file via P2P
+    async shareP2PFile(file) {
+        if (!this.connected || !this.pubkey) {
+            this.displaySystemMessage('Must be connected to share files');
+            return;
+        }
+
+        // Compute file hash for identification
+        const arrayBuffer = await file.arrayBuffer();
+        const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+        // Create unique offer ID
+        const offerId = fileHash.substring(0, 16) + '-' + Date.now().toString(36);
+
+        // Store file for seeding
+        this.p2pPendingFiles.set(offerId, file);
+
+        // Create file offer metadata
+        const fileOffer = {
+            offerId: offerId,
+            name: file.name,
+            size: file.size,
+            type: file.type || 'application/octet-stream',
+            hash: fileHash,
+            seederPubkey: this.pubkey,
+            timestamp: Math.floor(Date.now() / 1000)
+        };
+
+        // Store offer locally
+        this.p2pFileOffers.set(offerId, fileOffer);
+
+        // Determine channel info and kind for the offer event
+        let tags = [
+            ['n', this.nym],
+            ['offer', JSON.stringify(fileOffer)]
+        ];
+
+        let kind;
+
+        if (this.currentGeohash) {
+            kind = 20000; // Geohash channel kind
+            tags.push(['g', this.currentGeohash]);
+        } else if (this.currentCommunity) {
+            kind = 4550; // Community channel kind
+            const community = this.communityChannels.get(this.currentCommunity);
+            if (community) {
+                tags.push(['a', `34550:${community.creator}:${community.name}`]);
+            }
+        } else if (this.currentChannel) {
+            kind = 23333; // Standard channel kind
+            tags.push(['d', this.currentChannel]);
+        } else {
+            this.displaySystemMessage('No channel selected for file sharing');
+            return;
+        }
+
+        // Create and sign the file offer event
+        const event = {
+            kind: kind,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: tags,
+            content: `Sharing file through NYM: ${file.name} (${this.formatFileSize(file.size)})`,
+            pubkey: this.pubkey
+        };
+
+        const signedEvent = await this.signEvent(event);
+
+        // Create optimistic message for immediate display
+        const optimisticMessage = {
+            id: signedEvent.id,
+            author: this.nym,
+            pubkey: this.pubkey,
+            content: event.content,
+            timestamp: new Date(event.created_at * 1000),
+            channel: this.currentCommunity || this.currentChannel,
+            geohash: this.currentGeohash || '',
+            isOwn: true,
+            isHistorical: false,
+            isFileOffer: true,
+            fileOffer: fileOffer,
+            isCommunity: !!this.currentCommunity,
+            communityId: this.currentCommunity || null
+        };
+
+        // Display locally immediately
+        this.displayMessage(optimisticMessage);
+
+        // Broadcast to relays
+        this.sendToRelay(['EVENT', signedEvent]);
+
+        this.displaySystemMessage(`File "${file.name}" is now available for P2P download`);
+    }
+
+    // Format file size for display
+    formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    // Get file type category for icon styling
+    getFileTypeCategory(filename, mimeType) {
+        const ext = filename.split('.').pop().toLowerCase();
+        const audioExts = ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'];
+        const videoExts = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm'];
+        const archiveExts = ['zip', 'rar', '7z', 'tar', 'gz', 'bz2'];
+        const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf'];
+
+        if (audioExts.includes(ext) || mimeType?.startsWith('audio/')) return 'audio';
+        if (videoExts.includes(ext) || mimeType?.startsWith('video/')) return 'video';
+        if (archiveExts.includes(ext)) return 'archive';
+        if (docExts.includes(ext)) return 'document';
+        return 'file';
+    }
+
+    // Request a file from a seeder
+    async requestP2PFile(offerId) {
+        const offer = this.p2pFileOffers.get(offerId);
+        if (!offer) {
+            this.displaySystemMessage('File offer not found');
+            return;
+        }
+
+        if (offer.seederPubkey === this.pubkey) {
+            this.displaySystemMessage('Cannot download your own file');
+            return;
+        }
+
+        // Update UI to show connecting
+        const btn = document.querySelector(`[data-offer-id="${offerId}"] .file-offer-btn`);
+        const progressDiv = document.getElementById(`progress-${offerId}`);
+        if (btn) {
+            btn.textContent = 'Connecting...';
+            btn.classList.add('downloading');
+            btn.onclick = null;
+        }
+        if (progressDiv) {
+            progressDiv.style.display = 'block';
+        }
+
+        // Create transfer state
+        const transferId = offerId + '-' + Date.now().toString(36);
+        this.p2pActiveTransfers.set(transferId, {
+            offerId: offerId,
+            offer: offer,
+            status: 'connecting',
+            bytesReceived: 0,
+            startTime: Date.now()
+        });
+        this.p2pReceivedChunks.set(transferId, []);
+
+        // Create WebRTC connection
+        await this.createP2PConnection(offer.seederPubkey, transferId, true);
+    }
+
+    // Create a WebRTC peer connection
+    async createP2PConnection(peerPubkey, transferId, isInitiator) {
+        const connectionId = peerPubkey + '-' + transferId;
+
+        // Create new RTCPeerConnection
+        const pc = new RTCPeerConnection({
+            iceServers: this.p2pIceServers
+        });
+
+        this.p2pConnections.set(connectionId, pc);
+
+        // Handle ICE candidates
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                this.sendP2PSignal(peerPubkey, {
+                    type: 'ice-candidate',
+                    candidate: event.candidate,
+                    transferId: transferId
+                });
+            }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+            const transfer = this.p2pActiveTransfers.get(transferId);
+            if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+                if (transfer) {
+                    this.updateTransferStatus(transferId, 'error', 'Connection failed');
+                }
+            }
+        };
+
+        if (isInitiator) {
+            // Create data channel for receiving file
+            const dc = pc.createDataChannel('fileTransfer', {
+                ordered: true
+            });
+            this.setupDataChannel(dc, transferId, false);
+            this.p2pDataChannels.set(connectionId, dc);
+
+            // Create and send offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            const transfer = this.p2pActiveTransfers.get(transferId);
+            this.sendP2PSignal(peerPubkey, {
+                type: 'offer',
+                sdp: pc.localDescription,
+                transferId: transferId,
+                offerId: transfer?.offerId
+            });
+        } else {
+            // Wait for data channel from peer
+            pc.ondatachannel = (event) => {
+                const dc = event.channel;
+                this.setupDataChannel(dc, transferId, true);
+                this.p2pDataChannels.set(connectionId, dc);
+            };
+        }
+
+        return pc;
+    }
+
+    // Setup data channel handlers
+    setupDataChannel(dc, transferId, isSender) {
+        dc.binaryType = 'arraybuffer';
+
+        dc.onopen = () => {
+            if (isSender) {
+                // Start sending file
+                this.startSendingFile(transferId, dc);
+            } else {
+                this.updateTransferStatus(transferId, 'transferring', 'Receiving...');
+            }
+        };
+
+        dc.onmessage = (event) => {
+            if (!isSender) {
+                this.handleFileChunk(transferId, event.data);
+            }
+        };
+
+        dc.onerror = (error) => {
+            console.error('Data channel error:', error);
+            this.updateTransferStatus(transferId, 'error', 'Transfer error');
+        };
+
+        dc.onclose = () => {
+            // Check if transfer completed
+            const transfer = this.p2pActiveTransfers.get(transferId);
+            if (transfer && transfer.status !== 'complete' && transfer.status !== 'error') {
+                this.updateTransferStatus(transferId, 'error', 'Connection closed');
+            }
+        };
+    }
+
+    // Start sending file chunks
+    async startSendingFile(transferId, dataChannel) {
+        const transfer = this.p2pActiveTransfers.get(transferId);
+        if (!transfer) return;
+
+        const file = this.p2pPendingFiles.get(transfer.offerId);
+        if (!file) {
+            dataChannel.send(JSON.stringify({ type: 'error', message: 'File no longer available' }));
+            return;
+        }
+
+        // Send file metadata first
+        dataChannel.send(JSON.stringify({
+            type: 'metadata',
+            name: file.name,
+            size: file.size,
+            mimeType: file.type
+        }));
+
+        // Read and send file in chunks
+        const chunkSize = this.P2P_CHUNK_SIZE;
+        const totalChunks = Math.ceil(file.size / chunkSize);
+        let offset = 0;
+        let chunkIndex = 0;
+
+        const sendNextChunk = async () => {
+            if (offset >= file.size) {
+                // Send completion signal
+                dataChannel.send(JSON.stringify({ type: 'complete' }));
+                return;
+            }
+
+            const chunk = file.slice(offset, offset + chunkSize);
+            const arrayBuffer = await chunk.arrayBuffer();
+
+            // Wait for buffer to clear if needed
+            while (dataChannel.bufferedAmount > chunkSize * 10) {
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+
+            if (dataChannel.readyState === 'open') {
+                dataChannel.send(arrayBuffer);
+                offset += chunkSize;
+                chunkIndex++;
+
+                // Continue sending
+                setTimeout(sendNextChunk, 0);
+            }
+        };
+
+        sendNextChunk();
+    }
+
+    // Handle received file chunk
+    handleFileChunk(transferId, data) {
+        const transfer = this.p2pActiveTransfers.get(transferId);
+        if (!transfer) return;
+
+        // Handle JSON messages (metadata, complete, error)
+        if (typeof data === 'string' || data instanceof ArrayBuffer && data.byteLength < 500) {
+            try {
+                let jsonStr = data;
+                if (data instanceof ArrayBuffer) {
+                    jsonStr = new TextDecoder().decode(data);
+                }
+                const msg = JSON.parse(jsonStr);
+
+                if (msg.type === 'metadata') {
+                    transfer.metadata = msg;
+                    return;
+                } else if (msg.type === 'complete') {
+                    this.completeFileTransfer(transferId);
+                    return;
+                } else if (msg.type === 'error') {
+                    this.updateTransferStatus(transferId, 'error', msg.message);
+                    return;
+                }
+            } catch (e) {
+                // Not JSON, treat as binary chunk
+            }
+        }
+
+        // Binary chunk
+        const chunks = this.p2pReceivedChunks.get(transferId);
+        if (chunks && data instanceof ArrayBuffer) {
+            chunks.push(data);
+            transfer.bytesReceived += data.byteLength;
+
+            // Update progress
+            if (transfer.offer) {
+                const progress = Math.min(100, (transfer.bytesReceived / transfer.offer.size) * 100);
+                this.updateTransferProgress(transferId, progress);
+            }
+        }
+    }
+
+    // Complete file transfer and trigger download
+    completeFileTransfer(transferId) {
+        const transfer = this.p2pActiveTransfers.get(transferId);
+        const chunks = this.p2pReceivedChunks.get(transferId);
+
+        if (!transfer || !chunks) return;
+
+        // Combine chunks into blob
+        const blob = new Blob(chunks, {
+            type: transfer.metadata?.mimeType || transfer.offer?.type || 'application/octet-stream'
+        });
+
+        // Create download link
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = transfer.metadata?.name || transfer.offer?.name || 'download';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        // Update status
+        this.updateTransferStatus(transferId, 'complete', 'Download complete!');
+
+        // Cleanup
+        this.p2pReceivedChunks.delete(transferId);
+
+        this.displaySystemMessage(`File "${transfer.offer?.name || 'file'}" downloaded successfully`);
+    }
+
+    // Update transfer progress UI
+    updateTransferProgress(transferId, percent) {
+        const transfer = this.p2pActiveTransfers.get(transferId);
+        if (!transfer) return;
+
+        const offerId = transfer.offerId;
+        const progressFill = document.getElementById(`progress-fill-${offerId}`);
+        const progressText = document.getElementById(`progress-text-${offerId}`);
+
+        if (progressFill) {
+            progressFill.style.width = percent.toFixed(1) + '%';
+        }
+        if (progressText) {
+            const elapsed = (Date.now() - transfer.startTime) / 1000;
+            const speed = transfer.bytesReceived / elapsed;
+            progressText.textContent = `${percent.toFixed(1)}% • ${this.formatFileSize(Math.round(speed))}/s`;
+        }
+    }
+
+    // Update transfer status
+    updateTransferStatus(transferId, status, message) {
+        const transfer = this.p2pActiveTransfers.get(transferId);
+        if (!transfer) return;
+
+        transfer.status = status;
+
+        const offerId = transfer.offerId;
+        const progressText = document.getElementById(`progress-text-${offerId}`);
+        const btn = document.querySelector(`[data-offer-id="${offerId}"] .file-offer-btn`);
+
+        if (progressText) {
+            progressText.textContent = message;
+            progressText.className = 'file-offer-progress-text ' + status;
+        }
+
+        if (status === 'complete' && btn) {
+            btn.textContent = 'Downloaded';
+            btn.classList.remove('downloading');
+        } else if (status === 'error' && btn) {
+            btn.textContent = 'Retry';
+            btn.classList.remove('downloading');
+            btn.onclick = () => this.requestP2PFile(offerId);
+        }
+    }
+
+    // Send P2P signaling message via Nostr
+    async sendP2PSignal(targetPubkey, data) {
+        const event = {
+            kind: this.P2P_SIGNALING_KIND,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [
+                ['p', targetPubkey]
+            ],
+            content: JSON.stringify(data),
+            pubkey: this.pubkey
+        };
+
+        const signedEvent = await this.signEvent(event);
+        this.sendToRelay(['EVENT', signedEvent]);
+    }
+
+    // Handle incoming SDP offer
+    async handleP2POffer(senderPubkey, data) {
+        const { sdp, transferId, offerId } = data;
+
+        // Check if we have this file to offer
+        if (!this.p2pPendingFiles.has(offerId)) {
+            return; // We don't have this file
+        }
+
+        // Create transfer state for sending
+        this.p2pActiveTransfers.set(transferId, {
+            offerId: offerId,
+            offer: this.p2pFileOffers.get(offerId),
+            status: 'connecting',
+            bytesSent: 0,
+            startTime: Date.now()
+        });
+
+        // Create peer connection and set remote description
+        const pc = await this.createP2PConnection(senderPubkey, transferId, false);
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+        // Create and send answer
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        this.sendP2PSignal(senderPubkey, {
+            type: 'answer',
+            sdp: pc.localDescription,
+            transferId: transferId
+        });
+    }
+
+    // Handle incoming SDP answer
+    async handleP2PAnswer(senderPubkey, data) {
+        const { sdp, transferId } = data;
+        const connectionId = senderPubkey + '-' + transferId;
+
+        const pc = this.p2pConnections.get(connectionId);
+        if (pc) {
+            await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        }
+    }
+
+    // Handle incoming ICE candidate
+    async handleP2PIceCandidate(senderPubkey, data) {
+        const { candidate, transferId } = data;
+        const connectionId = senderPubkey + '-' + transferId;
+
+        const pc = this.p2pConnections.get(connectionId);
+        if (pc && candidate) {
+            try {
+                await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (e) {
+                console.error('Error adding ICE candidate:', e);
+            }
+        }
+    }
+
+    // Open P2P transfers modal
+    openP2PTransfersModal() {
+        const modal = document.getElementById('p2pTransfersModal');
+        const list = document.getElementById('p2pTransfersList');
+
+        if (!modal || !list) return;
+
+        // Build transfer list
+        list.innerHTML = '';
+
+        if (this.p2pActiveTransfers.size === 0 && this.p2pPendingFiles.size === 0) {
+            list.innerHTML = '<div class="p2p-empty-state">No active transfers</div>';
+        } else {
+            // Show seeding files
+            this.p2pPendingFiles.forEach((file, offerId) => {
+                const offer = this.p2pFileOffers.get(offerId);
+                if (offer) {
+                    const item = document.createElement('div');
+                    item.className = 'p2p-transfer-item';
+                    item.innerHTML = `
+                        <div class="p2p-transfer-header">
+                            <span class="p2p-transfer-filename">${this.escapeHtml(offer.name)}</span>
+                            <span class="p2p-transfer-size">${this.formatFileSize(offer.size)}</span>
+                        </div>
+                        <div class="p2p-transfer-status">
+                            <span class="p2p-transfer-status-text complete">Seeding</span>
+                            <div class="p2p-transfer-actions">
+                                <button class="p2p-transfer-btn cancel" onclick="nym.stopSeeding('${offerId}')">Stop</button>
+                            </div>
+                        </div>
+                    `;
+                    list.appendChild(item);
+                }
+            });
+
+            // Show active transfers
+            this.p2pActiveTransfers.forEach((transfer, transferId) => {
+                if (transfer.offer) {
+                    const item = document.createElement('div');
+                    item.className = 'p2p-transfer-item';
+                    const progress = transfer.offer.size > 0 ? (transfer.bytesReceived / transfer.offer.size) * 100 : 0;
+                    item.innerHTML = `
+                        <div class="p2p-transfer-header">
+                            <span class="p2p-transfer-filename">${this.escapeHtml(transfer.offer.name)}</span>
+                            <span class="p2p-transfer-size">${this.formatFileSize(transfer.offer.size)}</span>
+                        </div>
+                        <div class="p2p-transfer-progress">
+                            <div class="p2p-transfer-progress-fill" style="width: ${progress.toFixed(1)}%"></div>
+                        </div>
+                        <div class="p2p-transfer-status">
+                            <span class="p2p-transfer-status-text ${transfer.status}">${transfer.status}</span>
+                            <div class="p2p-transfer-actions">
+                                <button class="p2p-transfer-btn cancel" onclick="nym.cancelTransfer('${transferId}')">Cancel</button>
+                            </div>
+                        </div>
+                    `;
+                    list.appendChild(item);
+                }
+            });
+        }
+
+        modal.classList.add('active');
+    }
+
+    // Stop seeding a file
+    stopSeeding(offerId) {
+        this.p2pPendingFiles.delete(offerId);
+        this.displaySystemMessage('Stopped seeding file');
+        this.openP2PTransfersModal(); // Refresh modal
+    }
+
+    // Cancel an active transfer
+    cancelTransfer(transferId) {
+        const transfer = this.p2pActiveTransfers.get(transferId);
+        if (transfer) {
+            // Close any associated connections
+            this.p2pConnections.forEach((pc, connectionId) => {
+                if (connectionId.includes(transferId)) {
+                    pc.close();
+                    this.p2pConnections.delete(connectionId);
+                }
+            });
+
+            this.p2pActiveTransfers.delete(transferId);
+            this.p2pReceivedChunks.delete(transferId);
+            this.displaySystemMessage('Transfer cancelled');
+            this.openP2PTransfersModal(); // Refresh modal
+        }
+    }
+
     isDuplicateMessage(message) {
         const displayChannel = message.geohash ? `#${message.geohash}` : message.channel;
         const channelMessages = this.messages.get(displayChannel) || [];
@@ -11507,10 +12197,52 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 }
             }
 
+            // Check if this is a file offer and render special UI
+            let messageContentHtml;
+            if (message.isFileOffer && message.fileOffer) {
+                const offer = message.fileOffer;
+                const fileCategory = this.getFileTypeCategory(offer.name, offer.type);
+                const isOwnOffer = message.isOwn;
+                messageContentHtml = `
+                    <div class="file-offer" data-offer-id="${offer.offerId}">
+                        <div class="file-offer-header">
+                            <div class="file-offer-icon ${fileCategory}">
+                                <svg viewBox="0 0 24 24" stroke-width="2">
+                                    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                                    <polyline points="13 2 13 9 20 9"></polyline>
+                                </svg>
+                            </div>
+                            <div class="file-offer-info">
+                                <div class="file-offer-name" title="${this.escapeHtml(offer.name)}">${this.escapeHtml(offer.name)}</div>
+                                <div class="file-offer-meta">${this.formatFileSize(offer.size)} • ${offer.type || 'Unknown type'}</div>
+                            </div>
+                        </div>
+                        ${isOwnOffer ? `
+                            <div class="file-offer-seeding">
+                                <div class="file-offer-seeding-dot"></div>
+                                <span>Seeding - available for download</span>
+                            </div>
+                        ` : `
+                            <div class="file-offer-actions">
+                                <button class="file-offer-btn" onclick="nym.requestP2PFile('${offer.offerId}')">Download</button>
+                            </div>
+                            <div class="file-offer-progress" id="progress-${offer.offerId}" style="display: none;">
+                                <div class="file-offer-progress-bar">
+                                    <div class="file-offer-progress-fill" id="progress-fill-${offer.offerId}"></div>
+                                </div>
+                                <div class="file-offer-progress-text" id="progress-text-${offer.offerId}">Connecting...</div>
+                            </div>
+                        `}
+                    </div>
+                `;
+            } else {
+                messageContentHtml = formattedContent;
+            }
+
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
     <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}:</span>
-    <span class="message-content ${userColorClass}">${formattedContent}</span>
+    <span class="message-content ${userColorClass}">${messageContentHtml}</span>
     ${reactionButton}
     ${deliveryCheckmark}
 `;
@@ -12659,6 +13391,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         document.getElementById('fileInput').addEventListener('change', (e) => {
             if (e.target.files && e.target.files[0]) {
                 this.uploadImage(e.target.files[0]);
+            }
+        });
+
+        // P2P File input
+        document.getElementById('p2pFileInput').addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                this.shareP2PFile(e.target.files[0]);
+                e.target.value = ''; // Reset for next selection
             }
         });
 
@@ -18387,6 +19127,10 @@ function selectImage() {
     document.getElementById('fileInput').click();
 }
 
+function selectP2PFile() {
+    document.getElementById('p2pFileInput').click();
+}
+
 function closeModal(id) {
     document.getElementById(id).classList.remove('active');
 }
@@ -18776,7 +19520,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.25.69 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.26.69 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

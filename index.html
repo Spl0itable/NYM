@@ -259,6 +259,15 @@
                             <polyline points="21 15 16 10 5 21"></polyline>
                         </svg>
                     </button>
+                    <input type="file" class="file-input" id="p2pFileInput">
+                    <button class="icon-btn input-btn" onclick="selectP2PFile()" title="Share File (P2P)">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                            <polyline points="13 2 13 9 20 9"></polyline>
+                            <line x1="12" y1="18" x2="12" y2="12"></line>
+                            <polyline points="9 15 12 12 15 15"></polyline>
+                        </svg>
+                    </button>
                     <button class="icon-btn input-btn" onclick="nym.toggleEmojiPicker()" title="Emoji">
                         <svg viewBox="0 0 24 24">
                             <circle cx="12" cy="12" r="10"></circle>
@@ -315,6 +324,21 @@
     <div class="image-modal" id="imageModal" onclick="closeImageModal()">
         <span class="image-modal-close" onclick="closeImageModal()">×</span>
         <img id="modalImage" src="" alt="Expanded image">
+    </div>
+
+    <!-- P2P File Transfers Modal -->
+    <div class="modal" id="p2pTransfersModal">
+        <div class="modal-content p2p-modal-content">
+            <div class="modal-header">P2P File Transfers</div>
+            <div class="modal-body">
+                <div class="p2p-transfers-list" id="p2pTransfersList">
+                    <div class="p2p-empty-state">No active transfers</div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" onclick="closeModal('p2pTransfersModal')">Close</button>
+            </div>
+        </div>
     </div>
 
     <!-- Nick Edit Modal -->
