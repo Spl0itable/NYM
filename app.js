@@ -1089,10 +1089,10 @@ class NYM {
         this.p2pReceivedChunks = new Map();
         this.p2pSignalingSubscriptions = new Set();
         this.p2pIceServers = [
-            { urls: 'stun:stun.cloudflare.com:3478' },
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' }
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun.cloudflare.com:3478' }
         ];
         this.P2P_SIGNALING_KIND = 25051;
         this.P2P_CHUNK_SIZE = 16384;
