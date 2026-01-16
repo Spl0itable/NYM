@@ -1045,12 +1045,6 @@ class NYM {
         this.communityChannels = new Map();
         this.ownedCommunities = new Set();
         this.moderatedCommunities = new Set();
-        this.discoveredGeohashes = new Set();
-        this.discoveredEphemeralChannels = new Set();
-        this.channelSubscriptions = new Map();
-        this.channelLoadedFromRelays = new Set();
-        this.channelSubscriptionBatchSize = 10;
-        this.channelMessageLimit = 200;
         this.communityBans = new Map();
         this.communityInvites = new Map();
         this.communityMembers = new Map();
@@ -5489,33 +5483,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         relay.subscriptions.add(subId);
 
+        // Build filters array
         const filters = [
-            // Messages in geohash channels (to find active geohashes)
+            // Messages in geohash channels
             {
                 kinds: [20000],
-                limit: 100,
+                limit: 500,
             },
             // Reactions for geohash channels
             {
                 kinds: [7],
                 "#k": ["20000"],
-                limit: 100,
+                limit: 500,
             },
-            // Messages in ephemeral channels (to find active channels)
+            // Messages in standard/ephemeral channels
             {
                 kinds: [23333],
-                limit: 100,
+                limit: 500,
             },
             // Reactions for standard channels
             {
                 kinds: [7],
                 "#k": ["23333"],
-                limit: 100,
+                limit: 500,
             },
-            // Messages in communities (to find active communities)
+            // Messages in communities
             {
                 kinds: [4550],
-                limit: 100
+                limit: 500
             },
             // All public community definitions
             {
@@ -5526,7 +5521,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             {
                 kinds: [7],
                 "#k": ["4550"],
-                limit: 100
+                limit: 500
             },
             // Moderation events
             {
@@ -5591,216 +5586,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Send single REQ with all filters
         ws.send(JSON.stringify(["REQ", subId, ...filters]));
-    }
-
-    // This is called when a user switches to a channel that hasn't been fully loaded
-    subscribeToChannelTargeted(channelKey, channelType) {
-        // Skip if already loaded
-        if (this.channelLoadedFromRelays.has(channelKey)) {
-            return;
-        }
-
-        // Mark as loaded to prevent duplicate requests
-        this.channelLoadedFromRelays.add(channelKey);
-
-        const subId = "nym-ch-" + Math.random().toString(36).substring(7);
-        let filters = [];
-
-        if (channelType === 'geohash') {
-            // Geohash channel - filter by 'g' tag
-            filters = [
-                {
-                    kinds: [20000],
-                    "#g": [channelKey],
-                    limit: this.channelMessageLimit
-                },
-                {
-                    kinds: [7],
-                    "#k": ["20000"],
-                    limit: this.channelMessageLimit
-                }
-            ];
-        } else if (channelType === 'ephemeral') {
-            // Ephemeral channel - filter by 'd' tag
-            filters = [
-                {
-                    kinds: [23333],
-                    "#d": [channelKey],
-                    limit: this.channelMessageLimit
-                },
-                {
-                    kinds: [7],
-                    "#k": ["23333"],
-                    limit: this.channelMessageLimit
-                }
-            ];
-        } else if (channelType === 'community') {
-            // Community channel - filter by 'a' tag
-            // Community ID format: communityId, need to find admin pubkey
-            const community = this.communityChannels.get(channelKey);
-            if (community && community.admin) {
-                const aTagValue = `34550:${community.admin}:${channelKey}`;
-                filters = [
-                    {
-                        kinds: [4550],
-                        "#a": [aTagValue],
-                        limit: this.channelMessageLimit
-                    },
-                    {
-                        kinds: [7],
-                        "#k": ["4550"],
-                        limit: this.channelMessageLimit
-                    }
-                ];
-            } else {
-                // Can't determine community admin, skip targeted subscription
-                return;
-            }
-        }
-
-        if (filters.length === 0) return;
-
-        // Send to all readable relays except nosflare
-        this.relayPool.forEach((relay, url) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                !['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(url)) {
-
-                // Track subscription
-                if (!relay.subscriptions) {
-                    relay.subscriptions = new Set();
-                }
-                relay.subscriptions.add(subId);
-
-                relay.ws.send(JSON.stringify(["REQ", subId, ...filters]));
-            }
-        });
-
-        // Store the subscription ID for this channel
-        this.channelSubscriptions.set(channelKey, subId);
-    }
-
-    // Batch multiple channel subscriptions into fewer REQs for efficiency
-    subscribeToChannelBatch(channels) {
-        if (!channels || channels.length === 0) return;
-
-        // Group channels by type
-        const geohashChannels = [];
-        const ephemeralChannels = [];
-        const communityChannels = [];
-
-        channels.forEach(({ key, type }) => {
-            // Skip already loaded channels
-            if (this.channelLoadedFromRelays.has(key)) return;
-
-            if (type === 'geohash') {
-                geohashChannels.push(key);
-            } else if (type === 'ephemeral') {
-                ephemeralChannels.push(key);
-            } else if (type === 'community') {
-                communityChannels.push(key);
-            }
-        });
-
-        // Build batched filters
-        const filters = [];
-
-        if (geohashChannels.length > 0) {
-            filters.push({
-                kinds: [20000],
-                "#g": geohashChannels,
-                limit: this.channelMessageLimit * geohashChannels.length
-            });
-            // Mark as loaded
-            geohashChannels.forEach(ch => this.channelLoadedFromRelays.add(ch));
-        }
-
-        if (ephemeralChannels.length > 0) {
-            filters.push({
-                kinds: [23333],
-                "#d": ephemeralChannels,
-                limit: this.channelMessageLimit * ephemeralChannels.length
-            });
-            // Mark as loaded
-            ephemeralChannels.forEach(ch => this.channelLoadedFromRelays.add(ch));
-        }
-
-        if (communityChannels.length > 0) {
-            // Build 'a' tags for communities
-            const aTags = [];
-            communityChannels.forEach(communityId => {
-                const community = this.communityChannels.get(communityId);
-                if (community && community.admin) {
-                    aTags.push(`34550:${community.admin}:${communityId}`);
-                    this.channelLoadedFromRelays.add(communityId);
-                }
-            });
-
-            if (aTags.length > 0) {
-                filters.push({
-                    kinds: [4550],
-                    "#a": aTags,
-                    limit: this.channelMessageLimit * aTags.length
-                });
-            }
-        }
-
-        if (filters.length === 0) return;
-
-        const subId = "nym-batch-" + Math.random().toString(36).substring(7);
-
-        // Send to all readable relays
-        this.relayPool.forEach((relay, url) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                !['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(url)) {
-
-                if (!relay.subscriptions) {
-                    relay.subscriptions = new Set();
-                }
-                relay.subscriptions.add(subId);
-
-                relay.ws.send(JSON.stringify(["REQ", subId, ...filters]));
-            }
-        });
-    }
-
-    // Load messages for a channel from relays - called when switching channels
-    loadChannelFromRelays(channelKey, channelType) {
-        // Only load if we haven't already sent a targeted request
-        if (this.channelLoadedFromRelays.has(channelKey)) {
-            return;
-        }
-
-        // Check if we have few messages for this channel (under 50)
-        const storageKey = channelType === 'geohash' ? `#${channelKey}` : channelKey;
-        const currentMessages = this.messages.get(storageKey) || [];
-
-        // If we have very few messages, send a targeted request
-        if (currentMessages.length < 50) {
-            this.subscribeToChannelTargeted(channelKey, channelType);
-        }
-    }
-
-    // Force refresh a channel from relays - used by /sync command or manual refresh
-    refreshChannelFromRelays(channelKey, channelType) {
-        // Remove from loaded set to allow re-fetching
-        this.channelLoadedFromRelays.delete(channelKey);
-
-        // Close existing subscription if any
-        const existingSubId = this.channelSubscriptions.get(channelKey);
-        if (existingSubId) {
-            this.relayPool.forEach((relay, url) => {
-                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    relay.ws.send(JSON.stringify(["CLOSE", existingSubId]));
-                    if (relay.subscriptions) {
-                        relay.subscriptions.delete(existingSubId);
-                    }
-                }
-            });
-            this.channelSubscriptions.delete(channelKey);
-        }
-
-        // Send new targeted request
-        this.subscribeToChannelTargeted(channelKey, channelType);
     }
 
     async connectToRelayWithTimeout(relayUrl, type, timeout) {
@@ -7438,66 +7223,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
-        // Send discovery subscriptions to each relay (small limits)
+        // Send subscriptions to each readable relay
         readableRelays.forEach(([url, relay]) => {
             this.subscribeToSingleRelay(url);
         });
 
         // Also do channel discovery
         this.discoverChannels();
-
-        // Wait 2 seconds for initial discovery to populate channels, then load full history
-        setTimeout(() => {
-            this.loadJoinedChannelsFromRelays();
-        }, 2000);
-    }
-
-    // Pre-load messages for user-joined channels using batch subscriptions
-    loadJoinedChannelsFromRelays() {
-        const channelsToLoad = [];
-
-        // Add user-joined channels
-        this.userJoinedChannels.forEach(channelKey => {
-            // Determine if it's a geohash or ephemeral channel
-            const isGeohash = this.geohashRegex.test(channelKey);
-            channelsToLoad.push({
-                key: channelKey,
-                type: isGeohash ? 'geohash' : 'ephemeral'
-            });
-        });
-
-        // Add common channels that user might visit
-        this.commonChannels.forEach(channel => {
-            if (!this.channelLoadedFromRelays.has(channel)) {
-                channelsToLoad.push({ key: channel, type: 'ephemeral' });
-            }
-        });
-
-        // Add common geohashes
-        this.commonGeohashes.forEach(geohash => {
-            if (!this.channelLoadedFromRelays.has(geohash)) {
-                channelsToLoad.push({ key: geohash, type: 'geohash' });
-            }
-        });
-
-        // Also load current channel if not loaded
-        if (this.currentChannel && !this.channelLoadedFromRelays.has(this.currentChannel)) {
-            const isGeohash = this.currentGeohash && this.currentGeohash === this.currentChannel;
-            channelsToLoad.push({
-                key: this.currentChannel,
-                type: isGeohash ? 'geohash' : 'ephemeral'
-            });
-        }
-
-        // Batch load in chunks
-        const batchSize = this.channelSubscriptionBatchSize;
-        for (let i = 0; i < channelsToLoad.length; i += batchSize) {
-            const batch = channelsToLoad.slice(i, i + batchSize);
-            // Stagger batch requests to avoid overwhelming relays
-            setTimeout(() => {
-                this.subscribeToChannelBatch(batch);
-            }, Math.floor(i / batchSize) * 500);
-        }
     }
 
     handleRelayMessage(msg, relayUrl) {
@@ -7848,11 +7580,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
             const geohash = geohashTag ? geohashTag[1] : '';
 
-            // Track discovered geohash for potential batch loading
-            if (geohash && !this.discoveredGeohashes.has(geohash)) {
-                this.discoveredGeohashes.add(geohash);
-            }
-
             // Check if user is blocked or message contains blocked keywords
             if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content)) {
                 return;
@@ -7964,11 +7691,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
             const channel = channelTag ? channelTag[1] : 'bar';
-
-            // Track discovered ephemeral channel for potential batch loading
-            if (channel && !this.discoveredEphemeralChannels.has(channel)) {
-                this.discoveredEphemeralChannels.add(channel);
-            }
 
             // Check if user is blocked or message contains blocked keywords
             if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content)) {
@@ -16132,11 +15854,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             this.connectToGeoRelays(geohash);
         }
 
-        // This ensures we get more messages even with few relays connected
-        const channelType = geohash ? 'geohash' : 'ephemeral';
-        const channelKey = geohash || channel;
-        this.loadChannelFromRelays(channelKey, channelType);
-
         // Show share button in channel mode
         const shareBtn = document.getElementById('shareChannelBtn');
         if (shareBtn) {
@@ -16259,9 +15976,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         // Clear unread count
         this.clearUnreadCount(communityId);
-
-        // This ensures we get more messages even with few relays connected
-        this.loadChannelFromRelays(communityId, 'community');
 
         // Load community messages (will check internally if already loaded)
         this.loadCommunityMessages(communityId);
@@ -19591,7 +19305,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.26.71 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.26.70 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
