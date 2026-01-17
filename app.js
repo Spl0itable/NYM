@@ -12852,8 +12852,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Process mentions and channels together in one pass
         formatted = formatted.replace(
-            /(@[^@#\s]*(?:<span class="flair[^"]*"[^>]*>[\s\S]*?<\/span>)?[^@#\s]*#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(?:^|\s)(#[\w\s-]+?)(?=\s|$|[.,!?])/gi,
-            (match, mentionWithSuffix, simpleMention, channel, offset) => {
+            /(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[\w\s-]+?)(?=\s|$|[.,!?])/gi,
+            (match, mentionWithSuffix, simpleMention, whitespace, channel) => {
                 if (mentionWithSuffix) {
                     // This is a mention with a pubkey suffix, may contain HTML flair
                     // Don't escape the HTML that's already there for flair
@@ -12915,7 +12915,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         }
 
                         // Show options modal instead of directly navigating - user can choose GEO or EPH
-                        return `${offset || ''}<span class="${classes.join(' ')}" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.showChannelOptions('${sanitized}'); return false;">${channel}</span>`;
+                        return `${whitespace || ''}<span class="${classes.join(' ')}" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.showChannelOptions('${sanitized}'); return false;">${channel}</span>`;
                     }
 
                     // If we have community matches, use the first one
@@ -12928,7 +12928,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             classes.push('active-channel');
                         }
 
-                        return `${offset || ''}<span class="${classes.join(' ')}" title="Community: ${community.name}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('c:${id}', event); return false;">#${community.name}</span>`;
+                        return `${whitespace || ''}<span class="${classes.join(' ')}" title="Community: ${community.name}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('c:${id}', event); return false;">#${community.name}</span>`;
                     }
 
                     // Standard/EPH channel - always link any valid hashtag
@@ -12944,7 +12944,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         classes.push('joined-channel');
                     }
 
-                    return `${offset || ''}<span class="${classes.join(' ')}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('e:${sanitized}', event); return false;">${channel}</span>`;
+                    return `${whitespace || ''}<span class="${classes.join(' ')}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('e:${sanitized}', event); return false;">${channel}</span>`;
                 }
             }
         );
@@ -19645,7 +19645,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.26.72 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.26.73 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

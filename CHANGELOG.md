@@ -1,3 +1,7 @@
+## v2.26.73 - 2026-01-17
+
+Hotfix: regex fix for mentions and hashtags
+
 ## v2.26.72 - 2026-01-16
 
 Hotfix: reconnection logic improvement
