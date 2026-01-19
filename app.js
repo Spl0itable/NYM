@@ -11494,12 +11494,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             progressFill.style.width = '40%';
 
             // Create and sign Nostr event
+            const now = Math.floor(Date.now() / 1000);
             const uploadEvent = {
                 kind: 24242,
-                created_at: Math.floor(Date.now() / 1000),
+                created_at: now,
                 tags: [
                     ['t', 'upload'],
-                    ['x', hashHex]
+                    ['x', hashHex],
+                    ['expiration', String(now + 600)] // 10 minutes from now
                 ],
                 content: 'Uploading blob with SHA-256 hash',
                 pubkey: this.pubkey
@@ -11509,23 +11511,20 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             progressFill.style.width = '60%';
 
-            // Prepare form data
-            const formData = new FormData();
-            formData.append('file', file);
-
             // Convert signed event to base64
             const eventString = JSON.stringify(signedEvent);
             const eventBase64 = btoa(eventString);
 
             progressFill.style.width = '80%';
 
-            // Upload to nostrmedia.com
-            const response = await fetch('https://nostrmedia.com/upload', {
-                method: 'POST',
+            // Upload to blossom.band
+            const response = await fetch('https://blossom.band/upload', {
+                method: 'PUT',
                 headers: {
-                    'Authorization': `Nostr ${eventBase64}`
+                    'Authorization': `Nostr ${eventBase64}`,
+                    'Content-Type': file.type || 'application/octet-stream'
                 },
-                body: formData
+                body: file
             });
 
             progressFill.style.width = '100%';
@@ -19645,7 +19644,7 @@ async function saveSettings() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.26.73 ═══<br/>
+═══ NYM - Nostr Ynstant Messenger v2.26.74 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

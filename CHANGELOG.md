@@ -1,3 +1,7 @@
+## v2.26.74 - 2026-01-20
+
+Hotfix: deprecated nostrmedia.com for blossom.band
+
 ## v2.26.73 - 2026-01-17
 
 Hotfix: regex fix for mentions and hashtags

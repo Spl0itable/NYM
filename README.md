@@ -37,7 +37,7 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 - **Rich Text** - Markdown support for bold, italic, strikethrough, code blocks, and quotes
 - **Message Reactions** - React to messages with emojis (NIP-25)
 - **Auto-Reply** - Set away messages with `/brb` command
-- **Image Sharing** - Upload and share images via nostrmedia.com
+- **Image Sharing** - Upload and share images via blossom.band
 
 ### Lightning Integration
 - **Lightning Zaps** - Send Lightning payments to messages and user profiles (NIP-57)
