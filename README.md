@@ -106,15 +106,6 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 **Channel Commands:**
 - `/share` - Share current channel URL
 
-## Technical Details
-
-- **Relay Support** - Connects to multiple Nostr relays for redundancy and discovery
-- **Relay Monitoring** - Uses NIP-66 for automatic relay discovery
-- **PWA Support** - Install as a standalone app on mobile and desktop
-- **Responsive Design** - Mobile-first interface with swipe gestures
-- **Message Deduplication** - Prevents duplicate messages across relays
-- **Automatic Reconnection** - Handles network interruptions gracefully
-
 ## Contributing
 
 Please feel free to submit a Pull Request.
