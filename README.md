@@ -1,21 +1,27 @@
 ```
-███╗   ██╗██╗   ██╗███╗   ███╗
-████╗  ██║╚██╗ ██╔╝████╗ ████║
-██╔██╗ ██║ ╚████╔╝ ██╔████╔██║
-██║╚██╗██║  ╚██╔╝  ██║╚██╔╝██║
-██║ ╚████║   ██║   ██║ ╚═╝ ██║
-╚═╝  ╚═══╝   ╚═╝   ╚═╝     ╚═╝
+                                            ##\                  ##\     
+                                            ## |                 ## |    
+#######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\   
+##  __##\ ## |  ## |##  _##  _##\ ##  _____|##  __##\  \____##\\_##  _|  
+## |  ## |## |  ## |## / ## / ## |## /      ## |  ## | ####### | ## |    
+## |  ## |## |  ## |## | ## | ## |## |      ## |  ## |##  __## | ## |##\ 
+## |  ## |\####### |## | ## | ## |\#######\ ## |  ## |\####### | \####  |
+\__|  \__| \____## |\__| \__| \__| \_______|\__|  \__| \_______|  \____/ 
+          ##\   ## |                                                     
+          \######  |                                                     
+           \______/                                                      
+
 ```
 
-# Nostr Ynstant Messenger
+# Nymchat
 
 A lightweight ephemeral chat client built on Nostr protocol, bridging with [Bitchat](https://bitchat.free) for anonymous, temporary messaging.
 
 ## Overview
 
-NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kind 20000) for geohash-based location channels and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting.
+Nymchat is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kind 20000) for geohash-based location channels and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting.
 
-![NYM Screenshot](https://nym.bar/images/NYM.png)
+![Nymchat Screenshot](https://nym.bar/images/NYM.png)
 
 ## Features
 
@@ -57,7 +63,7 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 
 ### Geohash Channels
 - Geohash event `kind 20000` with `['g', geohash]` tag
-- Tags: `['n', nym]` for nickname, `['client', 'NYM']` for client identification
+- Tags: `['n', nym]` for nickname, `['client', 'Nymchat']` for client identification
 
 ### Private Messages
 - NIP-17 encrypted direct messages `kind 1059`
@@ -79,7 +85,7 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 - `/w` - Shortcut for /who
 - `/clear` - Clear chat messages
 - `/leave` - Leave current channel
-- `/quit` - Disconnect from NYM
+- `/quit` - Disconnect from Nymchat
 
 **Moderation Commands:**
 - `/block [nym|#channel]` - Block a user or channel

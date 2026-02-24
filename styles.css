@@ -102,19 +102,15 @@ body::after {
     background: var(--bg-tertiary);
 }
 
-.logo {
-    font-size: 24px;
-    font-weight: bold;
+.logo-ascii {
+    font-size: 4.5px;
+    line-height: 1.2;
     color: var(--primary);
     text-shadow: 0 0 10px var(--primary);
     margin-bottom: 5px;
-    letter-spacing: 4px;
-}
-
-.tagline {
-    font-size: 10px;
-    color: var(--text-dim);
-    letter-spacing: 1px;
+    font-family: monospace;
+    white-space: pre;
+    overflow: hidden;
 }
 
 .nym-display {

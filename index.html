@@ -5,20 +5,20 @@
     <meta charset="UTF-8">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>NYM</title>
+    <title>Nymchat App</title>
     <meta name="description"
-        content="NYM App - Nostr Ynstant Messenger. Ephemeral anonymous messaging. Bridged with Bitchat geohash channels.">
+        content="Ephemeral anonymous chat messaging. Bridged with Bitchat geohash channels.">
     <link rel="manifest"
-        href="data:application/json;base64,eyJuYW1lIjoiTllNIC0gTm9zdHIgWW5zdGFudCBNZXNzZW5nZXIiLCJzaG9ydF9uYW1lIjoiTllNIiwic3RhcnRfdXJsIjoiaHR0cHM6Ly9hcHAubnltLmJhciIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwidGhlbWVfY29sb3IiOiIjMDAwMDAwIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDAwMDAiLCJpY29ucyI6W3sic3JjIjoiaHR0cHM6Ly9ueW0uYmFyL2ltYWdlcy9OWU0taWNvbi5wbmciLCJzaXplcyI6IjE5MngxOTIiLCJ0eXBlIjoiaW1hZ2UvcG5nIn0seyJzcmMiOiJodHRwczovL255bS5iYXIvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiNTEyeDUxMiIsInR5cGUiOiJpbWFnZS9wbmcifV19Cg==">
+        href="data:application/json;base64,eyJuYW1lIjoiTnltY2hhdCIsInNob3J0X25hbWUiOiJOeW1jaGF0Iiwic3RhcnRfdXJsIjoiaHR0cHM6Ly9hcHAubnltLmJhciIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwidGhlbWVfY29sb3IiOiIjMDAwMDAwIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDAwMDAiLCJpY29ucyI6W3sic3JjIjoiaHR0cHM6Ly9ueW0uYmFyL2ltYWdlcy9OWU0taWNvbi5wbmciLCJzaXplcyI6IjE5MngxOTIiLCJ0eXBlIjoiaW1hZ2UvcG5nIn0seyJzcmMiOiJodHRwczovL255bS5iYXIvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiNTEyeDUxMiIsInR5cGUiOiJpbWFnZS9wbmcifV19">
     <link rel="icon" type="image/x-icon" href="https://nym.bar/images/favicon.ico">
     <link rel="icon" type="image/png" sizes="192x192" href="https://nym.bar/images/android-chrome-192x192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="https://nym.bar/images/android-chrome-512x512.png">
     <link rel="apple-touch-icon" sizes="192x192" href="https://nym.bar/images/android-chrome-192x192.png">
 
     <!-- Open Graph Meta Tags -->
-    <meta property="og:title" content="Anonymously Chat with NYM">
+    <meta property="og:title" content="Anonymously Chat with Nymchat">
     <meta property="og:description"
-        content="Ephemeral anonymous messaging over Nostr. Bridged with Bitchat geohash channels.">
+        content="Ephemeral anonymous chat messaging over Nostr. Bridged with Bitchat geohash channels.">
     <meta property="og:image" content="https://nym.bar/images/NYM-favicon.png">
     <meta property="og:url" content="https://app.nym.bar">
     <meta property="og:type" content="website">
@@ -28,7 +28,7 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="NYM">
+    <meta name="apple-mobile-web-app-title" content="Nymchat">
     <link rel="apple-touch-icon" href="https://nym.bar/images/NYM-favicon.png">
 
     <!-- Preload critical assets for faster paint -->
@@ -112,8 +112,19 @@
     <div class="container">
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <div class="logo">NYM</div>
-                <div class="tagline">Ephemeral Nostr Chat</div>
+<pre class="logo-ascii">
+                                            ##\                  ##\     
+                                            ## |                 ## |    
+#######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\   
+##  __##\ ## |  ## |##  _##  _##\ ##  _____|##  __##\  \____##\\_##  _|  
+## |  ## |## |  ## |## / ## / ## |## /      ## |  ## | ####### | ## |    
+## |  ## |## |  ## |## | ## | ## |## |      ## |  ## |##  __## | ## |##\ 
+## |  ## |\####### |## | ## | ## |\#######\ ## |  ## |\####### | \####  |
+\__|  \__| \____## |\__| \__| \__| \_______|\__|  \__| \_______|  \____/ 
+          ##\   ## |                                                     
+          \######  |                                                     
+           \______/                                                      
+</pre>
                 <div class="nym-display" onclick="editNick()">
                     <div class="nym-label">Your Nym (click to edit)</div>
                     <div class="nym-value" id="currentNym">anonymous</div>
@@ -125,7 +136,6 @@
             </div>
 
             <div class="sidebar-actions">
-                <button class="icon-btn" onclick="showChannelModal(); nym.closeSidebar();">+ Geohash</button>
                 <button class="icon-btn" onclick="nym.openShop(); nym.closeSidebar();">Shop</button>
                 <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();">Settings</button>
                 <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();">About</button>
@@ -156,8 +166,8 @@
                     onkeyup="nym.handleChannelSearch(this.value)">
                 <div id="channelSearchResults"></div>
                 <div class="channel-list" id="channelList">
-                    <div class="channel-item active" data-channel="9q" data-geohash="9q">
-                        <span class="channel-name">#9q</span>
+                    <div class="channel-item active" data-channel="nym" data-geohash="nym">
+                        <span class="channel-name">#nym</span>
                         <div class="channel-badges">
                             <span class="unread-badge" style="display:none">0</span>
                         </div>
@@ -201,7 +211,7 @@
                 <div class="channel-info">
                     <div style="display: flex; align-items: center; gap: 10px;">
                         <div>
-                            <div class="channel-title" id="currentChannel">#9q</div>
+                            <div class="channel-title" id="currentChannel">#nym</div>
                             <div class="channel-meta" id="channelMeta">0 nyms in channel</div>
                         </div>
                         <button class="share-channel-btn" id="shareChannelBtn" onclick="nym.shareChannel()"
@@ -214,7 +224,6 @@
                     </div>
                 </div>
                 <div class="header-actions">
-                    <button class="icon-btn" onclick="showChannelModal()">+ Geohash</button>
                     <button class="icon-btn" onclick="nym.openShop()">Shop</button>
                     <button class="icon-btn" onclick="showSettings()">Settings</button>
                     <button class="icon-btn" onclick="showAbout()">About</button>
@@ -224,7 +233,7 @@
 
             <div class="messages-container" id="messagesContainer">
                 <div class="system-message">
-                    ═══ Booting up NYM ═══
+                    ═══ Booting up Nymchat ═══
                 </div>
             </div>
 
@@ -292,7 +301,7 @@
                 <div class="shop-title">
                     <span>SHOP<br />
                         <span style="font-size:12px;">Buy addon packs to change the styling of your messages and
-                            nickname that others will see across all channels (only in the NYM app).</span></span>
+                            nickname that others will see across all channels (only in the Nymchat app).</span></span>
                 </div>
                 <div class="shop-recovery">
                     <input type="text" id="recoveryCodeInput" placeholder="Recovery code">
@@ -356,7 +365,7 @@
     <!-- Initial Setup Modal -->
     <div class="modal active" id="setupModal">
         <div class="modal-content">
-            <div class="modal-header">Welcome to NYM<br /><label style="color: var(--warning); margin-top:5px;"
+            <div class="modal-header">Welcome to Nymchat<br /><label style="color: var(--warning); margin-top:5px;"
                     class="form-label">Ephemeral, anonymous, decentralized chat</label></div>
             <div class="modal-body">
                 <div class="form-group" id="nymGroup">
@@ -383,7 +392,7 @@
                 </div>
             </div>
             <div class="modal-actions" style="margin-bottom:20px;">
-                <button class="send-btn" id="enterNymBtn" onclick="initializeNym()">Enter NYM</button>
+                <button class="send-btn" id="enterNymBtn" onclick="initializeNym()">Enter Nymchat</button>
             </div>
             <span style="color: var(--text-dim);">By entering, you agree to our <a
                     href="https://github.com/Spl0itable/NYM/blob/main/TOS.md" target="_blank" rel="noopener"
@@ -609,25 +618,6 @@
         </div>
     </div>
 
-    <!-- Channel Modal -->
-    <div class="modal" id="channelModal">
-        <div class="modal-content">
-            <div class="modal-header">Join Geohash Channel</div>
-            <div class="modal-body">
-                <div class="form-group" id="geohashGroup">
-                    <label class="form-label">Geohash</label>
-                    <input type="text" class="form-input" id="geohashInput" placeholder="e.g., 9q, w1, dr5r, etc."
-                        maxlength="12"
-                        oninput="this.value = this.value.toLowerCase().replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '')">
-                    <div class="form-hint">Enter a geohash code (valid chars: 0-9, b-z except a,i,l,o)</div>
-                </div>
-            </div>
-            <div class="modal-actions">
-                <button class="icon-btn" onclick="closeModal('channelModal')">Cancel</button>
-                <button class="send-btn" onclick="joinOrCreateChannel()">Join</button>
-            </div>
-        </div>
-    </div>
 
 
     <!-- Zap Modal -->
@@ -765,7 +755,7 @@
         <div id="tutorialHighlight" class="tutorial-highlight" style="display:none;"></div>
         <div id="tutorialCard" class="tutorial-card" role="dialog" aria-modal="true" aria-labelledby="tutorialTitle">
             <div class="tutorial-header">
-                <div class="tutorial-title" id="tutorialTitle">NYM Tutorial</div>
+                <div class="tutorial-title" id="tutorialTitle">Nymchat Tutorial</div>
                 <button id="tutorialSkipBtn" class="tutorial-skip" type="button">Skip</button>
             </div>
             <div class="tutorial-body" id="tutorialBody">

@@ -23,7 +23,7 @@
     function buildSteps() {
         state.steps = [
             {
-                title: 'NYM Tutorial',
+                title: 'Nymchat Tutorial',
                 body: 'Take a quick tour so you know what’s where. You can skip anytime. And use the /help command in any channel to learn more.',
                 selector: null
             },
@@ -41,13 +41,13 @@
             },
             {
                 title: 'Main Menu',
-                body: 'Create or join a channel. Buy addon packs in the shop to change the styling of your messages and nickname. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start anew.',
+                body: 'Buy addon packs in the shop to change the styling of your messages and nickname. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start anew.',
                 selector: (window.innerWidth > 768 ? '.header-actions' : '.sidebar-actions'),
                 onBefore: () => { if (window.innerWidth <= 768) return ensureSidebarOpenOnMobile(); }
             },
             {
                 title: 'Channels',
-                body: 'Browse and switch geohash channels. Use the search or "+ Geohash" button in menu to join or create new geohash channels.',
+                body: 'Browse and switch geohash channels. Use the search feature to find and join geohash channels.',
                 selector: '#channelList',
                 onBefore: ensureSidebarOpenOnMobile
             },
@@ -87,7 +87,7 @@
             },
             {
                 title: 'All set!',
-                body: 'That\'s it. Enjoy NYM! Check out all of the available commands by typing the /help command in any channel.',
+                body: 'That\'s it. Enjoy Nymchat! Check out all of the available commands by typing the /help command in any channel.',
                 selector: null,
                 final: true
             }
@@ -286,7 +286,7 @@
         const step = state.steps[state.idx];
 
         const updateAndPosition = () => {
-            state.elTitle.textContent = step.title || 'NYM';
+            state.elTitle.textContent = step.title || 'Nymchat';
             state.elBody.textContent = step.body || '';
             state.elProgress.textContent = `Step ${state.idx + 1} of ${state.steps.length}`;
 
@@ -444,7 +444,6 @@
     };
 })();
 
-// NYM - Ephemeral Nostr Chat
 class NYM {
     constructor() {
         this.relayPool = new Map();
@@ -1013,7 +1012,7 @@ class NYM {
         this.powDifficulty = 12;
         this.enablePow = false;
         this.connectionMode = 'ephemeral';
-        this.currentChannel = '9q';
+        this.currentChannel = 'nym';
         this.currentGeohash = '';
         this.currentPM = null;
         this.messages = new Map();
@@ -1047,13 +1046,13 @@ class NYM {
         this.channelSubscriptionBatchSize = 10;
         this.channelMessageLimit = 200;
         this.settings = this.loadSettings();
-        this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: '9q' };
+        this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
         if (this.pinnedLandingChannel.type === 'geohash' && this.pinnedLandingChannel.geohash) {
             this.currentChannel = this.pinnedLandingChannel.geohash;
             this.currentGeohash = this.pinnedLandingChannel.geohash;
         } else {
-            this.currentChannel = '9q';
-            this.currentGeohash = '9q';
+            this.currentChannel = 'nym';
+            this.currentGeohash = 'nym';
         }
         this.commandHistory = [];
         this.historyIndex = -1;
@@ -1065,7 +1064,7 @@ class NYM {
         this.gifSearchTimeout = null;
         this.giphyApiKey = 'G6neFEExTMBM0h3hM2QjQg4vG8jMMLa9';
         this.emojiAutocompleteIndex = -1;
-        this.commonGeohashes = ['9q', 'w1', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
+        this.commonGeohashes = ['nym', 'w1', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
         this.userJoinedChannels = new Set(this.loadUserJoinedChannels());
         this.inPMMode = false;
         this.userSearchTerm = '';
@@ -1217,7 +1216,7 @@ class NYM {
         this.verifiedDeveloper = {
             npub: 'npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv',
             pubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
-            title: 'NYM Developer'
+            title: 'Nymchat Developer'
         };
         this.isFlutterWebView = navigator.userAgent.includes('NYMApp') ||
             navigator.userAgent.includes('Flutter');
@@ -1556,7 +1555,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Shield">
             special: [
                 {
                     id: 'supporter-badge',
-                    name: 'NYM Supporter',
+                    name: 'Nymchat Supporter',
                     description: 'Special supporter badge with golden messages',
                     price: 42069,
                     type: 'supporter',
@@ -1717,7 +1716,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
             created_at: Math.floor(Date.now() / 1000),
             tags: [
                 ['d', 'nym-shop-active'],
-                ['title', 'NYM Shop Active Items']
+                ['title', 'Nymchat Shop Active Items']
             ],
             content: JSON.stringify(payload),
             pubkey: this.pubkey
@@ -2203,13 +2202,13 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
             };
 
             // Create zap request event for shop purchase
-            const zapRequest = await this.createShopZapRequest(amount, `NYM Shop Purchase: ${item.name}`);
+            const zapRequest = await this.createShopZapRequest(amount, `Nymchat Shop Purchase: ${item.name}`);
 
             // Build the LNURL callback with the zap request
             const invoice = await this.fetchShopLightningInvoice(
                 '69420@wallet.yakihonne.com',
                 amount,
-                `NYM Shop Purchase: ${item.name}`,
+                `Nymchat Shop Purchase: ${item.name}`,
                 zapRequest
             );
 
@@ -2541,7 +2540,7 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
                 created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ["d", "nym-shop-purchases"],
-                    ["title", "NYM Shop Purchases"]
+                    ["title", "Nymchat Shop Purchases"]
                 ],
                 content: JSON.stringify(purchaseData),
                 pubkey: this.pubkey
@@ -3592,7 +3591,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         let channelPart;
 
         // For geohash channels, use 'g:' prefix
-        channelPart = `g:${this.currentGeohash || '9q'}`;
+        channelPart = `g:${this.currentGeohash || 'nym'}`;
 
         const shareUrl = `${baseUrl}#${channelPart}`;
 
@@ -3630,7 +3629,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     shareToTwitter() {
         const url = document.getElementById('shareUrlInput').value;
         const channelName = this.currentGeohash || this.currentChannel;
-        const text = `Join me in the #${channelName} channel on NYM - ephemeral Nostr chat`;
+        const text = `Join me in the #${channelName} channel on Nymchat - ephemeral Nostr chat`;
         const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
         window.open(twitterUrl, '_blank');
     }
@@ -3638,7 +3637,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     shareToNostr() {
         const url = document.getElementById('shareUrlInput').value;
         const channelName = this.currentGeohash || this.currentChannel;
-        const content = `Join me in the #${channelName} channel on NYM - ephemeral Nostr chat\n\n${url}`;
+        const content = `Join me in the #${channelName} channel on Nymchat - ephemeral Nostr chat\n\n${url}`;
 
         // Copy to clipboard with Nostr note format
         const note = `nostr:note1${content}`;
@@ -4598,7 +4597,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             slapOption = document.createElement('div');
             slapOption.className = 'context-menu-item';
             slapOption.id = 'ctxSlap';
-            slapOption.textContent = 'Slap with Trout';
+            slapOption.textContent = 'Slap with Trout 🐟';
 
             // Insert after PM option
             const pmOption = document.getElementById('ctxPM');
@@ -4606,6 +4605,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 pmOption.parentNode.insertBefore(slapOption, pmOption.nextSibling);
             } else if (pmOption) {
                 pmOption.parentNode.appendChild(slapOption);
+            }
+        }
+
+        // Add hug handler
+        let hugOption = document.getElementById('ctxHug');
+        if (!hugOption) {
+            hugOption = document.createElement('div');
+            hugOption.className = 'context-menu-item';
+            hugOption.id = 'ctxHug';
+            hugOption.textContent = 'Hug 🫂';
+
+            // Insert after slap option
+            if (slapOption && slapOption.nextSibling) {
+                slapOption.parentNode.insertBefore(hugOption, slapOption.nextSibling);
+            } else if (slapOption) {
+                slapOption.parentNode.appendChild(hugOption);
             }
         }
 
@@ -4622,6 +4637,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (this.contextMenuData) {
                 // Pass the pubkey directly as the argument
                 this.cmdSlap(this.contextMenuData.pubkey);
+            }
+            document.getElementById('contextMenu').classList.remove('active');
+        });
+
+        // Add the click handler for hug
+        hugOption.addEventListener('click', () => {
+            if (this.contextMenuData) {
+                this.cmdHug(this.contextMenuData.pubkey);
             }
             document.getElementById('contextMenu').classList.remove('active');
         });
@@ -4807,7 +4830,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             slapOption = document.createElement('div');
             slapOption.className = 'context-menu-item';
             slapOption.id = 'ctxSlap';
-            slapOption.textContent = 'Slap with Trout';
+            slapOption.textContent = 'Slap with Trout 🐟';
 
             // Insert after PM option
             const pmOption = document.getElementById('ctxPM');
@@ -4820,6 +4843,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Show slap option only if not yourself
         slapOption.style.display = pubkey === this.pubkey ? 'none' : 'block';
+
+        // Add hug option if it doesn't exist
+        let hugOption = document.getElementById('ctxHug');
+        if (!hugOption) {
+            hugOption = document.createElement('div');
+            hugOption.className = 'context-menu-item';
+            hugOption.id = 'ctxHug';
+            hugOption.textContent = 'Hug 🫂';
+
+            if (slapOption && slapOption.nextSibling) {
+                slapOption.parentNode.insertBefore(hugOption, slapOption.nextSibling);
+            } else if (slapOption) {
+                slapOption.parentNode.appendChild(hugOption);
+            }
+        }
+
+        // Show hug option only if not yourself
+        hugOption.style.display = pubkey === this.pubkey ? 'none' : 'block';
 
         // Add zap option handling
         const zapOption = document.getElementById('ctxZap');
@@ -5000,35 +5041,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     generateRandomNym() {
-        const adjectives = [
-            'quantum', 'neon', 'cyber', 'shadow', 'plasma',
-            'echo', 'nexus', 'void', 'flux', 'ghost',
-            'phantom', 'stealth', 'cryptic', 'dark', 'neural',
-            'binary', 'matrix', 'digital', 'virtual', 'zero',
-            'null', 'anon', 'masked', 'hidden', 'cipher',
-            'enigma', 'spectral', 'rogue', 'omega', 'alpha',
-            'delta', 'sigma', 'vortex', 'turbo', 'razor',
-            'blade', 'frost', 'storm', 'glitch', 'pixel'
-        ];
-
-        const nouns = [
-            'ghost', 'nomad', 'drift', 'pulse', 'wave',
-            'spark', 'node', 'byte', 'mesh', 'link',
-            'runner', 'hacker', 'coder', 'agent', 'proxy',
-            'daemon', 'virus', 'worm', 'bot', 'droid',
-            'reaper', 'shadow', 'wraith', 'specter', 'shade',
-            'entity', 'unit', 'core', 'nexus', 'cypher',
-            'breach', 'exploit', 'overflow', 'inject', 'root',
-            'kernel', 'shell', 'terminal', 'console', 'script'
-        ];
-
-        const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
-        const noun = nouns[Math.floor(Math.random() * nouns.length)];
+        const randomNum = Math.floor(1000 + Math.random() * 9000);
 
         // Use the last 4 chars of pubkey
         const suffix = this.getPubkeySuffix(this.pubkey);
 
-        return `${adj}_${noun}#${suffix}`;
+        return `nym${randomNum}#${suffix}`;
     }
 
     formatNymWithPubkey(nym, pubkey) {
@@ -5167,12 +5185,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Switch to the pinned landing channel (geohash only)
             setTimeout(() => {
-                const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: '9q' };
+                const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
 
                 if (pinned.type === 'geohash' && pinned.geohash) {
                     this.switchChannel(pinned.geohash, pinned.geohash);
                 } else {
-                    this.switchChannel('9q', '9q');
+                    this.switchChannel('nym', 'nym');
                 }
             }, 100);
 
@@ -6082,12 +6100,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.lightningAddress = address;
             // Save with pubkey-specific key
             localStorage.setItem(`nym_lightning_address_${this.pubkey}`, address);
+            // Also save globally so new sessions inherit the lightning address
+            localStorage.setItem('nym_lightning_address_global', address);
 
             // Always save to Nostr profile (merging with existing data)
             await this.saveToNostrProfile();
         } else {
             this.lightningAddress = null;
             localStorage.removeItem(`nym_lightning_address_${this.pubkey}`);
+            localStorage.removeItem('nym_lightning_address_global');
             // Only remove from local storage
         }
 
@@ -6115,7 +6136,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 name: this.nym,
                 display_name: this.nym,
                 lud16: this.lightningAddress,
-                about: `NYM user - ${this.nym}`
+                about: `Nymchat user - ${this.nym}`
             };
 
             const profileEvent = {
@@ -6739,7 +6760,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const invoiceToOpen = invoiceStr.toLowerCase().startsWith('lightning:') ?
             invoiceStr : `lightning:${invoiceStr}`;
 
-        // Try Flutter bridge first (for NYM native app)
+        // Try Flutter bridge first (for Nymchat native app)
         if (window.nymOpenExternal) {
             window.nymOpenExternal(invoiceToOpen);
         } else {
@@ -6933,7 +6954,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     created_at: Math.floor(Date.now() / 1000),
                     tags: [
                         ["d", "nym-settings"],
-                        ["title", "NYM Settings"],
+                        ["title", "Nymchat Settings"],
                         ["encrypted"]
                     ],
                     content: JSON.stringify(settingsData),
@@ -6947,7 +6968,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 return; // Don't sync anything else for ephemeral users
             }
 
-            // Save NYM-specific settings (kind 30078)
+            // Save Nymchat-specific settings (kind 30078)
             const settingsData = {
                 theme: this.settings.theme,
                 sound: this.settings.sound,
@@ -6963,7 +6984,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
                 dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
                 readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,  // Default true
-                pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: '9q' }
+                pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' }
             };
 
             const settingsEvent = {
@@ -6971,7 +6992,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ["d", "nym-settings"],
-                    ["title", "NYM Settings"],
+                    ["title", "Nymchat Settings"],
                     ["encrypted"]
                 ],
                 content: JSON.stringify(settingsData),
@@ -7355,7 +7376,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const nymTag = event.tags.find(t => t[0] === 'n');
             const geohashTag = event.tags.find(t => t[0] === 'g');
 
-            const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
+            // Strip any existing #suffix from n tag (bitchat includes it, Nymchat adds its own)
+            const rawNym = nymTag ? nymTag[1].split('#')[0] : null;
+            const nym = rawNym || this.getNymFromPubkey(event.pubkey);
             const geohash = geohashTag ? geohashTag[1] : '';
 
             // Track discovered geohash for potential batch loading
@@ -8810,7 +8833,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.sendToRelay(['EVENT', wrapped]);
     }
 
-    // NYM receipt types: 'delivered' or 'read'
+    // Nymchat receipt types: 'delivered' or 'read'
     // Uses NIP-17 gift wrap with a special rumor format for receipts
     // Format: rumor with kind 69420 (custom), content empty, tags include ['x', messageId] and ['receipt', type]
     // Using kind 69420 instead of 14 to avoid showing blank DMs in other NIP-17 clients
@@ -8840,13 +8863,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.sendToRelay(['EVENT', wrapped]);
     }
 
-    // Check if a rumor is a NYM receipt
+    // Check if a rumor is a Nymchat receipt
     isNymReceipt(rumor) {
         if (!rumor || !rumor.tags) return false;
         return rumor.tags.some(t => Array.isArray(t) && t[0] === 'receipt' && (t[1] === 'delivered' || t[1] === 'read'));
     }
 
-    // Extract receipt info from a NYM receipt rumor
+    // Extract receipt info from a Nymchat receipt rumor
     parseNymReceipt(rumor) {
         if (!rumor || !rumor.tags) return null;
 
@@ -8869,13 +8892,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return null;
     }
 
-    // Check if a rumor is a NYM message (has 'x' tag for message ID)
+    // Check if a rumor is a Nymchat message (has 'x' tag for message ID)
     isNymMessage(rumor) {
         if (!rumor || !rumor.tags) return false;
         return rumor.tags.some(t => Array.isArray(t) && t[0] === 'x' && t[1] && !this.isNymReceipt(rumor));
     }
 
-    // Extract NYM message ID from rumor
+    // Extract Nymchat message ID from rumor
     getNymMessageId(rumor) {
         if (!rumor || !rumor.tags) return null;
         const xTag = rumor.tags.find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
@@ -9018,7 +9041,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     async sendNIP17PM(content, recipientPubkey) {
         const now = Math.floor(Date.now() / 1000);
 
-        // Generate message ID for delivery receipts (NYM format)
+        // Generate message ID for delivery receipts (Nymchat format)
         const nymMessageId = this.generateUUID();
 
         const rumor = {
@@ -9026,7 +9049,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             created_at: now,
             tags: [
                 ['p', recipientPubkey],
-                ['x', nymMessageId]  // NYM message ID for delivery receipts
+                ['x', nymMessageId]  // Nymchat message ID for delivery receipts
             ],
             content,
             pubkey: this.pubkey
@@ -9058,7 +9081,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 };
                 wrapped = this.bitchatWrapEvent(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
             } else {
-                // Use NYM format with message ID tag for delivery receipts
+                // Use Nymchat format with message ID tag for delivery receipts
                 wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
             }
 
@@ -9087,7 +9110,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
                 bitchatMessageId,  // For tracking Bitchat delivery/read receipts
-                nymMessageId: useBitchatFormat ? null : nymMessageId,  // For tracking NYM delivery/read receipts
+                nymMessageId: useBitchatFormat ? null : nymMessageId,  // For tracking Nymchat delivery/read receipts
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
 
@@ -9155,7 +9178,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 conversationKey,
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
-                nymMessageId,  // For tracking NYM delivery/read receipts
+                nymMessageId,  // For tracking Nymchat delivery/read receipts
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
 
@@ -9392,7 +9415,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             // Validate rumor and identity
-            // Accept kind 14 (DM), kind 15 (file), and kind 69420 (NYM receipt)
+            // Accept kind 14 (DM), kind 15 (file), and kind 69420 (Nymchat receipt)
             if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420)) {
                 return;
             }
@@ -9414,7 +9437,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.bitchatUsers.add(senderPubkey);
             }
 
-            // Track if this user uses NYM format with delivery receipts (has 'x' tag)
+            // Track if this user uses Nymchat format with delivery receipts (has 'x' tag)
             const isNymUser = this.isNymMessage(rumor) || this.isNymReceipt(rumor);
             if (isNymUser && !isOwn) {
                 this.nymUsers.add(senderPubkey);
@@ -9444,7 +9467,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
 
-            // Handle NYM delivery/read receipts (tag-based format)
+            // Handle Nymchat delivery/read receipts (tag-based format)
             if (this.isNymReceipt(rumor)) {
                 const nymReceipt = this.parseNymReceipt(rumor);
                 if (nymReceipt && nymReceipt.messageId) {
@@ -9519,7 +9542,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Get sender name from kind 0 profile (not from rumor tags)
             const senderName = this.getNymFromPubkey(senderPubkey);
 
-            // Extract NYM message ID from rumor tags
+            // Extract Nymchat message ID from rumor tags
             const nymMsgId = this.getNymMessageId(rumor);
 
             const msg = {
@@ -9535,7 +9558,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 eventKind: 1059,
                 isHistorical: (Date.now() / 1000 - tsSec) > 10,
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
-                nymMessageId: nymMsgId  // For sending NYM read receipts
+                nymMessageId: nymMsgId  // For sending Nymchat read receipts
             };
 
             list.push(msg);
@@ -9547,7 +9570,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.sendBitchatReceipt(parsed.messageId, 0x03, senderPubkey); // 0x03 = DELIVERED
             }
 
-            // Send DELIVERED receipt back to NYM user
+            // Send DELIVERED receipt back to Nymchat user
             if (!isOwn && nymMsgId && this.nymUsers.has(senderPubkey)) {
                 this.sendNymReceipt(nymMsgId, 'delivered', senderPubkey);
             }
@@ -9563,7 +9586,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
                     this.sendBitchatReceipt(parsed.messageId, 0x02, senderPubkey); // 0x02 = READ
                 }
-                // Send READ receipt for NYM users
+                // Send READ receipt for Nymchat users
                 if (!isOwn && nymMsgId && this.nymUsers.has(senderPubkey)) {
                     this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
                 }
@@ -9791,7 +9814,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // If currently viewing this PM, switch to bar
             if (this.inPMMode && this.currentPM === pubkey) {
-                this.switchChannel('9q', '9q');
+                this.switchChannel('nym', 'nym');
             }
 
             this.displaySystemMessage('PM conversation deleted');
@@ -9844,7 +9867,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (msg.bitchatMessageId && this.bitchatUsers.has(msg.pubkey)) {
                     this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
                 }
-                // Send NYM READ receipt if applicable
+                // Send Nymchat READ receipt if applicable
                 if (msg.nymMessageId && this.nymUsers.has(msg.pubkey)) {
                     this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey);
                 }
@@ -10073,7 +10096,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             ];
 
             const kind = 20000; // Geohash channels use kind 20000
-            tags.push(['g', geohash || '9q']);
+            tags.push(['g', geohash || 'nym']);
 
             let event = {
                 kind: kind,
@@ -10287,7 +10310,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             kind: kind,
             created_at: Math.floor(Date.now() / 1000),
             tags: tags,
-            content: `Sharing file through NYM: ${file.name} (${this.formatFileSize(file.size)})`,
+            content: `Sharing file through Nymchat: ${file.name} (${this.formatFileSize(file.size)})`,
             pubkey: this.pubkey
         };
 
@@ -11396,8 +11419,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         formatted = formatted
             .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
-            .replace(/<(?!span class="flair|\/span|svg|\/svg|path|\/path|title|\/title)/g, '&lt;')
-            .replace(/>(?![^<]*<\/(?:span|svg|title|path)>)/g, '&gt;')
+            .replace(/<(?!span class="flair|\/span|svg|\/svg|path|\/path|title|\/title|circle|\/circle|rect|\/rect|polyline|\/polyline|polygon|\/polygon|line(?=\s)|\/line|text|\/text|g(?=\s|>|\/)|\/g>)/g, '&lt;')
+            .replace(/>(?![^<]*<\/(?:span|svg|title|path|circle|rect|polyline|polygon|line|text|g)>)/g, '&gt;')
             .replace(/"/g, '&quot;');
 
         // Code blocks with proper line break handling
@@ -11432,7 +11455,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         );
 
-        // Convert NYM app channel links BEFORE general URLs
+        // Convert Nymchat app channel links BEFORE general URLs
         formatted = formatted.replace(
             /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
             (match, prefix, channelId) => {
@@ -11721,9 +11744,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     togglePin(channel, geohash) {
-        // Don't allow pinning/unpinning #9q since it's always at top
-        if (geohash === '9q') {
-            this.displaySystemMessage('#9q is always at the top');
+        // Don't allow pinning/unpinning #nym since it's always at top
+        if (geohash === 'nym') {
+            this.displaySystemMessage('#nym is always at the top');
             return;
         }
 
@@ -11773,8 +11796,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     toggleHideChannel(channel, geohash) {
-        if (geohash === '9q') {
-            this.displaySystemMessage('#9q cannot be hidden');
+        if (geohash === 'nym') {
+            this.displaySystemMessage('#nym cannot be hidden');
             return;
         }
 
@@ -11796,8 +11819,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const geohash = item.dataset.geohash;
             const key = geohash || channel;
 
-            // Never hide #9q or the active channel
-            if (geohash === '9q' || item.classList.contains('active')) {
+            // Never hide #nym or the active channel
+            if (geohash === 'nym' || item.classList.contains('active')) {
                 item.style.display = '';
                 return;
             }
@@ -11999,7 +12022,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '/clear': { desc: 'Clear chat messages', fn: () => this.cmdClear() },
             '/block': { desc: 'Block a user or #channel', fn: (args) => this.cmdBlock(args) },
             '/unblock': { desc: 'Unblock a user', fn: (args) => this.cmdUnblock(args) },
-            '/slap': { desc: 'Slap someone with a trout', fn: (args) => this.cmdSlap(args) },
+            '/slap': { desc: 'Slap someone with a trout 🐟', fn: (args) => this.cmdSlap(args) },
+            '/hug': { desc: 'Hug someone 🫂', fn: (args) => this.cmdHug(args) },
             '/me': { desc: 'Action message', fn: (args) => this.cmdMe(args) },
             '/shrug': { desc: 'Send a shrug', fn: () => this.cmdShrug() },
             '/bold': { desc: 'Send bold text (**text**)', fn: (args) => this.cmdBold(args) },
@@ -12018,7 +12042,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '/invite': { desc: 'Invite a user to current channel', fn: (args) => this.cmdInvite(args) },
             '/share': { desc: 'Share current channel URL', fn: () => this.cmdShare() },
             '/leave': { desc: 'Leave current channel', fn: () => this.cmdLeave() },
-            '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() }
+            '/quit': { desc: 'Disconnect from Nymchat', fn: () => this.cmdQuit() }
         };
     }
 
@@ -12399,7 +12423,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     async cmdJoin(args) {
         if (!args) {
-            this.displaySystemMessage('Usage: /join #geohash (e.g., /join #9q5 or /join 9q5)');
+            this.displaySystemMessage('Usage: /join #geohash (e.g., /join #9q5 or /join nym)');
             return;
         }
 
@@ -12428,8 +12452,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        if (this.currentGeohash === '9q') {
-            this.displaySystemMessage('Cannot leave the default #9q channel');
+        if (this.currentGeohash === 'nym') {
+            this.displaySystemMessage('Cannot leave the default #nym channel');
             return;
         }
 
@@ -12669,8 +12693,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Check current channel
             const currentChannelName = this.currentGeohash || this.currentChannel;
-            if (this.currentGeohash === '9q') {
-                this.displaySystemMessage('Cannot block the default #9q channel');
+            if (this.currentGeohash === 'nym') {
+                this.displaySystemMessage('Cannot block the default #nym channel');
                 return;
             }
 
@@ -12679,8 +12703,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.blockChannel(this.currentGeohash, this.currentGeohash);
                 this.displaySystemMessage(`Blocked geohash channel #${this.currentGeohash}`);
 
-                // Switch to #9q
-                this.switchChannel('9q', '9q');
+                // Switch to #nym
+                this.switchChannel('nym', 'nym');
 
                 this.updateBlockedChannelsList();
 
@@ -12696,22 +12720,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Check if it's current channel
             if (this.currentGeohash === channelName) {
-                // Block current channel and switch to #9q
+                // Block current channel and switch to #nym
                 if (confirm(`Block and leave channel #${channelName}?`)) {
                     this.blockChannel(channelName, channelName);
                     this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
 
-                    // Switch to #9q
-                    this.switchChannel('9q', '9q');
+                    // Switch to #nym
+                    this.switchChannel('nym', 'nym');
 
                     this.updateBlockedChannelsList();
                 }
                 return;
             }
 
-            // Don't allow blocking #9q
-            if (channelName === '9q') {
-                this.displaySystemMessage("Cannot block the default #9q channel");
+            // Don't allow blocking #nym
+            if (channelName === 'nym') {
+                this.displaySystemMessage("Cannot block the default #nym channel");
                 return;
             }
 
@@ -12990,7 +13014,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Create the slap message content  
-        const slapContent = `/me slaps ${targetNym} around a bit with a large trout`;
+        const slapContent = `/me slaps ${targetNym} around a bit with a large trout 🐟`;
 
         // Send the message using the appropriate method based on current context
         try {
@@ -13003,6 +13027,74 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         } catch (error) {
             this.displaySystemMessage('Failed to send slap: ' + error.message);
+        }
+    }
+
+    async cmdHug(args) {
+        if (!args) {
+            this.displaySystemMessage('Usage: /hug nym, /hug nym#xxxx, or /hug [pubkey]');
+            return;
+        }
+
+        const targetInput = args.trim();
+        let targetNym = '';
+
+        // Check if input is a pubkey (64 hex characters)
+        if (/^[0-9a-f]{64}$/i.test(targetInput)) {
+            const targetPubkey = targetInput.toLowerCase();
+            const user = this.users.get(targetPubkey);
+            if (user) {
+                targetNym = this.parseNymFromDisplay(user.nym);
+            } else {
+                targetNym = `anon#${targetPubkey.slice(-4)}`;
+            }
+        } else {
+            const hashIndex = targetInput.indexOf('#');
+            let searchNym = targetInput;
+            let searchSuffix = null;
+
+            if (hashIndex !== -1) {
+                searchNym = targetInput.substring(0, hashIndex);
+                searchSuffix = targetInput.substring(hashIndex + 1);
+            }
+
+            // Find matching users
+            const matches = [];
+            this.users.forEach((user, pubkey) => {
+                const cleanNym = this.parseNymFromDisplay(user.nym);
+                if (cleanNym === searchNym || cleanNym.toLowerCase() === searchNym.toLowerCase()) {
+                    if (searchSuffix) {
+                        if (pubkey.endsWith(searchSuffix)) {
+                            matches.push({ nym: cleanNym, pubkey: pubkey });
+                        }
+                    } else {
+                        matches.push({ nym: cleanNym, pubkey: pubkey });
+                    }
+                }
+            });
+
+            if (matches.length > 1 && !searchSuffix) {
+                const matchList = matches.map(m =>
+                    `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
+                ).join(', ');
+                this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
+                return;
+            }
+
+            targetNym = matches.length > 0 ? matches[0].nym : searchNym;
+        }
+
+        const hugContent = `/me hugs ${targetNym} 🫂`;
+
+        try {
+            if (this.inPMMode && this.currentPM) {
+                await this.sendPM(hugContent, this.currentPM);
+            } else if (this.currentGeohash) {
+                await this.publishMessage(hugContent, this.currentGeohash, this.currentGeohash);
+            }
+        } catch (error) {
+            this.displaySystemMessage('Failed to send hug: ' + error.message);
         }
     }
 
@@ -13284,7 +13376,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     async cmdQuit() {
-        this.displaySystemMessage('Disconnecting from NYM...');
+        this.displaySystemMessage('Disconnecting from Nymchat...');
 
         // Clear saved connection preferences
         localStorage.removeItem('nym_connection_mode');
@@ -13337,10 +13429,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Remove from channels map
         this.channels.delete(key);
 
-        // If currently in this channel, switch to #9q
+        // If currently in this channel, switch to #nym
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
             (geohash && this.currentGeohash === geohash)) {
-            this.switchChannel('9q', '9q');
+            this.switchChannel('nym', 'nym');
         }
 
         // Update view more button after removing
@@ -14148,9 +14240,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     removeChannel(channel, geohash = '') {
         const key = geohash || channel;
 
-        // Don't allow removing default channel #9q
-        if (key === '9q') {
-            this.displaySystemMessage('Cannot remove the default #9q channel');
+        // Don't allow removing default channel #nym
+        if (key === 'nym') {
+            this.displaySystemMessage('Cannot remove the default #nym channel');
             return;
         }
 
@@ -14169,10 +14261,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             element.remove();
         }
 
-        // If we're currently in this channel, switch to #9q
+        // If we're currently in this channel, switch to #nym
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
             (geohash && this.currentGeohash === geohash)) {
-            this.switchChannel('9q', '9q');
+            this.switchChannel('nym', 'nym');
         }
 
         // Save the updated channel list
@@ -14190,9 +14282,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const channel = channelItem.dataset.channel;
                 const geohash = channelItem.dataset.geohash;
 
-                // Don't allow removing default channel #9q
+                // Don't allow removing default channel #nym
                 const key = geohash || channel;
-                if (key === '9q') {
+                if (key === 'nym') {
                     return;
                 }
 
@@ -14377,9 +14469,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const scrollTop = channelList.scrollTop;
 
         channels.sort((a, b) => {
-            // #9q is always first
-            const aIsDefault = a.dataset.geohash === '9q';
-            const bIsDefault = b.dataset.geohash === '9q';
+            // #nym is always first
+            const aIsDefault = a.dataset.geohash === 'nym';
+            const bIsDefault = b.dataset.geohash === 'nym';
 
             if (aIsDefault) return -1;
             if (bIsDefault) return 1;
@@ -14760,7 +14852,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             try {
                 const notification = new Notification(titleToShow, {
                     body: body,
-                    icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="40" fill="%230ff" text-anchor="middle" font-family="monospace">NYM</text></svg>',
+                    icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="24" fill="%230ff" text-anchor="middle" font-family="monospace">Nymchat</text></svg>',
                     tag: channelInfo ? (channelInfo.id || 'nym-notification') : 'nym-notification',
                     requireInteraction: false,
                     data: { channelInfo: channelInfo }
@@ -14985,9 +15077,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         let pinnedLandingChannel;
         try {
             const saved = localStorage.getItem('nym_pinned_landing_channel');
-            pinnedLandingChannel = saved ? JSON.parse(saved) : { type: 'geohash', geohash: '9q' };
+            pinnedLandingChannel = saved ? JSON.parse(saved) : { type: 'geohash', geohash: 'nym' };
         } catch (e) {
-            pinnedLandingChannel = { type: 'geohash', geohash: '9q' };
+            pinnedLandingChannel = { type: 'geohash', geohash: 'nym' };
         }
 
         return {
@@ -15392,7 +15484,7 @@ async function showSettings() {
 
     if (pinnedSearchInput && pinnedValueInput && pinnedDropdown) {
         // Get current pinned value
-        const currentPinned = nym.pinnedLandingChannel || { type: 'geohash', geohash: '9q' };
+        const currentPinned = nym.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
 
         // Build geohash channel options only
         const channelOptions = [];
@@ -15429,8 +15521,8 @@ async function showSettings() {
             pinnedSearchInput.value = currentOption.label;
             pinnedValueInput.value = JSON.stringify(currentOption.value);
         } else {
-            pinnedSearchInput.value = '#9q';
-            pinnedValueInput.value = JSON.stringify({ type: 'geohash', geohash: '9q' });
+            pinnedSearchInput.value = '#nym';
+            pinnedValueInput.value = JSON.stringify({ type: 'geohash', geohash: 'nym' });
         }
 
         // Function to render filtered options
@@ -15609,7 +15701,7 @@ async function saveSettings() {
             localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(pinnedLandingChannel));
         } catch (e) {
             // Fallback to default
-            const defaultChannel = { type: 'geohash', geohash: '9q' };
+            const defaultChannel = { type: 'geohash', geohash: 'nym' };
             nym.pinnedLandingChannel = defaultChannel;
             nym.settings.pinnedLandingChannel = defaultChannel;
             localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(defaultChannel));
@@ -15732,7 +15824,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v3.26.74 ═══<br/>
+═══ Nymchat v3.26.75 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -15743,34 +15835,10 @@ No accounts. No persistence. Just nyms.<br/>
 <br/>
 Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br/>
 <br/>
-NYM is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br/><br/>
+Nymchat is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br/><br/>
 Made with ♥ by <a href="https://nostrservices.com" target="_blank" rel="noopener" style="color: var(--secondary)">21 Million LLC</a><br/><br/>
 Lead developer: <a href="https://njump.me/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas</a>
 `);
-}
-
-function showChannelModal() {
-    document.getElementById('channelModal').classList.add('active');
-}
-
-async function joinOrCreateChannel() {
-    let geohash = document.getElementById('geohashInput').value.trim().toLowerCase();
-    geohash = geohash.replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
-
-    if (!geohash) {
-        alert('Please enter a valid geohash');
-        return;
-    }
-
-    if (!nym.isValidGeohash(geohash)) {
-        alert('Invalid geohash. Valid characters are: 0-9, b-z (except a, i, l, o)');
-        return;
-    }
-
-    await nym.cmdJoin('#' + geohash);
-
-    closeModal('channelModal');
-    document.getElementById('geohashInput').value = '';
 }
 
 // Function to check for saved connection on page load
@@ -15806,13 +15874,22 @@ async function checkSavedConnection() {
             // Apply cached shop items (styles/flairs) to the new ephemeral identity
             nym.applyCachedShopItemsToNewIdentity();
 
+            // Restore lightning address from global localStorage to new session
+            const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
+            if (globalLnAddress) {
+                nym.lightningAddress = globalLnAddress;
+                localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
+                nym.updateLightningAddressDisplay();
+                await nym.saveToNostrProfile();
+            }
+
             // Request notification permission
             if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
                 Notification.requestPermission();
             }
 
             // Welcome message
-            nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Type /help for available commands.`);
+            nym.displaySystemMessage(`Welcome to Nymchat, ${nym.nym}! Type /help for available commands.`);
             nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
             nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
@@ -15868,6 +15945,15 @@ async function initializeNym() {
         // Apply cached shop items (styles/flairs) to the new ephemeral identity
         nym.applyCachedShopItemsToNewIdentity();
 
+        // Restore lightning address from global localStorage to new session
+        const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
+        if (globalLnAddress) {
+            nym.lightningAddress = globalLnAddress;
+            localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
+            nym.updateLightningAddressDisplay();
+            await nym.saveToNostrProfile();
+        }
+
         // Request notification permission
         if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
             Notification.requestPermission();
@@ -15881,7 +15967,7 @@ async function initializeNym() {
         closeModal('setupModal');
 
         // Welcome messages
-        nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Type /help for available commands.`);
+        nym.displaySystemMessage(`Welcome to Nymchat, ${nym.nym}! Type /help for available commands.`);
         nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
         nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
@@ -15914,7 +16000,7 @@ function disconnectNym() {
 
 // Sign-out button
 function signOut() {
-    if (confirm('Sign out and disconnect from NYM?')) {
+    if (confirm('Sign out and disconnect from Nymchat?')) {
         // Clear auto-ephemeral preferences on logout
         localStorage.removeItem('nym_auto_ephemeral');
         localStorage.removeItem('nym_auto_ephemeral_nick');

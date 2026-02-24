@@ -1,6 +1,12 @@
+## v3.26.75 - 2026-02-24
+
+New: rebranding from NYM to Nymchat
+Hotfix: duplicate suffix
+Hotfix: SVG icon rendering
+
 ## v3.26.74 - 2026-02-24
 
-New: NYM is now geohash channel and ephemeral mode only
+New: Nymchat is now geohash channel and ephemeral mode only
 New: hide channels
 New: hide all non-pinned channels
 New: purchased shop items carry across ephemeral sessions
@@ -55,7 +61,7 @@ Hotfix: incorrect functions for geohash channel info
 
 ## v2.25.64 - 2026-01-14
 
-Hotfix: changed the way NYM handles read receipts
+Hotfix: changed the way Nymchat handles read receipts
 
 ## v2.25.63 - 2026-01-09
 
@@ -385,7 +391,7 @@ New: sort geohash channels by proximity to location by enabling access from sett
 
 ## v1.6.9 - 2025-09-04
 
-New: shows verified badge for NYM dev
+New: shows verified badge for Nymchat dev
 
 ## v1.5.9 - 2025-09-04
 
