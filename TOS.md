@@ -1,7 +1,7 @@
 # Terms of Service
 Last Updated: October 17th, 2025
 
-These Terms of Service ("Terms") govern your access to and use of the services made available by 21 Million LLC (referred to as "we", "our", "21 Million LLC") including services that we provide via the Nymchat website (nym.bar and any other domain or subdomain through which Nymchat-related services are provided from time to time, the "Nymchat Website") and in connection with the Nymchat Private Messenger applications (the "Nymchat App"), including Linux, Windows, Mac OS, Android and Mac iOS (collectively referred to as the "Services", which expression shall include any services, or any part thereof, that 21 Million LLC provides from time to time) and any information, text, links, graphics, videos, audio or other material uploaded, downloaded or appearing on such Services (collectively, referred to as "Content").
+These Terms of Service ("Terms") govern your access to and use of the services made available by 21 Million LLC (referred to as "we", "our", "21 Million LLC") including services that we provide via the Nymchat website (nymchat.app and any other domain or subdomain through which Nymchat-related services are provided from time to time, the "Nymchat Website") and in connection with the Nymchat Private Messenger applications (the "Nymchat App"), including Linux, Windows, Mac OS, Android and Mac iOS (collectively referred to as the "Services", which expression shall include any services, or any part thereof, that 21 Million LLC provides from time to time) and any information, text, links, graphics, videos, audio or other material uploaded, downloaded or appearing on such Services (collectively, referred to as "Content").
 
 These Terms and the Nymchat Privacy Policy form the End User Agreement between you and 21 Million LLC.
 
@@ -66,7 +66,7 @@ Community by Nymchat — You may use Communities run by Nymchat in accordance wi
 
 Your Content — You own and/or take responsibility for the content (text messages, audio, video, images) you submit through our Services. We can not access this information unless you explicitly send it to us, or it is published in a Community.
 
-Nymchat's Rights — You acknowledge that 21 Million LLC owns all copyrights, trademarks, domains, logos, trade dress, trade secrets, patents, and other intellectual property rights associated with our Services. You may not use our copyrights, trademarks, domains, logos, trade dress, patents, and other intellectual property rights unless you have our written permission. To report copyright, trademark, or other intellectual property infringement, please contact support@nym.bar.
+Nymchat's Rights — You acknowledge that 21 Million LLC owns all copyrights, trademarks, domains, logos, trade dress, trade secrets, patents, and other intellectual property rights associated with our Services. You may not use our copyrights, trademarks, domains, logos, trade dress, patents, and other intellectual property rights unless you have our written permission. To report copyright, trademark, or other intellectual property infringement, please contact support@nymchat.app.
 
 ### 5.2. Nymchat Content Policy
 21 Million LLC exists to build private and secure technology, and defend individuals' rights to privacy and security in the digital world. We are also mission-driven to uphold key democratic, media freedom and human rights principles.
@@ -110,7 +110,7 @@ Our Services have been created using a privacy-by-design approach which means th
 
 Communities on Nymchat, by their nature, are open to the public, routed through the Nostr network, and the content posted and shared through Communities can be monitored. 21 Million LLC does not have the capacity to monitor all Communities; however, we do make a concerted effort to monitor and where necessary moderate Communities that have been created by us.
 
-If you become aware of any behavior or content which you believe may breach any of our terms or principles of use, you should contact support@nym.bar.
+If you become aware of any behavior or content which you believe may breach any of our terms or principles of use, you should contact support@nymchat.app.
 
 ### 6.1 Third-party notification of breaches
 We may be notified by third-parties of breaches to these Terms. In such cases, the evidence presented by the third-parties will be reviewed by us (or a service provider engaged by us or by the community to perform such review), to determine the severity of the breach and the required outcomes. Any decisions made by our Board will be final.
@@ -130,7 +130,7 @@ All notifications, including requests for information or take down notices, will
 ## 9.0 General
 21 Million LLC may update the Terms at any time. When we update our Terms, We will update the "Last Modified" date associated with the updated Terms. Your continued use of our Services confirms your acceptance of our updated Terms and supersedes any prior agreed Terms. You will comply with all applicable export control and trade sanctions laws. Our Terms cover the entire agreement between you and Nymchat regarding our Services. If you do not agree with our Terms, you should stop using our Services.
 
-If we fail to enforce our Terms, we do not waive the right to enforce them. If any provision of the Terms is deemed unlawful, void, or unenforceable, that provision shall be deemed severable from our Terms and shall not affect the enforceability of the remaining provisions. Our Services are not intended for distribution to or use in any country where such distribution or use would violate local law or would subject us to any regulations in another country. If you have specific questions about these Terms, please contact us at support@nym.bar
+If we fail to enforce our Terms, we do not waive the right to enforce them. If any provision of the Terms is deemed unlawful, void, or unenforceable, that provision shall be deemed severable from our Terms and shall not affect the enforceability of the remaining provisions. Our Services are not intended for distribution to or use in any country where such distribution or use would violate local law or would subject us to any regulations in another country. If you have specific questions about these Terms, please contact us at support@nymchat.app
 
 ## Nymchat iOS – End User License Agreement
 By using the Nymchat iOS app ("App"), you agree to this End User License Agreement ("EULA"), the Terms of Service and Privacy Policy of Nymchat, but also:
@@ -149,7 +149,7 @@ By using the Nymchat iOS app ("App"), you agree to this End User License Agreeme
 
 **Legal Compliance:** You represent and warrant that (i) he/she is not located in a country that is subject to a U.S. Government embargo, or that has been designated by the U.S. Government as a "terrorist supporting" country; and (ii) he/she is not listed on any U.S. Government list of prohibited or restricted parties.
 
-**Developer Name and Address:** If you have questions about the Terms of Service or this EULA, you may email support@nym.bar
+**Developer Name and Address:** If you have questions about the Terms of Service or this EULA, you may email support@nymchat.app
 
 **Third Party Terms of Agreement:** You must comply with applicable third party terms of agreement when using the App, if any such third party applications exist.
 
@@ -158,4 +158,4 @@ By using the Nymchat iOS app ("App"), you agree to this End User License Agreeme
 **Unacceptable Content:** You acknowledge that you are subject to acceptable content policies within Communities and other areas on the app and must not use the App to distribute objectionable content. If you are deemed an abusive user you may also be restricted or removed from Communities or the App if reported or discovered.
 
 ## Conclusion
-This page outlines the Terms of Service for the Nymchat app, services, and website, as well as the End User License Agreement for iOS. If you'd like to read more about how we handle your privacy, you can check out the Nymchat privacy policy. If you have any questions, opinions, or concerns about Nymchat's Terms, please get in touch with us via email at support@nym.bar.
+This page outlines the Terms of Service for the Nymchat app, services, and website, as well as the End User License Agreement for iOS. If you'd like to read more about how we handle your privacy, you can check out the Nymchat privacy policy. If you have any questions, opinions, or concerns about Nymchat's Terms, please get in touch with us via email at support@nymchat.app.

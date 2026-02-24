@@ -32,4 +32,4 @@ The Nymchat website stores some limited data to make sure it is easy-to-use and 
 We use Cloudflare services in order to serve the Nymchat website. Cloudflare keeps logs about HTTP requests for the Nymchat domains, which can be stored for up to 7 days.
 
 ## Get in touch!
-This is the way the Nymchat app and website treat your privacy. If you would like more information, have suggestions about how Nymchat can better protect your privacy, or just want to say hello—please send an email to support@nym.bar
+This is the way the Nymchat app and website treat your privacy. If you would like more information, have suggestions about how Nymchat can better protect your privacy, or just want to say hello—please send an email to support@nymchat.app
