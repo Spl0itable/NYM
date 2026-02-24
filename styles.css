@@ -403,18 +403,14 @@ body::after {
     color: var(--text-dim);
     padding: 2px;
     cursor: pointer;
-    opacity: 0;
+    opacity: 0.5;
     transition: opacity 0.2s;
     display: flex;
     align-items: center;
 }
 
-.channel-item:hover .hide-btn {
-    opacity: 0.5;
-}
-
 .hide-btn:hover {
-    opacity: 1 !important;
+    opacity: 1;
     color: var(--error, #f44);
 }
 
