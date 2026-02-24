@@ -9,26 +9,23 @@
 
 # Nostr Ynstant Messenger
 
-A lightweight ephemeral and persistent chat client built on Nostr protocol, bridging with [Bitchat](https://bitchat.free) for anonymous, temporary messaging.
+A lightweight ephemeral chat client built on Nostr protocol, bridging with [Bitchat](https://bitchat.free) for anonymous, temporary messaging.
 
 ## Overview
 
-NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kinds 20000 and 23333), persistent communities (kinds 4550 and 34550), and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting, or connect using a Nostr extension for persistent identity.
+NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kind 20000) for geohash-based location channels and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting.
 
 ![NYM Screenshot](https://nym.bar/images/NYM.png)
 
 ## Features
 
-### Identity & Connection
+### Identity
 - **Ephemeral Identity** - Generate temporary keypairs and pseudonyms per session
-- **Persistent Identity** - Connect via Nostr extension (Alby, nos2x) or NSEC private key
-- **Auto-Ephemeral Mode** - Option to skip welcome screen and auto-start ephemeral sessions
-- **Profile Sync** - Lightning addresses and settings synced across devices for persistent users
+- **Auto-Ephemeral Mode** - Auto-start ephemeral sessions without a welcome screen
 
-### Channels & Communities
-- **Ephemeral Channels** - Standard channels (kind 23333) and geohash-based location channels (kind 20000)
-- **Community Channels** - Public and private persistent communities (kinds 4550, 34550) with moderation tools
-- **Channel Sharing** - Generate shareable URLs for channels and communities
+### Channels
+- **Geohash Channels** - Location-based channels using geohash encoding (kind 20000)
+- **Channel Sharing** - Generate shareable URLs for channels
 - **Channel Pinning** - Pin frequently used channels to the top of your list
 - **Proximity Sorting** - Sort geohash channels by distance from your location
 
@@ -47,8 +44,6 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 ### Moderation & Privacy
 - **User Blocking** - Block unwanted users and channels
 - **Keyword Filtering** - Block messages containing specific keywords or phrases
-- **Community Moderation** - Kick, ban, and manage moderators (admins and mods only)
-- **Community-Specific Filters** - Custom keyword blocking per community
 - **Flood Protection** - Automatic spam prevention
 - **Image Blur** - Option to blur images from other users until clicked
 
@@ -60,16 +55,9 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 
 ## Protocol Implementation
 
-### Ephemeral Channels
+### Geohash Channels
 - Geohash event `kind 20000` with `['g', geohash]` tag
-- Standard channel event `kind 23333` with `['d', channel]` tag
 - Tags: `['n', nym]` for nickname, `['client', 'NYM']` for client identification
-
-### Community Channels
-- Community definition `kind 34550` (NIP-72)
-- Community posts `kind 4550` with `['a', communityReference]` tag
-- Moderation events `kind 1984` (NIP-56) for bans, kicks, and moderator actions
-- Support for public and private communities with member management
 
 ### Private Messages
 - NIP-17 encrypted direct messages `kind 1059`
@@ -83,7 +71,7 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 
 **Basic Commands:**
 - `/help` - Show available commands
-- `/join <channel>` - Join a channel (e.g., /join random or /join #geohash)
+- `/join <channel>` - Join a geohash channel (e.g., /join #9q5)
 - `/j` - Shortcut for /join
 - `/pm <nym>` - Send private message (e.g., /pm nym or /pm nym#xxxx)
 - `/nick <nym>` - Change your nym
@@ -117,19 +105,6 @@ NYM is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral ev
 
 **Channel Commands:**
 - `/share` - Share current channel URL
-
-**Community Commands (requires persistent identity):**
-- `/createcommunity <name> ["description"] [--private]` or `/cc` - Create a community
-- `/addmod <nym>` - Add moderator to community (admin only)
-- `/removemod <nym>` - Remove moderator (admin only)
-- `/kick <nym>` - Kick user from community (admin/mod)
-- `/ban <nym>` - Ban user from community (admin/mod)
-- `/unban <nym>` - Unban user from community (admin/mod)
-- `/invitecommunity <nym>` - Invite user to private community
-- `/communityinfo` or `/ci` - Show community information
-- `/members` - List community members (admin/mod)
-- `/mods` - List community moderators
-- `/communitysettings` or `/cs` - Manage community settings (admin only)
 
 ## Technical Details
 

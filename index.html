@@ -125,7 +125,7 @@
             </div>
 
             <div class="sidebar-actions">
-                <button class="icon-btn" onclick="showChannelModal(); nym.closeSidebar();">+ Channel</button>
+                <button class="icon-btn" onclick="showChannelModal(); nym.closeSidebar();">+ Geohash</button>
                 <button class="icon-btn" onclick="nym.openShop(); nym.closeSidebar();">Shop</button>
                 <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();">Settings</button>
                 <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();">About</button>
@@ -156,15 +156,9 @@
                     onkeyup="nym.handleChannelSearch(this.value)">
                 <div id="channelSearchResults"></div>
                 <div class="channel-list" id="channelList">
-                    <div class="channel-item active" data-channel="bar" data-geohash="">
-                        <span class="channel-name">#bar</span>
+                    <div class="channel-item active" data-channel="9q" data-geohash="9q">
+                        <span class="channel-name">#9q</span>
                         <div class="channel-badges">
-                            <span class="pin-btn" onclick="event.stopPropagation(); nym.togglePin('bar', '')">
-                                <svg viewBox="0 0 24 24">
-                                    <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" />
-                                </svg>
-                            </span>
-                            <span class="std-badge">EPH</span>
                             <span class="unread-badge" style="display:none">0</span>
                         </div>
                     </div>
@@ -207,7 +201,7 @@
                 <div class="channel-info">
                     <div style="display: flex; align-items: center; gap: 10px;">
                         <div>
-                            <div class="channel-title" id="currentChannel">#bar</div>
+                            <div class="channel-title" id="currentChannel">#9q</div>
                             <div class="channel-meta" id="channelMeta">0 nyms in channel</div>
                         </div>
                         <button class="share-channel-btn" id="shareChannelBtn" onclick="nym.shareChannel()"
@@ -220,7 +214,7 @@
                     </div>
                 </div>
                 <div class="header-actions">
-                    <button class="icon-btn" onclick="showChannelModal()">+ Channel</button>
+                    <button class="icon-btn" onclick="showChannelModal()">+ Geohash</button>
                     <button class="icon-btn" onclick="nym.openShop()">Shop</button>
                     <button class="icon-btn" onclick="showSettings()">Settings</button>
                     <button class="icon-btn" onclick="showAbout()">About</button>
@@ -298,7 +292,7 @@
                 <div class="shop-title">
                     <span>SHOP<br />
                         <span style="font-size:12px;">Buy addon packs to change the styling of your messages and
-                            nickname that others will see across all channels.</span></span>
+                            nickname that others will see across all channels (only in the NYM app).</span></span>
                 </div>
                 <div class="shop-recovery">
                     <input type="text" id="recoveryCodeInput" placeholder="Recovery code">
@@ -365,204 +359,6 @@
             <div class="modal-header">Welcome to NYM<br /><label style="color: var(--warning); margin-top:5px;"
                     class="form-label">Ephemeral, anonymous, decentralized chat</label></div>
             <div class="modal-body">
-                <div class="form-group">
-                    <label class="form-label">Connection Mode</label>
-                    <select class="form-select" id="connectionMode">
-                        <option value="ephemeral">Ephemeral (Auto-generate temporary keys)</option>
-                        <option value="create">Create New Account (Persistent Nostr identity)</option>
-                        <option value="extension">Use Nostr Extension (Existing Persistent identity)</option>
-                        <option value="nsec">Use NSEC Private Key (Existing Persistent identity)</option>
-                        <option value="bunker">Nostr Connect / Bunker (Remote signing)</option>
-                    </select>
-                </div>
-
-                <!-- Account Creation Multi-Step Flow -->
-                <div id="accountCreationSteps" class="account-creation-steps">
-                    <!-- Step Indicators -->
-                    <div class="step-indicators">
-                        <div class="step-indicator active" id="indicator-0"></div>
-                        <div class="step-indicator" id="indicator-1"></div>
-                        <div class="step-indicator" id="indicator-2"></div>
-                        <div class="step-indicator" id="indicator-3"></div>
-                    </div>
-
-                    <!-- Step 0: Introduction to Nostr -->
-                    <div class="step" id="step-0" style="display: block;">
-                        <div class="step-header">What is Nostr?</div>
-                        <div class="step-content">
-                            <p><strong>Nostr</strong> (Notes and Other Stuff Transmitted by Relays) is a simple, open
-                                protocol for creating censorship-resistant social networks.</p>
-
-                            <ul class="info-list">
-                                <li><strong>Decentralized:</strong> No single company controls your data</li>
-                                <li><strong>Portable Identity:</strong> Your account works across all Nostr apps</li>
-                                <li><strong>Censorship Resistant:</strong> No one can ban or silence you</li>
-                                <li><strong>Cryptographically Secure:</strong> Your identity is backed by public key
-                                    cryptography</li>
-                            </ul>
-
-                            <p>When you create a Nostr account, you're generating a cryptographic key pair that becomes
-                                your unique, portable identity across the entire Nostr network.</p>
-                        </div>
-                        <div class="step-actions">
-                            <button class="send-btn" onclick="nextAccountCreationStep()">Next: Generate Keys</button>
-                        </div>
-                    </div>
-
-                    <!-- Step 1: Key Generation -->
-                    <div class="step" id="step-1">
-                        <div class="step-header">Generate Your Keys</div>
-                        <div class="step-content">
-                            <p>Your Nostr identity consists of two keys:</p>
-
-                            <ul class="info-list">
-                                <li><strong>Public Key (npub):</strong> Like your username - share this with others</li>
-                                <li><strong>Private Key (nsec):</strong> Like your password - NEVER share this with
-                                    anyone!</li>
-                            </ul>
-
-                            <p>Click the button below to generate your unique key pair. This happens entirely in your
-                                browser - we never see or store your keys on any server.</p>
-
-                            <button class="send-btn" onclick="generateAndDisplayKeys(); nextAccountCreationStep();"
-                                style="width: 100%; margin-top: 15px;">
-                                Generate My Keys
-                            </button>
-                        </div>
-                        <div class="step-actions">
-                            <button class="send-btn" style="background-color: var(--bg-tertiary);"
-                                onclick="previousAccountCreationStep()">Back</button>
-                        </div>
-                    </div>
-
-                    <!-- Step 2: Display Keys with Security Warning -->
-                    <div class="step" id="step-2">
-                        <div class="step-header">Save Your Private Key</div>
-
-                        <div class="warning-box">
-                            <strong>⚠️ CRITICAL: Save Your Private Key Now!</strong>
-                            <p>Your private key is the ONLY way to access your account. If you lose it, your account is
-                                gone forever. We cannot recover it for you.</p>
-                        </div>
-
-                        <div class="step-content">
-                            <label
-                                style="color: var(--secondary); font-weight: bold; display: block; margin-bottom: 5px;">Your
-                                Private Key (nsec)</label>
-                            <div class="key-display" id="generated-nsec">Generating...</div>
-                            <button class="copy-btn" onclick="copyNsecToClipboard()">📋 Copy Private Key</button>
-
-                            <div style="margin-top: 20px;">
-                                <label
-                                    style="color: var(--text-dim); font-weight: bold; display: block; margin-bottom: 5px;">Your
-                                    Public Key (npub)</label>
-                                <div class="key-display" id="generated-npub">Generating...</div>
-                            </div>
-
-                            <div
-                                style="margin-top: 20px; padding: 15px; background-color: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-dim);">
-                                <p style="color: var(--text-dim); font-size: 13px; margin: 0;">
-                                    <strong>How to store your private key:</strong><br />
-                                    • Write it down on paper and store it safely<br />
-                                    • Use a password manager (recommended)<br />
-                                    • Store it in an encrypted file<br />
-                                    • NEVER share it or post it online<br />
-                                    • NEVER enter it on websites you don't trust
-                                </p>
-                            </div>
-
-                            <label style="display: flex; align-items: center; margin-top: 20px; cursor: pointer;">
-                                <input type="checkbox" id="keySavedCheckbox" style="margin-right: 10px;">
-                                <span style="color: var(--text-primary); font-size: 14px;">I have securely saved my
-                                    private key</span>
-                            </label>
-                        </div>
-
-                        <div class="step-actions">
-                            <button class="send-btn" style="background-color: var(--bg-tertiary);"
-                                onclick="previousAccountCreationStep()">Back</button>
-                            <button class="send-btn"
-                                onclick="if(document.getElementById('keySavedCheckbox').checked) { nextAccountCreationStep(); } else { alert('Please confirm that you have saved your private key'); }">Next:
-                                Choose Nickname</button>
-                        </div>
-                    </div>
-
-                    <!-- Step 3: Choose Nickname -->
-                    <div class="step" id="step-3">
-                        <div class="step-header">Choose Your Nickname</div>
-                        <div class="step-content">
-                            <p>Pick a nickname (nym) for your account. This will be stored in your Nostr profile (kind 0
-                                metadata event) and will be visible to others in the network.</p>
-
-                            <div class="form-group" style="margin-top: 20px;">
-                                <label class="form-label">Your Nickname</label>
-                                <input type="text" class="form-input" id="newAccountNym"
-                                    placeholder="Enter your nickname" maxlength="20">
-                                <div class="form-hint">This will be your display name on Nostr</div>
-                            </div>
-
-                            <div
-                                style="margin-top: 20px; padding: 15px; background-color: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-dim);">
-                                <p style="color: var(--text-dim); font-size: 13px; margin: 0;">
-                                    Your nickname will be published as a <strong>kind 0 metadata event</strong> to the
-                                    Nostr network. You can change it later in settings.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="step-actions">
-                            <button class="send-btn" style="background-color: var(--bg-tertiary);"
-                                onclick="previousAccountCreationStep()">Back</button>
-                            <button class="send-btn" onclick="finalizeAccountCreation()">Create Account & Enter
-                                NYM</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- NSEC -->
-                <div class="form-group" id="nsecGroup" style="display:none">
-                    <label class="form-label">Enter your NSEC</label>
-                    <input type="password" class="form-input" id="nsecInput" placeholder="nsec1...">
-                    <div class="form-hint">Your private key will be stored locally</div>
-                </div>
-
-                <!-- Nostr Connect / Bunker -->
-                <div class="form-group" id="bunkerGroup" style="display:none">
-                    <label class="form-label">Connect with Nostr Bunker</label>
-
-                    <div style="margin-bottom: 15px;">
-                        <button class="copy-btn" onclick="showBunkerPairing()" style="width: 100%;">
-                            Pair with Mobile App (Amber, etc.)
-                        </button>
-                    </div>
-
-                    <div id="bunkerPairingSection" style="display:none; margin-bottom: 20px;">
-                        <div class="step-header" style="font-size: 16px; margin-bottom: 10px;">Scan with your bunker app
-                        </div>
-                        <div id="bunkerQRCode"
-                            style="background: white; padding: 20px; border-radius: 8px; display: flex; justify-content: center; align-items: center; min-height: 200px;">
-                            <div style="color: #333;">Generating QR code...</div>
-                        </div>
-                        <div style="margin-top: 10px; padding: 10px; background-color: var(--bg-secondary); border-radius: 6px; font-family: monospace; font-size: 11px; word-break: break-all; max-height: 80px; overflow-y: auto; cursor: pointer;"
-                            id="bunkerUriDisplay" onclick="copyBunkerUri()"></div>
-                        <div class="form-hint">Open Amber or another NIP-46 compatible app and scan this QR code</div>
-                        <div id="bunkerWaitingStatus"
-                            style="margin-top: 15px; color: var(--warning); text-align: center; display: none;">
-                            <div class="spinner"
-                                style="display: inline-block; width: 16px; height: 16px; border: 2px solid var(--warning); border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px;">
-                            </div>
-                            Waiting for approval...
-                        </div>
-                    </div>
-
-                    <div style="text-align: center; margin: 15px 0; color: var(--text-dim);">— OR —</div>
-
-                    <label class="form-label">Enter Bunker URI</label>
-                    <input type="text" class="form-input" id="bunkerInput"
-                        placeholder="bunker://pubkey?relay=wss://...">
-                    <div class="form-hint">Paste your bunker:// connection string from nsec.app or another signer</div>
-                </div>
-
                 <div class="form-group" id="nymGroup">
                     <label class="form-label">Choose Your Nym's nickname (optional)</label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nick"
@@ -721,7 +517,7 @@
                     </select>
                 </div>
 
-                <div class="form-group" id="autoEphemeralSettingGroup" style="display: none;">
+                <div class="form-group" id="autoEphemeralSettingGroup">
                     <label class="form-label">Auto Ephemeral Mode on Restart</label>
                     <select class="form-select" id="autoEphemeralSelect">
                         <option value="false">Disabled</option>
@@ -766,6 +562,22 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Hide All Non-Pinned Channels</label>
+                    <select class="form-select" id="hideNonPinnedSelect">
+                        <option value="false">Disabled</option>
+                        <option value="true">Enabled (only show pinned channels)</option>
+                    </select>
+                    <div class="form-hint">When enabled, only your pinned channels will appear in the sidebar</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Hidden Channels</label>
+                    <div class="blocked-list" id="hiddenChannelsList">
+                        <div style="color: var(--text-dim); font-size: 12px;">No hidden channels</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Blocked Channels</label>
                     <div class="blocked-list" id="blockedChannelsList">
                         <div style="color: var(--text-dim); font-size: 12px;">No blocked channels</div>
@@ -778,6 +590,17 @@
                         <div style="color: var(--text-dim); font-size: 12px;">No blocked users</div>
                     </div>
                 </div>
+
+                <div class="form-group"
+                    style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
+                    <button class="icon-btn" id="clearCacheBtn" onclick="clearLocalStorageCache()"
+                        style="width: 100%; color: var(--danger); border-color: var(--danger);"
+                        onmouseover="this.style.color='black'" onmouseout="this.style.color='var(--danger)'">
+                        Clear Local Storage Cache
+                    </button>
+                    <div class="form-hint">Resets all settings, pinned/hidden/blocked channels, and preferences to
+                        defaults. Preserves your login and shop purchases.</div>
+                </div>
             </div>
             <div class="modal-actions">
                 <button class="icon-btn" onclick="closeModal('settingsModal')">Cancel</button>
@@ -789,179 +612,23 @@
     <!-- Channel Modal -->
     <div class="modal" id="channelModal">
         <div class="modal-content">
-            <div class="modal-header">Join/Create Channel</div>
+            <div class="modal-header">Join Geohash Channel</div>
             <div class="modal-body">
-                <div class="form-group">
-                    <label class="form-label">Channel Type</label>
-                    <select class="form-select" id="channelTypeSelect">
-                        <option value="standard">Standard Channel (Ephemeral)</option>
-                        <option value="geohash">Location-based (Geohash)</option>
-                        <option value="community">Community Channel (Requires Login)</option>
-                    </select>
-                </div>
-
-                <div class="form-group" id="standardChannelGroup">
-                    <label class="form-label">Channel Name</label>
-                    <input type="text" class="form-input" id="channelNameInput" placeholder="random"
-                        oninput="this.value = this.value.toLowerCase().replace(/[^a-z0-9-]/g, '')">
-                    <div class="form-hint">Enter channel name without # (e.g., "random" for #random). No spaces allowed
-                        - use hyphens.</div>
-                </div>
-
-                <div class="form-group" id="geohashGroup" style="display:none">
+                <div class="form-group" id="geohashGroup">
                     <label class="form-label">Geohash</label>
-                    <input type="text" class="form-input" id="geohashInput" placeholder="e.g., w1, dr5r, etc."
+                    <input type="text" class="form-input" id="geohashInput" placeholder="e.g., 9q, w1, dr5r, etc."
                         maxlength="12"
                         oninput="this.value = this.value.toLowerCase().replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '')">
                     <div class="form-hint">Enter a geohash code (valid chars: 0-9, b-z except a,i,l,o)</div>
                 </div>
-
-                <div id="communityChannelGroup" style="display:none">
-                    <div class="form-group">
-                        <label class="form-label">Community Name</label>
-                        <input type="text" class="form-input" id="communityNameInput" placeholder="bitcoin"
-                            oninput="this.value = this.value.toLowerCase().replace(/[^a-z0-9-]/g, '')">
-                        <div class="form-hint">A unique name for your community. No spaces allowed - use hyphens.</div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Description</label>
-                        <textarea class="form-textarea" id="communityDescInput"
-                            placeholder="Describe your community (optional)"></textarea>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Community Image URL (optional)</label>
-                        <input type="text" class="form-input" id="communityImageInput"
-                            placeholder="https://example.com/image.png">
-                        <div class="form-hint">URL to an image representing your community</div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Privacy</label>
-                        <select class="form-select" id="communityPrivacySelect">
-                            <option value="public">Public (anyone can join)</option>
-                            <option value="private">Private (invite only)</option>
-                        </select>
-                    </div>
-
-                    <div
-                        style="color: var(--warning); font-size: 11px; margin-top: 10px; padding: 8px; border: 1px solid var(--warning);">
-                        NOTE: Community channels are persistent and tied to your Nostr identity. You will be the admin.
-                    </div>
-                </div>
             </div>
             <div class="modal-actions">
                 <button class="icon-btn" onclick="closeModal('channelModal')">Cancel</button>
-                <button class="send-btn" onclick="joinOrCreateChannel()">Join/Create</button>
+                <button class="send-btn" onclick="joinOrCreateChannel()">Join</button>
             </div>
         </div>
     </div>
 
-    <!-- Community Settings Modal -->
-    <div class="modal" id="communitySettingsModal">
-        <div class="modal-content">
-            <div class="modal-header">Community Settings</div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label class="form-label">Community Name</label>
-                    <div id="communityNameDisplay" style="font-size: 16px; color: var(--primary); padding: 8px 0;">
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Community Image</label>
-                    <div id="communityImagePreview" style="margin-bottom: 10px; display: none;">
-                        <img id="communityImagePreviewImg" src="" alt="Community image"
-                            style="max-width: 200px; max-height: 200px; border: 1px solid var(--border);">
-                    </div>
-                    <input type="text" class="form-input" id="communityImageEdit"
-                        placeholder="https://example.com/image.png">
-                    <div class="form-hint">URL to an image representing your community</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Description</label>
-                    <textarea class="form-textarea" id="communityDescEdit"
-                        placeholder="Community description"></textarea>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Privacy</label>
-                    <select class="form-select" id="communityPrivacyEdit">
-                        <option value="public">Public (anyone can join)</option>
-                        <option value="private">Private (invite only)</option>
-                    </select>
-                    <div class="form-hint">Changing privacy will take effect immediately</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Blocked Keywords/Phrases</label>
-                    <input type="text" class="form-input" id="newCommunityKeywordInput"
-                        placeholder="Add keyword or phrase to block">
-                    <button class="icon-btn" onclick="nym.addCommunityKeyword()"
-                        style="margin-top: 10px; width: 100%;">Add Keyword</button>
-                    <div class="keyword-list" id="communityKeywordList"
-                        style="margin-top: 10px; max-height: 150px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; background: var(--bg);">
-                        <div style="color: var(--text-dim); font-size: 12px;">No blocked keywords</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Moderators</label>
-                    <div id="communityModsList"
-                        style="max-height: 150px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; background: var(--bg);">
-                        <div style="color: var(--text-dim); font-size: 12px;">Loading moderators...</div>
-                    </div>
-                    <div style="display: flex; gap: 10px; margin-top: 10px;">
-                        <input type="text" class="form-input" id="addModInput" placeholder="Enter nym or nym#xxxx"
-                            style="flex: 1;">
-                        <button class="icon-btn" onclick="nym.addModFromSettings()">Add Mod</button>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Banned Users</label>
-                    <div id="communityBansList"
-                        style="max-height: 150px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; background: var(--bg);">
-                        <div style="color: var(--text-dim); font-size: 12px;">No banned users</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Statistics</label>
-                    <div
-                        style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border);">
-                        <div style="text-align: center;">
-                            <div style="font-size: 20px; color: var(--primary);" id="statMembers">0</div>
-                            <div style="font-size: 11px; color: var(--text-dim);">Members</div>
-                        </div>
-                        <div style="text-align: center;">
-                            <div style="font-size: 20px; color: var(--secondary);" id="statMods">0</div>
-                            <div style="font-size: 11px; color: var(--text-dim);">Moderators</div>
-                        </div>
-                        <div style="text-align: center;">
-                            <div style="font-size: 20px; color: var(--danger);" id="statBanned">0</div>
-                            <div style="font-size: 11px; color: var(--text-dim);">Banned</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" style="color: var(--danger);">Danger Zone</label>
-                    <button class="icon-btn" onclick="nym.deleteCommunity()"
-                        style="width: 100%; background: var(--bg); border-color: var(--danger); color: var(--danger);">
-                        Delete Community
-                    </button>
-                    <div class="form-hint" style="color: var(--danger);">This action cannot be undone</div>
-                </div>
-            </div>
-            <div class="modal-actions">
-                <button class="icon-btn" onclick="closeModal('communitySettingsModal')">Close</button>
-                <button class="send-btn" onclick="nym.saveCommunitySettings()">Save Changes</button>
-            </div>
-        </div>
-    </div>
 
     <!-- Zap Modal -->
     <div class="modal zap-modal" id="zapModal">

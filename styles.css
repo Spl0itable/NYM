@@ -398,6 +398,32 @@ body::after {
     fill: currentColor;
 }
 
+.hide-btn {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 2px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s;
+    display: flex;
+    align-items: center;
+}
+
+.channel-item:hover .hide-btn {
+    opacity: 0.5;
+}
+
+.hide-btn:hover {
+    opacity: 1 !important;
+    color: var(--error, #f44);
+}
+
+.hide-btn svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+}
+
 .std-badge {
     font-size: 9px;
     color: var(--blue);
@@ -1441,7 +1467,8 @@ body::after {
 }
 
 .unblock-btn:hover,
-.remove-keyword-btn:hover {
+.remove-keyword-btn:hover,
+#clearCacheBtn:hover {
     background: var(--danger);
     color: var(--bg);
 }

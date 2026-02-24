@@ -1,3 +1,11 @@
+## v3.26.74 - 2026-02-24
+
+New: NYM is now geohash channel and ephemeral mode only
+New: hide channels
+New: hide all non-pinned channels
+New: purchased shop items carry across ephemeral sessions
+New: custom nickname carries accross sessions if automatic nym session enabled
+
 ## v2.26.74 - 2026-01-20
 
 Hotfix: deprecated nostrmedia.com for blossom.band

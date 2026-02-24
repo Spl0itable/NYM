@@ -47,7 +47,7 @@
             },
             {
                 title: 'Channels',
-                body: 'Browse and switch channels. Each channel type is denoted by a unique, colorful badge (Ephemeral is blue, Geohash is yellow, Public community is green, and Private community is pink). Use the search or "+ Channel" button in menu to join or create. Note: only users who used a Nostr login method can view public/private communities.',
+                body: 'Browse and switch geohash channels. Use the search or "+ Geohash" button in menu to join or create new geohash channels.',
                 selector: '#channelList',
                 onBefore: ensureSidebarOpenOnMobile
             },
@@ -1013,8 +1013,7 @@ class NYM {
         this.powDifficulty = 12;
         this.enablePow = false;
         this.connectionMode = 'ephemeral';
-        this.originalProfile = null;
-        this.currentChannel = 'bar';
+        this.currentChannel = '9q';
         this.currentGeohash = '';
         this.currentPM = null;
         this.messages = new Map();
@@ -1042,30 +1041,19 @@ class NYM {
         this.blockedUsers = new Set();
         this.blockedKeywords = new Set();
         this.blockedChannels = new Set();
-        this.communityChannels = new Map();
-        this.ownedCommunities = new Set();
-        this.moderatedCommunities = new Set();
         this.discoveredGeohashes = new Set();
-        this.discoveredEphemeralChannels = new Set();
         this.channelSubscriptions = new Map();
         this.channelLoadedFromRelays = new Set();
         this.channelSubscriptionBatchSize = 10;
         this.channelMessageLimit = 200;
-        this.communityBans = new Map();
-        this.communityInvites = new Map();
-        this.communityMembers = new Map();
-        this.communityModerators = new Map();
-        this.currentCommunity = null;
-        this.processedModerationEvents = new Set();
         this.settings = this.loadSettings();
-        this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'ephemeral', channel: 'bar' };
-        if (this.pinnedLandingChannel.type === 'geohash') {
+        this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: '9q' };
+        if (this.pinnedLandingChannel.type === 'geohash' && this.pinnedLandingChannel.geohash) {
             this.currentChannel = this.pinnedLandingChannel.geohash;
             this.currentGeohash = this.pinnedLandingChannel.geohash;
-        } else if (this.pinnedLandingChannel.type === 'community') {
-            this.currentCommunity = this.pinnedLandingChannel.communityId;
         } else {
-            this.currentChannel = this.pinnedLandingChannel.channel || 'bar';
+            this.currentChannel = '9q';
+            this.currentGeohash = '9q';
         }
         this.commandHistory = [];
         this.historyIndex = -1;
@@ -1077,13 +1065,14 @@ class NYM {
         this.gifSearchTimeout = null;
         this.giphyApiKey = 'G6neFEExTMBM0h3hM2QjQg4vG8jMMLa9';
         this.emojiAutocompleteIndex = -1;
-        this.commonChannels = ['bar', 'random', 'nostr', 'bitcoin', 'tech', 'music', 'gaming', 'anime', 'memes', 'news', 'politics', 'science', 'art', 'food', 'sports'];
-        this.commonGeohashes = ['w1', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
+        this.commonGeohashes = ['9q', 'w1', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
         this.userJoinedChannels = new Set(this.loadUserJoinedChannels());
         this.inPMMode = false;
         this.userSearchTerm = '';
         this.geohashRegex = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
         this.pinnedChannels = new Set();
+        this.hiddenChannels = new Set();
+        this.hideNonPinned = false;
         this.reactions = new Map();
         this.failedRelays = new Map();
         this.relayRetryDelay = 2 * 60 * 1000;
@@ -1091,7 +1080,7 @@ class NYM {
         this.floodTracking = new Map();
         this.activeReactionPicker = null;
         this.activeReactionPickerButton = null;
-        this.usingExtension = false;
+        // Removed: usingExtension, nostrConnect, usingNostrConnect (persistent login removed)
         this.contextMenuTarget = null;
         this.contextMenuData = null;
         this.p2pConnections = new Map();
@@ -1206,8 +1195,6 @@ class NYM {
         this.lightningAddress = null;
         this.userLightningAddresses = new Map();
         this.userAvatars = new Map();
-        this.nostrConnect = null;
-        this.usingNostrConnect = false;
         this.profileFetchQueue = [];
         this.profileFetchTimer = null;
         this.profileFetchBatchDelay = 100;
@@ -1737,9 +1724,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         };
 
         let signed;
-        if (this.connectionMode === 'extension' && window.nostr) {
-            signed = await window.nostr.signEvent(evt);
-        } else if (this.privkey) {
+        if (this.privkey) {
             signed = window.NostrTools.finalizeEvent(evt, this.privkey);
         }
         if (signed) this.sendToRelay(['EVENT', signed]);
@@ -1769,6 +1754,40 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
 
         // Apply to any existing messages immediately
         this.applyShopStylesToOwnMessages();
+    }
+
+    applyCachedShopItemsToNewIdentity() {
+        if (!this.pubkey) return;
+
+        // Load cached active style/flair from localStorage
+        const cachedStyle = localStorage.getItem('nym_active_style');
+        const cachedFlair = localStorage.getItem('nym_active_flair');
+
+        if (cachedStyle && cachedStyle !== '') {
+            this.activeMessageStyle = cachedStyle;
+            this.localActiveStyle = cachedStyle;
+        }
+        if (cachedFlair && cachedFlair !== '') {
+            this.activeFlair = cachedFlair;
+            this.localActiveFlair = cachedFlair;
+        }
+
+        // If there are any active items, publish them for the new pubkey
+        if (this.activeMessageStyle || this.activeFlair || (this.activeCosmetics && this.activeCosmetics.size > 0)) {
+            // Also cache for the new pubkey so others see it immediately
+            this.cacheShopActiveItems(this.pubkey, {
+                style: this.activeMessageStyle,
+                flair: this.activeFlair,
+                supporter: this.userPurchases.has('supporter-badge'),
+                cosmetics: Array.from(this.activeCosmetics || [])
+            }, Math.floor(Date.now() / 1000));
+
+            // Broadcast active items for the new pubkey so other users see the styling
+            this.publishActiveShopItems();
+
+            // Apply to any messages already displayed
+            this.applyShopStylesToOwnMessages();
+        }
     }
 
     applyShopStylesToOwnMessages() {
@@ -1813,6 +1832,35 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
                         }
                     }
                 });
+            }
+
+            // Update flair badge in author element
+            const authorEl = msg.querySelector('.message-author');
+            if (authorEl) {
+                const existingFlair = authorEl.querySelector('.flair-badge');
+                if (existingFlair) existingFlair.remove();
+                if (this.activeFlair) {
+                    const flairItem = this.getShopItemById(this.activeFlair);
+                    if (flairItem) {
+                        const flairSpan = document.createElement('span');
+                        flairSpan.className = `flair-badge ${this.activeFlair}`;
+                        flairSpan.textContent = flairItem.icon;
+                        const suffix = authorEl.querySelector('.nym-suffix');
+                        if (suffix) {
+                            suffix.after(flairSpan);
+                        }
+                    }
+                }
+
+                // Update supporter badge
+                const existingSupporter = authorEl.querySelector('.supporter-badge');
+                if (existingSupporter) existingSupporter.remove();
+                if (this.userPurchases.has('supporter-badge')) {
+                    const badge = document.createElement('span');
+                    badge.className = 'supporter-badge';
+                    badge.innerHTML = '<span class="supporter-badge-icon">\u{1F3C6}</span><span class="supporter-badge-text">Supporter</span>';
+                    authorEl.insertBefore(badge, authorEl.lastChild);
+                }
             }
         });
 
@@ -2754,76 +2802,20 @@ ${code}
             event.stopPropagation();
         }
 
-        // Parse channel type from prefix
-        let channelType = 'auto';
+        // Strip any prefix
         let channelName = channelInput;
-
-        if (channelInput.startsWith('c:')) {
-            channelType = 'community';
+        if (channelInput.startsWith('g:')) {
             channelName = channelInput.substring(2);
-        } else if (channelInput.startsWith('g:')) {
-            channelType = 'geohash';
-            channelName = channelInput.substring(2);
-        } else if (channelInput.startsWith('e:')) {
-            channelType = 'ephemeral';
+        } else if (channelInput.startsWith('e:') || channelInput.startsWith('c:')) {
             channelName = channelInput.substring(2);
         }
 
-        // Handle based on type
-        if (channelType === 'community') {
-            const communityId = channelName;
-
-            if (this.connectionMode === 'ephemeral') {
-                this.displaySystemMessage('Community channels require a persistent identity (extension or nsec login)');
-                return;
-            }
-
-            // Check if community exists
-            if (this.communityChannels.has(communityId)) {
-                const community = this.communityChannels.get(communityId);
-
-                // Check if private and has access
-                if (community.isPrivate) {
-                    const hasAccess = this.ownedCommunities.has(communityId) ||
-                        (this.communityModerators.has(communityId) &&
-                            this.communityModerators.get(communityId).has(this.pubkey)) ||
-                        (this.communityMembers.has(communityId) &&
-                            this.communityMembers.get(communityId).has(this.pubkey)) ||
-                        (this.communityInvites.has(communityId) &&
-                            this.communityInvites.get(communityId).has(this.pubkey));
-
-                    if (!hasAccess) {
-                        this.displaySystemMessage(`Cannot join private community "${community.name}" - invitation required`);
-                        return;
-                    }
-                }
-
-                // Add to UI if not present
-                if (!document.querySelector(`[data-community="${communityId}"]`)) {
-                    this.addCommunityChannel(community.name, communityId, community.isPrivate);
-                }
-
-                this.switchToCommunity(communityId);
-                this.userJoinedChannels.add(communityId);
-                this.saveUserChannels();
-            } else {
-                this.displaySystemMessage('Community not found or you do not have access');
-            }
-        } else if (channelType === 'geohash' || (channelType === 'auto' && this.isValidGeohash(channelName))) {
-            // Geohash channel
+        // Only handle geohash channels
+        if (this.isValidGeohash(channelName)) {
             if (!this.channels.has(channelName)) {
                 this.addChannel(channelName, channelName);
             }
             this.switchChannel(channelName, channelName);
-            this.userJoinedChannels.add(channelName);
-            this.saveUserChannels();
-        } else {
-            // Standard ephemeral channel
-            if (!this.channels.has(channelName)) {
-                this.addChannel(channelName, '');
-            }
-            this.switchChannel(channelName, '');
-            await this.createChannel(channelName);
             this.userJoinedChannels.add(channelName);
             this.saveUserChannels();
         }
@@ -3599,17 +3591,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const baseUrl = window.location.origin + window.location.pathname;
         let channelPart;
 
-        // Determine what to share based on current mode with prefixes to avoid conflicts
-        if (this.currentCommunity) {
-            // For communities, use 'c:' prefix with community ID
-            channelPart = `c:${this.currentCommunity}`;
-        } else if (this.currentGeohash) {
-            // For geohash channels, use 'g:' prefix
-            channelPart = `g:${this.currentGeohash}`;
-        } else {
-            // For standard channels, use 'e:' prefix (ephemeral)
-            channelPart = `e:${this.currentChannel}`;
-        }
+        // For geohash channels, use 'g:' prefix
+        channelPart = `g:${this.currentGeohash || '9q'}`;
 
         const shareUrl = `${baseUrl}#${channelPart}`;
 
@@ -3995,60 +3978,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Show create/join prompt if search term exists
         if (term.length > 0) {
-            // Sanitize the search term (remove spaces and invalid characters)
-            const sanitized = term.replace(/[^a-z0-9-]/g, '');
+            // Sanitize the search term for geohash (only valid geohash chars)
+            const sanitized = term.replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
 
             if (!sanitized) {
-                resultsDiv.innerHTML = '<div class="search-create-prompt" style="color: var(--danger);">Invalid name. Use only letters, numbers, and hyphens.</div>';
+                resultsDiv.innerHTML = '<div class="search-create-prompt" style="color: var(--danger);">Invalid geohash. Valid characters are: 0-9, b-z (except a, i, l, o).</div>';
                 return;
             }
 
             const isGeohash = this.isValidGeohash(sanitized);
-
-            // Check if it's a community channel
-            let matchedCommunity = null;
-            this.communityChannels.forEach((community, id) => {
-                if (community.name.toLowerCase() === sanitized || id.toLowerCase().includes(sanitized)) {
-                    matchedCommunity = { id, community };
-                }
-            });
-
             const exists = Array.from(this.channels.keys()).some(k => k.toLowerCase() === sanitized);
 
             // Clear previous results
             resultsDiv.innerHTML = '';
-
-            // Show matched community if found
-            if (matchedCommunity) {
-                const { id, community } = matchedCommunity;
-
-                // Check if user can access this community
-                const isOwned = this.ownedCommunities.has(id);
-                const isModerated = this.moderatedCommunities.has(id);
-                const isMember = this.communityMembers.has(id) &&
-                    this.communityMembers.get(id).has(this.pubkey);
-                const canAccess = !community.isPrivate || isOwned || isModerated || isMember;
-
-                if (canAccess) {
-                    const privacyBadge = community.isPrivate ? 'PRI' : 'PUB';
-                    const privacyColor = community.isPrivate ? 'var(--purple)' : 'var(--primary)';
-
-                    const prompt = document.createElement('div');
-                    prompt.className = 'search-create-prompt';
-                    prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
-                    prompt.innerHTML = `
-            <span>Join community "${community.name}"</span>
-            <span style="color: ${privacyColor}; border: 1px solid ${privacyColor}; padding: 2px 8px; border-radius: 3px; font-size: 10px;">${privacyBadge}</span>
-        `;
-                    prompt.onclick = () => {
-                        this.switchToCommunity(id);
-                        document.getElementById('channelSearch').value = '';
-                        resultsDiv.innerHTML = '';
-                        this.filterChannels('');
-                    };
-                    resultsDiv.appendChild(prompt);
-                }
-            }
 
             // Show geohash option if valid
             if (isGeohash && !exists) {
@@ -4057,8 +3999,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 prompt.className = 'search-create-prompt';
                 prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
                 prompt.innerHTML = `
-        <span>Join geohash "${sanitized}" (${location})</span>
-        <span style="color: var(--warning); border: 1px solid var(--warning); padding: 2px 8px; border-radius: 3px; font-size: 10px;">GEO</span>
+        <span>Join geohash channel "${sanitized}" (${location})</span>
     `;
                 prompt.onclick = async () => {
                     this.addChannel(sanitized, sanitized);
@@ -4070,49 +4011,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.saveUserChannels();
                 };
                 resultsDiv.appendChild(prompt);
-            }
-
-            // Show standard channel option if doesn't exist
-            if (!exists && !matchedCommunity) {
-                const prompt = document.createElement('div');
-                prompt.className = 'search-create-prompt';
-                prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
-                prompt.innerHTML = `
-        <span>Create/Join channel "${sanitized}"</span>
-        <span style="color: var(--blue); border: 1px solid var(--blue); padding: 2px 8px; border-radius: 3px; font-size: 10px;">EPH</span>
-    `;
-                prompt.onclick = async () => {
-                    this.addChannel(sanitized, '');
-                    this.switchChannel(sanitized, '');
-                    await this.createChannel(sanitized);
-                    this.userJoinedChannels.add(sanitized);
-                    document.getElementById('channelSearch').value = '';
-                    resultsDiv.innerHTML = '';
-                    this.filterChannels('');
-                    this.saveUserChannels();
-                };
-                resultsDiv.appendChild(prompt);
-            }
-
-            // Show create community option if logged in and name doesn't match existing
-            if (this.connectionMode !== 'ephemeral' && !matchedCommunity && !isGeohash) {
-                const prompt = document.createElement('div');
-                prompt.className = 'search-create-prompt';
-                prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-top: 5px;';
-                prompt.innerHTML = `
-        <span>Create public community "${sanitized}"</span>
-        <span style="color: var(--primary); border: 1px solid var(--primary); padding: 2px 8px; border-radius: 3px; font-size: 10px;">PUB</span>
-    `;
-                prompt.onclick = async () => {
-                    const communityId = await this.createCommunityChannel(sanitized, `Public community for ${sanitized}`, false);
-                    if (communityId) {
-                        this.switchToCommunity(communityId);
-                    }
-                    document.getElementById('channelSearch').value = '';
-                    resultsDiv.innerHTML = '';
-                    this.filterChannels('');
-                };
-                resultsDiv.appendChild(prompt);
+            } else if (!isGeohash) {
+                resultsDiv.innerHTML = '<div class="search-create-prompt" style="color: var(--text-dim);">Enter a valid geohash code to join a channel.</div>';
             }
 
             // Show warning if original term had invalid characters
@@ -4170,6 +4070,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.loadBlockedKeywords();
             this.loadBlockedChannels();
             this.loadPinnedChannels();
+            this.loadHiddenChannels();
 
             // Load lightning address
             await this.loadLightningAddress();
@@ -4899,10 +4800,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         this.contextMenuData = { nym: baseNym, pubkey, content, messageId };
 
-        // First, clear any existing dynamic menu items (community moderation options)
-        const existingModItems = menu.querySelectorAll('.context-menu-item.moderation');
-        existingModItems.forEach(item => item.remove());
-
         // Add slap option if it doesn't exist
         let slapOption = document.getElementById('ctxSlap');
         if (!slapOption) {
@@ -4923,86 +4820,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Show slap option only if not yourself
         slapOption.style.display = pubkey === this.pubkey ? 'none' : 'block';
-
-        // Add community moderation options if in a community and user is admin/mod
-        if (this.currentCommunity && pubkey !== this.pubkey) {
-            const isAdmin = this.ownedCommunities.has(this.currentCommunity);
-            const isMod = this.communityModerators.has(this.currentCommunity) &&
-                this.communityModerators.get(this.currentCommunity).has(this.pubkey);
-
-            if (isAdmin || isMod) {
-                const community = this.communityChannels.get(this.currentCommunity);
-                const isTargetAdmin = community && community.admin === pubkey;
-                const isTargetMod = this.communityModerators.has(this.currentCommunity) &&
-                    this.communityModerators.get(this.currentCommunity).has(pubkey);
-                const isTargetBanned = this.communityBans.has(this.currentCommunity) &&
-                    this.communityBans.get(this.currentCommunity).has(pubkey);
-
-                // Add separator
-                const separator = document.createElement('div');
-                separator.className = 'context-menu-item moderation';
-                separator.style.borderTop = '1px solid var(--border)';
-                separator.style.pointerEvents = 'none';
-                separator.style.padding = '0';
-                separator.style.margin = '5px 0';
-                menu.appendChild(separator);
-
-                // Add moderation label
-                const modLabel = document.createElement('div');
-                modLabel.className = 'context-menu-item moderation';
-                modLabel.style.fontSize = '10px';
-                modLabel.style.color = 'var(--text-dim)';
-                modLabel.style.pointerEvents = 'none';
-                modLabel.textContent = 'COMMUNITY MODERATION';
-                menu.appendChild(modLabel);
-
-                // Kick option (can't kick admin or other mods if you're a mod)
-                if (!isTargetAdmin && !(isMod && isTargetMod) && !isTargetBanned) {
-                    const kickOption = document.createElement('div');
-                    kickOption.className = 'context-menu-item moderation';
-                    kickOption.textContent = 'Kick';
-                    kickOption.onclick = () => {
-                        this.cmdKick(fullNym);
-                        menu.classList.remove('active');
-                    };
-                    menu.appendChild(kickOption);
-                }
-
-                // Ban/Unban option
-                if (!isTargetAdmin && !(isMod && isTargetMod)) {
-                    const banOption = document.createElement('div');
-                    banOption.className = 'context-menu-item moderation danger';
-                    banOption.textContent = isTargetBanned ? 'Unban' : 'Ban';
-                    banOption.onclick = () => {
-                        if (isTargetBanned) {
-                            this.cmdUnban(fullNym);
-                        } else {
-                            this.cmdBan(fullNym);
-                        }
-                        menu.classList.remove('active');
-                    };
-                    menu.appendChild(banOption);
-                }
-
-                // Admin-only options
-                if (isAdmin && !isTargetAdmin) {
-                    // Add/Remove moderator
-                    const modOption = document.createElement('div');
-                    modOption.className = 'context-menu-item moderation';
-                    modOption.style.color = 'var(--secondary)';
-                    modOption.textContent = isTargetMod ? 'Remove Moderator' : 'Make Moderator';
-                    modOption.onclick = () => {
-                        if (isTargetMod) {
-                            this.cmdRemoveMod(fullNym);
-                        } else {
-                            this.cmdAddMod(fullNym);
-                        }
-                        menu.classList.remove('active');
-                    };
-                    menu.appendChild(modOption);
-                }
-            }
-        }
 
         // Add zap option handling
         const zapOption = document.getElementById('ctxZap');
@@ -5135,10 +4952,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
 
-            // Sync to Nostr for persistent connections
-            if (this.connectionMode !== 'ephemeral') {
-                this.saveSyncedSettings();
-            }
         }
     }
 
@@ -5165,10 +4978,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         this.displaySystemMessage(`Unblocked keyword: "${keyword}"`);
 
-        // Sync to Nostr for persistent connections
-        if (this.connectionMode !== 'ephemeral') {
-            this.saveSyncedSettings();
-        }
     }
 
     updateKeywordList() {
@@ -5356,25 +5165,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Start subscriptions on all connected relays
             this.subscribeToAllRelays();
 
-            // Switch to the pinned landing channel based on type
+            // Switch to the pinned landing channel (geohash only)
             setTimeout(() => {
-                const pinned = this.pinnedLandingChannel || { type: 'ephemeral', channel: 'bar' };
+                const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: '9q' };
 
-                if (pinned.type === 'community') {
-                    // Give communities time to load, then switch
-                    setTimeout(() => {
-                        if (this.communityChannels.has(pinned.communityId)) {
-                            this.switchToCommunity(pinned.communityId);
-                        } else {
-                            // Community not available, fallback to bar
-                            this.switchChannel('bar', '');
-                        }
-                    }, 1000);
-                } else if (pinned.type === 'geohash') {
+                if (pinned.type === 'geohash' && pinned.geohash) {
                     this.switchChannel(pinned.geohash, pinned.geohash);
                 } else {
-                    // Ephemeral channel
-                    this.switchChannel(pinned.channel || 'bar', '');
+                    this.switchChannel('9q', '9q');
                 }
             }, 100);
 
@@ -5382,13 +5180,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.updateConnectionStatus();
             this.displaySystemMessage(`Connected to the Nostr network via multiple relays...`);
 
-            // Load synced settings for persistent connections
-            if (this.connectionMode !== 'ephemeral') {
-                // Wait a bit longer to ensure relays are ready
-                setTimeout(() => {
-                    this.loadSyncedSettings();
-                }, 2000); // Increased from 1000ms
-            }
 
             // Now connect to remaining broadcast relays in background
             this.broadcastRelays.forEach(relayUrl => {
@@ -5526,49 +5317,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         relay.subscriptions.add(subId);
 
+        const since24h = Math.floor(Date.now() / 1000) - 86400;
+
         const filters = [
-            // Messages in geohash channels (to find active geohashes)
+            // Messages in geohash channels (past 24hrs)
             {
                 kinds: [20000],
+                since: since24h,
                 limit: 100,
             },
             // Reactions for geohash channels
             {
                 kinds: [7],
                 "#k": ["20000"],
+                since: since24h,
                 limit: 100,
-            },
-            // Messages in ephemeral channels (to find active channels)
-            {
-                kinds: [23333],
-                limit: 100,
-            },
-            // Reactions for standard channels
-            {
-                kinds: [7],
-                "#k": ["23333"],
-                limit: 100,
-            },
-            // Messages in communities (to find active communities)
-            {
-                kinds: [4550],
-                limit: 100
-            },
-            // All public community definitions
-            {
-                kinds: [34550],
-                limit: 500
-            },
-            // Reactions for community posts
-            {
-                kinds: [7],
-                "#k": ["4550"],
-                limit: 100
-            },
-            // Moderation events
-            {
-                kinds: [1984],
-                limit: 500
             },
             // Reactions for PMs
             {
@@ -5596,12 +5359,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     kinds: [1059],
                     "#p": [this.pubkey],
                     limit: 500,
-                },
-                // Profile/community definitions by me
-                {
-                    kinds: [34550],
-                    authors: [this.pubkey],
-                    limit: 500
                 },
                 // Any reactions with #p = my pubkey
                 {
@@ -5641,59 +5398,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.channelLoadedFromRelays.add(channelKey);
 
         const subId = "nym-ch-" + Math.random().toString(36).substring(7);
+        const since24h = Math.floor(Date.now() / 1000) - 86400; // 24 hours ago
         let filters = [];
 
-        if (channelType === 'geohash') {
-            // Geohash channel - filter by 'g' tag
-            filters = [
-                {
-                    kinds: [20000],
-                    "#g": [channelKey],
-                    limit: this.channelMessageLimit
-                },
-                {
-                    kinds: [7],
-                    "#k": ["20000"],
-                    limit: this.channelMessageLimit
-                }
-            ];
-        } else if (channelType === 'ephemeral') {
-            // Ephemeral channel - filter by 'd' tag
-            filters = [
-                {
-                    kinds: [23333],
-                    "#d": [channelKey],
-                    limit: this.channelMessageLimit
-                },
-                {
-                    kinds: [7],
-                    "#k": ["23333"],
-                    limit: this.channelMessageLimit
-                }
-            ];
-        } else if (channelType === 'community') {
-            // Community channel - filter by 'a' tag
-            // Community ID format: communityId, need to find admin pubkey
-            const community = this.communityChannels.get(channelKey);
-            if (community && community.admin) {
-                const aTagValue = `34550:${community.admin}:${channelKey}`;
-                filters = [
-                    {
-                        kinds: [4550],
-                        "#a": [aTagValue],
-                        limit: this.channelMessageLimit
-                    },
-                    {
-                        kinds: [7],
-                        "#k": ["4550"],
-                        limit: this.channelMessageLimit
-                    }
-                ];
-            } else {
-                // Can't determine community admin, skip targeted subscription
-                return;
+        // Only geohash channels supported
+        filters = [
+            {
+                kinds: [20000],
+                "#g": [channelKey],
+                since: since24h,
+                limit: this.channelMessageLimit
+            },
+            {
+                kinds: [7],
+                "#k": ["20000"],
+                since: since24h,
+                limit: this.channelMessageLimit
             }
-        }
+        ];
 
         if (filters.length === 0) return;
 
@@ -5720,22 +5442,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     subscribeToChannelBatch(channels) {
         if (!channels || channels.length === 0) return;
 
-        // Group channels by type
+        // Only geohash channels
         const geohashChannels = [];
-        const ephemeralChannels = [];
-        const communityChannels = [];
+        const since24h = Math.floor(Date.now() / 1000) - 86400;
 
         channels.forEach(({ key, type }) => {
             // Skip already loaded channels
             if (this.channelLoadedFromRelays.has(key)) return;
-
-            if (type === 'geohash') {
-                geohashChannels.push(key);
-            } else if (type === 'ephemeral') {
-                ephemeralChannels.push(key);
-            } else if (type === 'community') {
-                communityChannels.push(key);
-            }
+            geohashChannels.push(key);
         });
 
         // Build batched filters
@@ -5745,40 +5459,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             filters.push({
                 kinds: [20000],
                 "#g": geohashChannels,
+                since: since24h,
                 limit: this.channelMessageLimit * geohashChannels.length
             });
             // Mark as loaded
             geohashChannels.forEach(ch => this.channelLoadedFromRelays.add(ch));
-        }
-
-        if (ephemeralChannels.length > 0) {
-            filters.push({
-                kinds: [23333],
-                "#d": ephemeralChannels,
-                limit: this.channelMessageLimit * ephemeralChannels.length
-            });
-            // Mark as loaded
-            ephemeralChannels.forEach(ch => this.channelLoadedFromRelays.add(ch));
-        }
-
-        if (communityChannels.length > 0) {
-            // Build 'a' tags for communities
-            const aTags = [];
-            communityChannels.forEach(communityId => {
-                const community = this.communityChannels.get(communityId);
-                if (community && community.admin) {
-                    aTags.push(`34550:${community.admin}:${communityId}`);
-                    this.channelLoadedFromRelays.add(communityId);
-                }
-            });
-
-            if (aTags.length > 0) {
-                filters.push({
-                    kinds: [4550],
-                    "#a": aTags,
-                    limit: this.channelMessageLimit * aTags.length
-                });
-            }
         }
 
         if (filters.length === 0) return;
@@ -5943,7 +5628,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             const hasRequiredKinds =
                                 receivedKinds && (
                                     receivedKinds.has(20000) ||
-                                    receivedKinds.has(23333) ||
                                     receivedKinds.has(7) ||
                                     receivedKinds.has(1059)
                                 );
@@ -6426,35 +6110,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!this.pubkey) return;
 
         try {
-            let profileToSave;
-
-            // For persistent connections, preserve existing profile data
-            if (this.connectionMode !== 'ephemeral') {
-                // Fetch current profile if we don't have it
-                if (!this.originalProfile) {
-                    await this.fetchProfileFromRelay(this.pubkey);
-                }
-
-                // Start with existing profile or empty object
-                profileToSave = { ...(this.originalProfile || {}) };
-
-                // Update only the specific fields we manage, don't delete others
-                profileToSave.name = this.nym;
-                profileToSave.display_name = this.nym;
-
-                // Update lightning address if we have one
-                if (this.lightningAddress) {
-                    profileToSave.lud16 = this.lightningAddress;
-                }
-            } else {
-                // Ephemeral mode - minimal profile
-                profileToSave = {
-                    name: this.nym,
-                    display_name: this.nym,
-                    lud16: this.lightningAddress,
-                    about: `NYM user - ${this.nym}`
-                };
-            }
+            // Ephemeral mode - minimal profile
+            const profileToSave = {
+                name: this.nym,
+                display_name: this.nym,
+                lud16: this.lightningAddress,
+                about: `NYM user - ${this.nym}`
+            };
 
             const profileEvent = {
                 kind: 0,
@@ -6464,7 +6126,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 pubkey: this.pubkey
             };
 
-            // Sign based on connection mode
             const signedEvent = await this.signEvent(profileEvent);
 
             if (signedEvent) {
@@ -6600,11 +6261,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (this.currentZapTarget.messageId) {
                 zapRequest.tags.unshift(['e', this.currentZapTarget.messageId]); // Event being zapped
 
-                let originalKind = '23333'; // Default
+                let originalKind = '20000'; // Default geohash
                 if (this.inPMMode) {
                     originalKind = '1059'; // PMs via NIP-17
-                } else if (this.currentCommunity) {
-                    originalKind = '4550'; // Community post
                 } else if (this.currentGeohash) {
                     originalKind = '20000';
                 }
@@ -6832,7 +6491,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                     // Optional: Verify the k tag to ensure it's for supported kinds
                     const kTag = zapRequest.tags?.find(t => t[0] === 'k');
-                    if (kTag && !['20000', '23333', '1059', '4550'].includes(kTag[1])) {
+                    if (kTag && !['20000', '1059'].includes(kTag[1])) {
                         return;
                     }
                 } catch (e) {
@@ -7218,7 +6877,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async loadSyncedSettings() {
-        if (!this.pubkey || this.connectionMode === 'ephemeral') return;
+        // No synced settings in ephemeral-only mode
+        return;
 
         // Request NIP-78 settings (kind 30078)
         const settingsSubscription = [
@@ -7303,7 +6963,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
                 dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
                 readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,  // Default true
-                pinnedLandingChannel: this.pinnedLandingChannel || { type: 'ephemeral', channel: 'bar' }
+                pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: '9q' }
             };
 
             const settingsEvent = {
@@ -7320,9 +6980,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Sign and send settings event
             let signedSettingsEvent;
-            if (this.connectionMode === 'extension' && window.nostr) {
-                signedSettingsEvent = await window.nostr.signEvent(settingsEvent);
-            } else if (this.connectionMode === 'nsec' && this.privkey) {
+            if (this.privkey) {
                 signedSettingsEvent = window.NostrTools.finalizeEvent(settingsEvent, this.privkey);
             }
 
@@ -7330,59 +6988,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.sendToRelay(["EVENT", signedSettingsEvent]);
             }
 
-            // Save mute list (kind 10000)
-            const muteTags = [];
-
-            // Add blocked users as 'p' tags
-            for (const pubkey of this.blockedUsers) {
-                muteTags.push(["p", pubkey]);
-            }
-
-            // Add blocked keywords/phrases as 'word' tags
-            for (const keyword of this.blockedKeywords) {
-                muteTags.push(["word", keyword]);
-            }
-
-            const muteEvent = {
-                kind: 10000,
-                created_at: Math.floor(Date.now() / 1000),
-                tags: muteTags,
-                content: "",
-                pubkey: this.pubkey
-            };
-
-            // Sign and send mute event
-            let signedMuteEvent;
-            if (this.connectionMode === 'extension' && window.nostr) {
-                signedMuteEvent = await window.nostr.signEvent(muteEvent);
-            } else if (this.connectionMode === 'nsec' && this.privkey) {
-                signedMuteEvent = window.NostrTools.finalizeEvent(muteEvent, this.privkey);
-            }
-
-            if (signedMuteEvent) {
-                this.sendToRelay(["EVENT", signedMuteEvent]);
-            }
-
         } catch (error) {
         }
     }
 
     discoverChannels() {
-        // Create a mixed array of all channels
+        // Create a mixed array of geohash channels
         const allChannels = [];
-
-        // Add all standard channels
-        this.commonChannels.forEach(channel => {
-            // Don't re-add if already exists or if user-joined
-            if (!this.channels.has(channel) && !this.userJoinedChannels.has(channel)) {
-                allChannels.push({
-                    name: channel,
-                    geohash: '',
-                    type: 'standard',
-                    sortKey: Math.random()
-                });
-            }
-        });
 
         // Add all geohash channels
         this.commonGeohashes.forEach(geohash => {
@@ -7446,7 +7058,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         } catch (_) { }
 
-        const wideFanout = evt && (evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 4550 || evt.kind === 1984 || evt.kind === 34550 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051);
+        const wideFanout = evt && (evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051);
 
         if (wideFanout) {
             // Send to every connected relay for maximum propagation
@@ -7573,7 +7185,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     // For reactions (kind 7), only count them if they have the right k tags
                     if (event.kind === 7) {
                         const kTag = event.tags?.find(t => t[0] === 'k');
-                        if (kTag && ['20000', '23333', '1059', '4550'].includes(kTag[1])) {
+                        if (kTag && ['20000', '1059'].includes(kTag[1])) {
                             relayKindTracker.add(7);
                         }
                     } else {
@@ -7664,7 +7276,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (kinds && kinds.size > 0) {
                     const hasRequiredKinds =
                         kinds.has(20000) || // geohash channels
-                        kinds.has(23333) || // standard channels  
                         kinds.has(7) ||     // reactions (already filtered for our k tags)
                         kinds.has(1059);    // PMs
 
@@ -7689,7 +7300,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     async handleEvent(event) {
         // Early deduplication for channel messages to prevent re-processing on reconnect
-        if ([20000, 23333, 4550].includes(event.kind)) {
+        if (event.kind === 20000) {
             if (this.processedMessageEventIds.has(event.id)) {
                 return; // Already processed this message
             }
@@ -7706,8 +7317,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const isHistorical = messageAge > 10000; // Older than 10 seconds
 
         if (event.pubkey === this.pubkey) {
-            // For messages (kind 20000, 23333, 4550)
-            if ([20000, 23333, 4550].includes(event.kind)) {
+            // For geohash channel messages (kind 20000)
+            if (event.kind === 20000) {
                 // Check if message already displayed in DOM
                 if (document.querySelector(`[data-message-id="${event.id}"]`)) {
                     return; // Already displayed optimistically, skip
@@ -7733,161 +7344,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         }
 
-        // Handle NIP-72 moderation events FIRST (before processing messages)
-        if (event.kind === 5 && event.tags.some(t => t[0] === 'a' && t[1]?.includes('34550:'))) {
-            // Community deletion event
-            const aTag = event.tags.find(t => t[0] === 'a');
-            if (aTag) {
-                const [kind, adminPubkey, communityId] = aTag[1].split(':');
-
-                // Verify the deletion is from the community admin
-                const community = this.communityChannels.get(communityId);
-                if (community && community.admin === event.pubkey && event.pubkey === adminPubkey) {
-                    // Remove the community
-                    this.communityChannels.delete(communityId);
-                    this.ownedCommunities.delete(communityId);
-                    this.moderatedCommunities.delete(communityId);
-
-                    // Remove from UI
-                    const item = document.querySelector(`[data-community="${communityId}"]`);
-                    if (item) item.remove();
-
-                    this.displaySystemMessage(`Community "${community.name}" has been deleted by admin`);
-
-                    // If currently viewing this community, switch to bar
-                    if (this.currentCommunity === communityId) {
-                        this.switchChannel('bar', '');
-                    }
-                }
-            }
-            return;
-        }
-
-        // Handle NIP-72 moderation events FIRST (before processing messages)
-        if (event.kind === 1984) { // NIP-56 reporting/moderation events
-            const pTag = event.tags.find(t => t[0] === 'p');
-            const aTag = event.tags.find(t => t[0] === 'a');
-            const actionTag = event.tags.find(t => t[0] === 'action');
-
-            if (pTag && aTag && actionTag) {
-                const targetPubkey = pTag[1];
-                const [kind, adminPubkey, communityId] = aTag[1].split(':');
-                const action = actionTag[1];
-
-                // Verify the moderation event is from admin or mod
-                const community = this.communityChannels.get(communityId);
-                if (!community) return;
-
-                const isFromAdmin = event.pubkey === community.admin;
-                const isFromMod = this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(event.pubkey);
-
-                if (!isFromAdmin && !isFromMod) {
-                    return;
-                }
-
-                // Mark this moderation event as processed
-                if (this.processedModerationEvents.has(event.id)) {
-                    return; // Already processed
-                }
-                this.processedModerationEvents.add(event.id);
-
-                // Clean up old processed events (keep last 1000)
-                if (this.processedModerationEvents.size > 1000) {
-                    const toDelete = Array.from(this.processedModerationEvents).slice(0, -1000);
-                    toDelete.forEach(id => this.processedModerationEvents.delete(id));
-                }
-
-                // Process the moderation action
-                switch (action) {
-                    case 'ban':
-                        if (!this.communityBans.has(communityId)) {
-                            this.communityBans.set(communityId, new Set());
-                        }
-                        this.communityBans.get(communityId).add(targetPubkey);
-
-                        // Hide messages from banned user if viewing this community
-                        if (this.currentCommunity === communityId) {
-                            document.querySelectorAll('.message').forEach(msg => {
-                                if (msg.dataset.pubkey === targetPubkey) {
-                                    msg.remove();
-                                }
-                            });
-                        }
-
-                        // Clean up stored messages
-                        this.cleanupBannedMessages(communityId, targetPubkey);
-
-                        // Show notification ONLY if in this community AND not from current user
-                        if (this.currentCommunity === communityId && event.pubkey !== this.pubkey) {
-                            const targetNym = this.getNymFromPubkey(targetPubkey);
-                            const modNym = this.getNymFromPubkey(event.pubkey);
-                            this.displaySystemMessage(`${targetNym} was banned by ${modNym}`);
-                        }
-                        break;
-
-                    case 'unban':
-                        if (this.communityBans.has(communityId)) {
-                            this.communityBans.get(communityId).delete(targetPubkey);
-                        }
-
-                        // Show notification ONLY if in this community AND not from current user
-                        if (this.currentCommunity === communityId && event.pubkey !== this.pubkey) {
-                            const targetNym = this.getNymFromPubkey(targetPubkey);
-                            const modNym = this.getNymFromPubkey(event.pubkey);
-                            this.displaySystemMessage(`${targetNym} was unbanned by ${modNym}`);
-                        }
-                        break;
-
-                    case 'kick':
-                        // Get expiry timestamp
-                        const expiryTag = event.tags.find(t => t[0] === 'expiry');
-                        if (expiryTag) {
-                            const kickExpiry = parseInt(expiryTag[1]);
-
-                            // Initialize temporary kicks map if needed
-                            if (!this.communityTemporaryKicks) {
-                                this.communityTemporaryKicks = new Map();
-                            }
-                            if (!this.communityTemporaryKicks.has(communityId)) {
-                                this.communityTemporaryKicks.set(communityId, new Map());
-                            }
-
-                            // Add the kick
-                            this.communityTemporaryKicks.get(communityId).set(targetPubkey, kickExpiry);
-
-                            // If the kicked user is us and we're in this community, kick us out
-                            if (targetPubkey === this.pubkey && this.currentCommunity === communityId) {
-                                const communityName = community.name;
-                                this.displaySystemMessage(`You have been kicked from ${communityName}. You can rejoin in 15 minutes.`);
-
-                                // Switch to #bar after a short delay
-                                setTimeout(() => {
-                                    this.switchChannel('bar', '');
-                                }, 1500);
-                            }
-
-                            // Set up auto-cleanup after expiry
-                            const timeRemaining = kickExpiry - Date.now();
-                            if (timeRemaining > 0) {
-                                setTimeout(() => {
-                                    if (this.communityTemporaryKicks.has(communityId)) {
-                                        const kicks = this.communityTemporaryKicks.get(communityId);
-                                        if (kicks.has(targetPubkey)) {
-                                            kicks.delete(targetPubkey);
-                                            if (targetPubkey === this.pubkey) {
-                                                this.displaySystemMessage(`Your kick from ${community?.name || 'the community'} has expired. You can rejoin now.`);
-                                            }
-                                        }
-                                    }
-                                }, timeRemaining);
-                            }
-                        }
-                        break;
-                }
-            }
-            return;
-        }
 
         if (event.kind === 20000) {
             // Validate PoW (NIP-13)
@@ -8006,412 +7462,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.showNotification(nym, message.content, channelInfo);
                 }
             }
-        } else if (event.kind === 23333) {
-            // Validate PoW (NIP-13)
-            if (this.enablePow && !this.validatePow(event, this.powDifficulty)) {
-                return;
-            }
-
-            // Handle standard channel messages
-            const nymTag = event.tags.find(t => t[0] === 'n');
-            const channelTag = event.tags.find(t => t[0] === 'd');
-
-            const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
-            const channel = channelTag ? channelTag[1] : 'bar';
-
-            // Track discovered ephemeral channel for potential batch loading
-            if (channel && !this.discoveredEphemeralChannels.has(channel)) {
-                this.discoveredEphemeralChannels.add(channel);
-            }
-
-            // Check if user is blocked or message contains blocked keywords
-            if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content)) {
-                return;
-            }
-
-            if (this.isSpamMessage(event.content)) {
-                return;
-            }
-
-            // Check flooding FOR THIS CHANNEL (only for non-historical messages)
-            if (!isHistorical && this.isFlooding(event.pubkey, channel)) {
-                return;
-            }
-
-            // Only track flood for new messages in this channel
-            if (!isHistorical) {
-                this.trackMessage(event.pubkey, channel, isHistorical);
-            }
-
-            // Track notification state for this channel
-            const channelKey = channel;
-            if (!this.channelNotificationTracking) {
-                this.channelNotificationTracking = new Map();
-            }
-            if (!this.channelNotificationTracking.has(channelKey)) {
-                this.channelNotificationTracking.set(channelKey, new Set());
-            }
-            const alreadyNotified = this.channelNotificationTracking.get(channelKey).has(event.id);
-
-            // Check for BRB auto-response (UNIVERSAL) - only for NEW messages
-            if (!isHistorical && this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
-                // Check if we haven't already responded to this user in this session
-                const responseKey = `brb_universal_${this.pubkey}_${nym}`;
-                if (!sessionStorage.getItem(responseKey)) {
-                    sessionStorage.setItem(responseKey, '1');
-
-                    // Send auto-response to the same channel where mentioned
-                    const response = `@${nym} [Auto-Reply] ${this.awayMessages.get(this.pubkey)}`;
-                    await this.publishMessage(response, channel, '');
-                }
-            }
-
-            // Add channel if it's new (and not blocked)
-            if (!this.channels.has(channel) && !this.isChannelBlocked(channel, '')) {
-                this.addChannelToList(channel, '');
-            }
-
-            // Check if this is a P2P file offer
-            const offerTag23333 = event.tags.find(t => t[0] === 'offer');
-            let fileOffer23333 = null;
-            if (offerTag23333) {
-                try {
-                    fileOffer23333 = JSON.parse(offerTag23333[1]);
-                    this.p2pFileOffers.set(fileOffer23333.offerId, fileOffer23333);
-                } catch (e) {
-                    console.error('Error parsing file offer:', e);
-                }
-            }
-
-            const message = {
-                id: event.id,
-                author: nym,
-                pubkey: event.pubkey,
-                content: event.content,
-                timestamp: new Date(event.created_at * 1000),
-                channel: channel,
-                geohash: '',
-                isOwn: event.pubkey === this.pubkey,
-                isHistorical: isHistorical,
-                isFileOffer: !!fileOffer23333,
-                fileOffer: fileOffer23333
-            };
-
-            // Don't display duplicate of own messages
-            if (!this.isDuplicateMessage(message)) {
-                this.displayMessage(message);
-                this.updateUserPresence(nym, event.pubkey, channel, '');
-
-                // Show notification if mentioned and not blocked
-                const shouldNotify = !message.isOwn &&
-                    this.isMentioned(message.content) &&
-                    !this.isNymBlocked(nym) &&
-                    !isHistorical &&
-                    !alreadyNotified &&
-                    (document.hidden || this.currentChannel !== channel || this.currentGeohash !== '');
-
-                if (shouldNotify) {
-                    // Mark as notified
-                    this.channelNotificationTracking.get(channelKey).add(event.id);
-
-                    const channelInfo = {
-                        type: 'standard',
-                        channel: channel,
-                        geohash: '',
-                        id: event.id
-                    };
-                    this.showNotification(nym, message.content, channelInfo);
-                }
-            }
-        } else if (event.kind === 34550) {
-            const dTag = event.tags.find(t => t[0] === 'd');
-
-            if (dTag) {
-                const nameTag = event.tags.find(t => t[0] === 'name');
-                const descTag = event.tags.find(t => t[0] === 'description');
-                const imageTag = event.tags.find(t => t[0] === 'image');
-                const privacyTag = event.tags.find(t => t[0] === 'private' || t[0] === 'public');
-
-                if (!nameTag) {
-                    return;
-                }
-
-                const communityId = dTag[1];
-                const name = nameTag[1];
-                const description = descTag ? descTag[1] : '';
-                const imageUrl = imageTag ? imageTag[1] : '';
-                const isPrivate = privacyTag ? privacyTag[0] === 'private' : false;
-
-                // Store or update community
-                this.communityChannels.set(communityId, {
-                    name: name,
-                    description: description,
-                    imageUrl: imageUrl,
-                    isPrivate: isPrivate,
-                    admin: event.pubkey,
-                    createdAt: event.created_at * 1000
-                });
-
-                // Don't show communities to ephemeral users
-                if (this.connectionMode === 'ephemeral') {
-                    return; // Skip adding to UI for ephemeral users
-                }
-
-                // Filter out communities with spaces - don't add to UI
-                if (name.includes(' ')) {
-                    return; // Don't add to UI, just store in map
-                }
-
-                // Check if this is the official NYM community
-                const isNYMCommunity = event.pubkey === this.verifiedDeveloper.pubkey &&
-                    name.toLowerCase() === 'nym';
-
-                // For private communities, only show if user is a member, mod, or admin
-                if (isPrivate && !isNYMCommunity) {
-                    const isAdmin = event.pubkey === this.pubkey;
-                    const isMod = this.communityModerators.has(communityId) &&
-                        this.communityModerators.get(communityId).has(this.pubkey);
-                    const isMember = this.communityMembers.has(communityId) &&
-                        this.communityMembers.get(communityId).has(this.pubkey);
-
-                    if (!isAdmin && !isMod && !isMember) {
-                        return; // Don't show private communities unless member
-                    }
-                }
-
-                // Track if user owns this community
-                if (event.pubkey === this.pubkey) {
-                    this.ownedCommunities.add(communityId);
-                }
-
-                // Parse moderators
-                const modTags = event.tags.filter(t => t[0] === 'p' && t[3] === 'moderator');
-                if (modTags.length > 0) {
-                    if (!this.communityModerators.has(communityId)) {
-                        this.communityModerators.set(communityId, new Set());
-                    }
-                    // Clear existing mods and repopulate from latest definition
-                    this.communityModerators.get(communityId).clear();
-                    modTags.forEach(tag => {
-                        const modPubkey = tag[1];
-                        this.communityModerators.get(communityId).add(modPubkey);
-
-                        if (modPubkey === this.pubkey) {
-                            this.moderatedCommunities.add(communityId);
-
-                            // Add to UI if we're a moderator
-                            if (!document.querySelector(`[data-community="${communityId}"]`)) {
-                                this.addCommunityChannel(name, communityId, isPrivate);
-                                this.userJoinedChannels.add(communityId);
-                                this.saveUserChannels();
-                            }
-                        }
-                    });
-                } else {
-                    // No moderator tags - clear moderators for this community
-                    if (this.communityModerators.has(communityId)) {
-                        this.communityModerators.get(communityId).clear();
-                    }
-                }
-
-                // Parse banned users from community definition
-                const bannedTags = event.tags.filter(t => t[0] === 'p' && t[3] === 'banned');
-                if (bannedTags.length > 0) {
-                    if (!this.communityBans.has(communityId)) {
-                        this.communityBans.set(communityId, new Set());
-                    }
-                    // Clear existing bans and repopulate from latest definition
-                    this.communityBans.get(communityId).clear();
-                    bannedTags.forEach(tag => {
-                        const bannedPubkey = tag[1];
-                        this.communityBans.get(communityId).add(bannedPubkey);
-                    });
-
-                    // If we're currently viewing this community, remove banned users' messages
-                    if (this.currentCommunity === communityId) {
-                        bannedTags.forEach(tag => {
-                            const bannedPubkey = tag[1];
-                            // Remove from DOM
-                            document.querySelectorAll(`.message[data-pubkey="${bannedPubkey}"]`).forEach(msg => {
-                                msg.remove();
-                            });
-                            // Clean up stored messages
-                            this.cleanupBannedMessages(communityId, bannedPubkey);
-                        });
-                    }
-                } else {
-                    // No banned tags means no bans - clear any local bans for this community
-                    if (this.communityBans.has(communityId)) {
-                        this.communityBans.get(communityId).clear();
-                    }
-                }
-
-                // Add to UI if not already present
-                if (!document.querySelector(`[data-community="${communityId}"]`)) {
-
-                    if (isNYMCommunity || event.pubkey === this.pubkey || !isPrivate) {
-                        this.addCommunityChannel(name, communityId, isPrivate);
-
-                        // Only mark as user-joined if owned or NYM community
-                        if (isNYMCommunity || event.pubkey === this.pubkey) {
-                            this.userJoinedChannels.add(communityId);
-                        }
-
-                        // AUTO-PIN THE NYM COMMUNITY
-                        if (isNYMCommunity) {
-                            this.pinnedChannels.add(communityId);
-                            this.savePinnedChannels();
-                        }
-
-                        if (event.pubkey === this.pubkey) {
-                            this.saveUserChannels();
-                        }
-                    }
-                }
-            }
-        } else if (event.kind === 4550) {
-            // Validate PoW (NIP-13)
-            if (this.enablePow && !this.validatePow(event, this.powDifficulty)) {
-                return;
-            }
-
-            // Handle COMMUNITY POSTS
-            const aTag = event.tags.find(t => t[0] === 'a');
-
-            if (aTag) {
-                const nymTag = event.tags.find(t => t[0] === 'n');
-
-                // Parse a tag: "34550:adminPubkey:communityId"
-                const [kind, adminPubkey, communityId] = aTag[1].split(':');
-
-                // CHECK IF USER IS BANNED BEFORE PROCESSING
-                if (this.communityBans.has(communityId) &&
-                    this.communityBans.get(communityId).has(event.pubkey)) {
-                    return; // Don't process messages from banned users AT ALL
-                }
-
-                // ALSO CHECK IF USER IS GLOBALLY BLOCKED
-                const nymForCheck = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
-                if (this.blockedUsers.has(event.pubkey) || this.isNymBlocked(nymForCheck)) {
-                    return;
-                }
-
-                const nym = nymTag ? nymTag[1] : this.getNymFromPubkey(event.pubkey);
-
-                // Check if user is blocked globally
-                if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content)) {
-                    return;
-                }
-
-                if (this.isSpamMessage(event.content)) {
-                    return;
-                }
-
-                // Check if message is from this community
-                if (!this.communityChannels.has(communityId)) {
-                    // Store community info if we don't have it
-                    this.communityChannels.set(communityId, {
-                        name: communityId.split('-')[0],
-                        admin: adminPubkey,
-                        createdAt: Date.now()
-                    });
-                }
-
-                const messageAge = Date.now() - (event.created_at * 1000);
-                const isHistorical = messageAge > 10000;
-
-                // Check if this is a P2P file offer
-                const offerTag4550 = event.tags.find(t => t[0] === 'offer');
-                let fileOffer4550 = null;
-                if (offerTag4550) {
-                    try {
-                        fileOffer4550 = JSON.parse(offerTag4550[1]);
-                        this.p2pFileOffers.set(fileOffer4550.offerId, fileOffer4550);
-                    } catch (e) {
-                        console.error('Error parsing file offer:', e);
-                    }
-                }
-
-                // Check flooding
-                if (!isHistorical && this.isFlooding(event.pubkey, communityId)) {
-                    return;
-                }
-
-                if (!isHistorical) {
-                    this.trackMessage(event.pubkey, communityId, isHistorical);
-                }
-
-                const message = {
-                    id: event.id,
-                    author: nym,
-                    pubkey: event.pubkey,
-                    content: event.content,
-                    timestamp: new Date(event.created_at * 1000),
-                    channel: communityId,
-                    geohash: '',
-                    isCommunity: true,
-                    communityId: communityId,
-                    isOwn: event.pubkey === this.pubkey,
-                    isHistorical: isHistorical,
-                    isFileOffer: !!fileOffer4550,
-                    fileOffer: fileOffer4550
-                };
-
-                // Store message - Only store if not from banned user
-                if (!this.messages.has(communityId)) {
-                    this.messages.set(communityId, []);
-                }
-
-                const exists = this.messages.get(communityId).some(m => m.id === event.id);
-                if (!exists) {
-                    this.messages.get(communityId).push(message);
-                    this.messages.get(communityId).sort((a, b) => a.timestamp - b.timestamp);
-                }
-
-                // Display if in this community - will be filtered by loadCommunityMessages
-                if (this.currentCommunity === communityId) {
-                    if (!exists) {
-                        this.displayMessage(message);
-                        this.updateUserPresence(nym, event.pubkey, communityId, '');
-
-                        // Track notification state for this community
-                        if (!this.channelNotificationTracking) {
-                            this.channelNotificationTracking = new Map();
-                        }
-                        if (!this.channelNotificationTracking.has(communityId)) {
-                            this.channelNotificationTracking.set(communityId, new Set());
-                        }
-                        const alreadyNotified = this.channelNotificationTracking.get(communityId).has(event.id);
-
-                        // Show notification if mentioned and not blocked
-                        const shouldNotify = !message.isOwn &&
-                            this.isMentioned(message.content) &&
-                            !this.isNymBlocked(nym) &&
-                            !isHistorical &&
-                            !alreadyNotified &&
-                            (document.hidden || this.currentCommunity !== communityId);
-
-                        if (shouldNotify) {
-                            // Mark as notified
-                            this.channelNotificationTracking.get(communityId).add(event.id);
-
-                            const channelInfo = {
-                                type: 'community',
-                                communityId: communityId,
-                                channel: communityId,
-                                id: event.id
-                            };
-                            this.showNotification(nym, message.content, channelInfo);
-                        }
-                    }
-                } else if (!exists) {
-                    // Message is for different community
-                    // Update unread count for other communities
-                    if (!message.isOwn && !isHistorical) {
-                        this.updateUnreadCount(communityId);
-                    }
-                }
-            }
         } else if (event.kind === 30078) {
             const dTag = event.tags.find(t => t[0] === 'd');
             if (!dTag) return;
@@ -8492,11 +7542,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                         msg.classList.add('cosmetic-aura-gold');
                                     }
                                     if (c === 'cosmetic-redacted') {
-                                        const auth = msgDiv.querySelector('.message-author');
+                                        const auth = msg.querySelector('.message-author');
                                         if (auth) auth.classList.add('cosmetic-redacted');
 
                                         // Apply redacted effect to message content after 10 seconds
-                                        const contentEl = msgDiv.querySelector('.message-content');
+                                        const contentEl = msg.querySelector('.message-content');
                                         if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
                                             setTimeout(() => {
                                                 contentEl.classList.add('cosmetic-redacted-message');
@@ -8504,6 +7554,37 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                         }
                                     }
                                 });
+                            }
+
+                            // Update flair badge in author element
+                            const authorEl = msg.querySelector('.message-author');
+                            if (authorEl) {
+                                const existingFlair = authorEl.querySelector('.flair-badge');
+                                if (existingFlair) existingFlair.remove();
+                                if (normalized.flair) {
+                                    const flairItem = this.getShopItemById(normalized.flair);
+                                    if (flairItem) {
+                                        const flairSpan = document.createElement('span');
+                                        flairSpan.className = `flair-badge ${normalized.flair}`;
+                                        flairSpan.textContent = flairItem.icon;
+                                        // Insert flair after nym-suffix, before colon/supporter
+                                        const suffix = authorEl.querySelector('.nym-suffix');
+                                        if (suffix) {
+                                            suffix.after(flairSpan);
+                                        }
+                                    }
+                                }
+
+                                // Update supporter badge
+                                const existingSupporter = authorEl.querySelector('.supporter-badge');
+                                if (existingSupporter) existingSupporter.remove();
+                                if (normalized.supporter) {
+                                    const badge = document.createElement('span');
+                                    badge.className = 'supporter-badge';
+                                    badge.innerHTML = '<span class="supporter-badge-icon">\u{1F3C6}</span><span class="supporter-badge-text">Supporter</span>';
+                                    // Insert before the colon at the end
+                                    authorEl.insertBefore(badge, authorEl.lastChild);
+                                }
                             }
                         });
                     }
@@ -8650,7 +7731,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Block client spam
         if (trimmed.includes('joined the channel via bitchat.land')) return true;
 
-        // Block non-nym community messages
+        // Block non-nym client messages
         if (trimmed.includes('["client","chorus"]')) return true;
 
         // Check if it's a URL (contains :// or starts with www.)
@@ -8936,7 +8017,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!eTag) return;
 
         // Only process reactions for our supported kinds (include 1059 = NIP-17 gift wraps)
-        if (kTag && !['20000', '23333', '1059', '4550'].includes(kTag[1])) {
+        if (kTag && !['20000', '1059'].includes(kTag[1])) {
             return;
         }
 
@@ -9375,25 +8456,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Update UI immediately
             this.updateMessageReactions(messageId);
 
-            // Infer original kind directly from the rendered message element/container context
-            const container = document.getElementById('messagesContainer');
-            let originalKind = '23333'; // default to standard
+            // Infer original kind from message context
+            let originalKind = '20000'; // default to geohash channel
             if (messageEl.classList.contains('pm')) {
                 originalKind = '1059'; // NIP-17 gift wrap
-            } else if (container && container.dataset && container.dataset.lastCommunity) {
-                originalKind = '4550';  // community post
-            } else if (container && container.dataset && container.dataset.lastChannel) {
-                const lc = container.dataset.lastChannel;
-                // lastChannel is "#geohash" or "channel"; treat geohash with leading "#" as kind 20000
-                if (lc.startsWith('#') && this.isValidGeohash(lc.substring(1))) {
-                    originalKind = '20000';
-                } else {
-                    originalKind = '23333';
-                }
-            } else if (this.currentCommunity) {
-                originalKind = '4550';
-            } else if (this.currentGeohash) {
-                originalKind = '20000';
             }
 
             const event = {
@@ -10725,7 +9791,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // If currently viewing this PM, switch to bar
             if (this.inPMMode && this.currentPM === pubkey) {
-                this.switchChannel('bar', '');
+                this.switchChannel('9q', '9q');
             }
 
             this.displaySystemMessage('PM conversation deleted');
@@ -10854,51 +9920,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    async useExtension() {
-        if (!window.nostr) {
-            throw new Error('No Nostr extension detected. Please install Alby or nos2x.');
-        }
-
-        try {
-            const pk = await window.nostr.getPublicKey();
-            this.pubkey = pk;
-            this.usingExtension = true;
-
-            // Queue profile fetch - will be processed after relay connection
-            // Don't await here to avoid 3-second timeout when not connected
-            this.fetchProfileFromRelay(pk);
-
-            return { pubkey: pk };
-        } catch (error) {
-            throw new Error('Failed to connect to Nostr extension');
-        }
-    }
-
-    async useNostrConnect(bunkerUri) {
-        try {
-            this.nostrConnect = new NostrConnectClient();
-
-            const remotePubkey = await this.nostrConnect.connect(bunkerUri);
-            this.pubkey = remotePubkey;
-            this.usingNostrConnect = true;
-
-            // Queue profile fetch - will be processed after relay connection
-            // Don't await here to avoid 3-second timeout when not connected
-            this.fetchProfileFromRelay(remotePubkey);
-
-            return { pubkey: remotePubkey };
-
-        } catch (error) {
-            throw error;
-        }
-    }
-
     async signEvent(event) {
-        if (this.usingNostrConnect && this.nostrConnect) {
-            return await this.nostrConnect.signEvent(event);
-        } else if (this.connectionMode === 'extension' && window.nostr) {
-            return await window.nostr.signEvent(event);
-        } else if (this.privkey) {
+        if (this.privkey) {
             return window.NostrTools.finalizeEvent(event, this.privkey);
         } else {
             throw new Error('No signing method available');
@@ -10966,10 +9989,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     try {
                         const profile = JSON.parse(event.content);
 
-                        // Store complete original profile for non-ephemeral connections
-                        if (event.pubkey === this.pubkey && this.connectionMode !== 'ephemeral') {
-                            this.originalProfile = profile;
-                        }
 
                         // Get name for own profile
                         if (event.pubkey === this.pubkey && (profile.name || profile.username || profile.display_name)) {
@@ -11053,16 +10072,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 ['n', this.nym]
             ];
 
-            let kind;
-
-            // Use appropriate kind and tags based on channel type
-            if (geohash) {
-                kind = 20000; // Geohash channels use kind 20000
-                tags.push(['g', geohash]);
-            } else {
-                kind = 23333; // Standard channels use kind 23333
-                tags.push(['d', channel]);
-            }
+            const kind = 20000; // Geohash channels use kind 20000
+            tags.push(['g', geohash || '9q']);
 
             let event = {
                 kind: kind,
@@ -11091,7 +10102,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 isOwn: true,
                 isHistorical: false,
                 isPM: false,
-                isCommunity: false
             };
 
             // Display immediately (optimistic)
@@ -11115,367 +10125,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    async publishCommunityMessage(content, communityId) {
-        try {
-
-            if (!this.connected) {
-                throw new Error('Not connected to relay');
-            }
-
-            const community = this.communityChannels.get(communityId);
-            if (!community) {
-                throw new Error('Community not found');
-            }
-
-
-            // CHECK IF USER IS BANNED
-            if (this.communityBans.has(communityId) &&
-                this.communityBans.get(communityId).has(this.pubkey)) {
-                throw new Error('You are banned from this community');
-            }
-
-            // CHECK IF USER IS TEMPORARILY KICKED
-            if (this.communityTemporaryKicks && this.communityTemporaryKicks.has(communityId)) {
-                const kicks = this.communityTemporaryKicks.get(communityId);
-                if (kicks.has(this.pubkey)) {
-                    const kickExpiry = kicks.get(this.pubkey);
-                    if (Date.now() < kickExpiry) {
-                        const minutesLeft = Math.ceil((kickExpiry - Date.now()) / 60000);
-                        throw new Error(`You are temporarily kicked from this community. Try again in ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''}.`);
-                    } else {
-                        // Kick expired, remove it
-                        kicks.delete(this.pubkey);
-                    }
-                }
-            }
-
-            // Check if message contains blocked keywords
-            if (this.hasCommunityBlockedKeyword(content, communityId)) {
-                throw new Error('Message contains blocked keywords');
-            }
-
-            let event = {
-                kind: 4550,
-                created_at: Math.floor(Date.now() / 1000),
-                tags: [
-                    ['a', `34550:${community.admin}:${communityId}`],
-                    ['n', this.nym]
-                ],
-                content: content,
-                pubkey: this.pubkey
-            };
-
-            // Mine PoW if enabled (NIP-13)
-            if (this.enablePow && this.powDifficulty > 0) {
-                event = NostrTools.nip13.minePow(event, this.powDifficulty);
-            }
-
-
-            const signedEvent = await this.signEvent(event);
-
-
-            const optimisticMessage = {
-                id: signedEvent.id,
-                content: content,
-                author: this.nym,
-                pubkey: this.pubkey,
-                timestamp: new Date(signedEvent.created_at * 1000),
-                communityId: communityId,
-                isOwn: true,
-                isHistorical: false,
-                isPM: false,
-                isCommunity: true
-            };
-
-            // Display immediately (optimistic)
-            this.displayMessage(optimisticMessage);
-
-            // Send to relay (async)
-            this.sendToRelay(["EVENT", signedEvent]);
-
-            // Schedule deletion if redacted cosmetic is active  
-            if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                const eventIdToDelete = signedEvent.id;
-                setTimeout(() => {
-                    this.publishDeletionEvent(eventIdToDelete);
-                }, 600000); // 10 minutes
-            }
-
-
-            return true;
-        } catch (error) {
-            this.displaySystemMessage('Failed to send message: ' + error.message);
-            return false;
-        }
-    }
-
-    async publishDeletionEvent(eventId) {
-        try {
-            if (!this.connected) {
-                return;
-            }
-
-            // Create kind 5 deletion event
-            const event = {
-                kind: 5,
-                created_at: Math.floor(Date.now() / 1000),
-                tags: [
-                    ['e', eventId]
-                ],
-                content: 'Message redacted',
-                pubkey: this.pubkey
-            };
-
-            const signedEvent = await this.signEvent(event);
-
-            if (signedEvent) {
-                this.sendToRelay(["EVENT", signedEvent]);
-            }
-        } catch (error) {
-        }
-    }
-
-    async createChannel(channelName) {
-        try {
-            if (!this.connected) {
-                throw new Error('Not connected to relay');
-            }
-
-            const event = {
-                kind: 23333, // Channel creation/joining
-                created_at: Math.floor(Date.now() / 1000),
-                tags: [
-                    ['d', channelName],
-                    ['relay', this.relayUrl], // Add relay tag
-                    ['about', `Channel #${channelName} created via NYM`]
-                ],
-                content: JSON.stringify({
-                    name: channelName,
-                    about: `Channel #${channelName}`,
-                    picture: ''
-                }),
-                pubkey: this.pubkey
-            };
-
-            // Sign event
-            const signedEvent = await this.signEvent(event);
-
-            // Send to relay
-            this.sendToRelay(["EVENT", signedEvent]);
-
-            return true;
-        } catch (error) {
-            return false;
-        }
-    }
-
-    async createCommunityChannel(name, description, isPrivate = false, imageUrl = '') {
-        try {
-            if (!this.connected) {
-                throw new Error('Not connected to relay');
-            }
-
-            if (this.connectionMode === 'ephemeral') {
-                throw new Error('Community channels require a persistent identity (extension or nsec login)');
-            }
-
-            // Validate name - no spaces allowed
-            if (name.includes(' ')) {
-                throw new Error('Community names cannot contain spaces. Use hyphens instead (e.g., "my-community")');
-            }
-
-            // Generate unique community identifier with pubkey suffix
-            const suffix = this.getPubkeySuffix(this.pubkey);
-            const sanitizedName = this.sanitizeCommunityName(name);
-            const communityId = `${sanitizedName}-${suffix}`;
-
-            const event = {
-                kind: 34550, // NIP-72 community definition
-                created_at: Math.floor(Date.now() / 1000),
-                tags: [
-                    ['d', communityId], // Unique identifier
-                    ['name', name],
-                    ['description', description || `Community ${name}`],
-                    ['image', imageUrl || ''], // Community image
-                    ['p', this.pubkey, '', 'admin']
-                ],
-                content: description || '',
-                pubkey: this.pubkey
-            };
-
-            // Add privacy tag
-            if (isPrivate) {
-                event.tags.push(['private']);
-            } else {
-                event.tags.push(['public']);
-            }
-
-            // Sign event
-            const signedEvent = await this.signEvent(event);
-
-            // Send to relay
-            this.sendToRelay(["EVENT", signedEvent]);
-
-            // Store locally
-            this.communityChannels.set(communityId, {
-                name: name,
-                description: description,
-                imageUrl: imageUrl,
-                isPrivate: isPrivate,
-                admin: this.pubkey,
-                createdAt: Date.now()
-            });
-
-            // Initialize collections
-            if (!this.communityMembers.has(communityId)) {
-                this.communityMembers.set(communityId, new Set([this.pubkey]));
-            }
-            if (!this.communityModerators.has(communityId)) {
-                this.communityModerators.set(communityId, new Set());
-            }
-
-            this.ownedCommunities.add(communityId);
-
-            // Add to UI as a COMMUNITY channel (not standard)
-            this.addCommunityChannel(name, communityId, isPrivate);
-
-            this.displaySystemMessage(`Created ${isPrivate ? 'private' : 'public'} community: ${name}`);
-            this.displaySystemMessage(`Community ID: ${communityId}`);
-            this.displaySystemMessage(`Use /communityinfo to see community details`);
-            this.displaySystemMessage(`Use /addmod to add moderators`);
-
-            return communityId;
-        } catch (error) {
-            this.displaySystemMessage('Failed to create community: ' + error.message);
-            return null;
-        }
-    }
-
-    sanitizeCommunityName(name) {
-        // Replace spaces with hyphens for URL/ID compatibility
-        return name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-    }
-
-    addCommunityChannel(name, communityId, isPrivate) {
-        const list = document.getElementById('channelList');
-
-        // Filter out communities with spaces in the name
-        if (name.includes(' ')) {
-            // Still store it in communityChannels map but don't display
-            if (!this.communityChannels.has(communityId)) {
-                this.communityChannels.set(communityId, {
-                    name: name,
-                    isPrivate: isPrivate
-                });
-            }
-            return;
-        }
-
-        // Check if already exists
-        if (document.querySelector(`[data-community="${communityId}"]`)) {
-            return;
-        }
-
-        const item = document.createElement('div');
-        item.className = 'channel-item list-item';
-        item.dataset.community = communityId;
-        item.dataset.channel = name; // Just the display name
-        item.dataset.geohash = ''; // Not a geohash
-        item.dataset.isCommunity = 'true'; // Mark as community
-
-        const badge = isPrivate ?
-            '<span class="std-badge" style="border-color: var(--purple); color: var(--purple);">PRI</span>' :
-            '<span class="std-badge" style="border-color: var(--primary); color: var(--primary);">PUB</span>';
-
-        const isPinned = this.pinnedChannels.has(communityId);
-        if (isPinned) {
-            item.classList.add('pinned');
-        }
-
-        const pinButton = `
-<span class="pin-btn ${isPinned ? 'pinned' : ''}" data-community="${communityId}">
-    <svg viewBox="0 0 24 24">
-        <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/>
-    </svg>
-</span>
-`;
-
-        item.innerHTML = `
-<span class="channel-name">#${this.escapeHtml(name)}</span>
-<div class="channel-badges">
-    ${pinButton}
-    ${badge}
-    <span class="unread-badge" style="display:none">0</span>
-</div>
-`;
-
-        // Add click handler for the entire item
-        item.addEventListener('click', (e) => {
-            // Don't trigger if clicking on pin button
-            if (!e.target.closest('.pin-btn')) {
-                this.switchToCommunity(communityId);
-            }
-        });
-
-        // Add pin handler
-        const pinBtn = item.querySelector('.pin-btn');
-        if (pinBtn) {
-            pinBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                this.togglePin(communityId, '', true); // community flag
-            });
-        }
-
-        // Get all existing items (excluding view more button)
-        const existingItems = Array.from(list.querySelectorAll('.channel-item'));
-        const viewMoreBtn = list.querySelector('.view-more-btn');
-
-        // Find a random position among existing items
-        // Exclude #bar (first item) and NYM community if it exists
-        let insertableItems = existingItems.filter(existingItem => {
-            const isBar = existingItem.dataset.channel === 'bar' && !existingItem.dataset.geohash && !existingItem.dataset.isCommunity;
-            const isNYM = existingItem.dataset.community &&
-                this.communityChannels.get(existingItem.dataset.community)?.name?.toLowerCase() === 'nym' &&
-                this.communityChannels.get(existingItem.dataset.community)?.admin === this.verifiedDeveloper.pubkey;
-            return !isBar && !isNYM;
-        });
-
-        if (insertableItems.length > 0) {
-            // Insert at random position
-            const randomIndex = Math.floor(Math.random() * (insertableItems.length + 1));
-            if (randomIndex === insertableItems.length) {
-                // Insert at the end (before view more button)
-                if (viewMoreBtn) {
-                    list.insertBefore(item, viewMoreBtn);
-                } else {
-                    list.appendChild(item);
-                }
-            } else {
-                // Insert before the randomly selected item
-                list.insertBefore(item, insertableItems[randomIndex]);
-            }
-        } else {
-            // No insertable items, just add before view more or at end
-            if (viewMoreBtn) {
-                list.insertBefore(item, viewMoreBtn);
-            } else {
-                list.appendChild(item);
-            }
-        }
-
-        // Store in channels map with community flag
-        this.channels.set(communityId, {
-            channel: name,
-            community: communityId,
-            isCommunity: true,
-            isPrivate: isPrivate
-        });
-
-        this.userJoinedChannels.add(communityId);
-        this.updateChannelPins();
-        this.updateViewMoreButton('channelList');
-    }
 
     async uploadImage(file) {
         const progress = document.getElementById('uploadProgress');
@@ -11628,15 +10277,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (this.currentGeohash) {
             kind = 20000; // Geohash channel kind
             tags.push(['g', this.currentGeohash]);
-        } else if (this.currentCommunity) {
-            kind = 4550; // Community channel kind
-            const community = this.communityChannels.get(this.currentCommunity);
-            if (community) {
-                tags.push(['a', `34550:${community.creator}:${community.name}`]);
-            }
-        } else if (this.currentChannel) {
-            kind = 23333; // Standard channel kind
-            tags.push(['d', this.currentChannel]);
         } else {
             this.displaySystemMessage('No channel selected for file sharing');
             return;
@@ -11660,14 +10300,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             pubkey: this.pubkey,
             content: event.content,
             timestamp: new Date(event.created_at * 1000),
-            channel: this.currentCommunity || this.currentChannel,
+            channel: this.currentChannel,
             geohash: this.currentGeohash || '',
             isOwn: true,
             isHistorical: false,
             isFileOffer: true,
-            fileOffer: fileOffer,
-            isCommunity: !!this.currentCommunity,
-            communityId: this.currentCommunity || null
+            fileOffer: fileOffer
         };
 
         // Display locally immediately
@@ -12215,14 +10853,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return; // Don't display blocked messages
         }
 
-        // For community messages, also check if user is banned from that community
-        if (message.isCommunity && message.communityId) {
-            if (this.communityBans.has(message.communityId) &&
-                this.communityBans.get(message.communityId).has(message.pubkey)) {
-                return;
-            }
-        }
-
         // Handle PM messages differently
         if (message.isPM) {
             // Check if we should display this PM now
@@ -12236,43 +10866,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (message.conversationKey !== currentConversationKey) {
                 return;
             }
-        } else if (message.isCommunity) {
-            // Handle COMMUNITY messages
-            if (this.inPMMode) {
-                // In PM mode, don't display community messages
-                return;
-            }
-
-            // Only display if we're viewing this community
-            if (this.currentCommunity !== message.communityId) {
-                return;
-            }
-
-            const storageKey = message.communityId;
-
-            // Store message if not already exists
-            if (!this.messages.has(storageKey)) {
-                this.messages.set(storageKey, []);
-            }
-
-            // Check if message already exists
-            const exists = this.messages.get(storageKey).some(m => m.id === message.id);
-            if (!exists) {
-                // Add message and sort by timestamp with millisecond precision
-                this.messages.get(storageKey).push(message);
-                this.messages.get(storageKey).sort((a, b) => {
-                    return a.timestamp.getTime() - b.timestamp.getTime();
-                });
-            }
         } else {
-            // Regular channel message
+            // Regular geohash channel message
             if (this.inPMMode) {
                 // In PM mode, don't display channel messages
-                return;
-            }
-
-            // Don't display if we're in a community
-            if (this.currentCommunity) {
                 return;
             }
 
@@ -12360,7 +10957,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Check if nym is flooding in THIS CHANNEL (but not for PMs and not for historical messages)
-        const channelToCheck = message.communityId || message.geohash || message.channel;
+        const channelToCheck = message.geohash || message.channel;
         if (!message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
             messageEl.className = 'message flooded';
         }
@@ -12426,7 +11023,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
             const isMobile = window.innerWidth <= 768;
 
-            // Show reaction button for all messages with valid IDs (including PMs and community posts)
+            // Show reaction button for all messages with valid IDs (including PMs)
             const reactionButton = isValidEventId && !isMobile ? `
     <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
         <svg viewBox="0 0 24 24">
@@ -12634,7 +11231,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
-        // Add existing reactions if any (for both channel messages, PMs, and community posts)
+        // Add existing reactions if any (for both channel messages and PMs)
         if (message.id && this.reactions.has(message.id)) {
             this.updateMessageReactions(message.id);
         }
@@ -12849,101 +11446,33 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '<a href="$1" target="_blank" rel="noopener">$1</a>'
         );
 
-        // Process mentions and channels together in one pass
+        // Process mentions and geohash channel references in one pass
         formatted = formatted.replace(
-            /(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[\w\s-]+?)(?=\s|$|[.,!?])/gi,
+            /(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[0-9bcdefghjkmnpqrstuvwxyz]+)(?=\s|$|[.,!?])/gi,
             (match, mentionWithSuffix, simpleMention, whitespace, channel) => {
                 if (mentionWithSuffix) {
-                    // This is a mention with a pubkey suffix, may contain HTML flair
-                    // Don't escape the HTML that's already there for flair
                     return `<span style="color: var(--secondary)">${mentionWithSuffix}</span>`;
                 } else if (simpleMention) {
-                    // This is a simple mention without spaces or suffix
                     return `<span style="color: var(--secondary)">${simpleMention}</span>`;
                 } else if (channel) {
-                    // This is a channel reference - check all types
-                    const channelName = channel.substring(1).trim(); // Remove the # and trim
+                    const channelName = channel.substring(1).trim();
+                    const sanitized = channelName.toLowerCase().replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
 
-                    // Sanitize channel name (remove spaces and invalid chars)
-                    const sanitized = channelName.toLowerCase().replace(/[^a-z0-9-]/g, '');
-
-                    if (!sanitized) {
-                        // Invalid channel name, just return as text
+                    if (!sanitized || !this.isValidGeohash(sanitized)) {
                         return match;
                     }
 
-                    // Check for community channels that user has access to
-                    let communityMatches = [];
-                    this.communityChannels.forEach((community, id) => {
-                        if (community.name.toLowerCase() === sanitized) {
-                            // Filter out communities with spaces
-                            if (community.name.includes(' ')) {
-                                return;
-                            }
+                    const isActive = this.currentGeohash === sanitized;
+                    const classes = ['channel-reference', 'geohash-reference'];
+                    if (isActive) classes.push('active-channel');
 
-                            // Filter out private communities user doesn't have access to
-                            if (community.isPrivate) {
-                                const hasAccess = this.ownedCommunities.has(id) ||
-                                    (this.communityModerators.has(id) &&
-                                        this.communityModerators.get(id).has(this.pubkey)) ||
-                                    (this.communityMembers.has(id) &&
-                                        this.communityMembers.get(id).has(this.pubkey)) ||
-                                    (this.communityInvites.has(id) &&
-                                        this.communityInvites.get(id).has(this.pubkey));
-
-                                if (hasAccess) {
-                                    communityMatches.push({ id, community });
-                                }
-                            } else {
-                                // Public community - always include
-                                communityMatches.push({ id, community });
-                            }
-                        }
-                    });
-
-                    // Check if this is a geohash channel - show modal to let user choose GEO or EPH
-                    if (this.geohashRegex && this.geohashRegex.test(sanitized)) {
-                        const isActive = this.currentGeohash === sanitized;
-                        const classes = ['channel-reference', 'geohash-reference'];
-                        if (isActive) classes.push('active-channel');
-
-                        const location = this.getGeohashLocation(sanitized);
-                        let title = `Click to choose channel type: GEO or EPH`;
-                        if (location) {
-                            title += ` (${location})`;
-                        }
-
-                        // Show options modal instead of directly navigating - user can choose GEO or EPH
-                        return `${whitespace || ''}<span class="${classes.join(' ')}" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.showChannelOptions('${sanitized}'); return false;">${channel}</span>`;
+                    const location = this.getGeohashLocation(sanitized);
+                    let title = `Geohash channel`;
+                    if (location) {
+                        title += `: ${location}`;
                     }
 
-                    // If we have community matches, use the first one
-                    if (communityMatches.length > 0) {
-                        const { id, community } = communityMatches[0];
-                        const classes = ['channel-reference', 'community-reference'];
-
-                        // Check if this is the current community
-                        if (this.currentCommunity === id) {
-                            classes.push('active-channel');
-                        }
-
-                        return `${whitespace || ''}<span class="${classes.join(' ')}" title="Community: ${community.name}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('c:${id}', event); return false;">#${community.name}</span>`;
-                    }
-
-                    // Standard/EPH channel - always link any valid hashtag
-                    const classes = ['channel-reference'];
-
-                    // Check if this is the current channel
-                    if (this.currentChannel === sanitized) {
-                        classes.push('active-channel');
-                    }
-
-                    // Check if this channel is joined by user
-                    if (this.userJoinedChannels && this.userJoinedChannels.has(sanitized)) {
-                        classes.push('joined-channel');
-                    }
-
-                    return `${whitespace || ''}<span class="${classes.join(' ')}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('e:${sanitized}', event); return false;">${channel}</span>`;
+                    return `${whitespace || ''}<span class="${classes.join(' ')}" style="text-decoration: underline;" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('g:${sanitized}', event); return false;">${channel}</span>`;
                 }
             }
         );
@@ -12977,263 +11506,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     quickJoinChannel(channel) {
-        // Sanitize channel name
-        const sanitized = channel.toLowerCase().replace(/[^a-z0-9-]/g, '');
+        // Sanitize channel name for geohash
+        const sanitized = channel.toLowerCase().replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
 
-        if (!sanitized) {
-            this.displaySystemMessage('Invalid channel name. Use only letters, numbers, and hyphens.');
+        if (!sanitized || !this.isValidGeohash(sanitized)) {
+            this.displaySystemMessage('Invalid geohash channel.');
             return;
         }
 
-        const type = this.getChannelType(sanitized);
-
-        if (type === 'geo') {
-            this.addChannel(sanitized, sanitized);
-            this.switchChannel(sanitized, sanitized);
-            this.userJoinedChannels.add(sanitized);
-        } else {
-            this.addChannel(sanitized, '');
-            this.switchChannel(sanitized, '');
-            // Also create the channel with kind 23333
-            this.createChannel(sanitized);
-            this.userJoinedChannels.add(sanitized);
-        }
+        this.addChannel(sanitized, sanitized);
+        this.switchChannel(sanitized, sanitized);
+        this.userJoinedChannels.add(sanitized);
 
         // Save after quick join
         this.saveUserChannels();
     }
 
-    quickJoinCommunity(communityId) {
-        const community = this.communityChannels.get(communityId);
-        if (!community) {
-            this.displaySystemMessage('Community not found');
-            return;
-        }
 
-        // Check if community has spaces (shouldn't happen, but safety check)
-        if (community.name.includes(' ')) {
-            this.displaySystemMessage('This community has an invalid name (contains spaces)');
-            return;
-        }
-
-        if (this.connectionMode === 'ephemeral') {
-            this.displaySystemMessage('Community channels require a persistent identity (extension or nsec)');
-            return;
-        }
-
-        // Check if it's a private community and user has access
-        if (community.isPrivate) {
-            const hasAccess = this.ownedCommunities.has(communityId) ||
-                (this.communityModerators.has(communityId) &&
-                    this.communityModerators.get(communityId).has(this.pubkey)) ||
-                (this.communityMembers.has(communityId) &&
-                    this.communityMembers.get(communityId).has(this.pubkey)) ||
-                (this.communityInvites.has(communityId) &&
-                    this.communityInvites.get(communityId).has(this.pubkey));
-
-            if (!hasAccess) {
-                this.displaySystemMessage('This is a private community. You need an invitation.');
-                return;
-            }
-        }
-
-        // Add to UI if not present
-        if (!document.querySelector(`[data-community="${communityId}"]`)) {
-            this.addCommunityChannel(community.name, communityId, community.isPrivate);
-        }
-
-        this.switchToCommunity(communityId);
-        this.userJoinedChannels.add(communityId);
-        this.saveUserChannels();
-    }
-
-    showChannelOptions(channelName) {
-        // Sanitize the channel name
-        const sanitized = channelName.toLowerCase().replace(/[^a-z0-9-]/g, '');
-
-        if (!sanitized) {
-            this.displaySystemMessage('Invalid channel name');
-            return;
-        }
-
-        // Close any existing channel options modal
-        const existingModal = document.getElementById('channelOptionsModal');
-        if (existingModal) {
-            existingModal.remove();
-        }
-
-        // Create modal
-        const modal = document.createElement('div');
-        modal.id = 'channelOptionsModal';
-        modal.className = 'modal active';
-
-        let optionsHtml = '';
-        let optionCount = 0;
-
-        // Check for community channels that user has access to
-        const communityMatches = [];
-        this.communityChannels.forEach((community, id) => {
-            if (community.name.toLowerCase() === sanitized) {
-                // Filter out communities with spaces
-                if (community.name.includes(' ')) {
-                    return;
-                }
-
-                // Filter out private communities user doesn't have access to
-                if (community.isPrivate) {
-                    const hasAccess = this.ownedCommunities.has(id) ||
-                        (this.communityModerators.has(id) &&
-                            this.communityModerators.get(id).has(this.pubkey)) ||
-                        (this.communityMembers.has(id) &&
-                            this.communityMembers.get(id).has(this.pubkey)) ||
-                        (this.communityInvites.has(id) &&
-                            this.communityInvites.get(id).has(this.pubkey));
-
-                    if (hasAccess) {
-                        communityMatches.push({ id, community });
-                    }
-                } else {
-                    // Public community - always include
-                    communityMatches.push({ id, community });
-                }
-            }
-        });
-
-        // Add community options
-        communityMatches.forEach(({ id, community }) => {
-            optionCount++;
-            const privacyBadge = community.isPrivate ? 'PRI' : 'PUB';
-            const privacyColor = community.isPrivate ? 'var(--purple)' : 'var(--primary)';
-
-            // Different access info based on user's role
-            let accessInfo = '';
-            if (community.isPrivate) {
-                if (this.ownedCommunities.has(id)) {
-                    accessInfo = ' (Private - You are Admin)';
-                } else if (this.communityModerators.has(id) && this.communityModerators.get(id).has(this.pubkey)) {
-                    accessInfo = ' (Private - You are Moderator)';
-                } else if (this.communityMembers.has(id) && this.communityMembers.get(id).has(this.pubkey)) {
-                    accessInfo = ' (Private - You are Member)';
-                } else if (this.communityInvites.has(id) && this.communityInvites.get(id).has(this.pubkey)) {
-                    accessInfo = ' (Private - You are Invited)';
-                } else {
-                    accessInfo = ' (Private)';
-                }
-            } else {
-                accessInfo = ' (Public)';
-            }
-
-            optionsHtml += `
-    <button class="icon-btn channel-option-btn" onclick="nym.joinChannelOption('community', '${id}'); nym.closeChannelOptions();" style="width: 100%; margin-bottom: 10px; text-align: left; display: flex; justify-content: space-between; align-items: center;">
-        <span>#${this.escapeHtml(community.name)}${accessInfo}</span>
-        <span style="color: ${privacyColor}; border: 1px solid ${privacyColor}; padding: 2px 8px; border-radius: 3px; font-size: 10px;">${privacyBadge}</span>
-    </button>
-`;
-        });
-
-        // Check if it's a valid geohash
-        const isGeohash = this.isValidGeohash(sanitized);
-        if (isGeohash) {
-            optionCount++;
-            const location = this.getGeohashLocation(sanitized) || 'Unknown location';
-            optionsHtml += `
-    <button class="icon-btn channel-option-btn" onclick="nym.joinChannelOption('geohash', '${this.escapeHtml(sanitized)}'); nym.closeChannelOptions();" style="width: 100%; margin-bottom: 10px; text-align: left; display: flex; justify-content: space-between; align-items: center;">
-        <span>#${this.escapeHtml(sanitized)} (${location})</span>
-        <span style="color: var(--warning); border: 1px solid var(--warning); padding: 2px 8px; border-radius: 3px; font-size: 10px;">GEO</span>
-    </button>
-`;
-        }
-
-        // Always show standard channel option
-        optionCount++;
-        optionsHtml += `
-<button class="icon-btn channel-option-btn" onclick="nym.joinChannelOption('standard', '${this.escapeHtml(sanitized)}'); nym.closeChannelOptions();" style="width: 100%; margin-bottom: 10px; text-align: left; display: flex; justify-content: space-between; align-items: center;">
-    <span>#${this.escapeHtml(sanitized)} (Ephemeral)</span>
-    <span style="color: var(--blue); border: 1px solid var(--blue); padding: 2px 8px; border-radius: 3px; font-size: 10px;">EPH</span>
-</button>
-`;
-
-        // Only show modal if there are multiple options
-        if (optionCount > 1) {
-            modal.innerHTML = `
-    <div class="modal-content" style="max-width: 500px;">
-        <div class="modal-header">Choose Channel Type for #${this.escapeHtml(sanitized)}</div>
-        <div class="modal-body">
-            <div style="margin-bottom: 15px; color: var(--text-dim); font-size: 12px;">
-                Multiple channels with this name exist. Select which one to join:
-            </div>
-            ${optionsHtml}
-        </div>
-        <div class="modal-actions">
-            <button class="icon-btn" onclick="nym.closeChannelOptions()">Cancel</button>
-        </div>
-    </div>
-`;
-
-            document.body.appendChild(modal);
-
-            // Close on click outside
-            setTimeout(() => {
-                modal.addEventListener('click', (e) => {
-                    if (e.target === modal) {
-                        this.closeChannelOptions();
-                    }
-                });
-            }, 100);
-        } else {
-            // Only one option, join directly
-            if (communityMatches.length > 0) {
-                this.joinChannelOption('community', communityMatches[0].id);
-            } else if (isGeohash) {
-                this.joinChannelOption('geohash', sanitized);
-            } else {
-                this.joinChannelOption('standard', sanitized);
-            }
-        }
-    }
-
-    closeChannelOptions() {
-        const modal = document.getElementById('channelOptionsModal');
-        if (modal) {
-            modal.remove();
-        }
-    }
-
-    async joinChannelOption(type, identifier) {
-        if (type === 'community') {
-            // Community IDs are already validated, use as-is
-            this.quickJoinCommunity(identifier);
-        } else if (type === 'geohash') {
-            // Sanitize geohash identifier
-            const sanitized = identifier.toLowerCase().replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
-
-            if (!sanitized || !this.isValidGeohash(sanitized)) {
-                this.displaySystemMessage('Invalid geohash');
-                return;
-            }
-
-            // Join as geohash channel
-            this.addChannel(sanitized, sanitized);
-            this.switchChannel(sanitized, sanitized);
-            this.userJoinedChannels.add(sanitized);
-            this.saveUserChannels();
-        } else if (type === 'standard') {
-            // Sanitize standard channel name
-            const sanitized = identifier.toLowerCase().replace(/[^a-z0-9-]/g, '');
-
-            if (!sanitized) {
-                this.displaySystemMessage('Invalid channel name');
-                return;
-            }
-
-            // Join as standard ephemeral channel
-            this.addChannel(sanitized, '');
-            this.switchChannel(sanitized, '');
-            await this.createChannel(sanitized);
-            this.userJoinedChannels.add(sanitized);
-            this.saveUserChannels();
-        }
-    }
+    // No longer needed - geohash links navigate directly
 
     insertMention(nym) {
         const input = document.getElementById('messageInput');
@@ -13297,7 +11587,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     updateUserList() {
         const userListContent = document.getElementById('userListContent');
-        const currentChannelKey = this.currentCommunity || this.currentGeohash || this.currentChannel;
+        const currentChannelKey = this.currentGeohash || this.currentChannel;
 
         // Get deduplicated active users (one entry per pubkey)
         const uniqueUsers = new Map();
@@ -13430,28 +11720,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    togglePin(channel, geohash, isCommunity = false) {
-        // Don't allow pinning/unpinning #bar since it's always at top
-        if (channel === 'bar' && !geohash && !isCommunity) {
-            this.displaySystemMessage('#bar is always at the top');
+    togglePin(channel, geohash) {
+        // Don't allow pinning/unpinning #9q since it's always at top
+        if (geohash === '9q') {
+            this.displaySystemMessage('#9q is always at the top');
             return;
         }
 
-        // Check if this is the NYM community
-        const key = isCommunity ? channel : (geohash || channel);
+        const key = geohash || channel;
 
-        if (isCommunity && this.communityChannels.has(key)) {
-            const community = this.communityChannels.get(key);
-            const isNYMCommunity = community.admin === this.verifiedDeveloper.pubkey &&
-                community.name.toLowerCase() === 'nym';
-
-            if (isNYMCommunity) {
-                this.displaySystemMessage('#NYM community is always pinned');
-                return;
-            }
-        }
-
-        // For other channels, toggle pin status
+        // Toggle pin status
         if (this.pinnedChannels.has(key)) {
             this.pinnedChannels.delete(key);
         } else {
@@ -13460,24 +11738,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         this.savePinnedChannels();
         this.updateChannelPins();
-
-        if (this.connectionMode !== 'ephemeral') {
-            this.saveSyncedSettings();
-        }
     }
 
     updateChannelPins() {
         document.querySelectorAll('.channel-item').forEach(item => {
             let key;
 
-            // Check if this is a community channel
-            if (item.dataset.isCommunity === 'true') {
-                key = item.dataset.community;
-            } else {
-                const channel = item.dataset.channel;
-                const geohash = item.dataset.geohash;
-                key = geohash || channel;
-            }
+            const channel = item.dataset.channel;
+            const geohash = item.dataset.geohash;
+            key = geohash || channel;
 
             const pinBtn = item.querySelector('.pin-btn');
 
@@ -13501,6 +11770,66 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.pinnedChannels = new Set(JSON.parse(saved));
             this.updateChannelPins();
         }
+    }
+
+    toggleHideChannel(channel, geohash) {
+        if (geohash === '9q') {
+            this.displaySystemMessage('#9q cannot be hidden');
+            return;
+        }
+
+        const key = geohash || channel;
+
+        if (this.hiddenChannels.has(key)) {
+            this.hiddenChannels.delete(key);
+        } else {
+            this.hiddenChannels.add(key);
+        }
+
+        this.saveHiddenChannels();
+        this.applyHiddenChannels();
+    }
+
+    applyHiddenChannels() {
+        document.querySelectorAll('.channel-item').forEach(item => {
+            const channel = item.dataset.channel;
+            const geohash = item.dataset.geohash;
+            const key = geohash || channel;
+
+            // Never hide #9q or the active channel
+            if (geohash === '9q' || item.classList.contains('active')) {
+                item.style.display = '';
+                return;
+            }
+
+            // Hide if explicitly hidden
+            if (this.hiddenChannels.has(key)) {
+                item.style.display = 'none';
+                return;
+            }
+
+            // Hide if "hide non-pinned" is on and channel is not pinned
+            if (this.hideNonPinned && !this.pinnedChannels.has(key)) {
+                item.style.display = 'none';
+                return;
+            }
+
+            item.style.display = '';
+        });
+    }
+
+    saveHiddenChannels() {
+        localStorage.setItem('nym_hidden_channels', JSON.stringify(Array.from(this.hiddenChannels)));
+    }
+
+    loadHiddenChannels() {
+        const saved = localStorage.getItem('nym_hidden_channels');
+        if (saved) {
+            this.hiddenChannels = new Set(JSON.parse(saved));
+        }
+        const hideNonPinned = localStorage.getItem('nym_hide_non_pinned');
+        this.hideNonPinned = hideNonPinned === 'true';
+        this.applyHiddenChannels();
     }
 
     setupEventListeners() {
@@ -13576,54 +11905,30 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         document.getElementById('channelList').addEventListener('click', (e) => {
             // Handle channel item clicks
             const channelItem = e.target.closest('.channel-item');
-            if (channelItem && !e.target.closest('.pin-btn')) {
+            if (channelItem && !e.target.closest('.pin-btn') && !e.target.closest('.hide-btn')) {
                 e.preventDefault();
                 e.stopPropagation();
 
-                // Check if it's a community channel FIRST
-                if (channelItem.dataset.isCommunity === 'true' && channelItem.dataset.community) {
-                    // It's a community channel - switch to community
-                    const communityId = channelItem.dataset.community;
+                const channel = channelItem.dataset.channel;
+                const geohash = channelItem.dataset.geohash || '';
 
-                    // Don't reload if already in this community
-                    if (!nym.inPMMode && nym.currentCommunity === communityId) {
-                        return;
-                    }
-
-                    // Add debounce to prevent double-clicks
-                    if (channelItem.dataset.clicking === 'true') return;
-                    channelItem.dataset.clicking = 'true';
-
-                    nym.switchToCommunity(communityId);
-
-                    // Reset click flag after a short delay
-                    setTimeout(() => {
-                        delete channelItem.dataset.clicking;
-                    }, 1000);
-                } else {
-                    // Regular channel handling
-                    const channel = channelItem.dataset.channel;
-                    const geohash = channelItem.dataset.geohash || '';
-
-                    // Don't reload if already in channel
-                    if (!nym.inPMMode &&
-                        !nym.currentCommunity &&
-                        channel === nym.currentChannel &&
-                        geohash === nym.currentGeohash) {
-                        return;
-                    }
-
-                    // Add debounce to prevent double-clicks
-                    if (channelItem.dataset.clicking === 'true') return;
-                    channelItem.dataset.clicking = 'true';
-
-                    nym.switchChannel(channel, geohash);
-
-                    // Reset click flag after a short delay
-                    setTimeout(() => {
-                        delete channelItem.dataset.clicking;
-                    }, 1000);
+                // Don't reload if already in channel
+                if (!nym.inPMMode &&
+                    channel === nym.currentChannel &&
+                    geohash === nym.currentGeohash) {
+                    return;
                 }
+
+                // Add debounce to prevent double-clicks
+                if (channelItem.dataset.clicking === 'true') return;
+                channelItem.dataset.clicking = 'true';
+
+                nym.switchChannel(channel, geohash);
+
+                // Reset click flag after a short delay
+                setTimeout(() => {
+                    delete channelItem.dataset.clicking;
+                }, 1000);
             }
         });
 
@@ -13680,16 +11985,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         });
 
-        // Modal controls
-        document.getElementById('channelTypeSelect').addEventListener('change', (e) => {
-            const type = e.target.value;
-            document.getElementById('standardChannelGroup').style.display =
-                type === 'standard' ? 'block' : 'none';
-            document.getElementById('geohashGroup').style.display =
-                type === 'geohash' ? 'block' : 'none';
-            document.getElementById('communityChannelGroup').style.display =
-                type === 'community' ? 'block' : 'none';
-        });
     }
 
     setupCommands() {
@@ -13723,23 +12018,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '/invite': { desc: 'Invite a user to current channel', fn: (args) => this.cmdInvite(args) },
             '/share': { desc: 'Share current channel URL', fn: () => this.cmdShare() },
             '/leave': { desc: 'Leave current channel', fn: () => this.cmdLeave() },
-            '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() },
-
-            // Community channel commands
-            '/createcommunity': { desc: 'Create a community channel', fn: (args) => this.cmdCreateCommunity(args) },
-            '/cc': { desc: 'Shortcut for /createcommunity', fn: (args) => this.cmdCreateCommunity(args) },
-            '/addmod': { desc: 'Add moderator to community', fn: (args) => this.cmdAddMod(args) },
-            '/removemod': { desc: 'Remove moderator', fn: (args) => this.cmdRemoveMod(args) },
-            '/kick': { desc: 'Kick user from community', fn: (args) => this.cmdKick(args) },
-            '/ban': { desc: 'Ban user from community', fn: (args) => this.cmdBan(args) },
-            '/unban': { desc: 'Unban user from community', fn: (args) => this.cmdUnban(args) },
-            '/invitetocommunity': { desc: 'Invite user to private community', fn: (args) => this.cmdInviteToCommunity(args) },
-            '/communityinfo': { desc: 'Show community info', fn: () => this.cmdCommunityInfo() },
-            '/ci': { desc: 'Shortcut for /communityinfo', fn: () => this.cmdCommunityInfo() },
-            '/members': { desc: 'List community members', fn: () => this.cmdListMembers() },
-            '/mods': { desc: 'List community moderators', fn: () => this.cmdListMods() },
-            '/communitysettings': { desc: 'Manage community settings', fn: () => this.cmdCommunitySettings() },
-            '/cs': { desc: 'Shortcut for /communitysettings', fn: () => this.cmdCommunitySettings() }
+            '/quit': { desc: 'Disconnect from NYM', fn: () => this.cmdQuit() }
         };
     }
 
@@ -14081,15 +12360,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.inPMMode && this.currentPM) {
                 // Send PM
                 await this.sendPM(content, this.currentPM);
-            } else if (this.currentCommunity) {
-                // Send to community (kind 4550)
-                await this.publishCommunityMessage(content, this.currentCommunity);
             } else if (this.currentGeohash) {
                 // Send to geohash channel (kind 20000)
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            } else {
-                // Send to standard channel (kind 23333)
-                await this.publishMessage(content, this.currentChannel, '');
             }
         }
 
@@ -14126,143 +12399,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     async cmdJoin(args) {
         if (!args) {
-            this.displaySystemMessage('Usage: /join channel, /join #geohash, or /join communityname');
+            this.displaySystemMessage('Usage: /join #geohash (e.g., /join #9q5 or /join 9q5)');
             return;
         }
 
         let channel = args.trim().toLowerCase();
 
-        // Check if it's a geohash (starts with #)
+        // Strip leading # if present
         if (channel.startsWith('#')) {
-            const geohash = channel.substring(1);
+            channel = channel.substring(1);
+        }
 
-            // Validate geohash
-            if (!this.isValidGeohash(geohash)) {
-                this.displaySystemMessage('Invalid geohash format');
-                return;
-            }
-
-            this.addChannel(geohash, geohash);
-            this.switchChannel(geohash, geohash);
-            this.userJoinedChannels.add(geohash);
-            this.saveUserChannels();
+        // Validate geohash
+        if (!this.isValidGeohash(channel)) {
+            this.displaySystemMessage('Invalid geohash format. Use only valid geohash characters (0-9, b-z excluding a, i, l, o).');
             return;
         }
 
-        // Check if this might be a community channel
-        let matchedCommunity = null;
-        let matchedCommunityId = null;
-
-        // Search through known communities
-        this.communityChannels.forEach((community, id) => {
-            if (community.name.toLowerCase() === channel ||
-                id.toLowerCase() === channel ||
-                id.toLowerCase().startsWith(channel + '-')) {
-                matchedCommunity = community;
-                matchedCommunityId = id;
-            }
-        });
-
-        if (matchedCommunity) {
-            // This is a community channel
-            if (this.connectionMode === 'ephemeral') {
-                this.displaySystemMessage('═══ ERROR: Cannot Join Community ═══');
-                this.displaySystemMessage('Community channels require a persistent identity.');
-                this.displaySystemMessage('Please reconnect using a Nostr extension or NSEC to join communities.');
-                this.displaySystemMessage('Ephemeral users can only join standard (EPH) and geohash (GEO) channels.');
-                return;
-            }
-
-            // CHECK IF TEMPORARILY KICKED
-            if (this.communityTemporaryKicks && this.communityTemporaryKicks.has(matchedCommunityId)) {
-                const kicks = this.communityTemporaryKicks.get(matchedCommunityId);
-                if (kicks.has(this.pubkey)) {
-                    const kickExpiry = kicks.get(this.pubkey);
-                    if (Date.now() < kickExpiry) {
-                        const minutesLeft = Math.ceil((kickExpiry - Date.now()) / 60000);
-                        this.displaySystemMessage(`You are temporarily kicked from this community. Try again in ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''}.`);
-                        return;
-                    } else {
-                        // Kick expired, remove it
-                        kicks.delete(this.pubkey);
-                    }
-                }
-            }
-
-            // CHECK IF BANNED
-            if (this.communityBans.has(matchedCommunityId) &&
-                this.communityBans.get(matchedCommunityId).has(this.pubkey)) {
-                this.displaySystemMessage(`You are banned from the community "${matchedCommunity.name}".`);
-                return;
-            }
-
-            // Check if it's a private community and user has access
-            if (matchedCommunity.isPrivate) {
-                const isAdmin = matchedCommunity.admin === this.pubkey;
-                const isMod = this.communityModerators.has(matchedCommunityId) &&
-                    this.communityModerators.get(matchedCommunityId).has(this.pubkey);
-                const isMember = this.communityMembers.has(matchedCommunityId) &&
-                    this.communityMembers.get(matchedCommunityId).has(this.pubkey);
-                const isInvited = this.communityInvites.has(matchedCommunityId) &&
-                    this.communityInvites.get(matchedCommunityId).has(this.pubkey);
-
-                if (!isAdmin && !isMod && !isMember && !isInvited) {
-                    this.displaySystemMessage('This is a private community. You need an invitation to join.');
-                    return;
-                }
-
-                // If invited, add to members
-                if (isInvited) {
-                    if (!this.communityMembers.has(matchedCommunityId)) {
-                        this.communityMembers.set(matchedCommunityId, new Set());
-                    }
-                    this.communityMembers.get(matchedCommunityId).add(this.pubkey);
-
-                    // Remove from invites
-                    this.communityInvites.get(matchedCommunityId).delete(this.pubkey);
-                }
-            } else {
-                // Public community - add user as member
-                if (!this.communityMembers.has(matchedCommunityId)) {
-                    this.communityMembers.set(matchedCommunityId, new Set());
-                }
-                this.communityMembers.get(matchedCommunityId).add(this.pubkey);
-            }
-
-            // Add to UI if not already present
-            if (!document.querySelector(`[data-community="${matchedCommunityId}"]`)) {
-                this.addCommunityChannel(matchedCommunity.name, matchedCommunityId, matchedCommunity.isPrivate);
-            }
-
-            // Switch to the community
-            this.switchToCommunity(matchedCommunityId);
-            this.userJoinedChannels.add(matchedCommunityId);
-            this.saveUserChannels();
-
-            this.displaySystemMessage(`Joined ${matchedCommunity.isPrivate ? 'private' : 'public'} community: ${matchedCommunity.name}`);
-            return;
-        }
-
-        // Validate standard channel name - no spaces allowed
-        if (channel.includes(' ')) {
-            this.displaySystemMessage('Channel names cannot contain spaces. Use hyphens instead (e.g., "my-channel")');
-            return;
-        }
-
-        // Sanitize channel name
-        channel = channel.toLowerCase().replace(/[^a-z0-9-]/g, '');
-
-        if (!channel) {
-            this.displaySystemMessage('Invalid channel name. Use only letters, numbers, and hyphens.');
-            return;
-        }
-
-        // Standard channel
-        this.addChannel(channel, '');
-        this.switchChannel(channel, '');
-
-        // Create channel with kind 23333
-        await this.createChannel(channel);
+        this.addChannel(channel, channel);
+        this.switchChannel(channel, channel);
         this.userJoinedChannels.add(channel);
         this.saveUserChannels();
     }
@@ -14273,43 +12428,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        if (this.currentChannel === 'bar' && !this.currentGeohash && !this.currentCommunity) {
-            this.displaySystemMessage('Cannot leave the default #bar channel');
+        if (this.currentGeohash === '9q') {
+            this.displaySystemMessage('Cannot leave the default #9q channel');
             return;
-        }
-
-        if (this.currentCommunity) {
-            const community = this.communityChannels.get(this.currentCommunity);
-
-            // Check if this is a public community (just discovered, not owned/moderated/member)
-            const isOwned = this.ownedCommunities.has(this.currentCommunity);
-            const isModerated = this.moderatedCommunities.has(this.currentCommunity);
-            const isMember = this.communityMembers.has(this.currentCommunity) &&
-                this.communityMembers.get(this.currentCommunity).has(this.pubkey);
-
-            if (community && !community.isPrivate && !isOwned && !isModerated && !isMember) {
-                // Public community - just remove from sidebar (will be re-discovered)
-                const element = document.querySelector(`[data-community="${this.currentCommunity}"]`);
-                if (element) {
-                    element.remove();
-                }
-                this.channels.delete(this.currentCommunity);
-                this.userJoinedChannels.delete(this.currentCommunity);
-                this.displaySystemMessage(`Left public community: ${community.name}`);
-                this.switchChannel('bar', '');
-                return;
-            }
-
-            // For owned/moderated/member communities, can't leave
-            if (isOwned) {
-                this.displaySystemMessage('You cannot leave a community you created. Use /communitysettings to delete it.');
-                return;
-            }
-
-            if (isModerated || isMember) {
-                this.displaySystemMessage('Use community settings or contact admin to leave this community');
-                return;
-            }
         }
 
         this.removeChannel(this.currentChannel, this.currentGeohash);
@@ -14409,11 +12530,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         this.nym = newNym;
         document.getElementById('currentNym').textContent = this.nym;
-
-        // Save profile for persistent connections
-        if (this.connectionMode !== 'ephemeral') {
-            await this.saveToNostrProfile();
-        }
 
         const changeMessage = `Your nym's new nick is now ${this.nym}`;
         this.displaySystemMessage(changeMessage);
@@ -14520,811 +12636,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
-        // Determine if target is ephemeral (check if they have a persistent identity)
-        const targetIsEphemeral = await this.isUserEphemeral(targetPubkey);
-
-        // Create channel info with proper type detection
-        let channelInfo;
-        let joinCommand;
-        let canJoin = true;
-
-        if (this.currentCommunity) {
-            // Community channel
-            const community = this.communityChannels.get(this.currentCommunity);
-            const privacyType = community?.isPrivate ? 'private' : 'public';
-            channelInfo = `#${community?.name || this.currentCommunity} [${privacyType.toUpperCase()} COMMUNITY]`;
-            joinCommand = `/join ${community?.name || this.currentCommunity}`;
-
-            // Check if target is ephemeral - they can't join communities
-            if (targetIsEphemeral) {
-                canJoin = false;
-            }
-        } else if (this.currentGeohash) {
-            // Geohash channel
-            channelInfo = `#${this.currentGeohash} [GEO]`;
-            joinCommand = `/join #${this.currentGeohash}`;
-        } else {
-            // Standard channel
-            channelInfo = `#${this.currentChannel} [EPH]`;
-            joinCommand = `/join ${this.currentChannel}`;
-        }
+        // Create channel info for geohash channel
+        const channelInfo = `#${this.currentGeohash}`;
+        const joinCommand = `/join #${this.currentGeohash}`;
 
         // Send an invitation as a PM
-        let inviteMessage;
-        if (canJoin) {
-            inviteMessage = `📨 Channel Invitation: You've been invited to join ${channelInfo}. Use ${joinCommand} to join!`;
-        } else {
-            inviteMessage = `📨 Channel Invitation: You've been invited to join ${channelInfo}. However, community channels require a persistent identity (extension or nsec login). Ephemeral users cannot join communities.`;
-        }
+        const inviteMessage = `📨 Channel Invitation: You've been invited to join ${channelInfo}. Use ${joinCommand} to join!`;
 
         // Send as PM
         const sent = await this.sendPM(inviteMessage, targetPubkey);
 
         if (sent) {
             const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
-            if (canJoin) {
-                this.displaySystemMessage(`Invitation sent to ${displayNym} for ${channelInfo}`);
-            } else {
-                this.displaySystemMessage(`Invitation sent to ${displayNym} for ${channelInfo} (Note: They cannot join as an ephemeral user)`);
-            }
+            this.displaySystemMessage(`Invitation sent to ${displayNym} for ${channelInfo}`);
 
-            // Also send a mention in the current channel (only if they can join)
-            if (canJoin) {
-                const publicNotice = `@${matchedNym} you've been invited to this channel! Check your PMs for details.`;
-
-                if (this.currentCommunity) {
-                    await this.publishCommunityMessage(publicNotice, this.currentCommunity);
-                } else {
-                    await this.publishMessage(publicNotice, this.currentChannel, this.currentGeohash);
-                }
-            }
+            // Also send a mention in the current channel
+            const publicNotice = `@${matchedNym} you've been invited to this channel! Check your PMs for details.`;
+            await this.publishMessage(publicNotice, this.currentChannel, this.currentGeohash);
         } else {
             this.displaySystemMessage(`Failed to send invitation to ${this.formatNymWithPubkey(matchedNym, targetPubkey)}`);
         }
     }
 
-    // Helper function to check if user is ephemeral
-    async isUserEphemeral(pubkey) {
-        // A user is ephemeral if they don't have a profile (kind 0 event)
-        // We can check if we have their profile data
-        return new Promise((resolve) => {
-            const subId = "check-ephemeral-" + Math.random().toString(36).substring(7);
-            let found = false;
-
-            const timeout = setTimeout(() => {
-                this.sendToRelay(["CLOSE", subId]);
-                resolve(true); // No profile found, likely ephemeral
-            }, 2000);
-
-            // Temporary handler for this check
-            const originalHandler = this.handleRelayMessage.bind(this);
-            this.handleRelayMessage = (msg, relayUrl) => {
-                if (Array.isArray(msg) && msg[0] === 'EVENT' && msg[1] === subId) {
-                    const event = msg[2];
-                    if (event && event.kind === 0 && event.pubkey === pubkey) {
-                        found = true;
-                        clearTimeout(timeout);
-                        this.handleRelayMessage = originalHandler;
-                        this.sendToRelay(["CLOSE", subId]);
-                        resolve(false); // Has profile, not ephemeral
-                    }
-                } else if (Array.isArray(msg) && msg[0] === 'EOSE' && msg[1] === subId) {
-                    clearTimeout(timeout);
-                    this.handleRelayMessage = originalHandler;
-                    this.sendToRelay(["CLOSE", subId]);
-                    resolve(!found); // If no profile found, they're ephemeral
-                }
-                originalHandler(msg, relayUrl);
-            };
-
-            // Request user's profile
-            const subscription = [
-                "REQ",
-                subId,
-                {
-                    kinds: [0],
-                    authors: [pubkey],
-                    limit: 1
-                }
-            ];
-
-            this.sendToRelay(subscription);
-        });
-    }
-
-    async cmdCreateCommunity(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /createcommunity name [description] [--private]');
-            this.displaySystemMessage('Example: /createcommunity bitcoin "Bitcoin discussion" --private');
-            this.displaySystemMessage('Note: Community names cannot contain spaces. Use hyphens instead.');
-            return;
-        }
-
-        if (this.connectionMode === 'ephemeral') {
-            this.displaySystemMessage('Community channels require a persistent identity. Please use extension or nsec login.');
-            return;
-        }
-
-        const parts = args.split('"');
-        const name = parts[0].trim().replace('--private', '').trim();
-        const description = parts[1] || '';
-        const isPrivate = args.includes('--private');
-
-        if (!name) {
-            this.displaySystemMessage('Please provide a community name');
-            return;
-        }
-
-        // Validate name - no spaces allowed
-        if (name.includes(' ')) {
-            this.displaySystemMessage('Community names cannot contain spaces. Use hyphens instead (e.g., "my-community")');
-            return;
-        }
-
-        const communityId = await this.createCommunityChannel(name, description, isPrivate);
-
-        if (communityId) {
-            this.switchToCommunity(communityId);
-        }
-    }
-
-    async cmdAddMod(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /addmod nym, /addmod nym#xxxx, or /addmod [pubkey]');
-            return;
-        }
-
-        if (!this.currentCommunity) {
-            this.displaySystemMessage('You must be in a community channel to use /addmod');
-            return;
-        }
-
-        const community = this.communityChannels.get(this.currentCommunity);
-        if (!community) {
-            this.displaySystemMessage('Current community not found');
-            return;
-        }
-
-        // Only admin can add moderators
-        if (!this.ownedCommunities.has(this.currentCommunity)) {
-            this.displaySystemMessage('Only the community admin can add moderators');
-            return;
-        }
-
-        const targetPubkey = await this.findUserPubkey(args.trim());
-        if (!targetPubkey) return;
-
-        const matchedNym = this.getNymFromPubkey(targetPubkey);
-
-        if (targetPubkey === this.pubkey) {
-            this.displaySystemMessage("You're already the admin (and a moderator)");
-            return;
-        }
-
-        // Check if already a moderator
-        if (this.communityModerators.has(this.currentCommunity) &&
-            this.communityModerators.get(this.currentCommunity).has(targetPubkey)) {
-            this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, targetPubkey)} is already a moderator`);
-            return;
-        }
-
-        // Add as moderator
-        if (!this.communityModerators.has(this.currentCommunity)) {
-            this.communityModerators.set(this.currentCommunity, new Set());
-        }
-        this.communityModerators.get(this.currentCommunity).add(targetPubkey);
-
-        // Update community definition
-        await this.updateCommunityDefinitionWithBans(this.currentCommunity);
-
-        // Parse base nym from display format - this removes HTML tags
-        const parsedNym = this.parseNymFromDisplay(matchedNym);
-        // Get just the base nym without any suffix
-        const baseNym = parsedNym.split('#')[0] || parsedNym;
-        const suffix = this.getPubkeySuffix(targetPubkey);
-        const fullNym = `${baseNym}#${suffix}`;
-
-        const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
-        this.displaySystemMessage(`Added ${displayNym} as a moderator`);
-
-        // Announce in channel with full nym#suffix
-        await this.publishCommunityMessage(`⭐ ${fullNym} is now a moderator of this community`, this.currentCommunity);
-    }
-
-    async cmdRemoveMod(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /removemod nym, /removemod nym#xxxx, or /removemod [pubkey]');
-            return;
-        }
-
-        if (!this.currentCommunity) {
-            this.displaySystemMessage('You must be in a community channel to use /removemod');
-            return;
-        }
-
-        const community = this.communityChannels.get(this.currentCommunity);
-        if (!community) {
-            this.displaySystemMessage('Current community not found');
-            return;
-        }
-
-        // Only admin can remove moderators
-        if (!this.ownedCommunities.has(this.currentCommunity)) {
-            this.displaySystemMessage('Only the community admin can remove moderators');
-            return;
-        }
-
-        const targetPubkey = await this.findUserPubkey(args.trim());
-        if (!targetPubkey) return;
-
-        const matchedNym = this.getNymFromPubkey(targetPubkey);
-
-        if (targetPubkey === this.pubkey) {
-            this.displaySystemMessage("You can't remove yourself as admin");
-            return;
-        }
-
-        // Check if actually a moderator
-        if (!this.communityModerators.has(this.currentCommunity) ||
-            !this.communityModerators.get(this.currentCommunity).has(targetPubkey)) {
-            this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, targetPubkey)} is not a moderator`);
-            return;
-        }
-
-        // Remove from moderators
-        this.communityModerators.get(this.currentCommunity).delete(targetPubkey);
-
-        // Update community definition
-        await this.updateCommunityDefinitionWithBans(this.currentCommunity);
-
-        // Parse base nym from display format - this removes HTML tags
-        const parsedNym = this.parseNymFromDisplay(matchedNym);
-        // Get just the base nym without any suffix
-        const baseNym = parsedNym.split('#')[0] || parsedNym;
-        const suffix = this.getPubkeySuffix(targetPubkey);
-        const fullNym = `${baseNym}#${suffix}`;
-
-        const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
-        this.displaySystemMessage(`Removed ${displayNym} as a moderator`);
-
-        // Announce in channel with full nym#suffix
-        await this.publishCommunityMessage(`📋 ${fullNym} is no longer a moderator of this community`, this.currentCommunity);
-    }
-
-    async cmdKick(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /kick nym, /kick nym#xxxx, or /kick [pubkey]');
-            return;
-        }
-
-        if (!this.currentCommunity) {
-            this.displaySystemMessage('You must be in a community channel to use /kick');
-            return;
-        }
-
-        const community = this.communityChannels.get(this.currentCommunity);
-        if (!community) {
-            this.displaySystemMessage('Current community not found');
-            return;
-        }
-
-        // Check if user is admin or moderator
-        const isAdmin = this.ownedCommunities.has(this.currentCommunity);
-        const isMod = this.communityModerators.has(this.currentCommunity) &&
-            this.communityModerators.get(this.currentCommunity).has(this.pubkey);
-
-        if (!isAdmin && !isMod) {
-            this.displaySystemMessage('Only admins and moderators can kick users');
-            return;
-        }
-
-        const targetPubkey = await this.findUserPubkey(args.trim());
-        if (!targetPubkey) return;
-
-        const targetNym = this.getNymFromPubkey(targetPubkey);
-
-        // Parse base nym from display format
-        const parsedNym = this.parseNymFromDisplay(targetNym);
-        const baseNym = parsedNym.split('#')[0] || parsedNym;
-        const suffix = this.getPubkeySuffix(targetPubkey);
-        const fullNym = `${baseNym}#${suffix}`;
-
-        // Don't allow kicking admin
-        if (targetPubkey === community.admin) {
-            this.displaySystemMessage("You can't kick the community admin");
-            return;
-        }
-
-        // Mods can't kick other mods
-        if (isMod && !isAdmin) {
-            const targetIsMod = this.communityModerators.has(this.currentCommunity) &&
-                this.communityModerators.get(this.currentCommunity).has(targetPubkey);
-            if (targetIsMod) {
-                this.displaySystemMessage("Moderators can't kick other moderators");
-                return;
-            }
-        }
-
-        // Initialize temporary kicks map if needed
-        if (!this.communityTemporaryKicks) {
-            this.communityTemporaryKicks = new Map();
-        }
-        if (!this.communityTemporaryKicks.has(this.currentCommunity)) {
-            this.communityTemporaryKicks.set(this.currentCommunity, new Map());
-        }
-
-        // Add temporary kick (15 minutes)
-        const kickExpiry = Date.now() + (15 * 60 * 1000); // 15 minutes
-        this.communityTemporaryKicks.get(this.currentCommunity).set(targetPubkey, kickExpiry);
-
-        // Publish kick event as NIP-56 moderation event (kind 1984)
-        const kickEvent = {
-            kind: 1984,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [
-                ['a', `34550:${community.admin}:${this.currentCommunity}`],
-                ['p', targetPubkey],
-                ['action', 'kick'],
-                ['expiry', kickExpiry.toString()]
-            ],
-            content: `Kicked from community for 15 minutes`,
-            pubkey: this.pubkey
-        };
-
-        // Sign the event
-        const signedEvent = await this.signEvent(kickEvent);
-
-        // Send the signed event
-        this.sendToRelay(["EVENT", signedEvent]);
-
-        const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
-        this.displaySystemMessage(`Kicked ${displayNym} from this community (15 min cooldown)`);
-
-        // Also announce in the community channel
-        await this.publishCommunityMessage(`👢 ${fullNym} has been kicked from this community (15 min cooldown)`, this.currentCommunity);
-
-        // Set up auto-cleanup after 15 minutes
-        setTimeout(() => {
-            if (this.communityTemporaryKicks.has(this.currentCommunity)) {
-                const kicks = this.communityTemporaryKicks.get(this.currentCommunity);
-                if (kicks.has(targetPubkey)) {
-                    kicks.delete(targetPubkey);
-                }
-            }
-        }, 15 * 60 * 1000);
-    }
-
-    async cmdBan(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /ban nym, /ban nym#xxxx, or /ban [pubkey]');
-            return;
-        }
-
-        if (!this.currentCommunity) {
-            this.displaySystemMessage('You must be in a community channel to use /ban');
-            return;
-        }
-
-        const community = this.communityChannels.get(this.currentCommunity);
-        if (!community) {
-            this.displaySystemMessage('Current community not found');
-            return;
-        }
-
-        // Check if user is admin or moderator
-        const isAdmin = this.ownedCommunities.has(this.currentCommunity);
-        const isMod = this.communityModerators.has(this.currentCommunity) &&
-            this.communityModerators.get(this.currentCommunity).has(this.pubkey);
-
-        if (!isAdmin && !isMod) {
-            this.displaySystemMessage('Only admins and moderators can ban users');
-            return;
-        }
-
-        const targetPubkey = await this.findUserPubkey(args.trim());
-        if (!targetPubkey) return;
-
-        const targetNym = this.getNymFromPubkey(targetPubkey);
-
-        if (targetPubkey === this.pubkey) {
-            this.displaySystemMessage("You can't ban yourself");
-            return;
-        }
-
-        // Check if already banned
-        if (this.communityBans.has(this.currentCommunity) &&
-            this.communityBans.get(this.currentCommunity).has(targetPubkey)) {
-            this.displaySystemMessage(`${this.formatNymWithPubkey(targetNym, targetPubkey)} is already banned`);
-            return;
-        }
-
-        // Add to bans
-        if (!this.communityBans.has(this.currentCommunity)) {
-            this.communityBans.set(this.currentCommunity, new Set());
-        }
-        this.communityBans.get(this.currentCommunity).add(targetPubkey);
-
-        // Remove from moderators if they were one
-        if (this.communityModerators.has(this.currentCommunity)) {
-            this.communityModerators.get(this.currentCommunity).delete(targetPubkey);
-        }
-
-        // Clean up messages from banned user immediately
-        if (this.messages.has(this.currentCommunity)) {
-            this.messages.get(this.currentCommunity).forEach(msg => {
-                if (msg.pubkey === targetPubkey) {
-                    msg.blocked = true;
-                }
-            });
-        }
-
-        // Remove from DOM immediately
-        document.querySelectorAll(`.message[data-pubkey="${targetPubkey}"]`).forEach(msg => {
-            if (msg.closest('.messages-container')?.dataset.lastCommunity === this.currentCommunity) {
-                msg.remove();
-            }
-        });
-
-        // Update community definition
-        await this.updateCommunityDefinitionWithBans(this.currentCommunity);
-
-        // Parse base nym from display format - this removes HTML tags
-        const parsedNym = this.parseNymFromDisplay(targetNym);
-        // Get just the base nym without any suffix
-        const baseNym = parsedNym.split('#')[0] || parsedNym;
-        const suffix = this.getPubkeySuffix(targetPubkey);
-        const fullNym = `${baseNym}#${suffix}`;
-
-        const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
-        this.displaySystemMessage(`Banned ${displayNym} from this community`);
-
-        // Announce in channel with full nym#suffix
-        await this.publishCommunityMessage(`🚫 ${fullNym} has been banned from this community`, this.currentCommunity);
-    }
-
-    async cmdUnban(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /unban nym, /unban nym#xxxx, or /unban [pubkey]');
-            return;
-        }
-
-        if (!this.currentCommunity) {
-            this.displaySystemMessage('You must be in a community channel to use /unban');
-            return;
-        }
-
-        const community = this.communityChannels.get(this.currentCommunity);
-        if (!community) {
-            this.displaySystemMessage('Current community not found');
-            return;
-        }
-
-        // Check if user is admin or moderator
-        const isAdmin = this.ownedCommunities.has(this.currentCommunity);
-        const isMod = this.communityModerators.has(this.currentCommunity) &&
-            this.communityModerators.get(this.currentCommunity).has(this.pubkey);
-
-        if (!isAdmin && !isMod) {
-            this.displaySystemMessage('Only admins and moderators can unban users');
-            return;
-        }
-
-        const targetPubkey = await this.findUserPubkey(args.trim());
-        if (!targetPubkey) return;
-
-        const targetNym = this.getNymFromPubkey(targetPubkey);
-
-        // Parse base nym from display format
-        const parsedNym = this.parseNymFromDisplay(targetNym);
-        const baseNym = parsedNym.split('#')[0] || parsedNym;
-        const suffix = this.getPubkeySuffix(targetPubkey);
-        const fullNym = `${baseNym}#${suffix}`;
-
-        // Check if actually banned
-        if (!this.communityBans.has(this.currentCommunity) ||
-            !this.communityBans.get(this.currentCommunity).has(targetPubkey)) {
-            this.displaySystemMessage(`${this.formatNymWithPubkey(targetNym, targetPubkey)} is not banned`);
-            return;
-        }
-
-        // Remove from bans
-        this.communityBans.get(this.currentCommunity).delete(targetPubkey);
-
-        // Update community definition
-        await this.updateCommunityDefinitionWithBans(this.currentCommunity);
-
-        // Re-subscribe to the unbanned user's messages for this community
-        if (this.connected && this.relay) {
-            const filter = {
-                kinds: [1],
-                authors: [targetPubkey],
-                '#q': [this.currentCommunity],
-                since: Math.floor(Date.now() / 1000)
-            };
-
-            this.relay.subscribe([filter], {
-                onevent: (event) => {
-                    this.handleNostrEvent(event);
-                },
-                oneose: () => {
-                }
-            });
-        }
-
-        const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
-        this.displaySystemMessage(`Unbanned ${displayNym} from this community`);
-        await this.publishCommunityMessage(`✅ ${fullNym} has been unbanned from this community`, this.currentCommunity);
-    }
-
-    async cmdInviteToCommunity(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /invitetocommunity nym, /invitetocommunity nym#xxxx, or /invitetocommunity [pubkey]');
-            return;
-        }
-
-        if (!this.currentCommunity) {
-            this.displaySystemMessage('You must be in a community channel to use /invitetocommunity');
-            return;
-        }
-
-        const community = this.communityChannels.get(this.currentCommunity);
-        if (!community) {
-            this.displaySystemMessage('Current community not found');
-            return;
-        }
-
-        // Check if user is a moderator or admin
-        const isAdmin = this.ownedCommunities.has(this.currentCommunity);
-        const isMod = this.communityModerators.has(this.currentCommunity) &&
-            this.communityModerators.get(this.currentCommunity).has(this.pubkey);
-
-        if (!isAdmin && !isMod) {
-            this.displaySystemMessage('You must be an admin or moderator to invite users to private communities');
-            return;
-        }
-
-        const targetInput = args.trim();
-        let targetPubkey = null;
-        let matchedNym = null;
-
-        // Check if input is a pubkey (64 hex characters)
-        if (/^[0-9a-f]{64}$/i.test(targetInput)) {
-            targetPubkey = targetInput.toLowerCase();
-
-            if (targetPubkey === this.pubkey) {
-                this.displaySystemMessage("You can't invite yourself");
-                return;
-            }
-
-            matchedNym = this.getNymFromPubkey(targetPubkey);
-        } else {
-            // Handle nym with optional suffix
-            const hashIndex = targetInput.indexOf('#');
-            let searchNym = targetInput;
-            let searchSuffix = null;
-
-            if (hashIndex !== -1) {
-                searchNym = targetInput.substring(0, hashIndex);
-                searchSuffix = targetInput.substring(hashIndex + 1);
-            }
-
-            // Find matching users
-            const matches = [];
-            this.users.forEach((user, pubkey) => {
-                const baseNym = user.nym.split('#')[0] || user.nym;
-                if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                    if (searchSuffix) {
-                        if (pubkey.endsWith(searchSuffix)) {
-                            matches.push({ nym: user.nym, pubkey: pubkey });
-                        }
-                    } else {
-                        matches.push({ nym: user.nym, pubkey: pubkey });
-                    }
-                }
-            });
-
-            if (matches.length === 0) {
-                this.displaySystemMessage(`User ${targetInput} not found`);
-                return;
-            }
-
-            if (matches.length > 1 && !searchSuffix) {
-                const matchList = matches.map(m =>
-                    `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-                ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
-                this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
-                return;
-            }
-
-            targetPubkey = matches[0].pubkey;
-            matchedNym = matches[0].nym;
-
-            if (targetPubkey === this.pubkey) {
-                this.displaySystemMessage("You can't invite yourself");
-                return;
-            }
-        }
-
-        // Check if target is banned
-        const bannedUsers = this.communityBans.get(this.currentCommunity) || new Set();
-        if (bannedUsers.has(targetPubkey)) {
-            this.displaySystemMessage(`Cannot invite ${this.formatNymWithPubkey(matchedNym, targetPubkey)} - they are banned from this community`);
-            return;
-        }
-
-        // Check if target is ephemeral
-        const targetIsEphemeral = await this.isUserEphemeral(targetPubkey);
-        if (targetIsEphemeral) {
-            this.displaySystemMessage(`Cannot invite ${this.formatNymWithPubkey(matchedNym, targetPubkey)} - ephemeral users cannot join communities`);
-            return;
-        }
-
-        // Check if already invited or member
-        if (!this.communityInvites) {
-            this.communityInvites = new Map();
-        }
-        if (!this.communityInvites.has(this.currentCommunity)) {
-            this.communityInvites.set(this.currentCommunity, new Set());
-        }
-
-        const invitedUsers = this.communityInvites.get(this.currentCommunity);
-        if (invitedUsers.has(targetPubkey)) {
-            this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, targetPubkey)} has already been invited`);
-            return;
-        }
-
-        // Add to invited users
-        invitedUsers.add(targetPubkey);
-
-        // Send PM with invitation details
-        const privacyType = community.isPrivate ? 'PRIVATE' : 'PUBLIC';
-        const inviteMessage = `📨 Community Invitation: You've been invited to join #${community.name} [${privacyType} COMMUNITY]. Use /join ${community.name} to join!`;
-
-        const sent = await this.sendPM(inviteMessage, targetPubkey);
-
-        const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
-        if (sent) {
-            this.displaySystemMessage(`Invitation sent to ${displayNym} for community #${community.name}`);
-
-            // Announce in community channel
-            await this.publishCommunityMessage(`📨 ${matchedNym} has been invited to this community`, this.currentCommunity);
-        } else {
-            this.displaySystemMessage(`Failed to send invitation to ${displayNym}`);
-        }
-    }
-
-    async cmdCommunityInfo() {
-        if (!this.isCurrentChannelCommunity()) {
-            this.displaySystemMessage('This is not a community channel');
-            return;
-        }
-
-        const communityId = this.getCurrentCommunityId();
-        const community = this.communityChannels.get(communityId);
-
-        if (!community) {
-            this.displaySystemMessage('Community info not available');
-            return;
-        }
-
-        const isAdmin = this.ownedCommunities.has(communityId);
-        const isMod = this.communityModerators.has(communityId) &&
-            this.communityModerators.get(communityId).has(this.pubkey);
-        const type = community.isPrivate ? 'Private' : 'Public';
-
-        const mods = this.communityModerators.get(communityId) || new Set();
-        const members = this.communityMembers.get(communityId) || new Set();
-        const banned = this.communityBans.get(communityId) || new Set();
-
-        // Deduplicate member count
-        const allMembers = new Set();
-        allMembers.add(this.pubkey); // Admin
-        mods.forEach(modPubkey => allMembers.add(modPubkey));
-        members.forEach(memberPubkey => allMembers.add(memberPubkey));
-
-        let info = `
-═══ Community Info ═══<br/>
-Name: ${community.name}<br/>
-Type: ${type}<br/>
-Description: ${community.description || 'None'}<br/>
-Your Role: ${isAdmin ? 'Admin' : isMod ? 'Moderator' : 'Member'}<br/>
-Moderators: ${mods.size}<br/>
-Members: ${allMembers.size}<br/>
-Banned: ${banned.size}<br/>
-Created: ${new Date(community.createdAt).toLocaleDateString()}
-`;
-
-        this.displaySystemMessage(info);
-
-        if (isAdmin || isMod) {
-            this.displaySystemMessage('Use /members to see all members');
-            this.displaySystemMessage('Use /mods to see all moderators');
-            this.displaySystemMessage('Use /communitysettings for more options');
-        }
-    }
-
-    async cmdListMembers() {
-        if (!this.isCurrentChannelCommunity()) {
-            this.displaySystemMessage('This is not a community channel');
-            return;
-        }
-
-        const communityId = this.getCurrentCommunityId();
-
-        if (!this.canModerate(communityId)) {
-            this.displaySystemMessage('Only admins and moderators can view member list');
-            return;
-        }
-
-        const members = this.communityMembers.get(communityId) || new Set();
-        const community = this.communityChannels.get(communityId);
-
-        if (members.size === 0) {
-            this.displaySystemMessage('No members found');
-            return;
-        }
-
-        let memberList = `═══ Community Members (${members.size}) ═══\n`;
-
-        members.forEach(pubkey => {
-            const nym = this.getNymFromPubkey(pubkey);
-            const isAdmin = community.admin === pubkey;
-            const isMod = this.communityModerators.has(communityId) &&
-                this.communityModerators.get(communityId).has(pubkey);
-
-            let role = '';
-            if (isAdmin) role = ' [ADMIN]';
-            else if (isMod) role = ' [MOD]';
-
-            memberList += `${nym}${role}\n`;
-        });
-
-        this.displaySystemMessage(memberList);
-    }
-
-    async cmdListMods() {
-        if (!this.isCurrentChannelCommunity()) {
-            this.displaySystemMessage('This is not a community channel');
-            return;
-        }
-
-        const communityId = this.getCurrentCommunityId();
-        const mods = this.communityModerators.get(communityId) || new Set();
-        const community = this.communityChannels.get(communityId);
-
-        let modList = `═══ Community Moderators ═══\n`;
-        modList += `Admin: ${this.getNymFromPubkey(community.admin)}\n`;
-
-        if (mods.size > 0) {
-            modList += `\nModerators (${mods.size}):\n`;
-            mods.forEach(pubkey => {
-                const nym = this.getNymFromPubkey(pubkey);
-                modList += `${nym}\n`;
-            });
-        } else {
-            modList += '\nNo additional moderators';
-        }
-
-        this.displaySystemMessage(modList);
-    }
-
-    async cmdCommunitySettings() {
-        if (!this.isCurrentChannelCommunity()) {
-            this.displaySystemMessage('This is not a community channel');
-            return;
-        }
-
-        const communityId = this.getCurrentCommunityId();
-
-        if (!this.ownedCommunities.has(communityId)) {
-            this.displaySystemMessage('Only community admins can access settings');
-            return;
-        }
-
-        // Show community settings modal
-        this.showCommunitySettingsModal(communityId);
-    }
 
     async cmdBlock(args) {
         if (!args) {
@@ -15336,30 +12669,21 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
             // Check current channel
             const currentChannelName = this.currentGeohash || this.currentChannel;
-            if (currentChannelName === 'bar' && !this.currentGeohash) {
-                this.displaySystemMessage('Cannot block the default #bar channel');
+            if (this.currentGeohash === '9q') {
+                this.displaySystemMessage('Cannot block the default #9q channel');
                 return;
             }
 
             // Block current channel
             if (confirm(`Block channel #${currentChannelName}?`)) {
-                if (this.currentGeohash) {
-                    this.blockChannel(this.currentGeohash, this.currentGeohash);
-                    this.displaySystemMessage(`Blocked geohash channel #${this.currentGeohash}`);
-                } else {
-                    this.blockChannel(this.currentChannel, '');
-                    this.displaySystemMessage(`Blocked channel #${this.currentChannel}`);
-                }
+                this.blockChannel(this.currentGeohash, this.currentGeohash);
+                this.displaySystemMessage(`Blocked geohash channel #${this.currentGeohash}`);
 
-                // Switch to #bar
-                this.switchChannel('bar', '');
+                // Switch to #9q
+                this.switchChannel('9q', '9q');
 
                 this.updateBlockedChannelsList();
 
-                // Sync to Nostr
-                if (this.connectionMode !== 'ephemeral') {
-                    await this.saveSyncedSettings();
-                }
             }
             return;
         }
@@ -15371,52 +12695,36 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             const channelName = target.substring(1);
 
             // Check if it's current channel
-            if ((this.currentChannel === channelName && !this.currentGeohash) ||
-                (this.currentGeohash === channelName)) {
-                // Block current channel and switch to bar
+            if (this.currentGeohash === channelName) {
+                // Block current channel and switch to #9q
                 if (confirm(`Block and leave channel #${channelName}?`)) {
-                    if (this.isValidGeohash(channelName)) {
-                        this.blockChannel(channelName, channelName);
-                        this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
-                    } else {
-                        this.blockChannel(channelName, '');
-                        this.displaySystemMessage(`Blocked channel #${channelName}`);
-                    }
+                    this.blockChannel(channelName, channelName);
+                    this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
 
-                    // Switch to #bar
-                    this.switchChannel('bar', '');
+                    // Switch to #9q
+                    this.switchChannel('9q', '9q');
 
                     this.updateBlockedChannelsList();
-
-                    // Sync to Nostr
-                    if (this.connectionMode !== 'ephemeral') {
-                        await this.saveSyncedSettings();
-                    }
                 }
                 return;
             }
 
-            // Don't allow blocking #bar
-            if (channelName === 'bar') {
-                this.displaySystemMessage("Cannot block the default #bar channel");
+            // Don't allow blocking #9q
+            if (channelName === '9q') {
+                this.displaySystemMessage("Cannot block the default #9q channel");
                 return;
             }
 
-            // Determine if it's a geohash or standard channel
+            // Block geohash channel
             if (this.isValidGeohash(channelName)) {
                 this.blockChannel(channelName, channelName);
                 this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
             } else {
-                this.blockChannel(channelName, '');
-                this.displaySystemMessage(`Blocked channel #${channelName}`);
+                this.displaySystemMessage(`Invalid geohash: ${channelName}`);
             }
 
             this.updateBlockedChannelsList();
 
-            // Sync to Nostr
-            if (this.connectionMode !== 'ephemeral') {
-                await this.saveSyncedSettings();
-            }
 
             return;
         }
@@ -15444,11 +12752,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             this.displaySystemMessage(`Unblocked ${cleanNym}`);
             this.updateUserList();
             this.updateBlockedList();
-
-            // Save to synced settings for persistent connections
-            if (this.connectionMode !== 'ephemeral') {
-                await this.saveSyncedSettings();
-            }
             return;
         }
 
@@ -15460,10 +12763,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         this.updateUserList();
         this.updateBlockedList();
 
-        // Save to synced settings for persistent connections
-        if (this.connectionMode !== 'ephemeral') {
-            await this.saveSyncedSettings();
-        }
     }
 
     unblockByPubkey(pubkey) {
@@ -15476,10 +12775,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         this.updateUserList();
         this.updateBlockedList();
 
-        // Save to synced settings for persistent connections
-        if (this.connectionMode !== 'ephemeral') {
-            this.saveSyncedSettings();
-        }
     }
 
     hideMessagesFromBlockedUser(pubkey) {
@@ -15575,10 +12870,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
                 this.updateBlockedChannelsList();
 
-                // Sync to Nostr
-                if (this.connectionMode !== 'ephemeral') {
-                    await this.saveSyncedSettings();
-                }
             } else {
                 this.displaySystemMessage(`Channel #${channelName} is not blocked`);
             }
@@ -15607,10 +12898,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         this.updateUserList();
         this.updateBlockedList();
 
-        // Save to synced settings for persistent connections
-        if (this.connectionMode !== 'ephemeral') {
-            await this.saveSyncedSettings();
-        }
     }
 
     showMessagesFromUnblockedUser(pubkey) {
@@ -15710,15 +12997,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             if (this.inPMMode && this.currentPM) {
                 // Send as PM
                 await this.sendPM(slapContent, this.currentPM);
-            } else if (this.currentCommunity) {
-                // Send to community channel
-                await this.publishCommunityMessage(slapContent, this.currentCommunity);
             } else if (this.currentGeohash) {
                 // Send to geohash channel
                 await this.publishMessage(slapContent, this.currentGeohash, this.currentGeohash);
-            } else {
-                // Send to standard ephemeral channel
-                await this.publishMessage(slapContent, this.currentChannel, '');
             }
         } catch (error) {
             this.displaySystemMessage('Failed to send slap: ' + error.message);
@@ -15737,15 +13018,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             if (this.inPMMode && this.currentPM) {
                 // Send as PM
                 await this.sendPM(content, this.currentPM);
-            } else if (this.currentCommunity) {
-                // Send to community channel
-                await this.publishCommunityMessage(content, this.currentCommunity);
             } else if (this.currentGeohash) {
                 // Send to geohash channel
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            } else {
-                // Send to standard ephemeral channel
-                await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
@@ -15758,12 +13033,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         try {
             if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM);
-            } else if (this.currentCommunity) {
-                await this.publishCommunityMessage(content, this.currentCommunity);
             } else if (this.currentGeohash) {
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            } else {
-                await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
@@ -15781,12 +13052,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         try {
             if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM);
-            } else if (this.currentCommunity) {
-                await this.publishCommunityMessage(content, this.currentCommunity);
             } else if (this.currentGeohash) {
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            } else {
-                await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
@@ -15804,12 +13071,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         try {
             if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM);
-            } else if (this.currentCommunity) {
-                await this.publishCommunityMessage(content, this.currentCommunity);
             } else if (this.currentGeohash) {
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            } else {
-                await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
@@ -15827,12 +13090,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         try {
             if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM);
-            } else if (this.currentCommunity) {
-                await this.publishCommunityMessage(content, this.currentCommunity);
             } else if (this.currentGeohash) {
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            } else {
-                await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
@@ -15850,12 +13109,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         try {
             if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM);
-            } else if (this.currentCommunity) {
-                await this.publishCommunityMessage(content, this.currentCommunity);
             } else if (this.currentGeohash) {
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            } else {
-                await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
@@ -15873,12 +13128,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         try {
             if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM);
-            } else if (this.currentCommunity) {
-                await this.publishCommunityMessage(content, this.currentCommunity);
             } else if (this.currentGeohash) {
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            } else {
-                await this.publishMessage(content, this.currentChannel, '');
             }
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
@@ -16086,10 +13337,10 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         // Remove from channels map
         this.channels.delete(key);
 
-        // If currently in this channel, switch to #bar
+        // If currently in this channel, switch to #9q
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
             (geohash && this.currentGeohash === geohash)) {
-            this.switchChannel('bar', '');
+            this.switchChannel('9q', '9q');
         }
 
         // Update view more button after removing
@@ -16138,31 +13389,51 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             this.unblockChannel(key, '');
         }
         this.updateBlockedChannelsList();
+    }
 
-        // Sync to Nostr if logged in
-        if (this.connectionMode !== 'ephemeral') {
-            this.saveSyncedSettings();
+    updateHiddenChannelsList() {
+        const container = document.getElementById('hiddenChannelsList');
+        if (!container) return;
+
+        if (this.hiddenChannels.size === 0) {
+            container.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No hidden channels</div>';
+        } else {
+            container.innerHTML = Array.from(this.hiddenChannels).map(key => {
+                const displayName = `#${key}`;
+                const location = this.getGeohashLocation(key);
+                const label = location ? `${this.escapeHtml(displayName)} (${this.escapeHtml(location)})` : this.escapeHtml(displayName);
+                return `
+        <div class="blocked-item">
+            <span>${label}</span>
+            <button class="unblock-btn" onclick="nym.unhideChannelFromSettings('${this.escapeHtml(key)}')">Unhide</button>
+        </div>
+    `;
+            }).join('');
         }
+    }
+
+    unhideChannelFromSettings(key) {
+        this.hiddenChannels.delete(key);
+        this.saveHiddenChannels();
+        this.applyHiddenChannels();
+        this.updateHiddenChannelsList();
     }
 
     switchChannel(channel, geohash = '') {
         // Store previous state
         const previousChannel = this.currentChannel;
         const previousGeohash = this.currentGeohash;
-        const previousCommunity = this.currentCommunity;
 
         // Check if we're actually switching to a different channel
         const isSameChannel = !this.inPMMode &&
             channel === previousChannel &&
-            geohash === previousGeohash &&
-            !previousCommunity;
+            geohash === previousGeohash;
 
         if (isSameChannel) {
             // Still ensure the sidebar active state is correct (for initialization)
             document.querySelectorAll('.channel-item').forEach(item => {
                 const isActive = item.dataset.channel === channel &&
-                    item.dataset.geohash === geohash &&
-                    !item.dataset.community;
+                    item.dataset.geohash === geohash;
                 item.classList.toggle('active', isActive);
             });
             return; // Don't reload the same channel
@@ -16172,7 +13443,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         this.currentPM = null;
         this.currentChannel = channel;
         this.currentGeohash = geohash;
-        this.currentCommunity = null; // Clear community mode
 
         // Handle geo-relay connections for Bitchat compatibility
         // Clean up previous geo relays if switching away from a geohash channel
@@ -16230,15 +13500,14 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         document.getElementById('currentChannel').innerHTML = fullTitle;
 
         // Ensure channel exists in sidebar before updating active state
-        if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]:not([data-community])`)) {
+        if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]`)) {
             this.addChannel(channel, geohash);
         }
 
         // Update active state
         document.querySelectorAll('.channel-item').forEach(item => {
             const isActive = item.dataset.channel === channel &&
-                item.dataset.geohash === geohash &&
-                !item.dataset.community; // Make sure it's not a community item
+                item.dataset.geohash === geohash;
             item.classList.toggle('active', isActive);
         });
 
@@ -16254,7 +13523,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         const storageKey = geohash ? `#${geohash}` : channel;
         const previousKey = previousGeohash ? `#${previousGeohash}` : previousChannel;
 
-        if (storageKey !== previousKey || previousCommunity) {
+        if (storageKey !== previousKey) {
             this.loadChannelMessages(displayName);
         }
 
@@ -16267,97 +13536,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         }
     }
 
-    switchToCommunity(communityId) {
-        const community = this.communityChannels.get(communityId);
-        if (!community) {
-            this.displaySystemMessage('Community not found');
-            return;
-        }
-
-        // Check if we're already in this community
-        if (!this.inPMMode && this.currentCommunity === communityId) {
-            return; // Don't reload the same community
-        }
-
-        // Set community mode - clear ALL other modes
-        this.inPMMode = false;
-        this.currentPM = null;
-        this.currentChannel = null; // Clear standard channel
-        this.currentGeohash = ''; // Clear geohash
-        this.currentCommunity = communityId; // Set community
-
-        // Show share button in community mode
-        const shareBtn = document.getElementById('shareChannelBtn');
-        if (shareBtn) {
-            shareBtn.style.display = 'block';
-        }
-
-        document.getElementById('currentChannel').innerHTML = `#${this.escapeHtml(community.name)} <span style="font-size: 12px; color: var(--text-dim);">(Community)</span>`;
-
-        // Update active state - only activate community items
-        document.querySelectorAll('.channel-item').forEach(item => {
-            const itemCommunity = item.dataset.community || '';
-            const isCommunityItem = item.dataset.isCommunity === 'true';
-
-            if (isCommunityItem) {
-                item.classList.toggle('active', itemCommunity === communityId);
-            } else {
-                item.classList.remove('active');
-            }
-        });
-
-        document.querySelectorAll('.pm-item').forEach(item => {
-            item.classList.remove('active');
-        });
-
-        // Clear unread count
-        this.clearUnreadCount(communityId);
-
-        // This ensures we get more messages even with few relays connected
-        this.loadChannelFromRelays(communityId, 'community');
-
-        // Load community messages (will check internally if already loaded)
-        this.loadCommunityMessages(communityId);
-
-        // Update user list
-        this.updateUserList();
-
-        // Close mobile sidebar
-        if (window.innerWidth <= 768) {
-            this.closeSidebar();
-        }
-    }
-
-    loadCommunityMessages(communityId) {
-        const container = document.getElementById('messagesContainer');
-
-        // Check if we're loading the same community
-        if (container.dataset.lastCommunity === communityId) {
-            return;
-        }
-
-        // Clear and mark new community
-        container.innerHTML = '';
-        container.dataset.lastCommunity = communityId;
-
-        // Clear channel marker since we're in a community
-        delete container.dataset.lastChannel;
-
-        const community = this.communityChannels.get(communityId);
-        if (!community) return;
-
-        // Community messages would be stored under the community ID
-        const communityMessages = this.messages.get(communityId) || [];
-
-        if (communityMessages.length === 0) {
-            this.displaySystemMessage(`Welcome to #${community.name}`);
-            this.displaySystemMessage(`This is a ${community.isPrivate ? 'private' : 'public'} community`);
-            return;
-        }
-
-        // Use virtual scrolling for efficient rendering
-        this.renderMessagesWithVirtualScroll(container, communityId, true);
-    }
 
     loadChannelMessages(displayName) {
         const container = document.getElementById('messagesContainer');
@@ -16371,9 +13549,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         // Clear and mark new channel
         container.innerHTML = '';
         container.dataset.lastChannel = storageKey;
-
-        // Clear community marker since we're in a regular channel
-        delete container.dataset.lastCommunity;
 
         const channelMessages = this.messages.get(storageKey) || [];
 
@@ -16683,13 +13858,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
     // Get filtered messages for a storage key (applies block filters)
     getFilteredMessages(storageKey) {
         const messages = this.messages.get(storageKey) || [];
-        const isCommunity = this.communityChannels.has(storageKey);
-        const bannedUsers = isCommunity ? (this.communityBans.get(storageKey) || new Set()) : new Set();
 
         return messages.filter(msg => {
-            if (bannedUsers.has(msg.pubkey)) return false;
             if (this.blockedUsers.has(msg.pubkey) || this.isNymBlocked(msg.author) || msg.blocked) return false;
-            if (isCommunity && this.hasCommunityBlockedKeyword(msg.content, storageKey)) return false;
             if (this.hasBlockedKeyword(msg.content)) return false;
             if (this.isSpamMessage(msg.content)) return false;
             return true;
@@ -16791,7 +13962,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
             // Check if this is the current active channel
             const isCurrentChannel = !this.inPMMode &&
-                !this.currentCommunity &&
                 this.currentChannel === channel &&
                 (this.currentGeohash || '') === geohash;
             if (isCurrentChannel) {
@@ -16799,7 +13969,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             const displayName = geohash ? `#${geohash}` : `#${channel}`;
-            const badge = geohash ? '<span class="geohash-badge">GEO</span>' : '<span class="std-badge">EPH</span>';
 
             // Get location information for geohash channels
             let locationHint = '';
@@ -16815,9 +13984,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 item.classList.add('pinned');
             }
 
-            // Don't show pin button for #bar
-            const isBar = channel === 'bar' && !geohash;
-            const pinButton = isBar ? '' : `
+            const pinButton = `
     <span class="pin-btn ${isPinned ? 'pinned' : ''}" data-channel="${channel}" data-geohash="${geohash}">
         <svg viewBox="0 0 24 24">
             <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/>
@@ -16825,25 +13992,43 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
     </span>
 `;
 
+            const hideButton = `
+    <span class="hide-btn" data-channel="${channel}" data-geohash="${geohash}" title="Hide channel">
+        <svg viewBox="0 0 24 24">
+            <path d="M12,7c-2.76,0-5,2.24-5,5c0,0.65,0.13,1.26,0.36,1.83l2.92-2.92C10.29,10.36,11.11,10,12,10c1.66,0,3,1.34,3,3 c0,0.89-0.36,1.71-0.91,2.28l2.92-2.92C17.87,11.74,18,11.13,18,10.48C18,9.24,17,7,12,7z"/>
+            <path d="M2,4.27l2.28,2.28l0.46,0.46C3.08,8.3,1.78,10.02,1,12c1.73,4.39,6,7.5,11,7.5c1.55,0,3.03-0.3,4.38-0.84 l0.42,0.42L19.73,22L21,20.73L3.27,3L2,4.27z M7.53,9.8l1.55,1.55C9.04,11.56,9,11.77,9,12c0,1.66,1.34,3,3,3 c0.23,0,0.44-0.04,0.65-0.08l1.55,1.55C13.51,16.8,12.78,17,12,17c-2.76,0-5-2.24-5-5C7,11.22,7.2,10.49,7.53,9.8z"/>
+            <path d="M11.84,9.02l3.15,3.15l0.02-0.16c0-1.66-1.34-3-3-3L11.84,9.02z"/>
+        </svg>
+    </span>
+`;
+
             item.innerHTML = `
     <span class="channel-name"${locationHint}>${displayName}</span>
     <div class="channel-badges">
+        ${hideButton}
         ${pinButton}
-        ${badge}
         <span class="unread-badge" style="display:none">0</span>
     </div>
 `;
 
-            // Add pin button handler using event listener instead of inline onclick
-            if (!isBar) {
-                const pinBtn = item.querySelector('.pin-btn');
-                if (pinBtn) {
-                    pinBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        this.togglePin(channel, geohash);
-                    });
-                }
+            // Add pin button handler
+            const pinBtn = item.querySelector('.pin-btn');
+            if (pinBtn) {
+                pinBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    this.togglePin(channel, geohash);
+                });
+            }
+
+            // Add hide button handler
+            const hideBtn = item.querySelector('.hide-btn');
+            if (hideBtn) {
+                hideBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    this.toggleHideChannel(channel, geohash);
+                });
             }
 
             // Insert before the view more button if it exists
@@ -16856,6 +14041,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
             this.channels.set(key, { channel, geohash });
             this.updateChannelPins();
+            this.applyHiddenChannels();
 
             // Check if we need to add/update view more button
             this.updateViewMoreButton('channelList');
@@ -16964,9 +14150,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
     removeChannel(channel, geohash = '') {
         const key = geohash || channel;
 
-        // Don't allow removing #bar (default channel)
-        if (channel === 'bar' && !geohash) {
-            this.displaySystemMessage('Cannot remove the default #bar channel');
+        // Don't allow removing default channel #9q
+        if (key === '9q') {
+            this.displaySystemMessage('Cannot remove the default #9q channel');
             return;
         }
 
@@ -16985,10 +14171,10 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             element.remove();
         }
 
-        // If we're currently in this channel, switch to #bar
+        // If we're currently in this channel, switch to #9q
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
             (geohash && this.currentGeohash === geohash)) {
-            this.switchChannel('bar', '');
+            this.switchChannel('9q', '9q');
         }
 
         // Save the updated channel list
@@ -17006,8 +14192,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 const channel = channelItem.dataset.channel;
                 const geohash = channelItem.dataset.geohash;
 
-                // Don't allow removing #bar
-                if (channel === 'bar' && !geohash) {
+                // Don't allow removing default channel #9q
+                const key = geohash || channel;
+                if (key === '9q') {
                     return;
                 }
 
@@ -17056,18 +14243,11 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
     saveUserChannels() {
         const userChannels = [];
         this.channels.forEach((value, key) => {
-            const isCommunity = value.isCommunity;
-            const isOwnedCommunity = isCommunity && this.ownedCommunities.has(key);
-            const isModeratedCommunity = isCommunity && this.moderatedCommunities.has(key);
-            const isMemberCommunity = isCommunity && this.communityMembers.has(key) &&
-                this.communityMembers.get(key).has(this.pubkey);
-            if (this.userJoinedChannels.has(key) || isOwnedCommunity || isModeratedCommunity || isMemberCommunity) {
+            if (this.userJoinedChannels.has(key)) {
                 userChannels.push({
                     key: key,
                     channel: value.channel,
-                    geohash: value.geohash,
-                    isCommunity: value.isCommunity,
-                    community: value.community
+                    geohash: value.geohash
                 });
             }
         });
@@ -17097,25 +14277,12 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             try {
                 const userChannels = JSON.parse(saved);
 
-                userChannels.forEach(({ key, channel, geohash, isCommunity, community }) => {
-                    if (isCommunity) {
-                        // For communities, only restore if owned/moderated/member
-                        // Public communities will be re-discovered automatically
-                        const isOwned = this.ownedCommunities.has(key);
-                        const isModerated = this.moderatedCommunities.has(key);
-                        const isMember = this.communityMembers.has(key) &&
-                            this.communityMembers.get(key).has(this.pubkey);
-
-                        if (isOwned || isModerated || isMember) {
-                            // Will be added when community definition is received
-                            this.userJoinedChannels.add(key);
-                        }
-                    } else {
-                        // Regular channels - add the channel to the list if not already present
+                userChannels.forEach(({ key, channel, geohash }) => {
+                    // Only restore geohash channels
+                    if (geohash && this.isValidGeohash(geohash)) {
                         if (!this.channels.has(key)) {
                             this.addChannel(channel, geohash);
                         }
-                        // Make sure it's marked as user-joined
                         this.userJoinedChannels.add(key);
                     }
                 });
@@ -17123,9 +14290,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Sort channels after loading
                 this.sortChannelsByActivity();
 
-                const regularChannelCount = userChannels.filter(c => !c.isCommunity).length;
-                if (regularChannelCount > 0) {
-                    this.displaySystemMessage(`Restored ${regularChannelCount} previously joined channels`);
+                const channelCount = userChannels.filter(c => c.geohash).length;
+                if (channelCount > 0) {
+                    this.displaySystemMessage(`Restored ${channelCount} previously joined channels`);
                 }
             } catch (error) {
             }
@@ -17187,15 +14354,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 // Geohash channel
                 selector = `[data-geohash="${channel.substring(1)}"]`;
             } else {
-                // Check if it's a community channel by ID
-                const communityElement = document.querySelector(`[data-community="${channel}"]`);
-                if (communityElement) {
-                    // It's a community channel
-                    selector = `[data-community="${channel}"]`;
-                } else {
-                    // Standard channel
-                    selector = `[data-channel="${channel}"][data-geohash=""]`;
-                }
+                selector = `[data-channel="${channel}"][data-geohash=""]`;
             }
 
             const badge = document.querySelector(`${selector} .unread-badge`);
@@ -17220,24 +14379,12 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         const scrollTop = channelList.scrollTop;
 
         channels.sort((a, b) => {
-            // #bar is always first
-            const aIsBar = a.dataset.channel === 'bar' && !a.dataset.geohash && !a.dataset.isCommunity;
-            const bIsBar = b.dataset.channel === 'bar' && !b.dataset.geohash && !b.dataset.isCommunity;
+            // #9q is always first
+            const aIsDefault = a.dataset.geohash === '9q';
+            const bIsDefault = b.dataset.geohash === '9q';
 
-            if (aIsBar) return -1;
-            if (bIsBar) return 1;
-
-            // Check if either is the NYM community (special pin that can't be unpinned)
-            const aIsNYM = a.dataset.community &&
-                this.communityChannels.get(a.dataset.community)?.name?.toLowerCase() === 'nym' &&
-                this.communityChannels.get(a.dataset.community)?.admin === this.verifiedDeveloper.pubkey;
-            const bIsNYM = b.dataset.community &&
-                this.communityChannels.get(b.dataset.community)?.name?.toLowerCase() === 'nym' &&
-                this.communityChannels.get(b.dataset.community)?.admin === this.verifiedDeveloper.pubkey;
-
-            // NYM community comes right after #bar
-            if (aIsNYM && !bIsBar) return -1;
-            if (bIsNYM && !aIsBar) return 1;
+            if (aIsDefault) return -1;
+            if (bIsDefault) return 1;
 
             // Active channel is third
             const aIsActive = a.classList.contains('active');
@@ -17287,8 +14434,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             }
 
             // Default: sort by unread count
-            const aChannel = a.dataset.community || (a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel);
-            const bChannel = b.dataset.community || (b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel);
+            const aChannel = a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel;
+            const bChannel = b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel;
 
             const aUnread = this.unreadCounts.get(aChannel) || 0;
             const bUnread = this.unreadCounts.get(bChannel) || 0;
@@ -17303,6 +14450,9 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
         // Re-add view more button
         this.updateViewMoreButton('channelList');
+
+        // Apply hidden channel visibility
+        this.applyHiddenChannels();
 
         // Restore scroll position
         channelList.scrollTop = scrollTop;
@@ -17339,14 +14489,7 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                     selector = `[data-channel="${channelName}"][data-geohash=""]`;
                 }
             } else {
-                // Check if it's a community channel
-                const communityElement = document.querySelector(`[data-community="${channel}"]`);
-                if (communityElement) {
-                    selector = `[data-community="${channel}"]`;
-                } else {
-                    // Standard channel without # prefix
-                    selector = `[data-channel="${channel}"][data-geohash=""]`;
-                }
+                selector = `[data-channel="${channel}"][data-geohash=""]`;
             }
 
             const badge = document.querySelector(`${selector} .unread-badge`);
@@ -17632,12 +14775,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
                         if (channelInfo.type === 'pm') {
                             this.openUserPM(baseTitle, channelInfo.pubkey);
-                        } else if (channelInfo.type === 'community') {
-                            this.switchToCommunity(channelInfo.communityId);
                         } else if (channelInfo.type === 'geohash') {
                             this.switchChannel(channelInfo.channel, channelInfo.geohash);
-                        } else {
-                            this.switchChannel(channelInfo.channel, '');
                         }
 
                         notification.close();
@@ -17664,12 +14803,8 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
             notifEl.onclick = () => {
                 if (channelInfo.type === 'pm') {
                     this.openUserPM(baseTitle, channelInfo.pubkey);
-                } else if (channelInfo.type === 'community') {
-                    this.switchToCommunity(channelInfo.communityId);
                 } else if (channelInfo.type === 'geohash') {
                     this.switchChannel(channelInfo.channel, channelInfo.geohash);
-                } else {
-                    this.switchChannel(channelInfo.channel, '');
                 }
                 notifEl.remove();
             };
@@ -17848,51 +14983,13 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         });
     }
 
-    cleanupBannedMessages(communityId, bannedPubkey) {
-        // Mark messages from banned user as blocked in stored messages
-        if (this.messages.has(communityId)) {
-            this.messages.get(communityId).forEach(msg => {
-                if (msg.pubkey === bannedPubkey) {
-                    msg.blocked = true;
-                }
-            });
-        }
-
-        // Remove from DOM
-        document.querySelectorAll(`.message[data-pubkey="${bannedPubkey}"]`).forEach(msg => {
-            msg.remove();
-        });
-    }
-
-    restoreUnbannedMessages(communityId, unbannedPubkey) {
-        // Unmark messages from unbanned user in stored messages
-        if (this.messages.has(communityId)) {
-            this.messages.get(communityId).forEach(msg => {
-                if (msg.pubkey === unbannedPubkey) {
-                    delete msg.blocked;
-                }
-            });
-        }
-
-        // Reload community messages if currently viewing this community
-        if (this.currentCommunity === communityId) {
-            this.loadCommunityMessages(communityId);
-        }
-    }
-
     loadSettings() {
         let pinnedLandingChannel;
         try {
             const saved = localStorage.getItem('nym_pinned_landing_channel');
-            pinnedLandingChannel = saved ? JSON.parse(saved) : { type: 'ephemeral', channel: 'bar' };
+            pinnedLandingChannel = saved ? JSON.parse(saved) : { type: 'geohash', geohash: '9q' };
         } catch (e) {
-            // Fallback for old string format
-            const saved = localStorage.getItem('nym_pinned_landing_channel');
-            if (saved) {
-                pinnedLandingChannel = { type: 'ephemeral', channel: saved };
-            } else {
-                pinnedLandingChannel = { type: 'ephemeral', channel: 'bar' };
-            }
+            pinnedLandingChannel = { type: 'geohash', geohash: '9q' };
         }
 
         return {
@@ -17919,11 +15016,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
 
     saveImageBlurSettings() {
         localStorage.setItem(`nym_image_blur_${this.pubkey}`, this.blurOthersImages.toString());
-
-        // Sync to Nostr for persistent connections
-        if (this.connectionMode !== 'ephemeral') {
-            this.saveSyncedSettings();
-        }
     }
 
     toggleImageBlur() {
@@ -18096,20 +15188,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         return String(text).replace(/[&<>"]/g, m => map[m]);
     }
 
-    isCurrentChannelCommunity() {
-        return this.currentCommunity !== null;
-    }
-
-    getCurrentCommunityId() {
-        return this.currentCommunity;
-    }
-
-    canModerate(communityId) {
-        const isAdmin = this.ownedCommunities.has(communityId);
-        const isMod = this.communityModerators.has(communityId) &&
-            this.communityModerators.get(communityId).has(this.pubkey);
-        return isAdmin || isMod;
-    }
 
     async findUserPubkey(input) {
         const hashIndex = input.indexOf('#');
@@ -18187,48 +15265,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
                 });
             });
 
-            // Also search in community members if in a community
-            if (this.currentCommunity && this.communityMembers.has(this.currentCommunity)) {
-                this.communityMembers.get(this.currentCommunity).forEach(pubkey => {
-                    // Try to get nym from cache
-                    const cachedNym = this.getNymFromPubkey(pubkey);
-                    if (cachedNym) {
-                        const baseNym = cachedNym.split('#')[0] || cachedNym;
-                        if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                            if (searchSuffix) {
-                                if (pubkey.endsWith(searchSuffix)) {
-                                    if (!matches.find(m => m.pubkey === pubkey)) {
-                                        matches.push({ nym: cachedNym, pubkey: pubkey });
-                                    }
-                                }
-                            } else {
-                                if (!matches.find(m => m.pubkey === pubkey)) {
-                                    matches.push({ nym: cachedNym, pubkey: pubkey });
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        // If still no matches and we have a suffix, we can construct a pubkey
-        // This is useful for moderators who might have the full nym#suffix
-        if (matches.length === 0 && searchSuffix && searchSuffix.length === 4) {
-            // If we're in a community, search through all messages to find a pubkey ending with this suffix
-            if (this.currentCommunity) {
-                const communityMessages = this.messages.get(this.currentCommunity) || [];
-                communityMessages.forEach(msg => {
-                    if (msg.pubkey && msg.pubkey.endsWith(searchSuffix)) {
-                        const baseNym = msg.author.split('#')[0] || msg.author;
-                        if (baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                            if (!matches.find(m => m.pubkey === msg.pubkey)) {
-                                matches.push({ nym: msg.author, pubkey: msg.pubkey });
-                            }
-                        }
-                    }
-                });
-            }
         }
 
         if (matches.length === 0) {
@@ -18248,983 +15284,6 @@ Created: ${new Date(community.createdAt).toLocaleDateString()}
         return matches[0].pubkey;
     }
 
-    async updateCommunityRole(communityId, targetPubkey, role) {
-        const community = this.communityChannels.get(communityId);
-        if (!community) return;
-
-        // Get current moderators
-        const mods = this.communityModerators.get(communityId) || new Set();
-
-        // Update community definition with new moderator list
-        const event = {
-            kind: 34550,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [
-                ['d', communityId],
-                ['name', community.name],
-                ['description', community.description || ''],
-                ['p', this.pubkey, '', 'admin'],
-            ],
-            content: community.description || '',
-            pubkey: this.pubkey
-        };
-
-        // Add all moderators
-        if (role === 'moderator') {
-            mods.add(targetPubkey);
-        } else if (role === 'remove') {
-            mods.delete(targetPubkey);
-        }
-
-        mods.forEach(modPubkey => {
-            event.tags.push(['p', modPubkey, '', 'moderator']);
-        });
-
-        // Add privacy tag
-        if (community.isPrivate) {
-            event.tags.push(['private']);
-        } else {
-            event.tags.push(['public']);
-        }
-
-        // Sign and send
-        const signedEvent = await this.signEvent(event);
-
-        if (signedEvent) {
-            this.sendToRelay(["EVENT", signedEvent]);
-        }
-    }
-
-    async updateCommunityDefinitionWithBans(communityId) {
-        const community = this.communityChannels.get(communityId);
-        if (!community) return;
-
-        // Only admin can update community definition
-        if (community.admin !== this.pubkey) {
-            return;
-        }
-
-        // Get current moderators
-        const mods = this.communityModerators.get(communityId) || new Set();
-
-        // Get current banned users
-        const banned = this.communityBans.get(communityId) || new Set();
-
-        // Create updated community definition
-        const event = {
-            kind: 34550,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [
-                ['d', communityId],
-                ['name', community.name],
-                ['description', community.description || ''],
-                ['image', community.imageUrl || ''],
-                ['p', this.pubkey, '', 'admin'],
-            ],
-            content: community.description || '',
-            pubkey: this.pubkey
-        };
-
-        // Add moderators
-        mods.forEach(modPubkey => {
-            event.tags.push(['p', modPubkey, '', 'moderator']);
-        });
-
-        // Add banned users - THIS IS KEY FOR PERSISTENCE
-        banned.forEach(bannedPubkey => {
-            event.tags.push(['p', bannedPubkey, '', 'banned']);
-        });
-
-        // Add privacy tag
-        if (community.isPrivate) {
-            event.tags.push(['private']);
-        } else {
-            event.tags.push(['public']);
-        }
-
-        // Sign and send
-        const signedEvent = await this.signEvent(event);
-
-        if (signedEvent) {
-            this.sendToRelay(["EVENT", signedEvent]);
-        }
-    }
-
-    async publishCommunityModeration(communityId, targetPubkey, action) {
-        const community = this.communityChannels.get(communityId);
-        if (!community) return;
-
-        // Use NIP-56 reporting event (kind 1984) for moderation
-        const event = {
-            kind: 1984, // NIP-56 report/moderation
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [
-                ['a', `34550:${community.admin}:${communityId}`], // Reference to community
-                ['p', targetPubkey], // Target user
-                ['action', action], // ban, unban, kick
-                ['reason', `${action} by moderator`]
-            ],
-            content: `User ${action} in community ${community.name}`,
-            pubkey: this.pubkey
-        };
-
-        const signedEvent = await this.signEvent(event);
-
-        if (signedEvent) {
-            this.sendToRelay(["EVENT", signedEvent]);
-        }
-    }
-
-    showCommunitySettingsModal(communityId) {
-        const community = this.communityChannels.get(communityId);
-        if (!community) return;
-
-        const modal = document.getElementById('communitySettingsModal');
-        if (!modal) {
-            this.displaySystemMessage('Community settings UI not available');
-            return;
-        }
-
-        // Populate modal with community data
-        document.getElementById('communityNameDisplay').textContent = community.name;
-        document.getElementById('communityDescEdit').value = community.description || '';
-        document.getElementById('communityPrivacyEdit').value = community.isPrivate ? 'private' : 'public';
-
-        // Load dynamic content
-        this.loadCommunitySettingsUI(communityId);
-
-        modal.classList.add('active');
-    }
-
-    async loadCommunitySettingsUI(communityId) {
-        const community = this.communityChannels.get(communityId);
-        if (!community) return;
-
-        // Load community image
-        const imageEdit = document.getElementById('communityImageEdit');
-        const imagePreview = document.getElementById('communityImagePreview');
-        const imagePreviewImg = document.getElementById('communityImagePreviewImg');
-
-        if (imageEdit) {
-            imageEdit.value = community.imageUrl || '';
-        }
-
-        if (community.imageUrl && imagePreviewImg && imagePreview) {
-            imagePreviewImg.src = community.imageUrl;
-            imagePreview.style.display = 'block';
-
-            imagePreviewImg.onerror = () => {
-                imagePreview.style.display = 'none';
-            };
-        } else if (imagePreview) {
-            imagePreview.style.display = 'none';
-        }
-
-        // Add live preview on image URL change
-        if (imageEdit) {
-            imageEdit.addEventListener('input', (e) => {
-                const url = e.target.value.trim();
-                if (url && imagePreviewImg && imagePreview) {
-                    imagePreviewImg.src = url;
-                    imagePreview.style.display = 'block';
-
-                    imagePreviewImg.onerror = () => {
-                        imagePreview.style.display = 'none';
-                    };
-                } else if (imagePreview) {
-                    imagePreview.style.display = 'none';
-                }
-            });
-        }
-
-        // Load blocked keywords for this community
-        const keywordList = document.getElementById('communityKeywordList');
-        if (keywordList) {
-            const communityKeywords = this.communityBlockedKeywords?.get(communityId) || new Set();
-
-            if (communityKeywords.size === 0) {
-                keywordList.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked keywords</div>';
-            } else {
-                keywordList.innerHTML = '';
-                communityKeywords.forEach(keyword => {
-                    const item = document.createElement('div');
-                    item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 5px; margin: 2px 0;';
-                    item.innerHTML = `
-            <span>${this.escapeHtml(keyword)}</span>
-            <button class="unblock-btn" onclick="nym.removeCommunityKeyword('${this.escapeHtml(keyword).replace(/'/g, "\\'")}')">Remove</button>
-        `;
-                    keywordList.appendChild(item);
-                });
-            }
-        }
-
-        // Load moderators list
-        const mods = this.communityModerators.get(communityId) || new Set();
-        const modsList = document.getElementById('communityModsList');
-
-        if (mods.size === 0) {
-            modsList.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No moderators assigned</div>';
-        } else {
-            modsList.innerHTML = '';
-            mods.forEach(pubkey => {
-                const nym = this.getNymFromPubkey(pubkey);
-                const item = document.createElement('div');
-                item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 5px; margin: 2px 0;';
-                item.innerHTML = `
-        <span>${nym}</span>
-        <button class="unblock-btn" onclick="nym.removeModFromSettings('${pubkey}')">Remove</button>
-    `;
-                modsList.appendChild(item);
-            });
-        }
-
-        // Load banned users list
-        const banned = this.communityBans.get(communityId) || new Set();
-        const bansList = document.getElementById('communityBansList');
-
-        if (banned.size === 0) {
-            bansList.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No banned users</div>';
-        } else {
-            bansList.innerHTML = '';
-            banned.forEach(pubkey => {
-                const nym = this.getNymFromPubkey(pubkey);
-                const item = document.createElement('div');
-                item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 5px; margin: 2px 0;';
-                item.innerHTML = `
-        <span>${nym}</span>
-        <button class="unblock-btn" onclick="nym.unbanFromSettings('${pubkey}')">Unban</button>
-    `;
-                bansList.appendChild(item);
-            });
-        }
-
-        // Update statistics with deduplication
-        const members = this.communityMembers.get(communityId) || new Set();
-
-        // Create a deduplicated set of all members (admin + mods + regular members)
-        const allMembers = new Set();
-
-        // Add admin (community owner)
-        allMembers.add(community.admin);
-
-        // Add all moderators
-        mods.forEach(modPubkey => allMembers.add(modPubkey));
-
-        // Add all regular members
-        members.forEach(memberPubkey => allMembers.add(memberPubkey));
-
-        // Now calculate stats without double-counting
-        const totalMembers = allMembers.size;
-        const totalMods = mods.size;
-        const totalBanned = banned.size;
-
-        document.getElementById('statMembers').textContent = totalMembers;
-        document.getElementById('statMods').textContent = totalMods;
-        document.getElementById('statBanned').textContent = totalBanned;
-    }
-
-    addCommunityKeyword() {
-        const communityId = this.getCurrentCommunityId();
-        if (!communityId) return;
-
-        const input = document.getElementById('newCommunityKeywordInput');
-        const keyword = input.value.trim().toLowerCase();
-
-        if (keyword) {
-            if (!this.communityBlockedKeywords) {
-                this.communityBlockedKeywords = new Map();
-            }
-            if (!this.communityBlockedKeywords.has(communityId)) {
-                this.communityBlockedKeywords.set(communityId, new Set());
-            }
-
-            this.communityBlockedKeywords.get(communityId).add(keyword);
-            this.saveCommunityKeywords(communityId);
-            this.loadCommunitySettingsUI(communityId);
-            input.value = '';
-
-            // Hide messages containing this keyword in this community
-            if (this.currentCommunity === communityId) {
-                document.querySelectorAll('.message').forEach(msg => {
-                    const content = msg.querySelector('.message-content');
-                    if (content && content.textContent.toLowerCase().includes(keyword)) {
-                        msg.classList.add('blocked');
-                        msg.style.display = 'none';
-                    }
-                });
-            }
-
-            this.displaySystemMessage(`Blocked keyword in community: "${keyword}"`);
-        }
-    }
-
-    removeCommunityKeyword(keyword) {
-        const communityId = this.getCurrentCommunityId();
-        if (!communityId) return;
-
-        if (this.communityBlockedKeywords?.has(communityId)) {
-            this.communityBlockedKeywords.get(communityId).delete(keyword);
-            this.saveCommunityKeywords(communityId);
-            this.loadCommunitySettingsUI(communityId);
-
-            // Re-check all messages in this community
-            if (this.currentCommunity === communityId) {
-                document.querySelectorAll('.message.blocked').forEach(msg => {
-                    const content = msg.querySelector('.message-content');
-                    if (content) {
-                        const hasOtherBlockedKeyword = Array.from(
-                            this.communityBlockedKeywords.get(communityId) || []
-                        ).some(kw => content.textContent.toLowerCase().includes(kw));
-
-                        if (!hasOtherBlockedKeyword) {
-                            msg.classList.remove('blocked');
-                            msg.style.display = '';
-                        }
-                    }
-                });
-            }
-
-            this.displaySystemMessage(`Unblocked keyword in community: "${keyword}"`);
-        }
-    }
-
-    saveCommunityKeywords(communityId) {
-        if (!this.communityBlockedKeywords?.has(communityId)) return;
-
-        const keywords = Array.from(this.communityBlockedKeywords.get(communityId));
-        localStorage.setItem(`nym_community_keywords_${communityId}`, JSON.stringify(keywords));
-    }
-
-    loadCommunityKeywords(communityId) {
-        const saved = localStorage.getItem(`nym_community_keywords_${communityId}`);
-        if (saved) {
-            if (!this.communityBlockedKeywords) {
-                this.communityBlockedKeywords = new Map();
-            }
-            this.communityBlockedKeywords.set(communityId, new Set(JSON.parse(saved)));
-        }
-    }
-
-    hasCommunityBlockedKeyword(text, communityId) {
-        if (!this.communityBlockedKeywords?.has(communityId)) return false;
-
-        const lowerText = text.toLowerCase();
-        return Array.from(this.communityBlockedKeywords.get(communityId)).some(
-            keyword => lowerText.includes(keyword)
-        );
-    }
-
-    async addModFromSettings() {
-        const input = document.getElementById('addModInput').value.trim();
-        if (!input) {
-            this.displaySystemMessage('Please enter a nym');
-            return;
-        }
-
-        const communityId = this.getCurrentCommunityId();
-        if (!communityId) return;
-
-        const community = this.communityChannels.get(communityId);
-        if (!community) {
-            this.displaySystemMessage('Current community not found');
-            return;
-        }
-
-        // Only admin can add moderators
-        if (!this.ownedCommunities.has(communityId)) {
-            this.displaySystemMessage('Only the community admin can add moderators');
-            return;
-        }
-
-        const targetPubkey = await this.findUserPubkey(input);
-        if (!targetPubkey) {
-            // Clear input even on failure
-            document.getElementById('addModInput').value = '';
-            return;
-        }
-
-        const matchedNym = this.getNymFromPubkey(targetPubkey);
-
-        if (targetPubkey === this.pubkey) {
-            this.displaySystemMessage("You're already the admin (and a moderator)");
-            document.getElementById('addModInput').value = '';
-            return;
-        }
-
-        // Check if already a moderator
-        if (this.communityModerators.has(communityId) &&
-            this.communityModerators.get(communityId).has(targetPubkey)) {
-            this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, targetPubkey)} is already a moderator`);
-            document.getElementById('addModInput').value = '';
-            return;
-        }
-
-        // Add as moderator
-        if (!this.communityModerators.has(communityId)) {
-            this.communityModerators.set(communityId, new Set());
-        }
-        this.communityModerators.get(communityId).add(targetPubkey);
-
-        // Update community definition
-        await this.updateCommunityDefinitionWithBans(communityId);
-
-        // Parse base nym from display format - this removes HTML tags
-        const parsedNym = this.parseNymFromDisplay(matchedNym);
-        // Get just the base nym without any suffix
-        const baseNym = parsedNym.split('#')[0] || parsedNym;
-        const suffix = this.getPubkeySuffix(targetPubkey);
-        const fullNym = `${baseNym}#${suffix}`;
-
-        const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
-        this.displaySystemMessage(`Added ${displayNym} as a moderator`);
-
-        // Announce in channel with full nym#suffix
-        await this.publishCommunityMessage(`⭐ ${fullNym} is now a moderator of this community`, communityId);
-
-        // Clear input and reload UI
-        document.getElementById('addModInput').value = '';
-        this.loadCommunitySettingsUI(communityId);
-    }
-
-    async removeModFromSettings(pubkey) {
-        const communityId = this.getCurrentCommunityId();
-        if (!communityId) return;
-
-        const community = this.communityChannels.get(communityId);
-        if (!community) {
-            this.displaySystemMessage('Current community not found');
-            return;
-        }
-
-        // Only admin can remove moderators
-        if (!this.ownedCommunities.has(communityId)) {
-            this.displaySystemMessage('Only the community admin can remove moderators');
-            return;
-        }
-
-        const matchedNym = this.getNymFromPubkey(pubkey);
-
-        if (pubkey === this.pubkey) {
-            this.displaySystemMessage("You can't remove yourself as admin");
-            return;
-        }
-
-        // Check if actually a moderator
-        if (!this.communityModerators.has(communityId) ||
-            !this.communityModerators.get(communityId).has(pubkey)) {
-            this.displaySystemMessage(`${this.formatNymWithPubkey(matchedNym, pubkey)} is not a moderator`);
-            return;
-        }
-
-        // Remove from moderators
-        this.communityModerators.get(communityId).delete(pubkey);
-
-        // Update community definition
-        await this.updateCommunityDefinitionWithBans(communityId);
-
-        // Parse base nym from display format - this removes HTML tags
-        const parsedNym = this.parseNymFromDisplay(matchedNym);
-        // Get just the base nym without any suffix
-        const baseNym = parsedNym.split('#')[0] || parsedNym;
-        const suffix = this.getPubkeySuffix(pubkey);
-        const fullNym = `${baseNym}#${suffix}`;
-
-        const displayNym = this.formatNymWithPubkey(matchedNym, pubkey);
-        this.displaySystemMessage(`Removed ${displayNym} as a moderator`);
-
-        // Announce in channel with full nym#suffix
-        await this.publishCommunityMessage(`📋 ${fullNym} is no longer a moderator of this community`, communityId);
-
-        // Reload UI
-        this.loadCommunitySettingsUI(communityId);
-    }
-
-    async unbanFromSettings(pubkey) {
-        const communityId = this.getCurrentCommunityId();
-        if (!communityId) return;
-
-        const community = this.communityChannels.get(communityId);
-        if (!community) return;
-
-        // Check if user is admin or moderator
-        const isAdmin = this.ownedCommunities.has(communityId);
-        const isMod = this.communityModerators.has(communityId) &&
-            this.communityModerators.get(communityId).has(this.pubkey);
-
-        if (!isAdmin && !isMod) {
-            this.displaySystemMessage('Only admins and moderators can unban users');
-            return;
-        }
-
-        // Get target nym for display
-        const targetNym = this.getNymFromPubkey(pubkey);
-
-        // Parse base nym from display format - this removes HTML tags
-        const parsedNym = this.parseNymFromDisplay(targetNym);
-        // Get just the base nym without any suffix
-        const baseNym = parsedNym.split('#')[0] || parsedNym;
-        const suffix = this.getPubkeySuffix(pubkey);
-        const fullNym = `${baseNym}#${suffix}`;
-
-        // Check if actually banned
-        if (!this.communityBans.has(communityId) ||
-            !this.communityBans.get(communityId).has(pubkey)) {
-            this.displaySystemMessage(`${this.formatNymWithPubkey(targetNym, pubkey)} is not banned`);
-            return;
-        }
-
-        // Remove from bans
-        this.communityBans.get(communityId).delete(pubkey);
-
-        // Update community definition
-        await this.updateCommunityDefinitionWithBans(communityId);
-
-        // Re-subscribe to the unbanned user's messages for this community
-        if (this.connected && this.relay) {
-            const filter = {
-                kinds: [1],
-                authors: [pubkey],
-                '#q': [communityId],
-                since: Math.floor(Date.now() / 1000)
-            };
-
-            this.relay.subscribe([filter], {
-                onevent: (event) => {
-                    this.handleNostrEvent(event);
-                },
-                oneose: () => {
-                }
-            });
-        }
-
-        const displayNym = this.formatNymWithPubkey(targetNym, pubkey);
-        this.displaySystemMessage(`Unbanned ${displayNym} from this community`);
-
-        // Announce in channel with full nym#suffix
-        await this.publishCommunityMessage(`✅ ${fullNym} has been unbanned from this community`, communityId);
-
-        // Reload UI
-        this.loadCommunitySettingsUI(communityId);
-    }
-
-    async saveCommunitySettings() {
-        const communityId = this.getCurrentCommunityId();
-        if (!communityId) return;
-
-        const community = this.communityChannels.get(communityId);
-        if (!community) return;
-
-        // Get updated values
-        const newDesc = document.getElementById('communityDescEdit').value.trim();
-        const newImageUrl = document.getElementById('communityImageEdit').value.trim();
-        const newPrivacy = document.getElementById('communityPrivacyEdit').value === 'private';
-
-        // Update local state
-        community.description = newDesc;
-        community.imageUrl = newImageUrl;
-        community.isPrivate = newPrivacy;
-
-        // Update the community definition event
-        const mods = this.communityModerators.get(communityId) || new Set();
-
-        const event = {
-            kind: 34550,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [
-                ['d', communityId],
-                ['name', community.name],
-                ['description', newDesc],
-                ['image', newImageUrl],
-                ['p', this.pubkey, '', 'admin'],
-            ],
-            content: newDesc,
-            pubkey: this.pubkey
-        };
-
-        // Add moderators
-        mods.forEach(modPubkey => {
-            event.tags.push(['p', modPubkey, '', 'moderator']);
-        });
-
-        // Add privacy tag
-        if (newPrivacy) {
-            event.tags.push(['private']);
-        } else {
-            event.tags.push(['public']);
-        }
-
-        // Sign and send
-        const signedEvent = await this.signEvent(event);
-
-        if (signedEvent) {
-            this.sendToRelay(["EVENT", signedEvent]);
-            this.displaySystemMessage('Community settings updated');
-
-            // Update channel badge if privacy changed
-            this.updateCommunityBadge(communityId, newPrivacy);
-
-            closeModal('communitySettingsModal');
-        }
-    }
-
-    updateCommunityBadge(communityId, isPrivate) {
-        const item = document.querySelector(`[data-community="${communityId}"]`);
-        if (!item) return;
-
-        const badgeContainer = item.querySelector('.channel-badges');
-        const existingBadge = badgeContainer.querySelector('.std-badge');
-
-        if (existingBadge) {
-            if (isPrivate) {
-                existingBadge.style.borderColor = 'var(--purple)';
-                existingBadge.style.color = 'var(--purple)';
-                existingBadge.textContent = 'PRI';
-            } else {
-                existingBadge.style.borderColor = 'var(--primary)';
-                existingBadge.style.color = 'var(--primary)';
-                existingBadge.textContent = 'PUB';
-            }
-        }
-    }
-
-    async deleteCommunity() {
-        const communityId = this.getCurrentCommunityId();
-        if (!communityId) return;
-
-        const community = this.communityChannels.get(communityId);
-        if (!community) return;
-
-        if (!confirm(`Are you sure you want to delete the community "${community.name}"? This cannot be undone.`)) {
-            return;
-        }
-
-        // Publish deletion event (kind 5 - deletion)
-        const event = {
-            kind: 5,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [
-                ['a', `34550:${this.pubkey}:${communityId}`]
-            ],
-            content: 'Community deleted by admin',
-            pubkey: this.pubkey
-        };
-
-        const signedEvent = await this.signEvent(event);
-
-        if (signedEvent) {
-            this.sendToRelay(["EVENT", signedEvent]);
-        }
-
-        // Remove locally
-        this.communityChannels.delete(communityId);
-        this.ownedCommunities.delete(communityId);
-        this.communityMembers.delete(communityId);
-        this.communityModerators.delete(communityId);
-        this.communityBans.delete(communityId);
-        this.communityInvites.delete(communityId);
-
-        // Remove from UI
-        const item = document.querySelector(`[data-community="${communityId}"]`);
-        if (item) {
-            item.remove();
-        }
-
-        this.channels.delete(communityId);
-        this.userJoinedChannels.delete(communityId);
-
-        this.displaySystemMessage(`Community "${community.name}" has been deleted`);
-
-        closeModal('communitySettingsModal');
-
-        // Switch to bar
-        this.switchChannel('bar', '');
-    }
-}
-
-// NIP-46 Nostr Connect Client Implementation
-class NostrConnectClient {
-    constructor() {
-        this.localKeypair = null;
-        this.remotePubkey = null;
-        this.relayUrl = null;
-        this.relay = null;
-        this.pendingRequests = new Map();
-        this.secret = null;
-        this.connected = false;
-        this.connectionTimeout = null;
-    }
-
-    // Helper to convert Uint8Array to hex string
-    bytesToHex(bytes) {
-        if (typeof bytes === 'string') return bytes;
-        return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
-    }
-
-    parseBunkerUri(uri) {
-        try {
-            if (!uri.startsWith('bunker://')) {
-                throw new Error('Invalid bunker URI format');
-            }
-
-            const withoutProtocol = uri.substring(9);
-            const [pubkeyPart, queryString] = withoutProtocol.split('?');
-
-            this.remotePubkey = pubkeyPart;
-
-            const params = new URLSearchParams(queryString);
-            this.relayUrl = params.get('relay');
-            this.secret = params.get('secret');
-
-            if (!this.relayUrl) {
-                throw new Error('Bunker URI must include relay parameter');
-            }
-
-            return {
-                remotePubkey: this.remotePubkey,
-                relay: this.relayUrl,
-                secret: this.secret
-            };
-        } catch (error) {
-            throw error;
-        }
-    }
-
-    async generateBunkerUri(relayUrl = null) {
-        const sk = window.NostrTools.generateSecretKey();
-        const pk = window.NostrTools.getPublicKey(sk);
-
-        // Convert to hex for compatibility
-        this.localKeypair = {
-            privkey: this.bytesToHex(sk),
-            pubkey: pk
-        };
-        this.relayUrl = relayUrl || 'wss://relay.nsec.app';
-        this.secret = this.generateSecret();
-
-        const uri = `bunker://${pk}?relay=${encodeURIComponent(this.relayUrl)}&secret=${this.secret}`;
-        return uri;
-    }
-
-    generateSecret() {
-        const array = new Uint8Array(16);
-        crypto.getRandomValues(array);
-        return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-    }
-
-    async connect(bunkerUri) {
-        return new Promise(async (resolve, reject) => {
-            try {
-                const parsed = this.parseBunkerUri(bunkerUri);
-
-                const sk = window.NostrTools.generateSecretKey();
-                const pk = window.NostrTools.getPublicKey(sk);
-
-                // Convert to hex for compatibility
-                this.localKeypair = {
-                    privkey: this.bytesToHex(sk),
-                    pubkey: pk
-                };
-
-                await this.connectToRelay();
-
-                const connectResponse = await this.sendRequest('connect', [pk, this.secret || '']);
-
-                if (connectResponse === 'ack') {
-                    this.connected = true;
-                    resolve(this.remotePubkey);
-                } else {
-                    throw new Error('Connection rejected by remote signer');
-                }
-
-            } catch (error) {
-                reject(error);
-            }
-        });
-    }
-
-    async connectToRelay() {
-        return new Promise((resolve, reject) => {
-            try {
-                this.relay = new WebSocket(this.relayUrl);
-
-                this.relay.onopen = () => {
-
-                    const subId = 'nip46-' + Math.random().toString(36).substring(7);
-                    const filter = {
-                        kinds: [24133],
-                        "#p": [this.localKeypair.pubkey],
-                        authors: [this.remotePubkey]
-                    };
-
-                    this.relay.send(JSON.stringify(['REQ', subId, filter]));
-                    resolve();
-                };
-
-                this.relay.onerror = (error) => {
-                    reject(error);
-                };
-
-                this.relay.onmessage = async (msg) => {
-                    await this.handleRelayMessage(msg);
-                };
-
-            } catch (error) {
-                reject(error);
-            }
-        });
-    }
-
-    async handleRelayMessage(msg) {
-        try {
-            const data = JSON.parse(msg.data);
-
-            if (data[0] === 'EVENT') {
-                const event = data[2];
-
-                if (event.kind === 24133) {
-
-                    // Use NIP-44 decryption
-                    const conversationKey = window.NostrTools.nip44.getConversationKey(
-                        this.localKeypair.privkey,
-                        event.pubkey
-                    );
-                    const decrypted = window.NostrTools.nip44.decrypt(
-                        event.content,
-                        conversationKey
-                    );
-
-
-                    const response = JSON.parse(decrypted);
-
-                    const requestId = response.id;
-
-                    if (this.pendingRequests.has(requestId)) {
-                        const { resolve, reject } = this.pendingRequests.get(requestId);
-
-                        // Handle auth_url response
-                        if (response.result === 'auth_url' && response.error) {
-                            // Open the auth URL in a popup
-                            const width = 500;
-                            const height = 700;
-                            const left = (window.screen.width - width) / 2;
-                            const top = (window.screen.height - height) / 2;
-                            window.open(
-                                response.error,
-                                'nostr-connect-auth',
-                                `width=${width},height=${height},left=${left},top=${top},popup=yes`
-                            );
-                            return;
-                        }
-
-                        if (response.error) {
-                            reject(new Error(response.error));
-                        } else {
-                            resolve(response.result);
-                        }
-
-                        this.pendingRequests.delete(requestId);
-                    } else {
-                    }
-                }
-            } else if (data[0] === 'OK') {
-            }
-        } catch (error) {
-        }
-    }
-
-    async sendRequest(method, params = []) {
-        return new Promise(async (resolve, reject) => {
-            try {
-                const requestId = this.generateRequestId();
-
-                const request = {
-                    id: requestId,
-                    method: method,
-                    params: params
-                };
-
-
-                // Use NIP-44 encryption
-                const conversationKey = window.NostrTools.nip44.getConversationKey(
-                    this.localKeypair.privkey,
-                    this.remotePubkey
-                );
-                const encrypted = window.NostrTools.nip44.encrypt(
-                    JSON.stringify(request),
-                    conversationKey
-                );
-
-                const event = {
-                    kind: 24133,
-                    created_at: Math.floor(Date.now() / 1000),
-                    tags: [['p', this.remotePubkey]],
-                    content: encrypted,
-                    pubkey: this.localKeypair.pubkey
-                };
-
-                const signedEvent = window.NostrTools.finalizeEvent(event, this.localKeypair.privkey);
-
-                this.relay.send(JSON.stringify(['EVENT', signedEvent]));
-
-                this.pendingRequests.set(requestId, { resolve, reject });
-
-                setTimeout(() => {
-                    if (this.pendingRequests.has(requestId)) {
-                        this.pendingRequests.delete(requestId);
-                        reject(new Error('Request timeout'));
-                    }
-                }, 30000);
-
-            } catch (error) {
-                reject(error);
-            }
-        });
-    }
-
-    generateRequestId() {
-        return Math.random().toString(36).substring(2) + Date.now().toString(36);
-    }
-
-    async getPublicKey() {
-        return await this.sendRequest('get_public_key');
-    }
-
-    async signEvent(event) {
-        const unsignedEvent = {
-            kind: event.kind,
-            created_at: event.created_at,
-            tags: event.tags,
-            content: event.content,
-            pubkey: event.pubkey
-        };
-
-        const result = await this.sendRequest('sign_event', [JSON.stringify(unsignedEvent)]);
-        return JSON.parse(result);
-    }
-
-    async nip04Encrypt(thirdPartyPubkey, plaintext) {
-        return await this.sendRequest('nip04_encrypt', [thirdPartyPubkey, plaintext]);
-    }
-
-    async nip04Decrypt(thirdPartyPubkey, ciphertext) {
-        return await this.sendRequest('nip04_decrypt', [thirdPartyPubkey, ciphertext]);
-    }
-
-    async nip44Encrypt(thirdPartyPubkey, plaintext) {
-        return await this.sendRequest('nip44_encrypt', [thirdPartyPubkey, plaintext]);
-    }
-
-    async nip44Decrypt(thirdPartyPubkey, ciphertext) {
-        return await this.sendRequest('nip44_decrypt', [thirdPartyPubkey, ciphertext]);
-    }
-
-    disconnect() {
-        if (this.relay) {
-            this.relay.close();
-        }
-        this.connected = false;
-        this.pendingRequests.clear();
-    }
 }
 
 // Global instance
@@ -19312,19 +15371,21 @@ async function showSettings() {
         blurSelect.value = nym.blurOthersImages ? 'true' : 'false';
     }
 
-    // Show/hide and load auto-ephemeral setting ONLY for ephemeral mode
-    const autoEphemeralSettingGroup = document.getElementById('autoEphemeralSettingGroup');
+    // Load auto-ephemeral setting (always shown, always ephemeral mode)
     const autoEphemeralSelect = document.getElementById('autoEphemeralSelect');
-
-    if (nym.connectionMode === 'ephemeral') {
-        autoEphemeralSettingGroup.style.display = 'block';
-        if (autoEphemeralSelect) {
-            const autoEphemeral = localStorage.getItem('nym_auto_ephemeral') === 'true';
-            autoEphemeralSelect.value = autoEphemeral ? 'true' : 'false';
-        }
-    } else {
-        autoEphemeralSettingGroup.style.display = 'none';
+    if (autoEphemeralSelect) {
+        const autoEphemeral = localStorage.getItem('nym_auto_ephemeral') === 'true';
+        autoEphemeralSelect.value = autoEphemeral ? 'true' : 'false';
     }
+
+    // Load hide non-pinned channels setting
+    const hideNonPinnedSelect = document.getElementById('hideNonPinnedSelect');
+    if (hideNonPinnedSelect) {
+        hideNonPinnedSelect.value = nym.hideNonPinned ? 'true' : 'false';
+    }
+
+    // Populate hidden channels list
+    nym.updateHiddenChannelsList();
 
     // Initialize pinned landing channel searchable dropdown
     const pinnedSearchInput = document.getElementById('pinnedLandingChannelSearch');
@@ -19333,53 +15394,32 @@ async function showSettings() {
 
     if (pinnedSearchInput && pinnedValueInput && pinnedDropdown) {
         // Get current pinned value
-        const currentPinned = nym.pinnedLandingChannel || { type: 'ephemeral', channel: 'bar' };
+        const currentPinned = nym.pinnedLandingChannel || { type: 'geohash', geohash: '9q' };
 
-        // Build all channel options
+        // Build geohash channel options only
         const channelOptions = [];
 
-        // Add common ephemeral channels
-        nym.commonChannels.forEach(channel => {
+        // Add common geohashes
+        nym.commonGeohashes.forEach(geohash => {
+            const location = nym.getGeohashLocation(geohash);
             channelOptions.push({
-                group: 'Common Ephemeral Channels',
-                label: `#${channel}`,
-                value: { type: 'ephemeral', channel: channel },
-                searchText: channel.toLowerCase()
+                group: 'Common Geohash Channels',
+                label: location ? `#${geohash} (${location})` : `#${geohash}`,
+                value: { type: 'geohash', geohash: geohash },
+                searchText: (geohash + ' ' + (location || '')).toLowerCase()
             });
         });
 
-        // Add geohash channels
+        // Add user's joined geohash channels (excluding already listed ones)
         Array.from(nym.channels.entries())
-            .filter(([key, val]) => nym.isValidGeohash(key))
+            .filter(([key, val]) => nym.isValidGeohash(key) && !nym.commonGeohashes.includes(key))
             .forEach(([geohash]) => {
                 const location = nym.getGeohashLocation(geohash);
                 channelOptions.push({
-                    group: 'Geohash Channels',
-                    label: location ? `${geohash} (${location})` : geohash,
+                    group: 'Joined Geohash Channels',
+                    label: location ? `#${geohash} (${location})` : `#${geohash}`,
                     value: { type: 'geohash', geohash: geohash },
                     searchText: (geohash + ' ' + (location || '')).toLowerCase()
-                });
-            });
-
-        // Add community channels
-        nym.communityChannels.forEach((community, communityId) => {
-            channelOptions.push({
-                group: 'Community Channels',
-                label: `#${community.name} (Community)`,
-                value: { type: 'community', communityId: communityId, name: community.name },
-                searchText: community.name.toLowerCase()
-            });
-        });
-
-        // Add user joined channels (excluding already listed ones)
-        Array.from(nym.userJoinedChannels)
-            .filter(ch => !nym.isValidGeohash(ch) && !nym.commonChannels.includes(ch))
-            .forEach(channel => {
-                channelOptions.push({
-                    group: 'User Joined Channels',
-                    label: `#${channel}`,
-                    value: { type: 'ephemeral', channel: channel },
-                    searchText: channel.toLowerCase()
                 });
             });
 
@@ -19391,8 +15431,8 @@ async function showSettings() {
             pinnedSearchInput.value = currentOption.label;
             pinnedValueInput.value = JSON.stringify(currentOption.value);
         } else {
-            pinnedSearchInput.value = '#bar';
-            pinnedValueInput.value = JSON.stringify({ type: 'ephemeral', channel: 'bar' });
+            pinnedSearchInput.value = '#9q';
+            pinnedValueInput.value = JSON.stringify({ type: 'geohash', geohash: '9q' });
         }
 
         // Function to render filtered options
@@ -19546,15 +15586,20 @@ async function saveSettings() {
     nym.settings.readReceiptsEnabled = readReceiptsEnabled;
     localStorage.setItem('nym_read_receipts_enabled', String(readReceiptsEnabled));
 
-    // Only handle auto-ephemeral if currently in ephemeral mode
-    if (nym.connectionMode === 'ephemeral') {
-        const autoEphemeral = document.getElementById('autoEphemeralSelect').value === 'true';
-        if (autoEphemeral) {
-            localStorage.setItem('nym_auto_ephemeral', 'true');
-        } else {
-            localStorage.removeItem('nym_auto_ephemeral');
-        }
+    // Handle auto-ephemeral setting
+    const autoEphemeral = document.getElementById('autoEphemeralSelect').value === 'true';
+    if (autoEphemeral) {
+        localStorage.setItem('nym_auto_ephemeral', 'true');
+    } else {
+        localStorage.removeItem('nym_auto_ephemeral');
+        localStorage.removeItem('nym_auto_ephemeral_nick');
     }
+
+    // Handle hide non-pinned channels setting
+    const hideNonPinned = document.getElementById('hideNonPinnedSelect').value === 'true';
+    nym.hideNonPinned = hideNonPinned;
+    localStorage.setItem('nym_hide_non_pinned', String(hideNonPinned));
+    nym.applyHiddenChannels();
 
     // Save pinned landing channel
     const pinnedValueInput = document.getElementById('pinnedLandingChannelValue');
@@ -19566,7 +15611,7 @@ async function saveSettings() {
             localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(pinnedLandingChannel));
         } catch (e) {
             // Fallback to default
-            const defaultChannel = { type: 'ephemeral', channel: 'bar' };
+            const defaultChannel = { type: 'geohash', geohash: '9q' };
             nym.pinnedLandingChannel = defaultChannel;
             nym.settings.pinnedLandingChannel = defaultChannel;
             localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(defaultChannel));
@@ -19590,11 +15635,6 @@ async function saveSettings() {
                     nym.sortChannelsByActivity();
 
                     nym.displaySystemMessage('Location access granted. Geohash channels sorted by proximity.');
-
-                    // Sync to Nostr if logged in
-                    if (nym.connectionMode !== 'ephemeral') {
-                        await nym.saveSyncedSettings();
-                    }
                 },
                 (error) => {
                     nym.displaySystemMessage('Location access denied. Proximity sorting disabled.');
@@ -19630,22 +15670,72 @@ async function saveSettings() {
         await nym.saveLightningAddress(lightningAddress || null);
     }
 
-    // Sync to Nostr
-    if (nym.connectionMode !== 'ephemeral') {
-        await nym.saveSyncedSettings();
-        nym.displaySystemMessage('Settings saved and synced to Nostr');
-    } else {
-        nym.displaySystemMessage('Settings saved locally');
+    nym.displaySystemMessage('Settings saved locally');
+
+    closeModal('settingsModal');
+}
+
+function clearLocalStorageCache() {
+    if (!confirm('Clear all cached settings and preferences? This will not log you out.')) {
+        return;
     }
 
+    // Preserve session identity and shop purchase keys
+    const preserveKeys = {};
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (
+            key === 'nym_auto_ephemeral' ||
+            key === 'nym_auto_ephemeral_nick' ||
+            key === 'nym_active_style' ||
+            key === 'nym_active_flair' ||
+            key === 'nym_shop_active_cache' ||
+            key.startsWith('nym_shop_recovery_')
+        )) {
+            preserveKeys[key] = localStorage.getItem(key);
+        }
+    }
+
+    // Remove all nym_ keys
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('nym_')) {
+            keysToRemove.push(key);
+        }
+    }
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+
+    // Restore preserved keys
+    for (const [key, value] of Object.entries(preserveKeys)) {
+        if (value !== null) {
+            localStorage.setItem(key, value);
+        }
+    }
+
+    // Reset in-memory state to defaults
+    nym.pinnedChannels = new Set();
+    nym.hiddenChannels = new Set();
+    nym.hideNonPinned = false;
+    nym.blockedUsers = new Set();
+    nym.blockedChannels = new Set();
+    nym.blockedKeywords = new Set();
+    nym.settings = nym.loadSettings();
+
+    // Re-apply defaults visually
+    nym.applyTheme(nym.settings.theme);
+    nym.updateChannelPins();
+    nym.applyHiddenChannels();
+
+    nym.displaySystemMessage('Local storage cache cleared. Settings reset to defaults.');
     closeModal('settingsModal');
 }
 
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ NYM - Nostr Ynstant Messenger v2.26.74 ═══<br/>
-Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kinds 4550, 20000, 23333, 34550 channels)<br/>
+═══ NYM - Nostr Ynstant Messenger v3.26.74 ═══<br/>
+Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
 <br/>
@@ -19666,98 +15756,34 @@ function showChannelModal() {
 }
 
 async function joinOrCreateChannel() {
-    const channelType = document.getElementById('channelTypeSelect').value;
+    let geohash = document.getElementById('geohashInput').value.trim().toLowerCase();
+    geohash = geohash.replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
 
-    if (channelType === 'standard') {
-        let name = document.getElementById('channelNameInput').value.trim();
-
-        // Validate and sanitize
-        if (!name) {
-            alert('Please enter a channel name');
-            return;
-        }
-
-        // Remove spaces and invalid characters
-        name = name.toLowerCase().replace(/[^a-z0-9-]/g, '');
-
-        if (!name) {
-            alert('Invalid channel name. Use only letters, numbers, and hyphens.');
-            return;
-        }
-
-        if (name.includes(' ')) {
-            alert('Channel names cannot contain spaces. Use hyphens instead (e.g., "my-channel")');
-            return;
-        }
-
-        await nym.cmdJoin(name);
-
-    } else if (channelType === 'geohash') {
-        let geohash = document.getElementById('geohashInput').value.trim().toLowerCase();
-        geohash = geohash.replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
-
-        if (!geohash) {
-            alert('Please enter a valid geohash');
-            return;
-        }
-
-        if (!nym.isValidGeohash(geohash)) {
-            alert('Invalid geohash. Valid characters are: 0-9, b-z (except a, i, l, o)');
-            return;
-        }
-
-        await nym.cmdJoin('#' + geohash);
-
-    } else if (channelType === 'community') {
-        // Check if ephemeral user
-        if (nym.connectionMode === 'ephemeral') {
-            alert('Community channels require a persistent identity. Please use extension or nsec login.');
-            closeModal('channelModal');
-            return;
-        }
-
-        let name = document.getElementById('communityNameInput').value.trim();
-        const description = document.getElementById('communityDescInput').value.trim();
-        const imageUrl = document.getElementById('communityImageInput').value.trim();
-        const isPrivate = document.getElementById('communityPrivacySelect').value === 'private';
-
-        if (!name) {
-            alert('Please enter a community name');
-            return;
-        }
-
-        // Remove spaces and invalid characters
-        name = name.toLowerCase().replace(/[^a-z0-9-]/g, '');
-
-        if (!name) {
-            alert('Invalid community name. Use only letters, numbers, and hyphens.');
-            return;
-        }
-
-        // Double-check for spaces (should be caught by oninput, but just in case)
-        if (name.includes(' ')) {
-            alert('Community names cannot contain spaces. Use hyphens instead (e.g., "my-community")');
-            return;
-        }
-
-        const communityId = await nym.createCommunityChannel(name, description, isPrivate, imageUrl);
-        if (communityId) {
-            nym.switchToCommunity(communityId);
-        }
+    if (!geohash) {
+        alert('Please enter a valid geohash');
+        return;
     }
 
+    if (!nym.isValidGeohash(geohash)) {
+        alert('Invalid geohash. Valid characters are: 0-9, b-z (except a, i, l, o)');
+        return;
+    }
+
+    await nym.cmdJoin('#' + geohash);
+
     closeModal('channelModal');
-    document.getElementById('channelNameInput').value = '';
     document.getElementById('geohashInput').value = '';
-    document.getElementById('communityNameInput').value = '';
-    document.getElementById('communityDescInput').value = '';
-    document.getElementById('communityImageInput').value = '';
-    document.getElementById('communityPrivacySelect').value = 'public';
 }
 
 // Function to check for saved connection on page load
 async function checkSavedConnection() {
-    // Auto-ephemeral preference FIRST
+    // Clear any legacy persistent login data
+    localStorage.removeItem('nym_connection_mode');
+    localStorage.removeItem('nym_nsec');
+    localStorage.removeItem('nym_bunker_uri');
+    localStorage.removeItem('nym_relay_url');
+
+    // Auto-ephemeral preference
     const autoEphemeral = localStorage.getItem('nym_auto_ephemeral');
     if (autoEphemeral === 'true') {
         try {
@@ -19769,12 +15795,18 @@ async function checkSavedConnection() {
 
             // Generate ephemeral keypair
             await nym.generateKeypair();
-            nym.nym = nym.generateRandomNym();
+
+            // Use saved custom nickname if available, otherwise random
+            const savedNick = localStorage.getItem('nym_auto_ephemeral_nick');
+            nym.nym = savedNick || nym.generateRandomNym();
             nym.connectionMode = 'ephemeral';
             document.getElementById('currentNym').textContent = nym.nym;
 
             // Connect to relays
             await nym.connectToRelays();
+
+            // Apply cached shop items (styles/flairs) to the new ephemeral identity
+            nym.applyCachedShopItemsToNewIdentity();
 
             // Request notification permission
             if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -19796,142 +15828,9 @@ async function checkSavedConnection() {
         } catch (error) {
             // Clear the preference and show setup modal
             localStorage.removeItem('nym_auto_ephemeral');
+            localStorage.removeItem('nym_auto_ephemeral_nick');
             document.getElementById('setupModal').classList.add('active');
             return;
-        }
-    }
-
-    const savedMode = localStorage.getItem('nym_connection_mode');
-    const savedRelay = localStorage.getItem('nym_relay_url');
-    const savedNsec = localStorage.getItem('nym_nsec');
-    const savedBunkerUri = localStorage.getItem('nym_bunker_uri');
-
-    // Saved NSEC restore
-    if (savedNsec) {
-        try {
-            const setupModal = document.getElementById('setupModal');
-            setupModal.classList.remove('active');
-
-            nym.displaySystemMessage('Restoring NSEC session...');
-
-            // Restore from saved nsec
-            nym.privkey = nym.decodeNsec(savedNsec);
-            nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
-            nym.connectionMode = 'nsec';
-
-            // Default text while loading
-            nym.nym = 'Loading profile...';
-            document.getElementById('currentNym').textContent = nym.nym;
-
-            // Connect to relays
-            await nym.connectToRelays();
-
-            // Fetch profile after connection
-            if (nym.connected) {
-                await nym.fetchProfileFromRelay(nym.pubkey);
-                if (nym.nym === 'Loading profile...') {
-                    nym.nym = nym.generateRandomNym();
-                    document.getElementById('currentNym').textContent = nym.nym;
-                }
-            }
-
-            if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-                Notification.requestPermission();
-            }
-
-            nym.displaySystemMessage(`Welcome back to NYM, ${nym.nym}!`);
-            nym.displaySystemMessage(`Your Nostr identity has been restored.`);
-            nym.displaySystemMessage(`Type /help for available commands.`);
-
-            // Start tutorial if not seen
-            window.maybeStartTutorial(false);
-
-            return;
-        } catch (error) {
-            localStorage.removeItem('nym_nsec');
-            localStorage.removeItem('nym_connection_mode');
-            localStorage.removeItem('nym_relay_url');
-            document.getElementById('setupModal').classList.add('active');
-        }
-        return;
-    }
-
-    // Bunker mode restore
-    if (savedBunkerUri && savedMode === 'bunker') {
-        try {
-            const setupModal = document.getElementById('setupModal');
-            setupModal.classList.remove('active');
-
-            nym.displaySystemMessage('Reconnecting with Nostr Connect bunker...');
-            await nym.useNostrConnect(savedBunkerUri);
-
-            await nym.connectToRelays();
-
-            // Fetch profile after connection if not already loaded
-            if (nym.connected && (!nym.nym || nym.nym === 'Loading profile...')) {
-                await nym.fetchProfileFromRelay(nym.pubkey);
-            }
-
-            // Fallback to random nym if profile wasn't found
-            if (!nym.nym || nym.nym === 'Loading profile...') {
-                nym.nym = nym.generateRandomNym();
-                document.getElementById('currentNym').textContent = nym.nym;
-            }
-
-            if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-                Notification.requestPermission();
-            }
-
-            nym.displaySystemMessage(`Welcome back to NYM, ${nym.nym}!`);
-            nym.displaySystemMessage(`Your Nostr Connect identity has been restored.`);
-            nym.displaySystemMessage(`Type /help for available commands.`);
-
-            await routeToUrlChannel();
-            window.maybeStartTutorial(false);
-            return;
-        } catch (error) {
-            localStorage.removeItem('nym_bunker_uri');
-        }
-    }
-
-    // Extension mode restore
-    if (savedMode === 'extension' && window.nostr) {
-        try {
-            const setupModal = document.getElementById('setupModal');
-            setupModal.classList.remove('active');
-
-            nym.displaySystemMessage('Reconnecting with Nostr extension...');
-            await nym.useExtension();
-
-            // Connect to all relays, not just one
-            await nym.connectToRelays();
-
-            // Fetch profile after connection if not already loaded
-            if (nym.connected && (!nym.nym || nym.nym === 'Loading profile...')) {
-                await nym.fetchProfileFromRelay(nym.pubkey);
-            }
-
-            // Fallback to random nym if profile wasn't found
-            if (!nym.nym || nym.nym === 'Loading profile...') {
-                nym.nym = nym.generateRandomNym();
-                document.getElementById('currentNym').textContent = nym.nym;
-            }
-
-            if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-                Notification.requestPermission();
-            }
-
-            nym.displaySystemMessage(`Welcome back to NYM, ${nym.nym}!`);
-            nym.displaySystemMessage(`Your Nostr identity has been restored.`);
-            nym.displaySystemMessage(`Type /help for available commands.`);
-
-            // Start tutorial if not seen
-            window.maybeStartTutorial(false);
-
-        } catch (error) {
-            localStorage.removeItem('nym_connection_mode');
-            localStorage.removeItem('nym_relay_url');
-            document.getElementById('setupModal').classList.add('active');
         }
     }
     // If no saved connection, the setup modal remains visible (default).
@@ -19945,149 +15844,31 @@ async function initializeNym() {
     enterBtn.innerHTML = '<span class="loader"></span> Connecting...';
 
     try {
-        // Check if running in NYMApp shell
-        const isNYMApp = navigator.userAgent.includes('NYMApp');
-
-        const mode = document.getElementById('connectionMode').value;
-        nym.connectionMode = mode; // Store connection mode
-
+        nym.connectionMode = 'ephemeral';
 
         // Get or generate nym first
         const nymInput = document.getElementById('nymInput').value.trim();
 
-        // Handle different connection modes
-        if (mode === 'ephemeral') {
-            await nym.generateKeypair();
-            nym.nym = nymInput || nym.generateRandomNym();
-            document.getElementById('currentNym').textContent = nym.nym;
-            localStorage.removeItem('nym_connection_mode');
+        // Generate ephemeral keypair
+        await nym.generateKeypair();
+        nym.nym = nymInput || nym.generateRandomNym();
+        document.getElementById('currentNym').textContent = nym.nym;
+        localStorage.removeItem('nym_connection_mode');
 
-            // Auto-ephemeral checkbox
-            const autoEphemeralCheckbox = document.getElementById('autoEphemeralCheckbox');
-            if (autoEphemeralCheckbox && autoEphemeralCheckbox.checked) {
-                localStorage.setItem('nym_auto_ephemeral', 'true');
-            }
-
-        } else if (mode === 'extension') {
-            await nym.useExtension();
-
-            if (nym.nym === 'Loading profile...' && !nymInput) {
-                nym.nym = nym.generateRandomNym();
-                document.getElementById('currentNym').textContent = nym.nym;
-            } else if (nymInput && nym.nym === 'Loading profile...') {
-                nym.nym = nymInput;
-                document.getElementById('currentNym').textContent = nym.nym;
-            }
-
-        } else if (mode === 'nsec') {
-            let nsecValue = document.getElementById('nsecInput').value.trim();
-
-            if (!nsecValue) {
-                const savedNsec = localStorage.getItem('nym_nsec');
-                if (savedNsec) {
-                    nsecValue = savedNsec;
-                }
-            }
-
-            if (!nsecValue) {
-                throw new Error('Please enter your NSEC');
-            }
-
-            // Decode NSEC to get private key
-            nym.privkey = nym.decodeNsec(nsecValue);
-            nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
-
-            // Queue profile fetch - will be processed after relay connection
-            // Don't await here to avoid 3-second timeout when not connected
-            nym.fetchProfileFromRelay(nym.pubkey);
-
-            // Use input nym if provided, otherwise set placeholder for now
+        // Auto-ephemeral checkbox - save custom nickname if provided
+        const autoEphemeralCheckbox = document.getElementById('autoEphemeralCheckbox');
+        if (autoEphemeralCheckbox && autoEphemeralCheckbox.checked) {
+            localStorage.setItem('nym_auto_ephemeral', 'true');
             if (nymInput) {
-                nym.nym = nymInput;
-            } else {
-                nym.nym = 'Loading profile...';
-            }
-
-            document.getElementById('currentNym').textContent = nym.nym;
-
-            // Store NSEC securely
-            localStorage.setItem('nym_nsec', nsecValue);
-        } else if (mode === 'bunker') {
-            let bunkerUri = document.getElementById('bunkerInput').value.trim();
-
-            if (!bunkerUri && window.tempBunkerConnection) {
-                bunkerUri = window.tempBunkerConnection.uri;
-            }
-
-            if (!bunkerUri) {
-                const savedBunker = localStorage.getItem('nym_bunker_uri');
-                if (savedBunker) {
-                    bunkerUri = savedBunker;
-                }
-            }
-
-            if (!bunkerUri) {
-                throw new Error('Please provide a bunker URI or complete pairing');
-            }
-
-            await nym.useNostrConnect(bunkerUri);
-
-            const nymInput = document.getElementById('nymInput').value.trim();
-            if (nymInput) {
-                nym.nym = nymInput;
-            } else if (!nym.nym || nym.nym === 'Loading profile...') {
-                nym.nym = nym.generateRandomNym();
-            }
-
-            document.getElementById('currentNym').textContent = nym.nym;
-
-            localStorage.setItem('nym_bunker_uri', bunkerUri);
-        }
-
-        // If nym is still not generated, generate it now
-        if (!nym.nym) {
-            nym.nym = nym.generateRandomNym();
-            document.getElementById('currentNym').textContent = nym.nym;
-        }
-
-        // Save connection preferences
-        if (mode !== 'ephemeral') {
-            localStorage.setItem('nym_connection_mode', mode);
-        }
-
-        if (mode === 'extension' || mode === 'nsec') {
-            if (nym.pubkey) {
-                // Load cached shop items IMMEDIATELY - before any relay connection
-                nym.loadCachedShopItems();
+                localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
             }
         }
 
         // Connect to relays
         await nym.connectToRelays();
 
-        // Fetch profile after connection for persistent modes
-        if ((mode === 'extension' || mode === 'nsec' || mode === 'bunker') && nym.connected) {
-            // Fetch profile if not already loaded
-            if (!nym.nym || nym.nym === 'Loading profile...') {
-                await nym.fetchProfileFromRelay(nym.pubkey);
-            }
-
-            // Fallback to random nym if profile wasn't found
-            if (!nym.nym || nym.nym === 'Loading profile...') {
-                nym.nym = nym.generateRandomNym();
-                document.getElementById('currentNym').textContent = nym.nym;
-            }
-
-            // Load synced settings (give relays time to respond)
-            setTimeout(() => {
-                nym.loadSyncedSettings();
-            }, 2000);
-
-            // Load shop purchases from relays (this will also refresh cached items if newer data is found)
-            setTimeout(async () => {
-                await nym.loadUserPurchases();
-            }, 2500);
-        }
+        // Apply cached shop items (styles/flairs) to the new ephemeral identity
+        nym.applyCachedShopItemsToNewIdentity();
 
         // Request notification permission
         if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -20102,9 +15883,8 @@ async function initializeNym() {
         closeModal('setupModal');
 
         // Welcome messages
-        const modeText = mode === 'ephemeral' ? 'ephemeral' : 'persistent Nostr';
         nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Type /help for available commands.`);
-        nym.displaySystemMessage(`Your ${modeText} identity is active${mode === 'ephemeral' ? ' for this session only' : ''}.`);
+        nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
         nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
         // Route to channel from URL if present
@@ -20122,214 +15902,9 @@ async function initializeNym() {
 }
 
 
-// Nostr Connect / Bunker pairing functions
-async function showBunkerPairing() {
-    const pairingSection = document.getElementById('bunkerPairingSection');
-    const qrContainer = document.getElementById('bunkerQRCode');
-    const uriDisplay = document.getElementById('bunkerUriDisplay');
-    const waitingStatus = document.getElementById('bunkerWaitingStatus');
-
-    pairingSection.style.display = 'block';
-    waitingStatus.style.display = 'none';
-
-    try {
-        const tempClient = new NostrConnectClient();
-        const relayUrl = 'wss://relay.nsec.app';
-        const uri = await tempClient.generateBunkerUri(relayUrl);
-
-        uriDisplay.textContent = uri;
-
-        qrContainer.innerHTML = '';
-
-        const qrImg = document.createElement('img');
-        qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(uri)}`;
-        qrImg.style.maxWidth = '200px';
-        qrContainer.appendChild(qrImg);
-
-        window.tempBunkerConnection = {
-            uri: uri,
-            client: tempClient
-        };
-
-        waitingStatus.style.display = 'block';
-        await tempClient.connectToRelay();
-
-
-    } catch (error) {
-        alert('Failed to generate pairing QR code: ' + error.message);
-    }
-}
-
-function copyBunkerUri() {
-    const uri = document.getElementById('bunkerUriDisplay').textContent;
-    navigator.clipboard.writeText(uri);
-
-    const display = document.getElementById('bunkerUriDisplay');
-    const originalBg = display.style.backgroundColor;
-    display.style.backgroundColor = 'var(--primary)';
-    setTimeout(() => {
-        display.style.backgroundColor = originalBg;
-    }, 500);
-}
-
-async function createNewAccount(nickname) {
-    // Generate keys
-    await nym.generateKeypair();
-
-    // Encode nsec for storage
-    const nsecEncoded = window.NostrTools.nip19.nsecEncode(nym.privkey);
-
-    // Store nsec
-    localStorage.setItem('nym_nsec', nsecEncoded);
-    localStorage.setItem('nym_connection_mode', 'nsec');
-
-    // Set nickname
-    nym.nym = nickname || nym.generateRandomNym();
-    document.getElementById('currentNym').textContent = nym.nym;
-
-    // Connect to relays first
-    await nym.connectToRelays();
-
-    // Publish kind 0 metadata event
-    await nym.saveToNostrProfile();
-
-    return nsecEncoded;
-}
-
-let currentStep = 0;
-const totalSteps = 4;
-
-function nextAccountCreationStep() {
-    if (currentStep < totalSteps - 1) {
-        hideStep(currentStep);
-        currentStep++;
-        showStep(currentStep);
-        updateStepIndicator();
-    }
-}
-
-function previousAccountCreationStep() {
-    if (currentStep > 0) {
-        hideStep(currentStep);
-        currentStep--;
-        showStep(currentStep);
-        updateStepIndicator();
-    }
-}
-
-function showStep(stepIndex) {
-    document.getElementById(`step-${stepIndex}`).style.display = 'block';
-}
-
-function hideStep(stepIndex) {
-    document.getElementById(`step-${stepIndex}`).style.display = 'none';
-}
-
-function updateStepIndicator() {
-    for (let i = 0; i < totalSteps; i++) {
-        const indicator = document.getElementById(`indicator-${i}`);
-        if (i === currentStep) {
-            indicator.classList.add('active');
-        } else if (i < currentStep) {
-            indicator.classList.add('completed');
-            indicator.classList.remove('active');
-        } else {
-            indicator.classList.remove('active', 'completed');
-        }
-    }
-}
-
-async function generateAndDisplayKeys() {
-    // Generate the keypair
-    await nym.generateKeypair();
-
-    // Encode keys for display
-    const nsecEncoded = window.NostrTools.nip19.nsecEncode(nym.privkey);
-    const npubEncoded = window.NostrTools.nip19.npubEncode(nym.pubkey);
-
-    // Display in the UI
-    document.getElementById('generated-nsec').textContent = nsecEncoded;
-    document.getElementById('generated-npub').textContent = npubEncoded;
-
-    // Store temporarily
-    window.tempNsec = nsecEncoded;
-}
-
-function copyNsecToClipboard() {
-    const nsec = document.getElementById('generated-nsec').textContent;
-    navigator.clipboard.writeText(nsec);
-
-    // Visual feedback
-    const btn = event.target;
-    const originalText = btn.textContent;
-    btn.textContent = 'Copied!';
-    setTimeout(() => {
-        btn.textContent = originalText;
-    }, 2000);
-}
-
-async function finalizeAccountCreation() {
-    const nickname = document.getElementById('newAccountNym').value.trim();
-
-    if (!nickname) {
-        alert('Please enter a nickname');
-        return;
-    }
-
-    try {
-        // Use the stored nsec
-        nym.privkey = nym.decodeNsec(window.tempNsec);
-        nym.pubkey = window.NostrTools.getPublicKey(nym.privkey);
-        nym.nym = nickname;
-        nym.connectionMode = 'nsec';
-
-        // Store permanently
-        localStorage.setItem('nym_nsec', window.tempNsec);
-        localStorage.setItem('nym_connection_mode', 'nsec');
-
-        document.getElementById('currentNym').textContent = nym.nym;
-
-        // Connect to relays
-        await nym.connectToRelays();
-
-        // Publish profile (kind 0 event)
-        await nym.saveToNostrProfile();
-
-        // Clear temp
-        delete window.tempNsec;
-
-        // Close modal
-        closeModal('setupModal');
-
-        // Welcome messages
-        nym.displaySystemMessage(`Welcome to NYM, ${nym.nym}! Your Nostr account has been created.`);
-        nym.displaySystemMessage(`Your persistent identity is now active. Make sure you've saved your private key!`);
-        nym.displaySystemMessage(`Type /help for available commands.`);
-
-        // Route to channel
-        await routeToUrlChannel();
-
-        // Start tutorial
-        window.maybeStartTutorial(false);
-
-    } catch (error) {
-        alert('Failed to create account: ' + error.message);
-    }
-}
 
 // Disconnect/logout function
 function disconnectNym() {
-    // Clear saved connection
-    localStorage.removeItem('nym_connection_mode');
-    localStorage.removeItem('nym_relay_url');
-    localStorage.removeItem('nym_bunker_uri');
-
-    if (nym.nostrConnect) {
-        nym.nostrConnect.disconnect();
-        nym.nostrConnect = null;
-        nym.usingNostrConnect = false;
-    }
-
     // Disconnect from relay
     if (nym && nym.ws) {
         nym.disconnect();
@@ -20342,8 +15917,9 @@ function disconnectNym() {
 // Sign-out button
 function signOut() {
     if (confirm('Sign out and disconnect from NYM?')) {
-        // Clear auto-ephemeral preference on logout
+        // Clear auto-ephemeral preferences on logout
         localStorage.removeItem('nym_auto_ephemeral');
+        localStorage.removeItem('nym_auto_ephemeral_nick');
         nym.cmdQuit();
     }
 }
@@ -20352,21 +15928,6 @@ function signOut() {
 document.addEventListener('DOMContentLoaded', () => {
     // Parse URL for channel routing BEFORE initialization
     parseUrlChannel();
-
-    // Check if running in NYMApp shell and hide extension option
-    const isNYMApp = navigator.userAgent.includes('NYMApp');
-    if (isNYMApp) {
-        const connectionMode = document.getElementById('connectionMode');
-        const extensionOption = connectionMode.querySelector('option[value="extension"]');
-        if (extensionOption) {
-            extensionOption.remove();
-        }
-
-        // If extension was the default selected, switch to ephemeral
-        if (connectionMode.value === 'extension') {
-            connectionMode.value = 'ephemeral';
-        }
-    }
 
     nym.initialize();
 
@@ -20387,83 +15948,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Auto-focus nickname input
     document.getElementById('nymInput').focus();
-
-    // Connection mode change listener
-    document.getElementById('connectionMode').addEventListener('change', (e) => {
-        const mode = e.target.value;
-        const nsecGroup = document.getElementById('nsecGroup');
-        const nymGroup = document.getElementById('nymGroup');
-        const hint = document.getElementById('nymHint');
-        const nymInput = document.getElementById('nymInput');
-        const nsecInput = document.getElementById('nsecInput');
-        const autoEphemeralGroup = document.getElementById('autoEphemeralGroup');
-
-        // Hide all special groups first
-        nsecGroup.style.display = 'none';
-        autoEphemeralGroup.style.display = 'none'; // Hide auto-ephemeral by default
-        const bunkerGroup = document.getElementById('bunkerGroup');
-        if (bunkerGroup) bunkerGroup.style.display = 'none';
-
-        switch (mode) {
-            case 'ephemeral':
-                hint.textContent = 'Your ephemeral pseudonym for this session';
-                nymInput.placeholder = 'Leave empty for random nick';
-                autoEphemeralGroup.style.display = 'block'; // Show only for ephemeral
-                break;
-            case 'extension':
-                hint.textContent = 'Will use your Nostr profile name if available';
-                nymInput.placeholder = 'Override profile name (optional)';
-                break;
-            case 'nsec':
-                nsecGroup.style.display = 'block';
-                hint.textContent = 'Will use your Nostr profile name if available';
-                nymInput.placeholder = 'Override profile name (optional)';
-
-                // Auto-fill saved nsec if available
-                const savedNsec = localStorage.getItem('nym_nsec');
-                if (savedNsec) {
-                    nsecInput.value = savedNsec;
-                }
-                break;
-            case 'create':
-                // Hide standard groups
-                nsecGroup.style.display = 'none';
-                nymGroup.style.display = 'none';
-                autoEphemeralGroup.style.display = 'none';
-
-                // Show account creation steps
-                document.getElementById('accountCreationSteps').style.display = 'block';
-                document.getElementById('enterNymBtn').style.display = 'none';
-
-                // Reset to first step
-                currentStep = 0;
-                for (let i = 0; i < totalSteps; i++) {
-                    hideStep(i);
-                }
-                showStep(0);
-                updateStepIndicator();
-                break;
-            case 'bunker':
-                nsecGroup.style.display = 'none';
-                autoEphemeralGroup.style.display = 'none';
-                const bunkerGroup = document.getElementById('bunkerGroup');
-                if (bunkerGroup) bunkerGroup.style.display = 'block';
-                hint.textContent = 'Will use your Nostr profile from the bunker';
-                nymInput.placeholder = 'Override profile name (optional)';
-
-                const savedBunker = localStorage.getItem('nym_bunker_uri');
-                if (savedBunker) {
-                    document.getElementById('bunkerInput').value = savedBunker;
-                }
-                break;
-
-                // Reset account creation UI when switching modes
-                if (mode !== 'create') {
-                    document.getElementById('accountCreationSteps').style.display = 'none';
-                    document.getElementById('enterNymBtn').style.display = 'block';
-                }
-        }
-    });
 
     // Add listener to show/hide time format option
     document.getElementById('timestampSelect').addEventListener('change', (e) => {
@@ -20677,87 +16161,23 @@ async function routeToUrlChannel() {
         const channelInput = window.pendingChannel;
         delete window.pendingChannel;
 
-        // Small delay for persistent connections to ensure relays are ready
-        if (nym.connectionMode !== 'ephemeral') {
-            await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-
-        // Parse channel type from prefix
-        let channelType = 'auto'; // auto-detect if no prefix
+        // Strip any prefix
         let channelName = channelInput;
-
-        if (channelInput.startsWith('c:')) {
-            channelType = 'community';
+        if (channelInput.startsWith('g:')) {
             channelName = channelInput.substring(2);
-        } else if (channelInput.startsWith('g:')) {
-            channelType = 'geohash';
-            channelName = channelInput.substring(2);
-        } else if (channelInput.startsWith('e:')) {
-            channelType = 'ephemeral';
+        } else if (channelInput.startsWith('e:') || channelInput.startsWith('c:')) {
             channelName = channelInput.substring(2);
         }
 
-        // Handle based on type
-        if (channelType === 'community') {
-            // Handle community routing
-            const communityId = channelName;
-
-            // Function to check for community
-            const checkForCommunity = () => {
-                if (nym.communityChannels.has(communityId)) {
-                    const community = nym.communityChannels.get(communityId);
-
-                    if (nym.connectionMode === 'ephemeral') {
-                        nym.displaySystemMessage(`Community "${community.name}" requires a persistent identity (extension or nsec login)`);
-                        return false;
-                    }
-
-                    if (!document.querySelector(`[data-community="${communityId}"]`)) {
-                        nym.addCommunityChannel(community.name, communityId, community.isPrivate);
-                    }
-
-                    nym.switchToCommunity(communityId);
-                    nym.userJoinedChannels.add(communityId);
-                    nym.saveUserChannels();
-                    nym.displaySystemMessage(`Joined community #${community.name} from URL`);
-                    return true;
-                }
-                return false;
-            };
-
-            // Try to find community immediately
-            let foundCommunity = checkForCommunity();
-
-            // If not found and user is persistent, wait for discovery
-            if (!foundCommunity && nym.connectionMode !== 'ephemeral') {
-                nym.displaySystemMessage(`Looking for community...`);
-
-                // Wait up to 5 seconds for community to be discovered
-                for (let i = 0; i < 10; i++) {
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    foundCommunity = checkForCommunity();
-                    if (foundCommunity) break;
-                }
-
-                if (!foundCommunity) {
-                    nym.displaySystemMessage(`Community not found. It may be private or no longer exist.`);
-                }
-            }
-        } else if (channelType === 'geohash' || (channelType === 'auto' && nym.isValidGeohash(channelName))) {
-            // Geohash channel
+        // Only handle geohash channels
+        if (nym.isValidGeohash(channelName)) {
             nym.addChannel(channelName, channelName);
             nym.switchChannel(channelName, channelName);
             nym.userJoinedChannels.add(channelName);
             nym.saveUserChannels();
             nym.displaySystemMessage(`Joined geohash channel #${channelName} from URL`);
         } else {
-            // Standard ephemeral channel
-            nym.addChannel(channelName, '');
-            nym.switchChannel(channelName, '');
-            await nym.createChannel(channelName);
-            nym.userJoinedChannels.add(channelName);
-            nym.saveUserChannels();
-            nym.displaySystemMessage(`Joined channel #${channelName} from URL`);
+            nym.displaySystemMessage(`Invalid geohash channel: ${channelName}`);
         }
 
         // Clear the URL hash to clean up
