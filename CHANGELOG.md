@@ -1,3 +1,7 @@
+## v3.26.79 - 2026-02-25
+
+Hotfix: verbiage change on buttons
+
 ## v3.26.78 - 2026-02-25
 
 Hotfix: added core default relays

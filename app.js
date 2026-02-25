@@ -41,7 +41,7 @@
             },
             {
                 title: 'Main Menu',
-                body: 'Buy addon packs in the shop to change the styling of your messages and nickname. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start anew.',
+                body: 'Get flair addon packs to change the styling of your messages and nickname. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start anew.',
                 selector: (window.innerWidth > 768 ? '.header-actions' : '.sidebar-actions'),
                 onBefore: () => { if (window.innerWidth <= 768) return ensureSidebarOpenOnMobile(); }
             },
@@ -1960,7 +1960,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         </div>
         <div class="shop-item-price">
             <span class="shop-price-amount">⚡ ${item.price} sats</span>
-            ${!isPurchased ? '<button class="shop-buy-btn">BUY</button>' : ''}
+            ${!isPurchased ? '<button class="shop-buy-btn">GET</button>' : ''}
         </div>
     </div>
 `;
@@ -2014,7 +2014,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         ` : ''}
         <div class="shop-item-price">
             <span class="shop-price-amount">⚡ ${item.price} sats</span>
-            ${!isPurchased ? '<button class="shop-buy-btn">BUY</button>' : ''}
+            ${!isPurchased ? '<button class="shop-buy-btn">GET</button>' : ''}
         </div>
     </div>
 `;
