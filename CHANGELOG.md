@@ -1,3 +1,7 @@
+## v3.27.79 - 2026-02-25
+
+New: laying foundation for BT/FIPS support
+
 ## v3.26.79 - 2026-02-25
 
 Hotfix: verbiage change on buttons
