@@ -4367,9 +4367,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         });
                 }
             });
-
-            // Flush FIPS offline message queue when connectivity is restored
-            if (window.fips) window.fips._scheduleFlush(3000);
         });
 
         window.addEventListener('offline', () => {
@@ -5232,12 +5229,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.updateConnectionStatus();
             this.displaySystemMessage(`Connected to the Nostr network via multiple relays...`);
 
-            // Attach FIPS node and flush any messages queued while offline
-            if (window.fips) {
-                window.fips.attach(this);
-                // Show BLE "Nearby" button now that ble transport is initialised
-                if (typeof fipsInitBLEButton === 'function') fipsInitBLEButton();
-            }
 
             // Now connect to remaining broadcast relays in background
             this.broadcastRelays.forEach(relayUrl => {
@@ -5436,13 +5427,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     kinds: [25051],
                     "#p": [this.pubkey],
                     since: Math.floor(Date.now() / 1000) - 120, // Last 2 minutes
-                    limit: 50
-                },
-                // FIPS WebRTC messaging signaling (kind 25050)
-                {
-                    kinds: [25050],
-                    "#p": [this.pubkey],
-                    since: Math.floor(Date.now() / 1000) - 120,
                     limit: 50
                 }
             );
@@ -7370,12 +7354,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async handleEvent(event) {
-        // Route FIPS WebRTC signaling events (kind 25050) to the FIPS node
-        if (event.kind === 25050 && window.fips) {
-            window.fips.handleSignalEvent(event);
-            return;
-        }
-
         // Early deduplication for channel messages to prevent re-processing on reconnect
         if (event.kind === 20000) {
             if (this.processedMessageEventIds.has(event.id)) {
@@ -9669,13 +9647,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     async sendPM(content, recipientPubkey) {
         try {
-            if (!this.connected) {
-                // FIPS: create gift-wrapped PM and queue for delivery when reconnected
-                if (window.fips && this.privkey) {
-                    return await this._fipsQueuePM(content, recipientPubkey);
-                }
-                throw new Error('Not connected to relay');
-            }
+            if (!this.connected) throw new Error('Not connected to relay');
 
             const wrapped = await this.sendNIP17PM(content, recipientPubkey);
             return !!wrapped;
@@ -9683,51 +9655,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displaySystemMessage('Failed to send PM: ' + error.message);
             return false;
         }
-    }
-
-    // FIPS: create a NIP-17 gift-wrapped PM, persist in outbox, and display locally.
-    async _fipsQueuePM(content, recipientPubkey) {
-        const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
-            ? Math.floor(Date.now() / 1000) + this.settings.dmTTLSeconds
-            : null;
-        const rumor = {
-            kind: 14,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [['p', recipientPubkey]],
-            content,
-            pubkey: this.pubkey
-        };
-        const wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
-        const ttl = expirationTs
-            ? Math.max(0, expirationTs * 1000 - Date.now())
-            : undefined;
-        await window.fips.queueMessage({
-            signedEvent: wrapped, recipient: recipientPubkey, type: 'pm', ttl
-        });
-
-        // Display locally (optimistic, same pattern as sendNIP17PM when online)
-        const conversationKey = this.getPMConversationKey(recipientPubkey);
-        if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
-        this.pmMessages.get(conversationKey).push({
-            id: wrapped.id,
-            author: this.nym,
-            pubkey: this.pubkey,
-            content,
-            timestamp: new Date(),
-            isOwn: true,
-            isPM: true,
-            conversationKey,
-            conversationPubkey: recipientPubkey,
-            eventKind: 1059,
-            deliveryStatus: 'queued'
-        });
-        this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
-        this.movePMToTop(recipientPubkey);
-        if (this.inPMMode && this.currentPM === recipientPubkey) {
-            this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
-        }
-        this.displaySystemMessage('Offline: PM queued, will send when reconnected');
-        return true;
     }
 
     movePMToTop(pubkey) {
@@ -10021,9 +9948,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.addPMConversation(baseNym, pubkey);
         // Open the PM
         this.openPM(baseNym, pubkey);
-
-        // FIPS: attempt WebRTC direct connection for lower-latency message delivery
-        if (window.fips) window.fips.connectToPeer(pubkey);
     }
 
     isMentioned(content) {
@@ -10201,39 +10125,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash) {
         try {
-            const tags = [['n', this.nym]];
-            const kind = 20000;
-            tags.push(['g', geohash || 'nym']);
-
-            let event = {
-                kind,
-                created_at: Math.floor(Date.now() / 1000),
-                tags,
-                content,
-                pubkey: this.pubkey
-            };
-
             if (!this.connected) {
-                // FIPS: sign and queue message for delivery when relay reconnects
-                if (window.fips && this.pubkey) {
-                    if (this.enablePow && this.powDifficulty > 0) {
-                        event = NostrTools.nip13.minePow(event, this.powDifficulty);
-                    }
-                    const signedEvent = await this.signEvent(event);
-                    await window.fips.queueMessage({
-                        signedEvent, recipient: null, type: 'channel', ttl: 60 * 60 * 1000
-                    });
-                    this.displayMessage({
-                        id: signedEvent.id, content, author: this.nym, pubkey: this.pubkey,
-                        timestamp: new Date(signedEvent.created_at * 1000),
-                        channel, geohash, isOwn: true, isHistorical: false, isPM: false
-                    });
-                    this.displaySystemMessage('Offline: message queued, will send when reconnected');
-                    return true;
-                }
                 throw new Error('Not connected to relay');
             }
 
+            const tags = [
+                ['n', this.nym]
+            ];
+
+            const kind = 20000; // Geohash channels use kind 20000
+            tags.push(['g', geohash || 'nym']);
+
+            let event = {
+                kind: kind,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: tags,
+                content: content,
+                pubkey: this.pubkey
+            };
 
             // Mine PoW if enabled (NIP-13)
             if (this.enablePow && this.powDifficulty > 0) {
@@ -16016,7 +15925,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.78 ═══<br/>
+═══ Nymchat v3.26.78 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16458,36 +16367,5 @@ async function routeToUrlChannel() {
 
         // Clear the URL hash to clean up
         history.replaceState(null, null, window.location.pathname);
-    }
-}
-
-// Show the BLE scan button only when the runtime supports it.
-// Called after the FIPS node attaches (guarantees ble is initialised).
-// Also called on DOMContentLoaded so it shows even before relay connection.
-function fipsInitBLEButton() {
-    const btns = document.querySelectorAll('.fips-ble-btn');
-    if (!btns.length) return;
-    const available = window.fips?.ble?.isAvailable ?? ('bluetooth' in navigator);
-    btns.forEach(b => { b.style.display = available ? '' : 'none'; });
-}
-// app.js loads at end of <body>, so DOM is already ready — call directly.
-fipsInitBLEButton();
-
-// Triggered by the "Nearby" button.
-// Web BT: opens the browser device picker (must be a user gesture — button click qualifies).
-// Flutter: starts a background scan and auto-connects; button gives feedback.
-async function fipsScanBLE() {
-    if (!window.fips) return;
-    const btns = [...document.querySelectorAll('.fips-ble-btn')];
-    const originalHTMLs = btns.map(b => b.innerHTML);
-    try {
-        btns.forEach(b => { b.disabled = true; });
-        if (window.nym) nym.displaySystemMessage('Scanning for nearby users via Bluetooth…');
-        await window.fips.scanBLE();
-        if (window.nym) nym.displaySystemMessage('Bluetooth scan started. Nearby users will appear when found.');
-    } catch (err) {
-        if (window.nym) nym.displaySystemMessage('Bluetooth: ' + err.message);
-    } finally {
-        btns.forEach((b, i) => { b.disabled = false; b.innerHTML = originalHTMLs[i]; });
     }
 }

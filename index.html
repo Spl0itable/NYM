@@ -132,7 +132,6 @@
                 <div class="status-indicator">
                     <span class="status-dot" id="statusDot"></span>
                     <span id="connectionStatus">Disconnected</span>
-                    <span id="fipsQueueBadge" style="display:none;margin-left:6px;font-size:10px;color:var(--warning);opacity:0.8;"></span>
                 </div>
             </div>
 
@@ -140,12 +139,6 @@
                 <button class="icon-btn" onclick="nym.openShop(); nym.closeSidebar();">Flair</button>
                 <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();">Settings</button>
                 <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();">About</button>
-                <!-- FIPS BLE: shown on Chromium and in the Flutter app -->
-                <button class="icon-btn fips-ble-btn" id="fipsBLEBtn" onclick="fipsScanBLE()" title="Find nearby users via Bluetooth" style="display:none;">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:middle;margin-right:3px;">
-                        <polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"/>
-                    </svg>Nearby
-                </button>
                 <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Logout">Logout</button>
             </div>
 
@@ -234,12 +227,6 @@
                     <button class="icon-btn" onclick="nym.openShop()">Flair</button>
                     <button class="icon-btn" onclick="showSettings()">Settings</button>
                     <button class="icon-btn" onclick="showAbout()">About</button>
-                    <!-- FIPS BLE: shown on Chromium and in the Flutter app -->
-                    <button class="icon-btn fips-ble-btn" onclick="fipsScanBLE()" title="Find nearby users via Bluetooth" style="display:none;">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:middle;margin-right:3px;">
-                            <polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"/>
-                        </svg>Nearby
-                    </button>
                     <button class="icon-btn" onclick="signOut()" title="Logout">Logout</button>
                 </div>
             </header>
@@ -787,7 +774,6 @@
 
     <!-- JavaScript -->
     <script src="nostr-tools.js"></script>
-    <script src="fips.js"></script>
     <script src="app.js"></script>
 
     <!-- QRCode library for Lightning invoices -->
