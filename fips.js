@@ -573,39 +573,44 @@ class FIPSBLETransport {
             if (this.onPeerDisconnected) this.onPeerDisconnected(pubkey);
         };
 
-        // Detect Flutter WebView after platform is ready
+        // Detect flutter_inappwebview (original path)
         window.addEventListener('flutterInAppWebViewPlatformReady', () => {
             this._isFlutter   = !!window.flutter_inappwebview;
             this._flutterReady = this._isFlutter;
         });
-        // Synchronous fallback check (already ready when script runs)
         if (window.flutter_inappwebview) {
             this._isFlutter    = true;
             this._flutterReady = true;
         }
     }
 
+    // True when the app injected the webview_flutter JS channel bridge.
+    // These functions are injected after page load, so check lazily.
+    get _usingInjectedBridge() {
+        return typeof window.fipsBleScan === 'function';
+    }
+
     // ── Capability detection ───────────────────────────────────────────────────
 
     get isAvailable() {
-        return this._isFlutter || ('bluetooth' in navigator);
+        return this._isFlutter || this._usingInjectedBridge || ('bluetooth' in navigator);
     }
 
     // Only Flutter can advertise; Web BT is central-only
-    get canAdvertise() { return this._isFlutter; }
+    get canAdvertise() { return this._isFlutter || this._usingInjectedBridge; }
 
     // ── Discovery & advertising ───────────────────────────────────────────────
 
     // Start advertising this node as a FIPS peripheral (Flutter only).
     // Called automatically when the FIPS node attaches to the app.
     async startAdvertising() {
-        if (!this._isFlutter) return false;
+        if (!this._isFlutter && !this._usingInjectedBridge) return false;
         return this._flutter('fipsBLEAdvertise', { pubkey: this.localPubkey });
     }
 
     // Stop advertising.
     async stopAdvertising() {
-        if (!this._isFlutter) return;
+        if (!this._isFlutter && !this._usingInjectedBridge) return;
         return this._flutter('fipsBLEStopAdvertise');
     }
 
@@ -613,7 +618,7 @@ class FIPSBLETransport {
     // Flutter: starts a background scan; results arrive via _fipsBLEOnPeerConnected.
     // Web BT:  opens the browser's BLE device picker (requires a user gesture).
     async scan() {
-        if (this._isFlutter) {
+        if (this._isFlutter || this._usingInjectedBridge) {
             return this._flutter('fipsBleScan');
         }
         if (!navigator.bluetooth) {
@@ -777,10 +782,24 @@ class FIPSBLETransport {
     // ── Flutter JS handler helper ─────────────────────────────────────────────
 
     async _flutter(handler, args) {
-        if (!this._flutterReady || !window.flutter_inappwebview) return null;
+        // Path 1: flutter_inappwebview.callHandler (original)
+        if (this._flutterReady && window.flutter_inappwebview) {
+            try {
+                return await window.flutter_inappwebview.callHandler(handler, args ?? {});
+            } catch (_) { return null; }
+        }
+        // Path 2: webview_flutter injected bridge functions
+        // fipsBLESend(pubkey, data) has a different signature from the rest.
         try {
-            return await window.flutter_inappwebview.callHandler(handler, args ?? {});
-        } catch (_) { return null; }
+            if (handler === 'fipsBLESend') {
+                if (typeof window.fipsBLESend === 'function')
+                    return await window.fipsBLESend(args?.pubkey, args?.data);
+            } else {
+                const fn = window[handler];
+                if (typeof fn === 'function') return await fn();
+            }
+        } catch (_) {}
+        return null;
     }
 }
 
@@ -834,6 +853,12 @@ class FIPSNode {
             localPrivkey: this.privkey,
             onMessage:    (from, data) => this._handleP2PMessage(from, data)
         });
+
+        // Register pubkey with the webview_flutter injected bridge so the
+        // GATT pubkey characteristic is populated before advertising starts.
+        if (typeof window.fipsBLERegisterPubkey === 'function') {
+            window.fipsBLERegisterPubkey(this.pubkey);
+        }
 
         this.ble.onPeerConnected = (pubkey) => {
             this.routing.seePeer(pubkey, 'ble');
