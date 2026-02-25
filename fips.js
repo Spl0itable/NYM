@@ -555,11 +555,8 @@ class FIPSBLETransport {
         // `${pubkey}:${msgId}` → { chunks[], received, total }
         this._reassembly  = new Map();
 
-        // Detect Flutter via user-agent — synchronous, available before any
-        // bridge injection. Matches app.js's isFlutterWebView check.
-        this._isFlutter   = /NYMApp|Flutter/.test(navigator.userAgent);
-        // _flutterReady = true only for flutter_inappwebview (callHandler path).
-        // For the webview_flutter injected-function path we check lazily.
+        // flutter_inappwebview exposes this global before the page is ready
+        this._isFlutter   = false;
         this._flutterReady = false;
 
         this.onPeerConnected    = null; // (pubkey) => {}
@@ -857,6 +854,12 @@ class FIPSNode {
             onMessage:    (from, data) => this._handleP2PMessage(from, data)
         });
 
+        // Register pubkey with the webview_flutter injected bridge so the
+        // GATT pubkey characteristic is populated before advertising starts.
+        if (typeof window.fipsBLERegisterPubkey === 'function') {
+            window.fipsBLERegisterPubkey(this.pubkey);
+        }
+
         this.ble.onPeerConnected = (pubkey) => {
             this.routing.seePeer(pubkey, 'ble');
             this._flushToPeer(pubkey);
@@ -870,22 +873,8 @@ class FIPSNode {
             this.routing.recordFailure(pubkey, 'ble');
         };
 
-        // Flutter: register pubkey and start advertising.
-        // Bridge functions are injected after onPageFinished and may not exist
-        // yet if login is fast (stored keys). Poll until they are ready.
-        if (this.ble.canAdvertise) {
-            const initBLEBridge = (attempts = 15) => {
-                if (typeof window.fipsBLERegisterPubkey === 'function') {
-                    window.fipsBLERegisterPubkey(this.pubkey);
-                    this.ble.startAdvertising().catch(() => {});
-                } else if (window.flutter_inappwebview) {
-                    this.ble.startAdvertising().catch(() => {});
-                } else if (attempts > 0) {
-                    setTimeout(() => initBLEBridge(attempts - 1), 200);
-                }
-            };
-            initBLEBridge();
-        };
+        // Flutter: start advertising immediately so nearby users can discover us
+        if (this.ble.canAdvertise) this.ble.startAdvertising().catch(() => {});
 
         // Flush any messages that were queued before this session connected
         this._scheduleFlush(1500);
