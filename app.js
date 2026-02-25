@@ -1986,7 +1986,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         </div>
         <div class="shop-item-price">
             <span class="shop-price-amount">⚡ ${item.price} sats</span>
-            ${!isPurchased ? '<button class="shop-buy-btn">BUY</button>' : ''}
+            ${!isPurchased ? '<button class="shop-buy-btn">GET</button>' : ''}
         </div>
     </div>
 `;
@@ -15925,7 +15925,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.26.78 ═══<br/>
+═══ Nymchat v3.26.80 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
