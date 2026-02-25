@@ -1,7 +1,3 @@
-## v3.27.80 - 2026-02-25
-
-Hotfix: various bugs relating to bluetooth
-
 ## v3.27.79 - 2026-02-25
 
 New: laying foundation for BT/FIPS support
