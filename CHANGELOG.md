@@ -1,3 +1,7 @@
+## v3.26.78 - 2026-02-25
+
+Hotfix: added core default relays
+
 ## v3.26.77 - 2026-02-25
 
 Hotfix: adjusted REQ limits

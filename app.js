@@ -995,6 +995,7 @@ class NYM {
         this.geoRelayConnections = new Map();
         this.currentGeoRelays = new Set();
         this.geoRelayCount = 10;
+        this.defaultRelays = this.broadcastRelays.slice(0, 5);
         this.discoveredRelays = new Set();
         this.relayList = [];
         this.lastRelayDiscovery = 0;
@@ -1016,7 +1017,7 @@ class NYM {
         this.currentGeohash = '';
         this.currentPM = null;
         this.messages = new Map();
-        this.channelDOMCache = new Map(); // Cache DOM fragments when switching channels
+        this.channelDOMCache = new Map();
         this.virtualScroll = {
             bufferSize: 30,
             windowSize: 100,
@@ -3826,6 +3827,27 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const relay = this.relayPool.get(url);
             return relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
         });
+
+        // Always ensure default relays (first 5 broadcast relays) are connected
+        this.ensureDefaultRelaysConnected();
+    }
+
+    // Ensure the first 5 broadcast relays are always connected regardless of channel
+    async ensureDefaultRelaysConnected() {
+        for (const relayUrl of this.defaultRelays) {
+            const relay = this.relayPool.get(relayUrl);
+            const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
+
+            if (!isConnected && this.shouldRetryRelay(relayUrl)) {
+                try {
+                    await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
+                    this.subscribeToSingleRelay(relayUrl);
+                    this.updateConnectionStatus();
+                } catch (err) {
+                    this.trackRelayFailure(relayUrl);
+                }
+            }
+        }
     }
 
     // Disconnect from geo-specific relays that are no longer needed
@@ -4242,6 +4264,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (this.currentGeohash) {
                 this.connectToGeoRelays(this.currentGeohash);
             }
+
+            // Always ensure default relays (first 5 broadcast) are connected
+            this.ensureDefaultRelaysConnected();
         }
     }
 
@@ -4476,6 +4501,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 // Reconnect to other relays in background
                 this.reconnectToBroadcastRelays();
+
+                // Always ensure default relays (first 5 broadcast) are connected
+                this.ensureDefaultRelaysConnected();
 
                 // Also reconnect to geo relays if we're in a geohash channel
                 if (this.currentGeohash) {
@@ -13557,6 +13585,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.connectToGeoRelays(geohash);
         }
 
+        // Always ensure default relays (first 5 broadcast) stay connected
+        this.ensureDefaultRelaysConnected();
+
         // This ensures we get more messages even with few relays connected
         const channelType = geohash ? 'geohash' : 'ephemeral';
         const channelKey = geohash || channel;
@@ -15894,7 +15925,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.26.77 ═══<br/>
+═══ Nymchat v3.26.78 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
