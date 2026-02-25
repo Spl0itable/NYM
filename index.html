@@ -351,7 +351,10 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label class="form-label">New Nym nick</label>
-                    <input type="text" class="form-input" id="newNickInput" placeholder="Enter new nym" maxlength="20">
+                    <div style="display: flex; align-items: center; gap: 0;">
+                        <input type="text" class="form-input" id="newNickInput" placeholder="Enter new nym" maxlength="20" style="flex: 1; border-radius: 4px 0 0 4px;">
+                        <span id="nickSuffixDisplay" class="nym-suffix" style="padding: 8px 10px; background: var(--bg-dark); border: 1px solid var(--border-color); border-left: none; border-radius: 0 4px 4px 0; font-size: 14px; white-space: nowrap;"></span>
+                    </div>
                     <div class="form-hint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
             </div>

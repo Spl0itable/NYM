@@ -1,3 +1,7 @@
+## v3.26.76 - 2026-02-24
+
+Hotfix: bug reloading already loaded channel messages
+
 ## v3.26.75 - 2026-02-24
 
 New: rebranding from NYM to Nymchat

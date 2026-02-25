@@ -1016,6 +1016,7 @@ class NYM {
         this.currentGeohash = '';
         this.currentPM = null;
         this.messages = new Map();
+        this.channelDOMCache = new Map(); // Cache DOM fragments when switching channels
         this.virtualScroll = {
             bufferSize: 30,
             windowSize: 100,
@@ -1064,7 +1065,7 @@ class NYM {
         this.gifSearchTimeout = null;
         this.giphyApiKey = 'G6neFEExTMBM0h3hM2QjQg4vG8jMMLa9';
         this.emojiAutocompleteIndex = -1;
-        this.commonGeohashes = ['nym', 'w1', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
+        this.commonGeohashes = ['nym', '9q', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
         this.userJoinedChannels = new Set(this.loadUserJoinedChannels());
         this.inPMMode = false;
         this.userSearchTerm = '';
@@ -1079,7 +1080,6 @@ class NYM {
         this.floodTracking = new Map();
         this.activeReactionPicker = null;
         this.activeReactionPickerButton = null;
-        // Removed: usingExtension, nostrConnect, usingNostrConnect (persistent login removed)
         this.contextMenuTarget = null;
         this.contextMenuData = null;
         this.p2pConnections = new Map();
@@ -4614,7 +4614,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             hugOption = document.createElement('div');
             hugOption.className = 'context-menu-item';
             hugOption.id = 'ctxHug';
-            hugOption.textContent = 'Hug 🫂';
+            hugOption.textContent = 'Give warm Hug 🫂';
 
             // Insert after slap option
             if (slapOption && slapOption.nextSibling) {
@@ -4850,7 +4850,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             hugOption = document.createElement('div');
             hugOption.className = 'context-menu-item';
             hugOption.id = 'ctxHug';
-            hugOption.textContent = 'Hug 🫂';
+            hugOption.textContent = 'Give warm Hug 🫂';
 
             if (slapOption && slapOption.nextSibling) {
                 slapOption.parentNode.insertBefore(hugOption, slapOption.nextSibling);
@@ -5050,9 +5050,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     formatNymWithPubkey(nym, pubkey) {
-        // If nym already has a # suffix, don't add another
+        // If nym already has a # suffix, wrap the existing suffix with nym-suffix class
         if (nym.includes('#')) {
-            return nym;
+            const hashIndex = nym.lastIndexOf('#');
+            const baseName = nym.substring(0, hashIndex);
+            const existingSuffix = nym.substring(hashIndex + 1);
+            return `${baseName}<span class="nym-suffix">#${existingSuffix}</span>`;
         }
 
         // Get last 4 characters of pubkey
@@ -5517,6 +5520,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // If we have very few messages, send a targeted request
         if (currentMessages.length < 50) {
             this.subscribeToChannelTargeted(channelKey, channelType);
+        } else {
+            // Mark as loaded so we don't recheck on every channel switch
+            this.channelLoadedFromRelays.add(channelKey);
         }
     }
 
@@ -9883,6 +9889,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     loadPMMessages(conversationKey) {
         const container = document.getElementById('messagesContainer');
 
+        // Cache current channel DOM before switching to PM view
+        this.cacheCurrentContainerDOM();
+        container.dataset.lastChannel = conversationKey;
+
         // Get filtered messages
         const filteredMessages = this.getFilteredPMMessages(conversationKey);
 
@@ -10017,7 +10027,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         if (event.pubkey === this.pubkey && (profile.name || profile.username || profile.display_name)) {
                             const profileName = profile.name || profile.username || profile.display_name;
                             this.nym = profileName.substring(0, 20);
-                            document.getElementById('currentNym').textContent = this.nym;
+                            document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
                         }
 
                         // Store and update for OTHER users (Bitchat users, PM contacts)
@@ -11003,7 +11013,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Format the action content but preserve any HTML in mentioned users
             const formattedAction = this.formatMessage(actionContent);
 
-            messageEl.innerHTML = `* ${authorWithFlair} ${formattedAction}`;
+            messageEl.innerHTML = `* ${authorWithFlair} ${formattedAction} *`;
         } else {
             const classes = ['message'];
 
@@ -12023,7 +12033,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '/block': { desc: 'Block a user or #channel', fn: (args) => this.cmdBlock(args) },
             '/unblock': { desc: 'Unblock a user', fn: (args) => this.cmdUnblock(args) },
             '/slap': { desc: 'Slap someone with a trout 🐟', fn: (args) => this.cmdSlap(args) },
-            '/hug': { desc: 'Hug someone 🫂', fn: (args) => this.cmdHug(args) },
+            '/hug': { desc: 'Give someone a warm hug 🫂', fn: (args) => this.cmdHug(args) },
             '/me': { desc: 'Action message', fn: (args) => this.cmdMe(args) },
             '/shrug': { desc: 'Send a shrug', fn: () => this.cmdShrug() },
             '/bold': { desc: 'Send bold text (**text**)', fn: (args) => this.cmdBold(args) },
@@ -12553,7 +12563,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         this.nym = newNym;
-        document.getElementById('currentNym').textContent = this.nym;
+        document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
 
         const changeMessage = `Your nym's new nick is now ${this.nym}`;
         this.displaySystemMessage(changeMessage);
@@ -13085,7 +13095,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             targetNym = matches.length > 0 ? matches[0].nym : searchNym;
         }
 
-        const hugContent = `/me hugs ${targetNym} 🫂`;
+        const hugContent = `/me gives ${targetNym} a warm hug 🫂`;
 
         try {
             if (this.inPMMode && this.currentPM) {
@@ -13611,13 +13621,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const unreadKey = geohash ? `#${geohash}` : channel;
         this.clearUnreadCount(unreadKey);
 
-        // Load channel messages only if switching to different channel
-        const storageKey = geohash ? `#${geohash}` : channel;
-        const previousKey = previousGeohash ? `#${previousGeohash}` : previousChannel;
-
-        if (storageKey !== previousKey) {
-            this.loadChannelMessages(displayName);
-        }
+        // Load channel messages - loadChannelMessages has its own dedup check
+        // via container.dataset.lastChannel, so always call it to handle
+        // switching back from PM mode to the same channel correctly
+        this.loadChannelMessages(displayName);
 
         // Update user list for this channel
         this.updateUserList();
@@ -13629,6 +13636,34 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
 
+    cacheCurrentContainerDOM() {
+        const container = document.getElementById('messagesContainer');
+        const previousKey = container.dataset.lastChannel;
+        if (!previousKey || container.children.length === 0) return;
+
+        const fragment = document.createDocumentFragment();
+        while (container.firstChild) {
+            fragment.appendChild(container.firstChild);
+        }
+
+        // Get message count for cache invalidation
+        const messages = this.messages.get(previousKey) || this.pmMessages.get(previousKey) || [];
+        this.channelDOMCache.set(previousKey, {
+            fragment,
+            messageCount: messages.length,
+            virtualScrollState: {
+                currentStartIndex: this.virtualScroll.currentStartIndex,
+                currentEndIndex: this.virtualScroll.currentEndIndex
+            }
+        });
+
+        // Limit cache to 5 channels to prevent memory bloat
+        if (this.channelDOMCache.size > 5) {
+            const oldestKey = this.channelDOMCache.keys().next().value;
+            this.channelDOMCache.delete(oldestKey);
+        }
+    }
+
     loadChannelMessages(displayName) {
         const container = document.getElementById('messagesContainer');
         const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
@@ -13638,11 +13673,38 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        // Clear and mark new channel
-        container.innerHTML = '';
+        // Cache current container DOM before switching
+        this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = storageKey;
 
+        // Try to restore from cache if message count hasn't changed
         const channelMessages = this.messages.get(storageKey) || [];
+        const cached = this.channelDOMCache.get(storageKey);
+
+        if (cached && cached.messageCount === channelMessages.length) {
+            // Message count unchanged, restore cached DOM instantly
+            container.appendChild(cached.fragment);
+            this.channelDOMCache.delete(storageKey);
+
+            // Restore virtual scroll state
+            this.virtualScroll.currentStartIndex = cached.virtualScrollState.currentStartIndex;
+            this.virtualScroll.currentEndIndex = cached.virtualScrollState.currentEndIndex;
+
+            // Re-init virtual scroll handler
+            this.initVirtualScroll(container, storageKey);
+
+            // Scroll to bottom
+            if (this.settings.autoscroll) {
+                setTimeout(() => {
+                    container.scrollTop = container.scrollHeight;
+                }, 0);
+            }
+            return;
+        }
+
+        // Cache miss or stale (new messages arrived) - render fresh
+        this.channelDOMCache.delete(storageKey);
+        container.innerHTML = '';
 
         if (channelMessages.length === 0) {
             this.displaySystemMessage(`Joined ${displayName}`);
@@ -15413,14 +15475,22 @@ function closeImageModal() {
 }
 
 function editNick() {
-    document.getElementById('newNickInput').value = nym.nym;
+    // Only show the base nym (without #suffix) in the editable field
+    const baseNym = nym.parseNymFromDisplay(nym.nym);
+    document.getElementById('newNickInput').value = baseNym;
+    // Show the non-editable suffix next to the input
+    const suffix = nym.getPubkeySuffix(nym.pubkey);
+    document.getElementById('nickSuffixDisplay').textContent = `#${suffix}`;
     document.getElementById('nickEditModal').classList.add('active');
 }
 
 function changeNick() {
     const newNick = document.getElementById('newNickInput').value.trim();
-    if (newNick && newNick !== nym.nym) {
-        nym.cmdNick(newNick);
+    // Strip any # suffix the user may have typed - the suffix is derived from pubkey
+    const baseNick = nym.parseNymFromDisplay(newNick);
+    const currentBase = nym.parseNymFromDisplay(nym.nym);
+    if (baseNick && baseNick !== currentBase) {
+        nym.cmdNick(baseNick);
     }
     closeModal('nickEditModal');
 }
@@ -15824,7 +15894,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.26.75 ═══<br/>
+═══ Nymchat v3.26.76 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -15866,7 +15936,7 @@ async function checkSavedConnection() {
             const savedNick = localStorage.getItem('nym_auto_ephemeral_nick');
             nym.nym = savedNick || nym.generateRandomNym();
             nym.connectionMode = 'ephemeral';
-            document.getElementById('currentNym').textContent = nym.nym;
+            document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
 
             // Connect to relays
             await nym.connectToRelays();
@@ -15927,7 +15997,7 @@ async function initializeNym() {
         // Generate ephemeral keypair
         await nym.generateKeypair();
         nym.nym = nymInput || nym.generateRandomNym();
-        document.getElementById('currentNym').textContent = nym.nym;
+        document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
         localStorage.removeItem('nym_connection_mode');
 
         // Auto-ephemeral checkbox - save custom nickname if provided

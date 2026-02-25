@@ -144,6 +144,10 @@ body::after {
     word-break: break-all;
 }
 
+.nym-value .nym-suffix {
+    color: var(--text-dim);
+}
+
 .status-indicator {
     display: inline-flex;
     align-items: center;
