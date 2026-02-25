@@ -5358,18 +5358,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             {
                 kinds: [7],
                 "#k": ["1059"],
-                limit: 500
+                limit: 100
             },
             // User shop items
             {
                 kinds: [30078],
                 "#d": ["nym-shop-active"],
-                limit: 1000
+                limit: 100
             },
             // Zap receipts
             {
                 kinds: [9735],
-                limit: 500,
+                limit: 100,
             }
         ];
 
@@ -5379,13 +5379,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 {
                     kinds: [1059],
                     "#p": [this.pubkey],
-                    limit: 500,
+                    limit: 100,
                 },
                 // Any reactions with #p = my pubkey
                 {
                     kinds: [7],
                     "#p": [this.pubkey],
-                    limit: 500
+                    limit: 100
                 },
                 // MY shop purchases and active items
                 {
@@ -15894,7 +15894,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.26.76 ═══<br/>
+═══ Nymchat v3.26.77 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

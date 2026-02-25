@@ -1,3 +1,7 @@
+## v3.26.77 - 2026-02-25
+
+Hotfix: adjusted REQ limits
+
 ## v3.26.76 - 2026-02-24
 
 Hotfix: bug reloading already loaded channel messages
