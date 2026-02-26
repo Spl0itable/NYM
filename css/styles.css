@@ -225,20 +225,48 @@ body::after {
     transition: stroke 0.2s;
 }
 
+.search-input-wrapper {
+    position: relative;
+    display: none;
+    margin-bottom: 10px;
+}
+
+.search-input-wrapper.active {
+    display: block;
+}
+
 .search-input {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 6px 8px;
+    padding: 6px 26px 6px 8px;
     font-family: var(--font-mono);
     font-size: 12px;
     outline: none;
-    margin-bottom: 10px;
-    display: none;
+    display: block;
+    box-sizing: border-box;
 }
 
-.search-input.active {
+.search-clear {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 4px;
+    display: none;
+    transition: color 0.2s;
+}
+
+.search-clear:hover {
+    color: var(--danger);
+}
+
+.search-input-wrapper.has-value .search-clear {
     display: block;
 }
 
@@ -275,7 +303,7 @@ body::after {
     display: none;
 }
 
-.list-expanded .list-item {
+.list-expanded .list-item:not(.search-hidden) {
     display: flex !important;
 }
 
@@ -438,22 +466,14 @@ body::after {
     border-radius: 3px;
 }
 
-.pm-badge {
-    font-size: 9px;
-    color: var(--purple);
-    background: var(--bg);
-    padding: 2px 4px;
-    border: 1px solid var(--purple);
-    border-radius: 3px;
-}
-
 .delete-pm {
-    font-size: 10px;
+    font-size: 16px;
     color: var(--danger);
-    padding: 2px 5px;
+    padding: 4px 8px;
     cursor: pointer;
     opacity: 0.5;
     transition: opacity 0.2s;
+    line-height: 1;
 }
 
 .delete-pm:hover {

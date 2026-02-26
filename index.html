@@ -161,9 +161,12 @@
                         </svg>
                     </span>
                 </div>
-                <input type="text" class="search-input" id="channelSearch" placeholder="Search channels..."
-                    oninput="this.value = this.value.toLowerCase(); nym.handleChannelSearch(this.value)"
-                    onkeyup="nym.handleChannelSearch(this.value)">
+                <div class="search-input-wrapper" id="channelSearchWrapper">
+                    <input type="text" class="search-input" id="channelSearch" placeholder="Search channels..."
+                        oninput="this.value = this.value.toLowerCase(); nym.handleChannelSearch(this.value)"
+                        onkeyup="nym.handleChannelSearch(this.value)">
+                    <span class="search-clear" onclick="clearSearch('channelSearch')">✕</span>
+                </div>
                 <div id="channelSearchResults"></div>
                 <div class="channel-list" id="channelList">
                     <div class="channel-item active" data-channel="nym" data-geohash="nym">
@@ -185,8 +188,11 @@
                         </svg>
                     </span>
                 </div>
-                <input type="text" class="search-input" id="pmSearch" placeholder="Search PMs..."
-                    onkeyup="nym.filterPMs(this.value)">
+                <div class="search-input-wrapper" id="pmSearchWrapper">
+                    <input type="text" class="search-input" id="pmSearch" placeholder="Search PMs..."
+                        onkeyup="nym.filterPMs(this.value)">
+                    <span class="search-clear" onclick="clearSearch('pmSearch')">✕</span>
+                </div>
                 <div class="pm-list" id="pmList"></div>
             </div>
 
@@ -200,8 +206,11 @@
                         </svg>
                     </span>
                 </div>
-                <input type="text" class="search-input" id="userSearch" placeholder="Search users..."
-                    onkeyup="nym.filterUsers(this.value)">
+                <div class="search-input-wrapper" id="userSearchWrapper">
+                    <input type="text" class="search-input" id="userSearch" placeholder="Search users..."
+                        onkeyup="nym.filterUsers(this.value)">
+                    <span class="search-clear" onclick="clearSearch('userSearch')">✕</span>
+                </div>
                 <div id="userListContent"></div>
             </div>
         </aside>

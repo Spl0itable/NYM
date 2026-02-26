@@ -9675,6 +9675,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Remove and re-insert in correct order
             pmItem.remove();
             this.insertPMInOrder(pmItem, pmList);
+
+            // Re-apply search filter if search is active
+            const searchInput = document.getElementById('pmSearch');
+            if (searchInput && searchInput.value.trim().length > 0) {
+                const term = searchInput.value.toLowerCase();
+                const pmName = pmItem.querySelector('.pm-name').textContent.toLowerCase();
+                if (!pmName.includes(term)) {
+                    pmItem.style.display = 'none';
+                    pmItem.classList.add('search-hidden');
+                }
+            }
         }
     }
 
@@ -9695,6 +9706,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Re-add/update view more button
         this.updateViewMoreButton('pmList');
+
+        // Re-apply search filter if search is active
+        const searchInput = document.getElementById('pmSearch');
+        if (searchInput && searchInput.value.trim().length > 0) {
+            this.filterPMs(searchInput.value);
+        }
     }
 
     requestUserProfile(pubkey) {
@@ -9789,7 +9806,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             item.innerHTML = `
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}</span>
 <div class="channel-badges">
-<span class="pm-badge">PM</span>
 <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
 <span class="unread-badge" style="display:none">0</span>
 </div>
@@ -9797,6 +9813,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             item.onclick = () => this.openPM(cleanBaseNym, pubkey);
 
             this.insertPMInOrder(item, pmList);
+
+            // Hide new item if it doesn't match active search filter
+            const searchInput = document.getElementById('pmSearch');
+            if (searchInput && searchInput.value.trim().length > 0) {
+                const term = searchInput.value.toLowerCase();
+                const pmName = item.querySelector('.pm-name').textContent.toLowerCase();
+                if (!pmName.includes(term)) {
+                    item.style.display = 'none';
+                    item.classList.add('search-hidden');
+                }
+            }
+
             this.updateViewMoreButton('pmList');
 
             // Proactively request their profile
@@ -11727,6 +11755,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const term = searchTerm.toLowerCase();
         const list = document.getElementById('channelList');
 
+        // Update wrapper has-value class for clear button visibility
+        const wrapper = document.getElementById('channelSearchWrapper');
+        if (wrapper) {
+            wrapper.classList.toggle('has-value', term.length > 0);
+        }
+
         items.forEach(item => {
             const channelName = item.querySelector('.channel-name').textContent.toLowerCase();
             if (term.length === 0 || channelName.includes(term)) {
@@ -11750,6 +11784,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const term = searchTerm.toLowerCase();
         const list = document.getElementById('pmList');
 
+        // Update wrapper has-value class for clear button visibility
+        const wrapper = document.getElementById('pmSearchWrapper');
+        if (wrapper) {
+            wrapper.classList.toggle('has-value', term.length > 0);
+        }
+
         items.forEach(item => {
             const pmName = item.querySelector('.pm-name').textContent.toLowerCase();
             if (term.length === 0 || pmName.includes(term)) {
@@ -11771,6 +11811,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     filterUsers(searchTerm) {
         this.userSearchTerm = searchTerm;
         this.updateUserList();
+
+        // Update wrapper has-value class for clear button visibility
+        const wrapper = document.getElementById('userSearchWrapper');
+        if (wrapper) {
+            wrapper.classList.toggle('has-value', searchTerm.length > 0);
+        }
 
         const list = document.getElementById('userListContent');
 
@@ -11856,6 +11902,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const channel = item.dataset.channel;
             const geohash = item.dataset.geohash;
             const key = geohash || channel;
+
+            // Don't override search filter visibility
+            if (item.classList.contains('search-hidden')) {
+                return;
+            }
 
             // Never hide #nym or the active channel
             if (geohash === 'nym' || item.classList.contains('active')) {
@@ -14226,6 +14277,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.updateChannelPins();
             this.applyHiddenChannels();
 
+            // Hide new channel if it doesn't match active search filter
+            const searchInput = document.getElementById('channelSearch');
+            if (searchInput && searchInput.value.trim().length > 0) {
+                const term = searchInput.value.toLowerCase();
+                const channelName = item.querySelector('.channel-name').textContent.toLowerCase();
+                if (!channelName.includes(term)) {
+                    item.style.display = 'none';
+                    item.classList.add('search-hidden');
+                }
+            }
+
             // Check if we need to add/update view more button
             this.updateViewMoreButton('channelList');
         }
@@ -14236,8 +14298,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (!list) return;
 
         // Don't manage view more button if search is active
-        const searchInput = list.parentElement?.querySelector('.search-input.active');
+        const searchWrapper = list.parentElement?.querySelector('.search-input-wrapper');
+        const searchInput = searchWrapper?.querySelector('.search-input');
         if (searchInput && searchInput.value.trim().length > 0) {
+            // Hide the view-more button during active search
+            const existingBtn = list.querySelector('.view-more-btn');
+            if (existingBtn) {
+                existingBtn.style.display = 'none';
+            }
             return;
         }
 
@@ -14636,6 +14704,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Apply hidden channel visibility
         this.applyHiddenChannels();
+
+        // Re-apply channel search filter if search is active
+        const searchInput = document.getElementById('channelSearch');
+        if (searchInput && searchInput.value.trim().length > 0) {
+            this.filterChannels(searchInput.value);
+        }
 
         // Restore scroll position
         channelList.scrollTop = scrollTop;
@@ -15478,10 +15552,41 @@ function toggleSidebar() {
 }
 
 function toggleSearch(inputId) {
+    const wrapper = document.getElementById(inputId + 'Wrapper');
     const search = document.getElementById(inputId);
-    search.classList.toggle('active');
-    if (search.classList.contains('active')) {
-        search.focus();
+    if (wrapper) {
+        wrapper.classList.toggle('active');
+        if (wrapper.classList.contains('active')) {
+            search.focus();
+        } else {
+            // Clear search when hiding
+            clearSearch(inputId);
+        }
+    } else {
+        // Fallback for inputs without wrapper
+        search.classList.toggle('active');
+        if (search.classList.contains('active')) {
+            search.focus();
+        }
+    }
+}
+
+function clearSearch(inputId) {
+    const search = document.getElementById(inputId);
+    const wrapper = document.getElementById(inputId + 'Wrapper');
+    if (search) {
+        search.value = '';
+        if (wrapper) {
+            wrapper.classList.remove('has-value', 'active');
+        }
+        // Trigger the appropriate filter to reset the list
+        if (inputId === 'pmSearch') {
+            nym.filterPMs('');
+        } else if (inputId === 'channelSearch') {
+            nym.handleChannelSearch('');
+        } else if (inputId === 'userSearch') {
+            nym.filterUsers('');
+        }
     }
 }
 
@@ -15925,7 +16030,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.26.82 ═══<br/>
+═══ Nymchat v3.26.83 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
