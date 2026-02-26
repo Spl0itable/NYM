@@ -137,7 +137,7 @@ body::after {
 
 .nym-value {
     font-size: 14px;
-    color: var(--text-bright);
+    color: var(--secondary);
     margin-top: 3px;
     overflow: hidden;
     text-overflow: ellipsis;
