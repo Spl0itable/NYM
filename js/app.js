@@ -3884,6 +3884,31 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return pubkey === this.verifiedDeveloper.pubkey;
     }
 
+    isReservedNick(nick) {
+        const reserved = ['luxas'];
+        return reserved.includes(nick.toLowerCase().replace(/#.*$/, '').trim());
+    }
+
+    verifyDeveloperNsec(nsec) {
+        try {
+            const secretKey = this.decodeNsec(nsec);
+            const derivedPubkey = window.NostrTools.getPublicKey(secretKey);
+            if (derivedPubkey === this.verifiedDeveloper.pubkey) {
+                return { valid: true, secretKey, pubkey: derivedPubkey };
+            }
+            return { valid: false };
+        } catch (e) {
+            return { valid: false };
+        }
+    }
+
+    applyDeveloperIdentity(secretKey, pubkey) {
+        this.privkey = secretKey;
+        this.pubkey = pubkey;
+        this.nym = 'Luxas';
+        document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
+    }
+
     validateGeohashInput(input) {
         // Geohash valid characters: 0-9, b-z excluding a, i, l, o
         const validChars = '0123456789bcdefghjkmnpqrstuvwxyz';
@@ -5069,12 +5094,52 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     generateRandomNym() {
-        const randomNum = Math.floor(1000 + Math.random() * 9000);
+        const style = localStorage.getItem('nym_nick_style') || 'fancy';
 
         // Use the last 4 chars of pubkey
         const suffix = this.getPubkeySuffix(this.pubkey);
 
-        return `nym${randomNum}#${suffix}`;
+        if (style === 'simple') {
+            const randomNum = Math.floor(1000 + Math.random() * 9000);
+            return `nym${randomNum}#${suffix}`;
+        }
+
+        // Fancy style: adjective_noun
+        const adjectives = [
+            'quantum', 'neon', 'cyber', 'shadow', 'plasma',
+            'echo', 'nexus', 'void', 'flux', 'ghost',
+            'phantom', 'stealth', 'cryptic', 'dark', 'neural',
+            'binary', 'matrix', 'digital', 'virtual', 'zero',
+            'null', 'anon', 'masked', 'hidden', 'cipher',
+            'enigma', 'spectral', 'rogue', 'omega', 'alpha',
+            'delta', 'sigma', 'vortex', 'turbo', 'razor',
+            'blade', 'frost', 'storm', 'glitch', 'pixel',
+            'hyper', 'proto', 'nano', 'micro', 'ultra',
+            'silent', 'feral', 'lucid', 'primal', 'astral',
+            'cobalt', 'onyx', 'crimson', 'obsidian', 'iron',
+            'solar', 'lunar', 'stellar', 'cosmic', 'atomic',
+            'toxic', 'rogue', 'rapid', 'swift', 'fierce'
+        ];
+
+        const nouns = [
+            'ghost', 'nomad', 'drift', 'pulse', 'wave',
+            'spark', 'node', 'byte', 'mesh', 'link',
+            'runner', 'hacker', 'coder', 'agent', 'proxy',
+            'daemon', 'virus', 'worm', 'bot', 'droid',
+            'reaper', 'shadow', 'wraith', 'specter', 'shade',
+            'entity', 'unit', 'core', 'nexus', 'cypher',
+            'breach', 'exploit', 'overflow', 'inject', 'root',
+            'kernel', 'shell', 'terminal', 'console', 'script',
+            'raven', 'wolf', 'viper', 'hawk', 'lynx',
+            'phantom', 'signal', 'cipher', 'vector', 'forge',
+            'circuit', 'photon', 'glider', 'shard', 'vault',
+            'beacon', 'torrent', 'crypt', 'grid', 'orbit'
+        ];
+
+        const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+        const noun = nouns[Math.floor(Math.random() * nouns.length)];
+
+        return `${adj}_${noun}#${suffix}`;
     }
 
     formatNymWithPubkey(nym, pubkey) {
@@ -6163,6 +6228,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     async saveToNostrProfile() {
         if (!this.pubkey) return;
+
+        // Skip kind 0 updates for the verified developer - they have their own profile data
+        if (this.isVerifiedDeveloper(this.pubkey)) return;
 
         try {
             // Ephemeral mode - minimal profile
@@ -9573,6 +9641,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const messageContent = parsed.content;
 
+            // Silently drop channel invitations for blocked channels
+            if (messageContent && messageContent.includes('Channel Invitation:')) {
+                const inviteMatch = messageContent.match(/join\s+#([a-z0-9]+)/i);
+                if (inviteMatch) {
+                    const invitedChannel = inviteMatch[1];
+                    if (this.isChannelBlocked(invitedChannel, invitedChannel)) {
+                        return;
+                    }
+                }
+            }
+
             // Get sender name from kind 0 profile (not from rumor tags)
             const senderName = this.getNymFromPubkey(senderPubkey);
 
@@ -12529,6 +12608,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
+        // Blocked channels cannot be joined — unblock first
+        if (this.isChannelBlocked(channel, channel)) {
+            this.displaySystemMessage(`Channel #${channel} is blocked. Use /unblock #${channel} to unblock it first.`);
+            return;
+        }
+
         this.addChannel(channel, channel);
         this.switchChannel(channel, channel);
         this.userJoinedChannels.add(channel);
@@ -12556,7 +12641,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        const targetInput = args.trim();
+        const targetInput = args.trim().replace(/^@/, '');
 
         // Check if input is a pubkey (64 hex characters)
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
@@ -12641,6 +12726,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
+        // Check if reserved nickname
+        if (this.isReservedNick(newNym)) {
+            const result = await showDevNsecModal('nick');
+            if (!result) {
+                this.displaySystemMessage('Nickname change cancelled.');
+                return;
+            }
+            // Verified - apply developer identity
+            this.applyDeveloperIdentity(result.secretKey, result.pubkey);
+            this.displaySystemMessage(`Identity verified. You are now logged in as ${this.nym}.`);
+            return;
+        }
+
         this.nym = newNym;
         document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
 
@@ -12682,7 +12780,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        const targetInput = args.trim();
+        const targetInput = args.trim().replace(/^@/, '');
         let targetPubkey = null;
         let matchedNym = null;
 
@@ -13050,7 +13148,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        const targetInput = args.trim();
+        const targetInput = args.trim().replace(/^@/, '');
         let targetNym = '';
 
         // Check if input is a pubkey (64 hex characters)
@@ -13125,7 +13223,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        const targetInput = args.trim();
+        const targetInput = args.trim().replace(/^@/, '');
         let targetNym = '';
 
         // Check if input is a pubkey (64 hex characters)
@@ -13380,7 +13478,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        const targetInput = args.trim();
+        const targetInput = args.trim().replace(/^@/, '');
 
         // Check if input is a pubkey (64 hex characters)
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
@@ -13417,7 +13515,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Find matching users
         const matches = [];
         this.users.forEach((user, pubkey) => {
-            if (user.nym === searchNym || user.nym.toLowerCase() === searchNym.toLowerCase()) {
+            const baseNym = user.nym.split('#')[0] || user.nym;
+            if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                 if (searchSuffix) {
                     if (pubkey.endsWith(searchSuffix)) {
                         matches.push({ nym: user.nym, pubkey: pubkey });
@@ -13471,6 +13570,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         localStorage.removeItem('nym_connection_mode');
         localStorage.removeItem('nym_relay_url');
         localStorage.removeItem('nym_nsec'); // Clear saved nsec
+        localStorage.removeItem('nym_dev_nsec'); // Clear developer nsec
 
         // Clear pubkey-specific lightning address
         if (this.pubkey) {
@@ -15259,7 +15359,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             dmForwardSecrecyEnabled: localStorage.getItem('nym_dm_fwdsec_enabled') === 'true',
             dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
             readReceiptsEnabled: localStorage.getItem('nym_read_receipts_enabled') !== 'false',  // Enabled by default
-            pinnedLandingChannel: pinnedLandingChannel
+            pinnedLandingChannel: pinnedLandingChannel,
+            nickStyle: localStorage.getItem('nym_nick_style') || 'fancy'
         };
     }
 
@@ -15447,13 +15548,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
 
     async findUserPubkey(input) {
-        const hashIndex = input.indexOf('#');
-        let searchNym = input;
+        const cleanInput = input.replace(/^@/, '');
+        const hashIndex = cleanInput.indexOf('#');
+        let searchNym = cleanInput;
         let searchSuffix = null;
 
         if (hashIndex !== -1) {
-            searchNym = input.substring(0, hashIndex);
-            searchSuffix = input.substring(hashIndex + 1);
+            searchNym = cleanInput.substring(0, hashIndex);
+            searchSuffix = cleanInput.substring(hashIndex + 1);
         }
 
         const matches = [];
@@ -15525,7 +15627,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         if (matches.length === 0) {
-            this.displaySystemMessage(`User ${input} not found. Try using the full nym#xxxx format if you know their pubkey suffix.`);
+            this.displaySystemMessage(`User ${cleanInput} not found. Try using the full nym#xxxx format if you know their pubkey suffix.`);
             return null;
         }
 
@@ -15620,15 +15722,61 @@ function editNick() {
     document.getElementById('nickEditModal').classList.add('active');
 }
 
-function changeNick() {
+async function changeNick() {
     const newNick = document.getElementById('newNickInput').value.trim();
     // Strip any # suffix the user may have typed - the suffix is derived from pubkey
     const baseNick = nym.parseNymFromDisplay(newNick);
     const currentBase = nym.parseNymFromDisplay(nym.nym);
     if (baseNick && baseNick !== currentBase) {
-        nym.cmdNick(baseNick);
+        closeModal('nickEditModal');
+        await nym.cmdNick(baseNick);
+        return;
     }
     closeModal('nickEditModal');
+}
+
+function randomizeNick() {
+    const generated = nym.generateRandomNym();
+    // Extract base name without #suffix
+    const baseName = generated.split('#')[0];
+    document.getElementById('newNickInput').value = baseName;
+}
+
+// Developer nsec verification modal state
+let devNsecResolve = null;
+let devNsecContext = null;
+
+function showDevNsecModal(context) {
+    return new Promise((resolve) => {
+        devNsecResolve = resolve;
+        devNsecContext = context;
+        document.getElementById('devNsecInput').value = '';
+        document.getElementById('devNsecError').style.display = 'none';
+        document.getElementById('devNsecModal').classList.add('active');
+    });
+}
+
+function cancelDevNsec() {
+    closeModal('devNsecModal');
+    if (devNsecResolve) {
+        devNsecResolve(null);
+        devNsecResolve = null;
+    }
+}
+
+function verifyDevNsec() {
+    const nsec = document.getElementById('devNsecInput').value.trim();
+    const result = nym.verifyDeveloperNsec(nsec);
+    if (result.valid) {
+        document.getElementById('devNsecError').style.display = 'none';
+        closeModal('devNsecModal');
+        if (devNsecResolve) {
+            devNsecResolve(result);
+            devNsecResolve = null;
+        }
+    } else {
+        document.getElementById('devNsecError').style.display = 'block';
+    }
 }
 
 async function changeRelay() {
@@ -15672,6 +15820,12 @@ async function showSettings() {
     if (autoEphemeralSelect) {
         const autoEphemeral = localStorage.getItem('nym_auto_ephemeral') === 'true';
         autoEphemeralSelect.value = autoEphemeral ? 'true' : 'false';
+    }
+
+    // Load nickname style setting
+    const nickStyleSelect = document.getElementById('nickStyleSelect');
+    if (nickStyleSelect) {
+        nickStyleSelect.value = nym.settings.nickStyle || 'fancy';
     }
 
     // Load hide non-pinned channels setting
@@ -15853,6 +16007,11 @@ async function saveSettings() {
     const timeFormat = document.getElementById('timeFormatSelect').value;
     const sortByProximity = document.getElementById('proximitySelect').value === 'true';
     const blurImages = document.getElementById('blurImagesSelect').value === 'true';
+    const nickStyle = document.getElementById('nickStyleSelect').value;
+
+    // Save nickname style
+    nym.settings.nickStyle = nickStyle;
+    localStorage.setItem('nym_nick_style', nickStyle);
 
     // Apply all settings
     nym.settings.theme = theme;
@@ -15983,6 +16142,7 @@ function clearLocalStorageCache() {
         if (key && (
             key === 'nym_auto_ephemeral' ||
             key === 'nym_auto_ephemeral_nick' ||
+            key === 'nym_dev_nsec' ||
             key === 'nym_active_style' ||
             key === 'nym_active_flair' ||
             key === 'nym_shop_active_cache' ||
@@ -16030,7 +16190,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.26.83 ═══<br/>
+═══ Nymchat v3.27.83 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16071,7 +16231,24 @@ async function checkSavedConnection() {
 
             // Use saved custom nickname if available, otherwise random
             const savedNick = localStorage.getItem('nym_auto_ephemeral_nick');
-            nym.nym = savedNick || nym.generateRandomNym();
+            if (savedNick && nym.isReservedNick(savedNick)) {
+                // Reserved nick - check for saved nsec to auto-verify
+                const savedNsec = localStorage.getItem('nym_dev_nsec');
+                if (savedNsec) {
+                    const result = nym.verifyDeveloperNsec(savedNsec);
+                    if (result.valid) {
+                        nym.applyDeveloperIdentity(result.secretKey, result.pubkey);
+                    } else {
+                        // Invalid saved nsec - clear it and use random nym
+                        localStorage.removeItem('nym_dev_nsec');
+                        nym.nym = nym.generateRandomNym();
+                    }
+                } else {
+                    nym.nym = nym.generateRandomNym();
+                }
+            } else {
+                nym.nym = savedNick || nym.generateRandomNym();
+            }
             nym.connectionMode = 'ephemeral';
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
 
@@ -16082,12 +16259,15 @@ async function checkSavedConnection() {
             nym.applyCachedShopItemsToNewIdentity();
 
             // Restore lightning address from global localStorage to new session
-            const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
-            if (globalLnAddress) {
-                nym.lightningAddress = globalLnAddress;
-                localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
-                nym.updateLightningAddressDisplay();
-                await nym.saveToNostrProfile();
+            // Skip for verified developer - they have their own kind 0 profile data
+            if (!nym.isVerifiedDeveloper(nym.pubkey)) {
+                const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
+                if (globalLnAddress) {
+                    nym.lightningAddress = globalLnAddress;
+                    localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
+                    nym.updateLightningAddressDisplay();
+                    await nym.saveToNostrProfile();
+                }
             }
 
             // Request notification permission
@@ -16131,11 +16311,24 @@ async function initializeNym() {
         // Get or generate nym first
         const nymInput = document.getElementById('nymInput').value.trim();
 
-        // Generate ephemeral keypair
-        await nym.generateKeypair();
-        nym.nym = nymInput || nym.generateRandomNym();
-        document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
-        localStorage.removeItem('nym_connection_mode');
+        // Check if reserved nickname
+        if (nymInput && nym.isReservedNick(nymInput)) {
+            const result = await showDevNsecModal('init');
+            if (!result) {
+                enterBtn.disabled = false;
+                enterBtn.innerHTML = originalBtnText;
+                return;
+            }
+            // Verified developer - use their persistent keypair
+            nym.applyDeveloperIdentity(result.secretKey, result.pubkey);
+            localStorage.removeItem('nym_connection_mode');
+        } else {
+            // Generate ephemeral keypair
+            await nym.generateKeypair();
+            nym.nym = nymInput || nym.generateRandomNym();
+            document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+            localStorage.removeItem('nym_connection_mode');
+        }
 
         // Auto-ephemeral checkbox - save custom nickname if provided
         const autoEphemeralCheckbox = document.getElementById('autoEphemeralCheckbox');
@@ -16143,6 +16336,13 @@ async function initializeNym() {
             localStorage.setItem('nym_auto_ephemeral', 'true');
             if (nymInput) {
                 localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
+                // If developer verified, also save nsec for auto-login
+                if (nym.isReservedNick(nymInput)) {
+                    const nsecVal = document.getElementById('devNsecInput').value.trim();
+                    if (nsecVal) {
+                        localStorage.setItem('nym_dev_nsec', nsecVal);
+                    }
+                }
             }
         }
 
@@ -16153,12 +16353,15 @@ async function initializeNym() {
         nym.applyCachedShopItemsToNewIdentity();
 
         // Restore lightning address from global localStorage to new session
-        const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
-        if (globalLnAddress) {
-            nym.lightningAddress = globalLnAddress;
-            localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
-            nym.updateLightningAddressDisplay();
-            await nym.saveToNostrProfile();
+        // Skip for verified developer - they have their own kind 0 profile data
+        if (!nym.isVerifiedDeveloper(nym.pubkey)) {
+            const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
+            if (globalLnAddress) {
+                nym.lightningAddress = globalLnAddress;
+                localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
+                nym.updateLightningAddressDisplay();
+                await nym.saveToNostrProfile();
+            }
         }
 
         // Request notification permission
@@ -16211,6 +16414,7 @@ function signOut() {
         // Clear auto-ephemeral preferences on logout
         localStorage.removeItem('nym_auto_ephemeral');
         localStorage.removeItem('nym_auto_ephemeral_nick');
+        localStorage.removeItem('nym_dev_nsec');
         nym.cmdQuit();
     }
 }

@@ -353,6 +353,25 @@
         </div>
     </div>
 
+    <!-- Developer Nsec Verification Modal -->
+    <div class="modal" id="devNsecModal">
+        <div class="modal-content">
+            <div class="modal-header">Reserved Nickname</div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">"Luxas" is reserved for the Nymchat developer.</label>
+                    <div class="form-hint" style="margin-bottom: 10px;">Paste your nsec to verify your identity:</div>
+                    <input type="password" class="form-input" id="devNsecInput" placeholder="nsec1..." autocomplete="off">
+                    <div id="devNsecError" style="color: var(--danger); font-size: 12px; margin-top: 5px; display: none;">Invalid nsec - does not match the developer pubkey.</div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" onclick="cancelDevNsec()">Cancel</button>
+                <button class="send-btn" onclick="verifyDevNsec()">Verify</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Nick Edit Modal -->
     <div class="modal nick-edit-modal" id="nickEditModal">
         <div class="modal-content">
@@ -368,6 +387,7 @@
                 </div>
             </div>
             <div class="modal-actions">
+                <button class="icon-btn" onclick="randomizeNick()">Randomize</button>
                 <button class="icon-btn" onclick="closeModal('nickEditModal')">Cancel</button>
                 <button class="send-btn" onclick="changeNick()">Change</button>
             </div>
@@ -545,6 +565,15 @@
                         <option value="true">Enabled (auto sign-in)</option>
                     </select>
                     <div class="form-hint">Automatically sign in with ephemeral mode on app restart</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Random Nickname Style</label>
+                    <select class="form-select" id="nickStyleSelect">
+                        <option value="fancy">Fancy (adjective_noun)</option>
+                        <option value="simple">Simple (nym1234)</option>
+                    </select>
+                    <div class="form-hint">Style used when generating random nicknames</div>
                 </div>
 
                 <div class="form-group">
