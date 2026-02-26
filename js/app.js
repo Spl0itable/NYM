@@ -4759,20 +4759,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             document.getElementById('contextMenu').classList.remove('active');
         });
 
-        document.getElementById('ctxCopyPubkey').addEventListener('click', async () => {
-            if (this.contextMenuData && this.contextMenuData.pubkey) {
-                try {
-                    await navigator.clipboard.writeText(this.contextMenuData.pubkey);
-                    this.displaySystemMessage(`Copied pubkey to clipboard`);
-                } catch (err) {
-                    this.displaySystemMessage('Failed to copy pubkey');
-                }
-            } else {
-                this.displaySystemMessage('No pubkey available to copy');
-            }
-            document.getElementById('contextMenu').classList.remove('active');
-        });
-
         // Add delete message handler
         document.getElementById('ctxDeleteMessage').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.messageId && this.contextMenuData.pubkey === this.pubkey) {
@@ -16190,7 +16176,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.84 ═══<br/>
+═══ Nymchat v3.27.85 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

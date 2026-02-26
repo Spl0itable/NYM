@@ -239,7 +239,7 @@ body::after {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);
-    color: var(--text);
+    color: #ffffff;
     padding: 6px 26px 6px 8px;
     font-family: var(--font-mono);
     font-size: 12px;
@@ -1268,7 +1268,7 @@ body::after {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);
-    color: var(--text);
+    color: #ffffff;
     padding: 10px;
     font-family: var(--font-mono);
     font-size: 16px;
@@ -1418,7 +1418,7 @@ body::after {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);
-    color: var(--text);
+    color: #ffffff;
     padding: 10px;
     font-family: var(--font-mono);
     font-size: 16px;
@@ -1797,7 +1797,7 @@ body::after {
     flex: 1;
     background: var(--bg);
     border: 1px solid var(--border);
-    color: var(--text);
+    color: #ffffff;
     padding: 5px;
     font-size: 12px;
     outline: none;
@@ -3542,7 +3542,7 @@ body.theme-ghost::before {
     flex: 1;
     background: var(--bg);
     border: 1px solid var(--border);
-    color: var(--text);
+    color: #ffffff;
     padding: 8px;
     font-size: 12px;
     outline: none;
