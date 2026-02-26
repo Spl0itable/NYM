@@ -93,6 +93,7 @@ Nymchat is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemera
 
 **Social Commands:**
 - `/slap <nym>` - Slap someone with a trout
+- `/hug <nym>` - Give a warm hug
 - `/me <action>` - Action message (e.g., /me is coding)
 - `/shrug` - Send a shrug ¯\_(ツ)_/¯
 - `/brb <message>` - Set away message
@@ -122,14 +123,18 @@ Please feel free to submit a Pull Request.
 4. Push to the branch
 5. Open a Pull Request
 
+## Changelog
+
+See the [releases page](https://github.com/Spl0itable/NYM/releases) for each update's changes.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Legal
 
-- [Terms of Service](TOS.md)
-- [Privacy Policy](PP.md)
+- [Terms of Service](https://web.nymchat.app/static/tos.html)
+- [Privacy Policy](https://web.nymchat.app/static/pp.html)
 
 ## Contact
 
