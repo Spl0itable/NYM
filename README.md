@@ -19,7 +19,7 @@ A lightweight ephemeral chat client built on Nostr protocol, bridging with [Bitc
 
 ## Overview
 
-Nymchat is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kind 20000) for geohash-based location channels and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting.
+Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kind 20000) for geohash-based location channels and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting.
 
 ![Nymchat Screenshot](https://nymchat.app/images/nymchat.png)
 
