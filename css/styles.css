@@ -2715,8 +2715,7 @@ body::after {
 }
 
 ::-webkit-scrollbar-thumb {
-    background: var(--text-bright);
-    border: 1px solid var(--border);
+    background: #666666;
 }
 
 ::-webkit-scrollbar-thumb:hover {
