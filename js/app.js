@@ -1059,6 +1059,7 @@ class NYM {
         this.commandHistory = [];
         this.historyIndex = -1;
         this.connected = false;
+        this.initialConnectionInProgress = false;
         this.messageQueue = [];
         this.autocompleteIndex = -1;
         this.commandPaletteIndex = -1;
@@ -4215,6 +4216,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.reconnectingRelays) {
             this.reconnectingRelays.clear();
         }
+
+        // Reset reconnection attempt counter so we get a fresh set of attempts
+        this.reconnectionAttempts = 0;
+        this.isReconnecting = false;
     }
 
     async checkConnectionHealth() {
@@ -4374,6 +4379,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Clear blacklist temporarily to allow retry
             const tempBlacklist = new Set(this.blacklistedRelays);
             this.blacklistedRelays.clear();
+            this.blacklistTimestamps.clear();
+            this.isReconnecting = false;
 
             // Attempt to reconnect to all broadcast relays
             this.broadcastRelays.forEach(relayUrl => {
@@ -4428,9 +4435,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 clearInterval(this.reconnectionInterval);
             }
 
+            // Don't start monitoring during initial connection - let connectToRelays() handle it
+            if (this.initialConnectionInProgress) {
+                return;
+            }
+
             // Only start if disconnected and visible
             if (!this.connected && !document.hidden) {
                 this.reconnectionInterval = setInterval(() => {
+                    // Skip during initial connection
+                    if (this.initialConnectionInProgress) {
+                        return;
+                    }
                     // Only attempt if still visible
                     if (!document.hidden && !this.connected && navigator.onLine) {
                         this.attemptReconnection();
@@ -4512,9 +4528,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 try {
                     await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
-                    this.subscribeToSingleRelay(relayUrl);
-                    connected = true;
-                    break;
+                    // Verify the relay is actually connected (not silently skipped)
+                    const relay = this.relayPool.get(relayUrl);
+                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                        this.subscribeToSingleRelay(relayUrl);
+                        connected = true;
+                        break;
+                    }
                 } catch (err) {
                 }
             }
@@ -5159,6 +5179,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     async connectToRelays() {
         try {
+            this.initialConnectionInProgress = true;
             this.updateConnectionStatus('Connecting...');
 
             // Check if we're already connected to ANY broadcast relay from pre-connection
@@ -5187,7 +5208,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     // Create connection promises that resolve with relay URL on success
                     const connectionPromises = initialRelays.map(relayUrl =>
                         this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000)
-                            .then(() => relayUrl)
+                            .then(() => {
+                                // Verify actual connection before reporting success
+                                const relay = this.relayPool.get(relayUrl);
+                                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                                    return relayUrl;
+                                }
+                                return null;
+                            })
                             .catch(err => {
                                 this.trackRelayFailure(relayUrl);
                                 return null;
@@ -5339,6 +5367,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Re-enable input anyway in case user wants to retry
             document.getElementById('messageInput').disabled = false;
             document.getElementById('sendBtn').disabled = false;
+        } finally {
+            this.initialConnectionInProgress = false;
         }
     }
 
@@ -5665,15 +5695,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // Check if blacklisted but also check if expired
                 if (this.blacklistedRelays.has(relayUrl)) {
                     if (!this.isBlacklistExpired(relayUrl)) {
-                        // Still blacklisted
-                        resolve();
+                        // Still blacklisted - reject so callers know no connection was made
+                        reject(new Error(`Relay ${relayUrl} is blacklisted`));
                         return;
                     }
                     // Was expired and removed, continue connecting
                 }
 
                 if (!this.shouldRetryRelay(relayUrl)) {
-                    resolve();
+                    reject(new Error(`Relay ${relayUrl} should not be retried yet`));
                     return;
                 }
 
@@ -12012,6 +12042,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     setupEventListeners() {
+        // Click handler for status indicator to manually trigger reconnection
+        const statusIndicator = document.querySelector('.status-indicator');
+        if (statusIndicator) {
+            statusIndicator.style.cursor = 'pointer';
+            statusIndicator.addEventListener('click', () => {
+                if (!this.connected && !this.initialConnectionInProgress) {
+                    this.clearRelayBlocksForReconnection();
+                    this.displaySystemMessage('Manual reconnection attempt...');
+                    this.attemptReconnection();
+                }
+            });
+        }
+
         const input = document.getElementById('messageInput');
 
         input.addEventListener('keydown', (e) => {
@@ -16186,7 +16229,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.88 ═══<br/>
+═══ Nymchat v3.27.89 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16496,17 +16539,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 5000);
 
-    // Periodically update connection status
+    // Periodically update connection status (skip during initial connection)
     setInterval(() => {
-        if (nym.connected) {
+        if (nym.connected && !nym.initialConnectionInProgress) {
             nym.updateConnectionStatus();
         }
     }, 1000);
 
-    // Periodic connection health check
+    // Periodic connection health check (skip during initial connection to avoid race conditions)
     setInterval(() => {
-        if (nym.connected || nym.relayPool.size > 0) {
-            // Only log if we think we should be connected
+        if (!nym.initialConnectionInProgress && (nym.connected || nym.relayPool.size > 0)) {
             nym.checkConnectionHealth();
         }
     }, 1000);
