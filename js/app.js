@@ -15181,7 +15181,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             autoscroll: localStorage.getItem('nym_autoscroll') !== 'false',
             showTimestamps: localStorage.getItem('nym_timestamps') !== 'false',
             sortByProximity: localStorage.getItem('nym_sort_proximity') === 'true',
-            timeFormat: localStorage.getItem('nym_time_format') || '24hr',
+            timeFormat: localStorage.getItem('nym_time_format') || '12hr',
             dmForwardSecrecyEnabled: localStorage.getItem('nym_dm_fwdsec_enabled') === 'true',
             dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
             readReceiptsEnabled: localStorage.getItem('nym_read_receipts_enabled') !== 'false',  // Enabled by default
@@ -15925,7 +15925,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.26.80 ═══<br/>
+═══ Nymchat v3.26.81 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
