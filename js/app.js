@@ -15042,7 +15042,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 primary: '#00ff00',
                 secondary: '#00ffff',
                 text: '#00ff00',
-                textDim: '#008800',
+                textDim: '#00BD00',
                 textBright: '#00ffaa',
                 lightning: '#f7931a'
             },
@@ -15058,7 +15058,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 primary: '#ff00ff',
                 secondary: '#00ffff',
                 text: '#ff00ff',
-                textDim: '#aa00aa',
+                textDim: '#DB16DB',
                 textBright: '#ff66ff',
                 lightning: '#ffaa00'
             },
@@ -15066,7 +15066,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 primary: '#00ffff',
                 secondary: '#00ff00',
                 text: '#00ffff',
-                textDim: '#008888',
+                textDim: '#01c2c2',
                 textBright: '#66ffff',
                 lightning: '#00ff88'
             },
@@ -15074,7 +15074,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 primary: '#ffffff',
                 secondary: '#cccccc',
                 text: '#ffffff',
-                textDim: '#666666',
+                textDim: '#cccccc',
                 textBright: '#ffffff',
                 lightning: '#dddddd'
             },
@@ -15082,7 +15082,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 primary: '#00ff00',
                 secondary: '#00ffff',
                 text: '#00ff00',
-                textDim: '#008800',
+                textDim: '#cccccc',
                 textBright: '#00ffaa',
                 lightning: '#f7931a'
             }
@@ -15925,7 +15925,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.26.81 ═══<br/>
+═══ Nymchat v3.26.82 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

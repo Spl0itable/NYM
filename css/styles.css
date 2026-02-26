@@ -16,7 +16,7 @@
     --bg-secondary: #0a0a0a;
     --bg-tertiary: #111111;
     --text: #00ff00;
-    --text-dim: #008800;
+    --text-dim: #cccccc;
     --text-bright: #00ffaa;
     --border: #00ff00;
     --font-mono: 'Courier New', 'Consolas', 'Monaco', monospace;
@@ -2771,7 +2771,7 @@ body.theme-ghost {
     --primary: #ffffff;
     --secondary: #cccccc;
     --warning: #888888;
-    --danger: #666666;
+    --danger: #cccccc;
     --purple: #999999;
     --blue: #bbbbbb;
     --lightning: #cccccc;
@@ -2779,7 +2779,7 @@ body.theme-ghost {
     --bg-secondary: #0a0a0a;
     --bg-tertiary: #111111;
     --text: #ffffff;
-    --text-dim: #666666;
+    --text-dim: #cccccc;
     --text-bright: #ffffff;
     --border: #333333;
 }
