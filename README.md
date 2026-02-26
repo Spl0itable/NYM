@@ -133,8 +133,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Legal
 
-- [Terms of Service](https://web.nymchat.app/static/tos.html)
-- [Privacy Policy](https://web.nymchat.app/static/pp.html)
+- [Terms of Service](https://web.nymchat.app/static/tos)
+- [Privacy Policy](https://web.nymchat.app/static/pp)
 
 ## Contact
 
