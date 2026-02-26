@@ -7312,6 +7312,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         if (profile.lud16 || profile.lud06) {
                             const lnAddress = profile.lud16 || profile.lud06;
                             this.userLightningAddresses.set(pubkey, lnAddress);
+                            this.notifyLightningAddress(pubkey, lnAddress);
                         }
 
                         if (profile.name || profile.username || profile.display_name) {
@@ -7804,6 +7805,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (profile.lud16 || profile.lud06) {
                     const lnAddress = profile.lud16 || profile.lud06;
                     this.userLightningAddresses.set(pubkey, lnAddress);
+                    this.notifyLightningAddress(pubkey, lnAddress);
                 }
 
                 // Update nym if we don't have one for this user
@@ -16180,7 +16182,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.86 ═══<br/>
+═══ Nymchat v3.27.87 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
