@@ -16190,7 +16190,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.83 ═══<br/>
+═══ Nymchat v3.27.84 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16224,10 +16224,7 @@ async function checkSavedConnection() {
             const setupModal = document.getElementById('setupModal');
             setupModal.classList.remove('active');
 
-            nym.displaySystemMessage('Auto-starting ephemeral session...');
-
-            // Generate ephemeral keypair
-            await nym.generateKeypair();
+            let isDeveloperLogin = false;
 
             // Use saved custom nickname if available, otherwise random
             const savedNick = localStorage.getItem('nym_auto_ephemeral_nick');
@@ -16238,18 +16235,29 @@ async function checkSavedConnection() {
                     const result = nym.verifyDeveloperNsec(savedNsec);
                     if (result.valid) {
                         nym.applyDeveloperIdentity(result.secretKey, result.pubkey);
+                        isDeveloperLogin = true;
+                        nym.displaySystemMessage('Auto-starting verified session...');
                     } else {
                         // Invalid saved nsec - clear it and use random nym
                         localStorage.removeItem('nym_dev_nsec');
+                        await nym.generateKeypair();
                         nym.nym = nym.generateRandomNym();
+                        nym.connectionMode = 'ephemeral';
+                        nym.displaySystemMessage('Auto-starting ephemeral session...');
                     }
                 } else {
+                    await nym.generateKeypair();
                     nym.nym = nym.generateRandomNym();
+                    nym.connectionMode = 'ephemeral';
+                    nym.displaySystemMessage('Auto-starting ephemeral session...');
                 }
             } else {
+                // Generate ephemeral keypair
+                await nym.generateKeypair();
                 nym.nym = savedNick || nym.generateRandomNym();
+                nym.connectionMode = 'ephemeral';
+                nym.displaySystemMessage('Auto-starting ephemeral session...');
             }
-            nym.connectionMode = 'ephemeral';
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
 
             // Connect to relays
@@ -16258,9 +16266,11 @@ async function checkSavedConnection() {
             // Apply cached shop items (styles/flairs) to the new ephemeral identity
             nym.applyCachedShopItemsToNewIdentity();
 
-            // Restore lightning address from global localStorage to new session
-            // Skip for verified developer - they have their own kind 0 profile data
-            if (!nym.isVerifiedDeveloper(nym.pubkey)) {
+            if (isDeveloperLogin) {
+                // Developer login - load lightning address from their kind 0 profile
+                await nym.loadLightningAddress();
+            } else {
+                // Restore lightning address from global localStorage to new session
                 const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
                 if (globalLnAddress) {
                     nym.lightningAddress = globalLnAddress;
@@ -16277,7 +16287,11 @@ async function checkSavedConnection() {
 
             // Welcome message
             nym.displaySystemMessage(`Welcome to Nymchat, ${nym.nym}! Type /help for available commands.`);
-            nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
+            if (isDeveloperLogin) {
+                nym.displaySystemMessage(`Identity verified. You are now logged in as ${nym.nym}.`);
+            } else {
+                nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
+            }
             nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
             // Start tutorial if not seen
@@ -16306,10 +16320,9 @@ async function initializeNym() {
     enterBtn.innerHTML = '<span class="loader"></span> Connecting...';
 
     try {
-        nym.connectionMode = 'ephemeral';
-
         // Get or generate nym first
         const nymInput = document.getElementById('nymInput').value.trim();
+        let isDeveloperLogin = false;
 
         // Check if reserved nickname
         if (nymInput && nym.isReservedNick(nymInput)) {
@@ -16321,9 +16334,11 @@ async function initializeNym() {
             }
             // Verified developer - use their persistent keypair
             nym.applyDeveloperIdentity(result.secretKey, result.pubkey);
+            isDeveloperLogin = true;
             localStorage.removeItem('nym_connection_mode');
         } else {
             // Generate ephemeral keypair
+            nym.connectionMode = 'ephemeral';
             await nym.generateKeypair();
             nym.nym = nymInput || nym.generateRandomNym();
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
@@ -16352,9 +16367,11 @@ async function initializeNym() {
         // Apply cached shop items (styles/flairs) to the new ephemeral identity
         nym.applyCachedShopItemsToNewIdentity();
 
-        // Restore lightning address from global localStorage to new session
-        // Skip for verified developer - they have their own kind 0 profile data
-        if (!nym.isVerifiedDeveloper(nym.pubkey)) {
+        if (isDeveloperLogin) {
+            // Developer login - load lightning address from their kind 0 profile
+            await nym.loadLightningAddress();
+        } else {
+            // Restore lightning address from global localStorage to new session
             const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
             if (globalLnAddress) {
                 nym.lightningAddress = globalLnAddress;
@@ -16378,7 +16395,11 @@ async function initializeNym() {
 
         // Welcome messages
         nym.displaySystemMessage(`Welcome to Nymchat, ${nym.nym}! Type /help for available commands.`);
-        nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
+        if (isDeveloperLogin) {
+            nym.displaySystemMessage(`Identity verified. You are now logged in as ${nym.nym}.`);
+        } else {
+            nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
+        }
         nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
         // Route to channel from URL if present
