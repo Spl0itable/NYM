@@ -12719,12 +12719,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const result = await showDevNsecModal('nick');
             if (!result) {
                 this.displaySystemMessage('Nickname change cancelled.');
-                return;
+                return null;
             }
             // Verified - apply developer identity
             this.applyDeveloperIdentity(result.secretKey, result.pubkey);
             this.displaySystemMessage(`Identity verified. You are now logged in as ${this.nym}.`);
-            return;
+            return result;
         }
 
         this.nym = newNym;
@@ -15717,10 +15717,14 @@ async function changeNick() {
     const currentBase = nym.parseNymFromDisplay(nym.nym);
     if (baseNick && baseNick !== currentBase) {
         closeModal('nickEditModal');
-        await nym.cmdNick(baseNick);
+        const cmdResult = await nym.cmdNick(baseNick);
         // If auto-ephemeral is enabled, persist the new nickname so it's reused on next session
         if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
             localStorage.setItem('nym_auto_ephemeral_nick', baseNick);
+            // For reserved (developer) nicks, also save the verified nsec for auto-login
+            if (cmdResult && cmdResult.nsec) {
+                localStorage.setItem('nym_dev_nsec', cmdResult.nsec);
+            }
         }
         return;
     }
@@ -15763,7 +15767,7 @@ function verifyDevNsec() {
         document.getElementById('devNsecError').style.display = 'none';
         closeModal('devNsecModal');
         if (devNsecResolve) {
-            devNsecResolve(result);
+            devNsecResolve({ ...result, nsec });
             devNsecResolve = null;
         }
     } else {
@@ -16182,7 +16186,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.87 ═══<br/>
+═══ Nymchat v3.27.88 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
