@@ -15716,6 +15716,10 @@ async function changeNick() {
     if (baseNick && baseNick !== currentBase) {
         closeModal('nickEditModal');
         await nym.cmdNick(baseNick);
+        // If auto-ephemeral is enabled, persist the new nickname so it's reused on next session
+        if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
+            localStorage.setItem('nym_auto_ephemeral_nick', baseNick);
+        }
         return;
     }
     closeModal('nickEditModal');
@@ -16176,7 +16180,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.85 ═══<br/>
+═══ Nymchat v3.27.86 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16190,7 +16194,7 @@ Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target
 Nymchat is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br/><br/>
 <a href="static/tos.html" target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> | <a href="static/pp.html" target="_blank" rel="noopener" style="color: var(--secondary)">Privacy Policy</a><br/><br/>
 Made with ♥ by <a href="https://nostrservices.com" target="_blank" rel="noopener" style="color: var(--secondary)">21 Million LLC</a><br/><br/>
-Lead developer: <a href="https://njump.me/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas</a>
+Lead developer: <a href="https://njump.me/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas#a8df</a>
 `);
 }
 
