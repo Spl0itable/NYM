@@ -12215,6 +12215,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const meta = document.getElementById('channelMeta');
             if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} active nyms`;
         }
+
+        // Refresh mention menu if it's currently open so it reflects latest presence
+        this.refreshAutocompleteIfOpen();
     }
 
     filterChannels(searchTerm) {
@@ -12882,6 +12885,20 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         input.value = value.substring(0, lastAtIndex) + '@' + nym + ' ';
         input.focus();
         this.hideAutocomplete();
+    }
+
+    refreshAutocompleteIfOpen() {
+        const dropdown = document.getElementById('autocompleteDropdown');
+        if (!dropdown || !dropdown.classList.contains('active')) return;
+        const input = document.getElementById('messageInput');
+        if (!input) return;
+        const value = input.value;
+        const lastAtIndex = value.lastIndexOf('@');
+        if (lastAtIndex !== -1 && (lastAtIndex === value.length - 1 ||
+            value.substring(lastAtIndex).match(/^@[^\s]*$/))) {
+            const search = value.substring(lastAtIndex + 1);
+            this.showAutocomplete(search);
+        }
     }
 
     hideAutocomplete() {
@@ -16648,7 +16665,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.100 ═══<br/>
+═══ Nymchat v3.27.101 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
