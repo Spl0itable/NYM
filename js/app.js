@@ -9860,7 +9860,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             : '';
         const flairHtml = this.getFlairForUser(pubkey);
         document.querySelectorAll(`.message[data-pubkey="${pubkey}"] .message-author`).forEach(el => {
-            el.innerHTML = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${verifiedBadge}${flairHtml}:`;
+            el.innerHTML = `&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>&gt;${verifiedBadge}${flairHtml}`;
         });
 
         // Update any visible notification banner from this user
@@ -11228,7 +11228,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const formattedContent = this.formatMessageWithQuotes(message.content);
 
             const baseNym = this.parseNymFromDisplay(message.author);
-            const displayAuthorBase = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            const displayAuthorBase = `&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>&gt;${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -11305,7 +11305,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}:</span>
+    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}</span>
     <span class="message-content ${userColorClass}">${messageContentHtml}</span>
     ${reactionButton}
     ${deliveryCheckmark}
@@ -16232,7 +16232,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.91 ═══<br/>
+═══ Nymchat v3.27.92 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
