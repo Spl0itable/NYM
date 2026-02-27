@@ -1098,7 +1098,7 @@ class NYM {
             { urls: 'stun:stun.cloudflare.com:3478' }
         ];
         this.P2P_SIGNALING_KIND = 25051;
-        this.PRESENCE_KIND = 20001; // Ephemeral presence broadcast
+        this.PRESENCE_KIND = 20001;
         this.P2P_CHUNK_SIZE = 16384;
         this.awayMessages = new Map();
         this.recentEmojis = [];
@@ -1116,7 +1116,7 @@ class NYM {
             'smile': '😊', 'laugh': '😂', 'rofl': '🤣', 'love': '😍', 'heart_eyes': '🥰',
             'kiss': '😘', 'cool': '😎', 'thinking': '🤔', 'cry': '😢', 'sob': '😭',
             'angry': '😡', 'rage': '🤬', 'scream': '😱', 'fearful': '😨', 'anxious': '😰',
-            'sad': '😥', 'disappointed': '😓', 'hug': '🤗', 'shush': '🤭', 'quiet': '🤫',
+            'sad': '😥', 'disappointed': '😓', 'hug': '🫂', 'shush': '🤭', 'quiet': '🤫',
             'lying': '🤥', 'neutral': '😐', 'expressionless': '😑', 'grimace': '😬', 'eye_roll': '🙄',
             'surprised': '😯', 'frowning': '😦', 'anguished': '😧', 'shocked': '😮', 'astonished': '😲',
             'yawn': '🥱', 'sleeping': '😴', 'drool': '🤤', 'sleepy': '😪', 'dizzy': '😵',
@@ -7588,7 +7588,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Don't display duplicate of own messages
             if (!this.isDuplicateMessage(message)) {
                 this.displayMessage(message);
-                this.updateUserPresence(nym, event.pubkey, message.channel, geohash);
+                this.updateUserPresence(nym, event.pubkey, message.channel, geohash, event.created_at);
 
                 // Show notification if mentioned and not blocked
                 const shouldNotify = !message.isOwn &&
@@ -11816,21 +11816,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    updateUserPresence(nym, pubkey, channel, geohash) {
+    updateUserPresence(nym, pubkey, channel, geohash, createdAt) {
         const channelKey = geohash || channel;
+
+        // Use the event's created_at timestamp (seconds) converted to ms,
+        // so historical messages don't falsely mark users as online
+        const eventTime = createdAt ? createdAt * 1000 : Date.now();
 
         // Update or create user with deduplication by pubkey
         if (!this.users.has(pubkey)) {
             this.users.set(pubkey, {
                 nym: nym,
                 pubkey: pubkey,
-                lastSeen: Date.now(),
+                lastSeen: eventTime,
                 status: this.awayMessages.has(pubkey) ? 'away' : 'online',
                 channels: new Set([channelKey])
             });
         } else {
             const user = this.users.get(pubkey);
-            user.lastSeen = Date.now();
+            // Only update lastSeen if this event is more recent
+            if (eventTime > user.lastSeen) {
+                user.lastSeen = eventTime;
+            }
             user.nym = nym; // Update nym in case it changed
             user.channels.add(channelKey);
             user.status = this.awayMessages.has(pubkey) ? 'away' : 'online';
@@ -11856,8 +11863,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.users.forEach((user, pubkey) => {
             if (!this.blockedUsers.has(user.nym)) {
                 if (!uniqueUsers.has(pubkey)) {
-                    // Set effective status: offline overrides away/online if past threshold
-                    if (now - user.lastSeen >= activeThreshold) {
+                    // Set effective status: offline if past threshold,
+                    // but preserve 'away' status from presence broadcasts
+                    if (now - user.lastSeen >= activeThreshold && user.status !== 'away') {
                         user.status = 'offline';
                     }
                     uniqueUsers.set(pubkey, user);
@@ -16319,7 +16327,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.28.93 ═══<br/>
+═══ Nymchat v3.27.94 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
