@@ -5180,7 +5180,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!displayNym) return 'anon';
 
         // Strip all HTML tags first, including flair
-        const withoutHtml = displayNym.replace(/<[^>]*>/g, '').trim();
+        let withoutHtml = displayNym.replace(/<[^>]*>/g, '').trim();
+
+        // Decode HTML entities (e.g., &lt; &gt; from display formatting)
+        withoutHtml = withoutHtml.replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
 
         // Then get base nym without suffix
         const parts = withoutHtml.split('#');
@@ -10183,8 +10186,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Create pattern that matches the clean nym with optional suffix
         const nymPattern = new RegExp(`@${escapedNym}(#[0-9a-f]{4})?(?:\\b|$)`, 'gi');
 
-        // Strip HTML from content for mention detection
-        const cleanContent = content.replace(/<[^>]*>/g, '');
+        // Strip HTML from content and deduplicate suffixes for mention detection
+        let cleanContent = content.replace(/<[^>]*>/g, '');
+        cleanContent = cleanContent.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
 
         return nymPattern.test(cleanContent);
     }
@@ -11653,8 +11657,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const quotedAuthor = authorMatch[1].trim();
                 const quotedMessage = authorMatch[2];
 
-                // Clean the author name of HTML for comparison
-                const cleanAuthor = quotedAuthor.replace(/<[^>]*>/g, '');
+                // Clean the author name of HTML, entities, and deduplicate suffixes for comparison
+                let cleanAuthor = quotedAuthor.replace(/<[^>]*>/g, '').replace(/&lt;/g, '').replace(/&gt;/g, '').trim();
+                cleanAuthor = cleanAuthor.replace(/^([^#]+)#([0-9a-f]{4})#\2$/i, '$1#$2');
 
                 // Look up the author's pubkey
                 let authorPubkey = null;
@@ -11709,6 +11714,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     formatMessage(content) {
         let formatted = content;
+
+        // Deduplicate suffixes in mentions from external apps (e.g., @user#abcd#abcd -> @user#abcd)
+        formatted = formatted.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
 
         formatted = formatted
             .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
@@ -16439,7 +16447,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.97 ═══<br/>
+═══ Nymchat v3.27.98 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16695,6 +16703,20 @@ document.addEventListener('DOMContentLoaded', () => {
     parseUrlChannel();
 
     nym.initialize();
+
+    // Scale logo-ascii to fit inside sidebar at any resolution
+    (function scaleLogoToFit() {
+        const logo = document.querySelector('.logo-ascii');
+        if (!logo) return;
+        const container = logo.parentElement;
+        const containerWidth = container.clientWidth;
+        const logoNaturalWidth = logo.scrollWidth;
+        if (logoNaturalWidth > containerWidth && containerWidth > 0) {
+            const scale = containerWidth / logoNaturalWidth;
+            logo.style.transformOrigin = 'top center';
+            logo.style.transform = `scaleX(${scale})`;
+        }
+    })();
 
     // Pre-connect to a broadcast relay for instant connection
     async function preConnect() {
