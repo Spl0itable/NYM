@@ -11122,8 +11122,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const container = document.getElementById('messagesContainer');
         const shouldScroll = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
 
+        // Clamp timestamp to now so messages never appear in the future
+        const now = new Date();
+        const displayTimestamp = message.timestamp > now ? now : message.timestamp;
+
         const time = this.settings.showTimestamps ?
-            message.timestamp.toLocaleTimeString('en-US', {
+            displayTimestamp.toLocaleTimeString('en-US', {
                 hour: '2-digit',
                 minute: '2-digit',
                 hour12: this.settings.timeFormat === '12hr'
@@ -11239,7 +11243,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
             // Prepare full timestamp for tooltip
-            const fullTimestamp = message.timestamp.toLocaleString('en-US', {
+            const fullTimestamp = displayTimestamp.toLocaleString('en-US', {
                 year: 'numeric',
                 month: 'short',
                 day: 'numeric',
@@ -16232,7 +16236,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.92 ═══<br/>
+═══ Nymchat v3.27.93 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
