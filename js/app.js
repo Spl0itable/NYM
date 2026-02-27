@@ -996,6 +996,15 @@ class NYM {
         this.currentGeoRelays = new Set();
         this.geoRelayCount = 10;
         this.defaultRelays = this.broadcastRelays.slice(0, 5);
+        // Bitchat app's hardcoded DM relays - always ensure these are connected
+        // and used for DM EVENT/REQ to guarantee cross-app PM delivery
+        this.bitchatDMRelays = [
+            'wss://relay.damus.io',
+            'wss://nos.lol',
+            'wss://relay.primal.net',
+            'wss://offchain.pub',
+            'wss://nostr21.com'
+        ];
         this.discoveredRelays = new Set();
         this.relayList = [];
         this.lastRelayDiscovery = 0;
@@ -7183,6 +7192,30 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
+    // Send DM events (kind 1059) with priority to bitchat's hardcoded relays
+    // Ensures cross-app PM delivery by always hitting bitchat's relay set,
+    // similar to how geohash channels prioritize geo-located relays
+    sendDMToRelays(message) {
+        const msg = JSON.stringify(message);
+        const sent = new Set();
+
+        // Priority: always send to bitchat's DM relays first
+        for (const url of this.bitchatDMRelays) {
+            const relay = this.relayPool.get(url);
+            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                relay.ws.send(msg);
+                sent.add(url);
+            }
+        }
+
+        // Then fan out to all other connected relays for maximum propagation
+        this.relayPool.forEach((relay, url) => {
+            if (!sent.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                relay.ws.send(msg);
+            }
+        });
+    }
+
     sendRequestToAllRelaysExceptNosflare(message) {
         const msg = JSON.stringify(message);
 
@@ -8741,8 +8774,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     randomNow() {
-        const TWO_DAYS = 2 * 24 * 60 * 60;
-        return Math.round(Date.now() / 1000 - Math.random() * TWO_DAYS);
+        // Randomize timestamp by ±2 hours for NIP-59 metadata protection
+        // Previously ±2 days, but bitchat only looks back 24 hours for DMs
+        // so large offsets caused messages to fall outside its subscription window
+        const TWO_HOURS = 2 * 60 * 60;
+        return Math.round(Date.now() / 1000 - Math.random() * TWO_HOURS);
     }
 
     // Generate UUID v4
@@ -8960,7 +8996,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         };
 
         const wrapped = this.bitchatWrapEvent(rumor, this.privkey, recipientPubkey, null);
-        this.sendToRelay(['EVENT', wrapped]);
+        this.sendDMToRelays(['EVENT', wrapped]);
     }
 
     // Nymchat receipt types: 'delivered' or 'read'
@@ -8990,7 +9026,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Wrap using standard NIP-59 format
         const wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, null);
-        this.sendToRelay(['EVENT', wrapped]);
+        this.sendDMToRelays(['EVENT', wrapped]);
     }
 
     // Check if a rumor is a Nymchat receipt
@@ -9193,12 +9229,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Local key available (ephemeral/nsec)
         if (this.privkey) {
             const NT = window.NostrTools;
-            const useBitchatFormat = this.bitchatUsers.has(recipientPubkey);
+            const isKnownBitchat = this.bitchatUsers.has(recipientPubkey);
+            const isKnownNym = this.nymUsers.has(recipientPubkey);
+            const isUnknownPeer = !isKnownBitchat && !isKnownNym;
             let wrapped;
             let bitchatMessageId = null;
-            if (useBitchatFormat) {
-                // Use Bitchat v2: encryption with bitchat1: message format
-                // Bitchat sends rumor with EMPTY tags (no p tag in rumor)
+
+            // For known bitchat users OR unknown peers, send bitchat-format wrap
+            // This ensures bitchat app users can always decrypt our messages
+            if (isKnownBitchat || isUnknownPeer) {
                 const encoded = this.encodeBitchatMessage(content, recipientPubkey);
                 bitchatMessageId = encoded.messageId;
 
@@ -9209,20 +9248,27 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     content: encoded.content,
                     pubkey: this.pubkey
                 };
-                wrapped = this.bitchatWrapEvent(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
-            } else {
-                // Use Nymchat format with message ID tag for delivery receipts
-                wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
+                const bitchatWrapped = this.bitchatWrapEvent(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
+                this.sendDMToRelays(['EVENT', bitchatWrapped]);
+                wrapped = bitchatWrapped;
+
+                // Schedule deletion if redacted cosmetic is active
+                if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                    setTimeout(() => { this.publishDeletionEvent(bitchatWrapped.id); }, 600000);
+                }
             }
 
-            this.sendToRelay(['EVENT', wrapped]);
+            // For known nymchat users OR unknown peers, send nymchat-format wrap
+            // Unknown peers get BOTH formats so either app can decrypt
+            if (isKnownNym || isUnknownPeer) {
+                const nymWrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
+                this.sendDMToRelays(['EVENT', nymWrapped]);
+                wrapped = nymWrapped;
 
-            // Schedule deletion if redacted cosmetic is active
-            if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                const eventIdToDelete = wrapped.id;
-                setTimeout(() => {
-                    this.publishDeletionEvent(eventIdToDelete);
-                }, 600000); // 10 minutes
+                // Schedule deletion if redacted cosmetic is active
+                if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                    setTimeout(() => { this.publishDeletionEvent(nymWrapped.id); }, 600000);
+                }
             }
 
             // Show locally
@@ -9240,7 +9286,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
                 bitchatMessageId,  // For tracking Bitchat delivery/read receipts
-                nymMessageId: useBitchatFormat ? null : nymMessageId,  // For tracking Nymchat delivery/read receipts
+                nymMessageId: isKnownBitchat ? null : nymMessageId,  // For tracking Nymchat delivery/read receipts
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
 
@@ -9284,7 +9330,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
 
-            this.sendToRelay(['EVENT', wrapped]);
+            this.sendDMToRelays(['EVENT', wrapped]);
 
             // Schedule deletion if redacted cosmetic is active
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
@@ -9669,6 +9715,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const messageContent = parsed.content;
 
+            // Content-based dedup for dual-wrapped messages: when nymchat sends
+            // both bitchat + nymchat format to unknown peers, the recipient may
+            // decrypt both. Deduplicate by sender + content + close timestamp.
+            if (list.some(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5)) return;
+
             // Silently drop channel invitations for blocked channels
             if (messageContent && messageContent.includes('Channel Invitation:')) {
                 const inviteMatch = messageContent.match(/join\s+#([a-z0-9]+)/i);
@@ -10052,9 +10103,44 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     loadPMMessages(conversationKey) {
         const container = document.getElementById('messagesContainer');
 
-        // Cache current channel DOM before switching to PM view
+        // Skip reload if already viewing this PM conversation
+        if (container.dataset.lastChannel === conversationKey) {
+            return;
+        }
+
+        // Cache current channel/PM DOM before switching
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = conversationKey;
+
+        // Try to restore from DOM cache if message count hasn't changed
+        const pmMessages = this.pmMessages.get(conversationKey) || [];
+        const cached = this.channelDOMCache.get(conversationKey);
+
+        if (cached && cached.messageCount === pmMessages.length) {
+            // Message count unchanged, restore cached DOM instantly
+            container.appendChild(cached.fragment);
+            this.channelDOMCache.delete(conversationKey);
+
+            // Restore virtual scroll state
+            this.virtualScroll.currentStartIndex = cached.virtualScrollState.currentStartIndex;
+            this.virtualScroll.currentEndIndex = cached.virtualScrollState.currentEndIndex;
+
+            // Re-init virtual scroll handler (isPM = true)
+            container.dataset.virtualScrollKey = conversationKey;
+            container.dataset.virtualScrollIsPM = 'true';
+            this.initVirtualScroll(container, conversationKey);
+
+            // Scroll to bottom
+            if (this.settings.autoscroll) {
+                setTimeout(() => {
+                    container.scrollTop = container.scrollHeight;
+                }, 0);
+            }
+            return;
+        }
+
+        // Cache miss or stale (new messages arrived) - render fresh
+        this.channelDOMCache.delete(conversationKey);
 
         // Get filtered messages
         const filteredMessages = this.getFilteredPMMessages(conversationKey);
@@ -16353,7 +16439,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.96 ═══<br/>
+═══ Nymchat v3.27.97 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
