@@ -1039,6 +1039,10 @@ class NYM {
         };
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
+        this.pendingDMs = new Map();
+        this.dmRetryInterval = null;
+        this.dmRetryCheckMs = 5000;
+        this.dmRetryMaxAttempts = 3;
         this.processedMessageEventIds = new Set();
         this.lastPMSyncTime = Math.floor(Date.now() / 1000) - 604800;
         this.bitchatUsers = new Set();
@@ -4409,6 +4413,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         });
                 }
             });
+
+            // Retry any pending DMs after network restore
+            setTimeout(() => this.retryPendingDMsOnReconnect(), 3000);
         });
 
         window.addEventListener('offline', () => {
@@ -4564,6 +4571,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (this.currentGeohash) {
                     this.connectToGeoRelays(this.currentGeohash);
                 }
+
+                // Retry any pending DMs that haven't been delivered
+                setTimeout(() => this.retryPendingDMsOnReconnect(), 2000);
             }
         } catch (error) {
             //
@@ -5908,6 +5918,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                                     this.retryDiscoveredRelays();
                                                 }, 2000);
                                             }
+
+                                            // Retry any pending DMs after relays reconnect
+                                            setTimeout(() => this.retryPendingDMsOnReconnect(), 1000);
                                         }
                                     })
                                     .catch(err => {
@@ -7217,6 +7230,140 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 relay.ws.send(msg);
             }
         });
+
+        return sent.size;
+    }
+
+    // Track a sent DM for retry if delivery receipt is not received
+    trackPendingDM(eventId, wrappedEvents, recipientPubkey, conversationKey) {
+        this.pendingDMs.set(eventId, {
+            wrappedEvents, // Array of ['EVENT', wrapped] messages to re-send
+            recipientPubkey,
+            conversationKey,
+            attempts: 0,
+            lastAttempt: Date.now(),
+            maxAttempts: this.dmRetryMaxAttempts
+        });
+
+        // Start the retry checker if not already running
+        if (!this.dmRetryInterval) {
+            this.dmRetryInterval = setInterval(() => this.retryPendingDMs(), this.dmRetryCheckMs);
+        }
+    }
+
+    // Retry sending DMs that haven't received a delivery receipt
+    retryPendingDMs() {
+        if (this.pendingDMs.size === 0) {
+            // No pending DMs, stop the interval
+            if (this.dmRetryInterval) {
+                clearInterval(this.dmRetryInterval);
+                this.dmRetryInterval = null;
+            }
+            return;
+        }
+
+        const now = Date.now();
+
+        for (const [eventId, pending] of this.pendingDMs) {
+            // Check if this message has been delivered (status upgraded from 'sent')
+            const msgs = this.pmMessages.get(pending.conversationKey);
+            if (msgs) {
+                const msg = msgs.find(m => m.id === eventId);
+                if (msg && msg.deliveryStatus !== 'sent') {
+                    // Delivered or read - remove from pending
+                    this.pendingDMs.delete(eventId);
+                    continue;
+                }
+            }
+
+            // Only retry if enough time has passed since last attempt
+            if (now - pending.lastAttempt < this.dmRetryCheckMs) continue;
+
+            // Check if max attempts reached
+            if (pending.attempts >= pending.maxAttempts) {
+                // Mark as failed in the message list
+                if (msgs) {
+                    const msg = msgs.find(m => m.id === eventId);
+                    if (msg && msg.deliveryStatus === 'sent') {
+                        msg.deliveryStatus = 'failed';
+                        // Update the UI checkmark if visible
+                        if (this.inPMMode && this.currentPM === pending.recipientPubkey) {
+                            const msgEl = document.querySelector(`[data-message-id="${eventId}"]`);
+                            if (msgEl) {
+                                let statusEl = msgEl.querySelector('.delivery-status');
+                                if (statusEl) {
+                                    statusEl.className = 'delivery-status failed';
+                                    statusEl.title = 'Failed to deliver - click to retry';
+                                    statusEl.textContent = '!';
+                                    statusEl.style.cursor = 'pointer';
+                                    statusEl.onclick = () => this.manualRetryDM(eventId);
+                                }
+                            }
+                        }
+                    }
+                }
+                this.pendingDMs.delete(eventId);
+                continue;
+            }
+
+            // Retry: re-send all wrapped events to relays
+            pending.attempts++;
+            pending.lastAttempt = now;
+
+            for (const wrappedMsg of pending.wrappedEvents) {
+                this.sendDMToRelays(wrappedMsg);
+            }
+        }
+    }
+
+    // Manual retry for a failed DM (triggered by clicking the ! indicator)
+    manualRetryDM(eventId) {
+        const msgs = this.pmMessages.get(this.getPMConversationKey(this.currentPM));
+        if (!msgs) return;
+        const msg = msgs.find(m => m.id === eventId);
+        if (!msg) return;
+
+        // Re-send the original message content
+        msg.deliveryStatus = 'sent';
+
+        // Update UI immediately
+        const msgEl = document.querySelector(`[data-message-id="${eventId}"]`);
+        if (msgEl) {
+            let statusEl = msgEl.querySelector('.delivery-status');
+            if (statusEl) {
+                statusEl.className = 'delivery-status sent';
+                statusEl.title = 'Sent';
+                statusEl.textContent = '○';
+                statusEl.style.cursor = '';
+                statusEl.onclick = null;
+            }
+        }
+
+        // Re-send by composing a new PM to the same recipient
+        this.sendNIP17PM(msg.content, msg.conversationPubkey);
+    }
+
+    // Called on relay reconnection to retry any pending DMs
+    retryPendingDMsOnReconnect() {
+        if (this.pendingDMs.size === 0) return;
+
+        for (const [eventId, pending] of this.pendingDMs) {
+            // Check if already delivered
+            const msgs = this.pmMessages.get(pending.conversationKey);
+            if (msgs) {
+                const msg = msgs.find(m => m.id === eventId);
+                if (msg && msg.deliveryStatus !== 'sent') {
+                    this.pendingDMs.delete(eventId);
+                    continue;
+                }
+            }
+
+            // Re-send all wrapped events
+            for (const wrappedMsg of pending.wrappedEvents) {
+                this.sendDMToRelays(wrappedMsg);
+            }
+            pending.lastAttempt = Date.now();
+        }
     }
 
     sendRequestToAllRelaysExceptNosflare(message) {
@@ -9237,6 +9384,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const isUnknownPeer = !isKnownBitchat && !isKnownNym;
             let wrapped;
             let bitchatMessageId = null;
+            const sentWrappedEvents = []; // Track wrapped events for retry
 
             // For known bitchat users OR unknown peers, send bitchat-format wrap
             // This ensures bitchat app users can always decrypt our messages
@@ -9253,6 +9401,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 };
                 const bitchatWrapped = this.bitchatWrapEvent(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', bitchatWrapped]);
+                sentWrappedEvents.push(['EVENT', bitchatWrapped]);
                 wrapped = bitchatWrapped;
 
                 // Schedule deletion if redacted cosmetic is active
@@ -9266,6 +9415,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (isKnownNym || isUnknownPeer) {
                 const nymWrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', nymWrapped]);
+                sentWrappedEvents.push(['EVENT', nymWrapped]);
                 wrapped = nymWrapped;
 
                 // Schedule deletion if redacted cosmetic is active
@@ -9292,6 +9442,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 nymMessageId: isKnownBitchat ? null : nymMessageId,  // For tracking Nymchat delivery/read receipts
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
+
+            // Track for automatic retry if delivery receipt not received
+            this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
 
             this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
             this.movePMToTop(recipientPubkey);
@@ -9333,6 +9486,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
 
+            const sentWrappedEvents = [['EVENT', wrapped]];
             this.sendDMToRelays(['EVENT', wrapped]);
 
             // Schedule deletion if redacted cosmetic is active
@@ -9360,6 +9514,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 nymMessageId,  // For tracking Nymchat delivery/read receipts
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
+
+            // Track for automatic retry if delivery receipt not received
+            this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
 
             this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
             this.movePMToTop(recipientPubkey);
@@ -9659,6 +9816,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             const statusOrder = { sent: 0, delivered: 1, read: 2 };
                             if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
                                 msg.deliveryStatus = receiptType;
+                                // Remove from pending retry queue since delivery confirmed
+                                this.pendingDMs.delete(msg.id);
                                 // Update in-place without re-rendering to avoid flicker
                                 const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
                                 if (msgEl) {
@@ -9694,6 +9853,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             const statusOrder = { sent: 0, delivered: 1, read: 2 };
                             if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
                                 msg.deliveryStatus = receiptType;
+                                // Remove from pending retry queue since delivery confirmed
+                                this.pendingDMs.delete(msg.id);
                                 // Update in-place without re-rendering to avoid flicker
                                 const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
                                 if (msgEl) {
@@ -11387,6 +11548,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     deliveryCheckmark = '<span class="delivery-status read" title="Read">✓✓</span>';
                 } else if (message.deliveryStatus === 'delivered') {
                     deliveryCheckmark = '<span class="delivery-status delivered" title="Delivered">✓</span>';
+                } else if (message.deliveryStatus === 'failed') {
+                    deliveryCheckmark = `<span class="delivery-status failed" title="Failed to deliver - click to retry" style="cursor:pointer" data-retry-event-id="${message.id}">!</span>`;
                 } else if (message.deliveryStatus === 'sent') {
                     deliveryCheckmark = '<span class="delivery-status sent" title="Sent">○</span>';
                 }
@@ -12258,6 +12421,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     this.clearRelayBlocksForReconnection();
                     this.displaySystemMessage('Manual reconnection attempt...');
                     this.attemptReconnection();
+                }
+            });
+        }
+
+        // Delegated click handler for DM retry buttons (failed delivery indicator)
+        const messagesContainer = document.getElementById('messagesContainer');
+        if (messagesContainer) {
+            messagesContainer.addEventListener('click', (e) => {
+                const retryEl = e.target.closest('[data-retry-event-id]');
+                if (retryEl) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.manualRetryDM(retryEl.dataset.retryEventId);
                 }
             });
         }
@@ -16447,7 +16623,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.98 ═══<br/>
+═══ Nymchat v3.27.99 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

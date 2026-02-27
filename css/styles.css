@@ -1091,6 +1091,12 @@ body::after {
     color: #2196F3;
 }
 
+.delivery-status.failed {
+    color: #f44336;
+    cursor: pointer;
+    font-weight: bold;
+}
+
 .message-author {
     color: var(--secondary);
     min-width: 120px;
