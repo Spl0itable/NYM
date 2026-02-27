@@ -10081,8 +10081,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Strip HTML from nym for comparison
         const cleanNym = this.parseNymFromDisplay(this.nym);
 
+        // Escape special regex characters in the nym
+        const escapedNym = cleanNym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
         // Create pattern that matches the clean nym with optional suffix
-        const nymPattern = new RegExp(`@${cleanNym}(#[0-9a-f]{4})?\\b`, 'gi');
+        const nymPattern = new RegExp(`@${escapedNym}(#[0-9a-f]{4})?(?:\\b|$)`, 'gi');
 
         // Strip HTML from content for mention detection
         const cleanContent = content.replace(/<[^>]*>/g, '');
@@ -12249,7 +12252,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Check for emoji autocomplete with :
         const colonIndex = value.lastIndexOf(':');
         if (colonIndex !== -1 && colonIndex === value.length - 1 ||
-            (colonIndex !== -1 && value.substring(colonIndex).match(/^:[a-z]*$/))) {
+            (colonIndex !== -1 && value.substring(colonIndex).match(/^:[a-z0-9_+-]*$/))) {
             const search = value.substring(colonIndex + 1);
             this.showEmojiAutocomplete(search);
         } else {
@@ -12259,7 +12262,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Check for @ mentions
         const lastAtIndex = value.lastIndexOf('@');
         if (lastAtIndex !== -1 && lastAtIndex === value.length - 1 ||
-            (lastAtIndex !== -1 && value.substring(lastAtIndex).match(/^@\w*$/))) {
+            (lastAtIndex !== -1 && value.substring(lastAtIndex).match(/^@[^\s]*$/))) {
             const search = value.substring(lastAtIndex + 1);
             this.showAutocomplete(search);
         } else {
@@ -16229,7 +16232,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.90 ═══<br/>
+═══ Nymchat v3.27.91 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
