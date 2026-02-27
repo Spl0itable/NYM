@@ -1098,6 +1098,7 @@ class NYM {
             { urls: 'stun:stun.cloudflare.com:3478' }
         ];
         this.P2P_SIGNALING_KIND = 25051;
+        this.PRESENCE_KIND = 20001; // Ephemeral presence broadcast
         this.P2P_CHUNK_SIZE = 16384;
         this.awayMessages = new Map();
         this.recentEmojis = [];
@@ -5456,6 +5457,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 since: since24h,
                 limit: 100,
             },
+            // Presence broadcasts (away/online status)
+            {
+                kinds: [this.PRESENCE_KIND],
+                since: since24h,
+                limit: 100,
+            },
             // Reactions for geohash channels
             {
                 kinds: [7],
@@ -7197,7 +7204,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         } catch (_) { }
 
-        const wideFanout = evt && (evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051);
+        const wideFanout = evt && (evt.kind === 7 || evt.kind === 20000 || evt.kind === this.PRESENCE_KIND || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051);
 
         if (wideFanout) {
             // Send to every connected relay for maximum propagation
@@ -7858,6 +7865,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } else if (event.kind === this.P2P_SIGNALING_KIND) {
             // Handle P2P signaling (WebRTC SDP/ICE)
             this.handleP2PSignalingEvent(event);
+        } else if (event.kind === this.PRESENCE_KIND) {
+            // Handle presence broadcasts (away/online status)
+            this.handlePresenceEvent(event);
         }
     }
 
@@ -10315,6 +10325,33 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
 
+    async publishPresence(status, awayMessage = '') {
+        try {
+            if (!this.connected) return;
+
+            const tags = [
+                ['n', this.nym],
+                ['status', status]
+            ];
+            if (status === 'away' && awayMessage) {
+                tags.push(['away', awayMessage]);
+            }
+
+            let event = {
+                kind: this.PRESENCE_KIND,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: tags,
+                content: '',
+                pubkey: this.pubkey
+            };
+
+            const signedEvent = await this.signEvent(event);
+            this.sendToRelay(["EVENT", signedEvent]);
+        } catch (error) {
+            // Silently fail - presence is best-effort
+        }
+    }
+
     async uploadImage(file) {
         const progress = document.getElementById('uploadProgress');
         const progressFill = document.getElementById('progressFill');
@@ -11749,6 +11786,36 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
+    handlePresenceEvent(event) {
+        const nymTag = event.tags.find(t => t[0] === 'n');
+        const statusTag = event.tags.find(t => t[0] === 'status');
+        const awayTag = event.tags.find(t => t[0] === 'away');
+
+        if (!statusTag) return;
+
+        const pubkey = event.pubkey;
+        const status = statusTag[1];
+        const nym = nymTag ? nymTag[1].split('#')[0] : null;
+
+        // Ignore our own presence events
+        if (pubkey === this.pubkey) return;
+
+        // Update away messages map for this user
+        if (status === 'away' && awayTag) {
+            this.awayMessages.set(pubkey, awayTag[1]);
+        } else if (status === 'online') {
+            this.awayMessages.delete(pubkey);
+        }
+
+        // Update user status if we know this user
+        if (this.users.has(pubkey)) {
+            const user = this.users.get(pubkey);
+            user.status = status;
+            if (nym) user.nym = nym;
+            this.updateUserList();
+        }
+    }
+
     updateUserPresence(nym, pubkey, channel, geohash) {
         const channelKey = geohash || channel;
 
@@ -11782,19 +11849,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const userListContent = document.getElementById('userListContent');
         const currentChannelKey = this.currentGeohash || this.currentChannel;
 
-        // Get deduplicated active users (one entry per pubkey)
+        // Get deduplicated users (one entry per pubkey), including inactive
         const uniqueUsers = new Map();
+        const now = Date.now();
+        const activeThreshold = 300000; // 5 minutes
         this.users.forEach((user, pubkey) => {
-            if (Date.now() - user.lastSeen < 300000 && !this.blockedUsers.has(user.nym)) {
+            if (!this.blockedUsers.has(user.nym)) {
                 if (!uniqueUsers.has(pubkey)) {
+                    // Set effective status: offline overrides away/online if past threshold
+                    if (now - user.lastSeen >= activeThreshold) {
+                        user.status = 'offline';
+                    }
                     uniqueUsers.set(pubkey, user);
                 }
             }
         });
 
+        const statusOrder = { online: 0, away: 1, offline: 2 };
         const allUsers = Array.from(uniqueUsers.values())
             .filter(user => user && user.nym)
             .sort((a, b) => {
+                const statusDiff = (statusOrder[a.status] || 2) - (statusOrder[b.status] || 2);
+                if (statusDiff !== 0) return statusDiff;
                 const nymA = String(a.nym || '');
                 const nymB = String(b.nym || '');
                 return nymA.localeCompare(nymB);
@@ -11843,9 +11919,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         this.updateViewMoreButton('userListContent');
 
+        const activeCount = allUsers.filter(u => u.status !== 'offline').length;
         const userListTitle = document.querySelector('#userList .nav-title-text');
         if (userListTitle) {
-            userListTitle.textContent = `Active Nyms (${allUsers.length})`;
+            userListTitle.textContent = `Nyms (${activeCount} active)`;
         }
 
         if (!this.inPMMode) {
@@ -13470,6 +13547,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.displaySystemMessage(`Away message set: "${message}"`);
         this.displaySystemMessage('You will auto-reply to mentions in ALL channels while away');
 
+        // Broadcast away status to other users
+        this.publishPresence('away', message);
+
         // Clear session storage for BRB responses to allow fresh responses
         const keysToRemove = [];
         for (let i = 0; i < sessionStorage.length; i++) {
@@ -13493,6 +13573,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             this.displaySystemMessage('Away message cleared - you are back!');
+
+            // Broadcast online status to other users
+            this.publishPresence('online');
 
             // Clear all universal BRB response keys
             const keysToRemove = [];
@@ -16236,7 +16319,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.93 ═══<br/>
+═══ Nymchat v3.28.93 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
