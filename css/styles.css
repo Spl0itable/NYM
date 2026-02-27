@@ -2817,6 +2817,448 @@ body.theme-ghost::before {
             rgba(255, 255, 255, 0.02) 4px);
 }
 
+body.light-mode {
+    --bg: #f5f5f0;
+    --bg-secondary: #eaeae5;
+    --bg-tertiary: #ddddd8;
+    --text-dim: #666666;
+    --border: var(--primary);
+}
+
+body.light-mode::before {
+    background: none;
+}
+
+body.light-mode::after {
+    background: none !important;
+}
+
+body.light-mode .modal-content,
+body.light-mode .shop-content {
+    background: var(--bg-secondary);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .modal {
+    background: rgba(0, 0, 0, 0.4);
+}
+
+body.light-mode .message:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+body.light-mode .sidebar {
+    background: var(--bg-secondary);
+}
+
+body.light-mode input,
+body.light-mode textarea,
+body.light-mode select,
+body.light-mode .form-input,
+body.light-mode .form-select {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+}
+
+body.light-mode .icon-btn {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+body.light-mode .icon-btn:hover {
+    background: var(--primary);
+    color: var(--bg);
+}
+
+body.light-mode .send-btn {
+    background: var(--primary);
+    color: var(--bg);
+}
+
+body.light-mode *:not(.message-author) {
+    text-shadow: none;
+}
+
+body.light-mode .shop-content {
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+body.light-mode .shop-header {
+    background: linear-gradient(135deg, rgba(0, 0, 0, 0.03), rgba(0, 0, 0, 0.06));
+}
+
+.color-mode-group {
+    display: flex;
+    gap: 6px;
+}
+
+.color-mode-btn {
+    flex: 1;
+    padding: 8px 4px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-align: center;
+}
+
+.color-mode-btn:hover {
+    color: var(--primary);
+    border-color: var(--primary);
+}
+
+.color-mode-btn.active {
+    background: var(--primary);
+    color: var(--bg);
+    border-color: var(--primary);
+}
+
+body.light-mode.theme-ghost {
+    --primary: #333333;
+    --secondary: #555555;
+    --text: #222222;
+    --text-dim: #777777;
+    --text-bright: #000000;
+    --border: #999999;
+    --warning: #666666;
+    --danger: #888888;
+    --purple: #777777;
+    --blue: #666666;
+    --lightning: #999999;
+}
+
+body.light-mode {
+    --warning: #8a6d00;
+    --danger: #cc0000;
+    --purple: #880088;
+    --blue: #0060cc;
+}
+
+body.light-mode.theme-ghost {
+    --warning: #555555;
+}
+
+body.light-mode .image-modal {
+    background: rgba(0, 0, 0, 0.6);
+}
+
+body.light-mode .image-modal img {
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+}
+
+body.light-mode .geohash-explorer-modal {
+    background: rgba(0, 0, 0, 0.5);
+}
+
+body.light-mode .geohash-info-panel {
+    background: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+body.light-mode .geohash-control-btn {
+    background: rgba(255, 255, 255, 0.9);
+}
+
+body.light-mode .geohash-legend {
+    background: rgba(255, 255, 255, 0.9);
+}
+
+body.light-mode .geohash-info-item {
+    border-bottom-color: rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode .shop-modal {
+    background: rgba(0, 0, 0, 0.4);
+}
+
+body.light-mode .mobile-overlay {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+body.light-mode .tutorial-highlight {
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.2), 0 0 0 9999px rgba(0, 0, 0, 0.35);
+}
+
+body.light-mode .bitchat-user-0 { color: #cc4400; }
+body.light-mode .bitchat-user-1 { color: #c47a15; }
+body.light-mode .bitchat-user-2 { color: #8a7200; }
+body.light-mode .bitchat-user-3 { color: #555555; }
+body.light-mode .bitchat-user-4 { color: #2266aa; }
+body.light-mode .bitchat-user-5 { color: #7733bb; }
+body.light-mode .bitchat-user-6 { color: #aa0028; }
+body.light-mode .bitchat-user-7 { color: #cc0066; }
+body.light-mode .bitchat-user-8 { color: #5566aa; }
+body.light-mode .bitchat-user-9 { color: #6644bb; }
+body.light-mode .bitchat-user-10 { color: #cc3300; }
+body.light-mode .bitchat-user-11 { color: #117766; }
+body.light-mode .bitchat-user-12 { color: #cc3388; }
+body.light-mode .bitchat-user-13 { color: #007777; }
+body.light-mode .bitchat-user-14 { color: #cc6600; }
+body.light-mode .bitchat-user-15 { color: #3366cc; }
+
+body.light-mode .flair-crown {
+    color: #b8960a;
+    text-shadow: none;
+}
+
+body.light-mode .flair-diamond {
+    color: #0088aa;
+    text-shadow: none;
+}
+
+body.light-mode .flair-skull {
+    color: #cc0000;
+    text-shadow: none;
+}
+
+body.light-mode .flair-star {
+    color: #8a7200;
+    text-shadow: none;
+}
+
+body.light-mode .flair-lightning {
+    color: #c47a15;
+    text-shadow: none;
+}
+
+body.light-mode .flair-heart {
+    color: #cc0066;
+    text-shadow: none;
+}
+
+body.light-mode .flair-mask {
+    color: #333333;
+    text-shadow: none;
+}
+
+body.light-mode .flair-rocket {
+    color: #cc3333;
+    text-shadow: none;
+}
+
+body.light-mode .flair-shield {
+    color: #228855;
+    text-shadow: none;
+}
+
+body.light-mode .message.style-matrix .message-content {
+    color: #006600 !important;
+    text-shadow: none;
+}
+
+body.light-mode .style-preview-matrix {
+    color: #006600;
+    text-shadow: none;
+}
+
+body.light-mode .message.style-neon .message-content {
+    color: #990099 !important;
+    text-shadow: none;
+}
+
+body.light-mode .style-preview-neon {
+    color: #990099;
+    text-shadow: none;
+}
+
+body.light-mode .message.style-ghost .message-content {
+    color: rgba(0, 0, 0, 0.45) !important;
+    text-shadow: none;
+}
+
+body.light-mode .style-preview-ghost {
+    color: rgba(0, 0, 0, 0.4);
+    text-shadow: none;
+}
+
+body.light-mode .message.style-fire .message-content {
+    background: linear-gradient(45deg, #cc0000, #cc4400, #aa7700);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+body.light-mode .style-preview-fire {
+    background: linear-gradient(45deg, #cc0000, #cc4400, #aa7700);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: none;
+}
+
+body.light-mode .message.style-ice .message-content {
+    background: linear-gradient(135deg, #007799, #004488);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+body.light-mode .style-preview-ice {
+    background: linear-gradient(135deg, #007799, #004488);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: none;
+}
+
+body.light-mode .message.style-rainbow .message-content {
+    background: linear-gradient(90deg, #cc0000, #cc5500, #888800, #007700, #005599, #442299);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+body.light-mode .style-preview-rainbow {
+    background: linear-gradient(90deg, #cc0000, #cc5500, #888800, #007700, #005599, #442299);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+body.light-mode .message.style-glitch .message-content {
+    color: #006600 !important;
+}
+
+body.light-mode .style-preview-glitch {
+    color: #006600;
+}
+
+body.light-mode .message.style-aurora .message-content {
+    background: linear-gradient(120deg, #007766, #334499, #880066, #007766);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+body.light-mode .style-preview-aurora {
+    background: linear-gradient(120deg, #007766, #334499, #880066, #007766);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: none;
+}
+
+body.light-mode .message.style-satoshi .message-content {
+    color: #7a5500 !important;
+    background-color: rgba(196, 122, 21, 0.1);
+}
+
+body.light-mode .message.style-satoshi .message-content > * {
+    background: linear-gradient(135deg, #c47a15 0%, #aa6600 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+body.light-mode .style-preview-satoshi {
+    color: #7a5500;
+    background-color: rgba(196, 122, 21, 0.1);
+}
+
+body.light-mode .style-preview-satoshi::after {
+    background: linear-gradient(135deg, #c47a15 0%, #aa6600 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+body.light-mode .message.cosmetic-aura-gold {
+    box-shadow: inset 0 0 0 1px rgba(180, 140, 0, 0.3), 0 0 12px rgba(180, 140, 0, 0.12);
+    border-left: 3px solid #b8960a;
+    background: linear-gradient(135deg, rgba(180, 140, 0, 0.06), rgba(180, 140, 0, 0.02));
+}
+
+body.light-mode .message.supporter-style {
+    background: linear-gradient(135deg, rgba(180, 140, 0, 0.06), rgba(180, 140, 0, 0.02));
+    border-left: 3px solid #b8960a;
+}
+
+body.light-mode .message.supporter-style .message-content {
+    color: #8a6d00 !important;
+    text-shadow: none;
+}
+
+body.light-mode .message .message-author.cosmetic-redacted {
+    color: var(--bg) !important;
+}
+
+body.light-mode .message-content.cosmetic-redacted-message {
+    background: var(--bg-tertiary) !important;
+    color: var(--bg-tertiary) !important;
+}
+
+body.light-mode .message-content.cosmetic-redacted-message * {
+    color: var(--bg-tertiary) !important;
+}
+
+body.light-mode .supporter-badge {
+    background: linear-gradient(135deg, rgba(180, 140, 0, 0.15), rgba(180, 140, 0, 0.08));
+    border-color: #b8960a;
+}
+
+body.light-mode .modal-content {
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .geohash-explorer-content {
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+body.light-mode .geohash-explorer-close:hover,
+body.light-mode .geohash-join-btn:hover,
+body.light-mode .geohash-control-btn:hover {
+    box-shadow: none;
+}
+
+body.light-mode .search-input,
+body.light-mode .message-input,
+body.light-mode .emoji-search-input,
+body.light-mode .gif-search-input {
+    color: var(--text) !important;
+}
+
+body.light-mode .search-input:focus,
+body.light-mode .message-input:focus,
+body.light-mode .form-input:focus,
+body.light-mode .form-select:focus,
+body.light-mode .form-textarea:focus {
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode ::-webkit-scrollbar-track {
+    background: var(--bg-tertiary);
+}
+
+body.light-mode ::-webkit-scrollbar-thumb {
+    background: #aaaaaa;
+}
+
+body.light-mode ::-webkit-scrollbar-thumb:hover {
+    background: var(--primary);
+}
+
+body.light-mode .context-menu {
+    background: var(--bg-secondary);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .notification {
+    background: var(--bg-secondary);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .channel-item:hover,
+body.light-mode .pm-item:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .channel-item.active,
+body.light-mode .pm-item.active {
+    background: rgba(0, 0, 0, 0.1);
+    box-shadow: none;
+}
+
+body.light-mode .message.mentioned {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+body.light-mode .zap-modal {
+    background: rgba(0, 0, 0, 0.4);
+}
+
 .shop-modal {
     display: none;
     position: fixed;

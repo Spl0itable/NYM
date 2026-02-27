@@ -3575,13 +3575,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             hash = pubkey.charCodeAt(i) + ((hash << 5) - hash);
         }
 
-        // Generate HSL color
-        const hue = Math.abs(hash) % 360;
-        const saturation = 65 + (Math.abs(hash) % 35); // 65-100%
-        const lightness = 60 + (Math.abs(hash) % 25);  // 60-85%
+        const isLight = document.body.classList.contains('light-mode');
 
-        // Create unique class name
-        const uniqueClass = `bitchat-user-${Math.abs(hash) % 1000}`;
+        // Generate HSL color (adjusted for light/dark backgrounds)
+        const hue = Math.abs(hash) % 360;
+        const saturation = isLight ? (55 + (Math.abs(hash) % 35)) : (65 + (Math.abs(hash) % 35));
+        const lightness = isLight ? (25 + (Math.abs(hash) % 20)) : (60 + (Math.abs(hash) % 25));
+
+        // Create unique class name (include mode so it regenerates on switch)
+        const modeTag = isLight ? 'l' : 'd';
+        const uniqueClass = `bitchat-user-${modeTag}${Math.abs(hash) % 1000}`;
 
         // Add dynamic style if not exists
         if (!document.getElementById(uniqueClass)) {
@@ -4126,7 +4129,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.setupMobileGestures();
 
             // Load saved preferences
-            this.applyTheme(this.settings.theme);
+            this.applyColorMode();
+            this.setupColorModeListener();
             this.loadBlockedUsers();
             this.loadBlockedKeywords();
             this.loadBlockedChannels();
@@ -15673,62 +15677,121 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             document.body.classList.add('theme-bitchat');
         }
 
+        const isLight = document.body.classList.contains('light-mode');
+
         const themes = {
             matrix: {
-                primary: '#00ff00',
-                secondary: '#00ffff',
-                text: '#00ff00',
-                textDim: '#00BD00',
-                textBright: '#00ffaa',
-                lightning: '#f7931a'
+                dark: {
+                    primary: '#00ff00',
+                    secondary: '#00ffff',
+                    text: '#00ff00',
+                    textDim: '#00BD00',
+                    textBright: '#00ffaa',
+                    lightning: '#f7931a'
+                },
+                light: {
+                    primary: '#007a00',
+                    secondary: '#007a7a',
+                    text: '#006600',
+                    textDim: '#558855',
+                    textBright: '#004d00',
+                    lightning: '#c47a15'
+                }
             },
             amber: {
-                primary: '#ffb000',
-                secondary: '#ffd700',
-                text: '#ffb000',
-                textDim: '#cc8800',
-                textBright: '#ffcc00',
-                lightning: '#ffa500'
+                dark: {
+                    primary: '#ffb000',
+                    secondary: '#ffd700',
+                    text: '#ffb000',
+                    textDim: '#cc8800',
+                    textBright: '#ffcc00',
+                    lightning: '#ffa500'
+                },
+                light: {
+                    primary: '#9a6a00',
+                    secondary: '#8a7200',
+                    text: '#7a5500',
+                    textDim: '#8a7a55',
+                    textBright: '#5a3a00',
+                    lightning: '#b87300'
+                }
             },
             cyber: {
-                primary: '#ff00ff',
-                secondary: '#00ffff',
-                text: '#ff00ff',
-                textDim: '#DB16DB',
-                textBright: '#ff66ff',
-                lightning: '#ffaa00'
+                dark: {
+                    primary: '#ff00ff',
+                    secondary: '#00ffff',
+                    text: '#ff00ff',
+                    textDim: '#DB16DB',
+                    textBright: '#ff66ff',
+                    lightning: '#ffaa00'
+                },
+                light: {
+                    primary: '#990099',
+                    secondary: '#007a7a',
+                    text: '#880088',
+                    textDim: '#885588',
+                    textBright: '#660066',
+                    lightning: '#b87300'
+                }
             },
             hacker: {
-                primary: '#00ffff',
-                secondary: '#00ff00',
-                text: '#00ffff',
-                textDim: '#01c2c2',
-                textBright: '#66ffff',
-                lightning: '#00ff88'
+                dark: {
+                    primary: '#00ffff',
+                    secondary: '#00ff00',
+                    text: '#00ffff',
+                    textDim: '#01c2c2',
+                    textBright: '#66ffff',
+                    lightning: '#00ff88'
+                },
+                light: {
+                    primary: '#007a7a',
+                    secondary: '#007a00',
+                    text: '#006666',
+                    textDim: '#558888',
+                    textBright: '#004d4d',
+                    lightning: '#009955'
+                }
             },
             ghost: {
-                primary: '#ffffff',
-                secondary: '#cccccc',
-                text: '#ffffff',
-                textDim: '#cccccc',
-                textBright: '#ffffff',
-                lightning: '#dddddd'
+                dark: {
+                    primary: '#ffffff',
+                    secondary: '#cccccc',
+                    text: '#ffffff',
+                    textDim: '#cccccc',
+                    textBright: '#ffffff',
+                    lightning: '#dddddd'
+                },
+                light: {
+                    primary: '#333333',
+                    secondary: '#555555',
+                    text: '#222222',
+                    textDim: '#777777',
+                    textBright: '#000000',
+                    lightning: '#999999'
+                }
             },
             bitchat: {
-                primary: '#00ff00',
-                secondary: '#00ffff',
-                text: '#00ff00',
-                textDim: '#cccccc',
-                textBright: '#00ffaa',
-                lightning: '#f7931a'
+                dark: {
+                    primary: '#00ff00',
+                    secondary: '#00ffff',
+                    text: '#00ff00',
+                    textDim: '#cccccc',
+                    textBright: '#00ffaa',
+                    lightning: '#f7931a'
+                },
+                light: {
+                    primary: '#007a00',
+                    secondary: '#007a7a',
+                    text: '#006600',
+                    textDim: '#666666',
+                    textBright: '#004d00',
+                    lightning: '#c47a15'
+                }
             }
         };
 
-        if (theme === 'ghost') {
-            document.body.classList.add('theme-ghost');
-        }
-
-        const selectedTheme = themes[theme];
+        const mode = isLight ? 'light' : 'dark';
+        const selectedTheme = themes[theme] && themes[theme][mode];
         if (selectedTheme) {
             Object.entries(selectedTheme).forEach(([key, value]) => {
                 const cssVar = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
@@ -15736,6 +15799,39 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             });
         }
         this.refreshMessages();
+    }
+
+    getColorMode() {
+        return localStorage.getItem('nym_color_mode') || 'auto';
+    }
+
+    resolveColorMode() {
+        const mode = this.getColorMode();
+        if (mode === 'light') return 'light';
+        if (mode === 'dark') return 'dark';
+        // auto: use system preference
+        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+
+    applyColorMode(mode) {
+        const resolved = mode || this.resolveColorMode();
+        if (resolved === 'light') {
+            document.body.classList.add('light-mode');
+        } else {
+            document.body.classList.remove('light-mode');
+        }
+        // Re-apply current theme to pick up light/dark color variants
+        this.applyTheme(this.settings.theme);
+    }
+
+    setupColorModeListener() {
+        this._colorModeMediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+        this._colorModeHandler = () => {
+            if (this.getColorMode() === 'auto') {
+                this.applyColorMode();
+            }
+        };
+        this._colorModeMediaQuery.addEventListener('change', this._colorModeHandler);
     }
 
     refreshMessages() {
@@ -16272,6 +16368,19 @@ async function changeRelay() {
 async function showSettings() {
     nym.updateRelayStatus();
 
+    // Load color mode setting
+    const colorModeGroup = document.getElementById('colorModeGroup');
+    if (colorModeGroup) {
+        const currentMode = nym.getColorMode();
+        colorModeGroup.querySelectorAll('.color-mode-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.mode === currentMode);
+            btn.onclick = () => {
+                colorModeGroup.querySelectorAll('.color-mode-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+            };
+        });
+    }
+
     // Load lightning address
     const lightningInput = document.getElementById('lightningAddressInput');
     if (lightningInput) {
@@ -16484,6 +16593,13 @@ async function saveSettings() {
     const blurImages = document.getElementById('blurImagesSelect').value === 'true';
     const nickStyle = document.getElementById('nickStyleSelect').value;
 
+    // Save color mode
+    const colorModeGroup = document.getElementById('colorModeGroup');
+    const activeColorBtn = colorModeGroup ? colorModeGroup.querySelector('.color-mode-btn.active') : null;
+    const colorMode = activeColorBtn ? activeColorBtn.dataset.mode : 'auto';
+    localStorage.setItem('nym_color_mode', colorMode);
+    nym.applyColorMode();
+
     // Save nickname style
     nym.settings.nickStyle = nickStyle;
     localStorage.setItem('nym_nick_style', nickStyle);
@@ -16654,7 +16770,7 @@ function clearLocalStorageCache() {
     nym.settings = nym.loadSettings();
 
     // Re-apply defaults visually
-    nym.applyTheme(nym.settings.theme);
+    nym.applyColorMode();
     nym.updateChannelPins();
     nym.applyHiddenChannels();
 
@@ -16665,7 +16781,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.101 ═══<br/>
+═══ Nymchat v3.28.101 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16911,6 +17027,7 @@ function signOut() {
         localStorage.removeItem('nym_auto_ephemeral');
         localStorage.removeItem('nym_auto_ephemeral_nick');
         localStorage.removeItem('nym_dev_nsec');
+        localStorage.removeItem('nym_color_mode');
         nym.cmdQuit();
     }
 }
