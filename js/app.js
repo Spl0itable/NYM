@@ -6736,11 +6736,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     <svg class="zap-icon" viewBox="0 0 24 24">
         <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"/>
     </svg>
-    ${totalZaps}
+    ${this.abbreviateNumber(totalZaps)}
 `;
 
             const zapperCount = messageZaps.amounts.size;
-            zapBadge.title = `${zapperCount} zapper${zapperCount > 1 ? 's' : ''} • ${totalZaps} sats total`;
+            zapBadge.title = `${this.abbreviateNumber(zapperCount)} zapper${zapperCount > 1 ? 's' : ''} • ${this.abbreviateNumber(totalZaps)} sats total`;
 
             // Insert at beginning of reactions row
             reactionsRow.insertBefore(zapBadge, reactionsRow.firstChild);
@@ -8265,7 +8265,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             badge.dataset.emoji = emoji;
             badge.dataset.messageId = messageId;
 
-            badge.innerHTML = `${emoji} ${reactors.size}`;
+            badge.innerHTML = `${emoji} ${this.abbreviateNumber(reactors.size)}`;
 
             // Create tooltip with user names
             if (hasReacted) {
@@ -11823,13 +11823,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // so historical messages don't falsely mark users as online
         const eventTime = createdAt ? createdAt * 1000 : Date.now();
 
+        // Determine base status from away messages or event age
+        const activeThreshold = 300000; // 5 minutes
+        const isRecent = (Date.now() - eventTime) < activeThreshold;
+        let baseStatus;
+        if (this.awayMessages.has(pubkey)) {
+            baseStatus = 'away';
+        } else if (isRecent) {
+            baseStatus = 'online';
+        } else {
+            baseStatus = 'offline';
+        }
+
         // Update or create user with deduplication by pubkey
         if (!this.users.has(pubkey)) {
             this.users.set(pubkey, {
                 nym: nym,
                 pubkey: pubkey,
                 lastSeen: eventTime,
-                status: this.awayMessages.has(pubkey) ? 'away' : 'online',
+                status: baseStatus,
                 channels: new Set([channelKey])
             });
         } else {
@@ -11837,10 +11849,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Only update lastSeen if this event is more recent
             if (eventTime > user.lastSeen) {
                 user.lastSeen = eventTime;
+                user.status = baseStatus;
             }
             user.nym = nym; // Update nym in case it changed
             user.channels.add(channelKey);
-            user.status = this.awayMessages.has(pubkey) ? 'away' : 'online';
         }
 
         // Track users per channel
@@ -11857,32 +11869,34 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const currentChannelKey = this.currentGeohash || this.currentChannel;
 
         // Get deduplicated users (one entry per pubkey), including inactive
+        // Compute effective status without mutating the source user objects
         const uniqueUsers = new Map();
         const now = Date.now();
         const activeThreshold = 300000; // 5 minutes
         this.users.forEach((user, pubkey) => {
             if (!this.blockedUsers.has(user.nym)) {
                 if (!uniqueUsers.has(pubkey)) {
-                    // Set effective status: offline if past threshold,
-                    // but preserve 'away' status from presence broadcasts
-                    if (now - user.lastSeen >= activeThreshold && user.status !== 'away') {
-                        user.status = 'offline';
+                    let effectiveStatus = user.status;
+                    if (now - user.lastSeen >= activeThreshold && effectiveStatus !== 'away') {
+                        effectiveStatus = 'offline';
                     }
-                    uniqueUsers.set(pubkey, user);
+                    uniqueUsers.set(pubkey, { ...user, effectiveStatus });
                 }
             }
         });
 
-        const statusOrder = { online: 0, away: 1, offline: 2 };
-        const allUsers = Array.from(uniqueUsers.values())
-            .filter(user => user && user.nym)
-            .sort((a, b) => {
-                const statusDiff = (statusOrder[a.status] || 2) - (statusOrder[b.status] || 2);
-                if (statusDiff !== 0) return statusDiff;
-                const nymA = String(a.nym || '');
-                const nymB = String(b.nym || '');
-                return nymA.localeCompare(nymB);
-            });
+        // Sort into three explicit groups: active first, then away, then inactive
+        // Each group is alphabetically sorted by nym
+        const alphabetical = (a, b) => {
+            const nymA = this.parseNymFromDisplay(a.nym || '').toLowerCase();
+            const nymB = this.parseNymFromDisplay(b.nym || '').toLowerCase();
+            return nymA.localeCompare(nymB);
+        };
+        const validUsers = Array.from(uniqueUsers.values()).filter(user => user && user.nym);
+        const activeUsers = validUsers.filter(u => u.effectiveStatus === 'online').sort(alphabetical);
+        const awayUsers = validUsers.filter(u => u.effectiveStatus === 'away').sort(alphabetical);
+        const inactiveUsers = validUsers.filter(u => u.effectiveStatus === 'offline').sort(alphabetical);
+        const allUsers = [...activeUsers, ...awayUsers, ...inactiveUsers];
 
         // Filter users based on search term
         let displayUsers = allUsers;
@@ -11919,7 +11933,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             onclick="nym.openUserPM('${this.escapeHtml(baseNym)}', '${user.pubkey}')" 
             oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}')"
             data-nym="${this.escapeHtml(baseNym)}">
-        <span class="user-status ${user.status}"></span>
+        <span class="user-status ${user.effectiveStatus}"></span>
         <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
     </div>
 `;
@@ -11927,15 +11941,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         this.updateViewMoreButton('userListContent');
 
-        const activeCount = allUsers.filter(u => u.status !== 'offline').length;
+        const activeCount = allUsers.filter(u => u.effectiveStatus !== 'offline').length;
         const userListTitle = document.querySelector('#userList .nav-title-text');
         if (userListTitle) {
-            userListTitle.textContent = `Nyms (${activeCount} active)`;
+            userListTitle.textContent = `Nyms (${this.abbreviateNumber(activeCount)} active)`;
         }
 
         if (!this.inPMMode) {
             const meta = document.getElementById('channelMeta');
-            if (meta) meta.textContent = `${channelUserCount} active nyms`;
+            if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} active nyms`;
         }
     }
 
@@ -14180,7 +14194,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 hint.remove();
             } else {
                 // Update hint text
-                hint.textContent = `↑ Scroll up for ${newStartIndex} older messages`;
+                hint.textContent = `↑ Scroll up for ${this.abbreviateNumber(newStartIndex)} older messages`;
             }
         }
 
@@ -14383,7 +14397,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const loadMoreDiv = document.createElement('div');
             loadMoreDiv.className = 'system-message virtual-scroll-hint';
             loadMoreDiv.style.cssText = 'color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
-            loadMoreDiv.textContent = `↑ Scroll up for ${startIndex} older messages`;
+            loadMoreDiv.textContent = `↑ Scroll up for ${this.abbreviateNumber(startIndex)} older messages`;
             container.appendChild(loadMoreDiv);
         }
 
@@ -14560,7 +14574,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 list.classList.remove('list-collapsed');
                 list.classList.add('list-expanded');
             } else {
-                existingBtn.textContent = `View ${items.length - 20} more...`;
+                existingBtn.textContent = `View ${this.abbreviateNumber(items.length - 20)} more...`;
                 list.classList.add('list-collapsed');
                 list.classList.remove('list-expanded');
             }
@@ -14614,7 +14628,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 btn.remove();
                 btn = document.createElement('div');
                 btn.className = 'view-more-btn';
-                btn.textContent = `View ${items.length - 20} more...`;
+                btn.textContent = `View ${this.abbreviateNumber(items.length - 20)} more...`;
                 btn.onclick = () => this.toggleListExpansion(listId);
 
                 // Insert after the 20th visible item
@@ -15675,6 +15689,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return String(text).replace(/[&<>"]/g, m => map[m]);
     }
 
+    abbreviateNumber(n) {
+        if (n < 1000) return String(n);
+        if (n < 1000000) return (n / 1000).toFixed(n < 10000 ? 1 : 0) + 'k';
+        return (n / 1000000).toFixed(1) + 'M';
+    }
 
     async findUserPubkey(input) {
         const cleanInput = input.replace(/^@/, '');
