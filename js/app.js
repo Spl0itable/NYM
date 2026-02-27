@@ -11796,9 +11796,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const pubkey = event.pubkey;
         const status = statusTag[1];
         const nym = nymTag ? nymTag[1].split('#')[0] : null;
+        const eventTime = event.created_at || 0;
 
         // Ignore our own presence events
         if (pubkey === this.pubkey) return;
+
+        // Skip stale presence events - only process if newer than last seen
+        if (!this.presenceTimestamps) this.presenceTimestamps = new Map();
+        const lastTimestamp = this.presenceTimestamps.get(pubkey) || 0;
+        if (eventTime < lastTimestamp) return;
+        this.presenceTimestamps.set(pubkey, eventTime);
 
         // Update away messages map for this user
         if (status === 'away' && awayTag) {
@@ -16346,7 +16353,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.95 ═══<br/>
+═══ Nymchat v3.27.96 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
