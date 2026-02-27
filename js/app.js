@@ -12769,14 +12769,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     showAutocomplete(search) {
         const dropdown = document.getElementById('autocompleteDropdown');
+        const currentChannelKey = this.currentGeohash || this.currentChannel;
 
         // Get current time for activity check
         const now = Date.now();
         const activeThreshold = 300000; // 5 minutes
 
-        // Collect and categorize users
-        const onlineUsers = [];
-        const offlineUsers = [];
+        // Collect users with effective status (matching sidebar logic)
+        const channelActiveUsers = [];
+        const channelAwayUsers = [];
+        const channelOfflineUsers = [];
+        const otherActiveUsers = [];
+        const otherAwayUsers = [];
+        const otherOfflineUsers = [];
 
         this.users.forEach((user, pubkey) => {
             // Create formatted nym for matching
@@ -12787,6 +12792,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!this.blockedUsers.has(user.nym) &&
                 searchableNym.toLowerCase().includes(search.toLowerCase())) {
 
+                // Compute effective status matching sidebar logic
+                let effectiveStatus = user.status;
+                if (now - user.lastSeen >= activeThreshold && effectiveStatus !== 'away') {
+                    effectiveStatus = 'offline';
+                }
+
                 // Create HTML version for display
                 const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
 
@@ -12795,33 +12806,47 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     pubkey: pubkey,
                     displayNym: displayNym,
                     searchableNym: searchableNym,
-                    lastSeen: user.lastSeen
+                    lastSeen: user.lastSeen,
+                    effectiveStatus: effectiveStatus
                 };
 
-                if (now - user.lastSeen < activeThreshold) {
-                    onlineUsers.push(userEntry);
+                const inCurrentChannel = user.channels && user.channels.has(currentChannelKey);
+
+                if (inCurrentChannel) {
+                    if (effectiveStatus === 'online') channelActiveUsers.push(userEntry);
+                    else if (effectiveStatus === 'away') channelAwayUsers.push(userEntry);
+                    else channelOfflineUsers.push(userEntry);
                 } else {
-                    offlineUsers.push(userEntry);
+                    if (effectiveStatus === 'online') otherActiveUsers.push(userEntry);
+                    else if (effectiveStatus === 'away') otherAwayUsers.push(userEntry);
+                    else otherOfflineUsers.push(userEntry);
                 }
             }
         });
 
-        // Sort each group alphabetically by searchable name
-        onlineUsers.sort((a, b) => a.searchableNym.localeCompare(b.searchableNym));
-        offlineUsers.sort((a, b) => a.searchableNym.localeCompare(b.searchableNym));
+        // Sort each group alphabetically
+        const sortAlpha = (a, b) => a.searchableNym.localeCompare(b.searchableNym);
+        channelActiveUsers.sort(sortAlpha);
+        channelAwayUsers.sort(sortAlpha);
+        channelOfflineUsers.sort(sortAlpha);
+        otherActiveUsers.sort(sortAlpha);
+        otherAwayUsers.sort(sortAlpha);
+        otherOfflineUsers.sort(sortAlpha);
 
-        // Combine with online users first
-        const allUsers = [...onlineUsers, ...offlineUsers].slice(0, 8);
+        // Channel members first (active > away > offline), then others (active > away > offline)
+        const allUsers = [
+            ...channelActiveUsers, ...channelAwayUsers, ...channelOfflineUsers,
+            ...otherActiveUsers, ...otherAwayUsers, ...otherOfflineUsers
+        ].slice(0, 8);
 
         if (allUsers.length > 0) {
             dropdown.innerHTML = allUsers.map((user, index) => {
-                const isOnline = now - user.lastSeen < activeThreshold;
-                const statusIndicator = isOnline ?
-                    '<span style="color: var(--primary); margin-right: 5px;">●</span>' :
-                    '<span style="color: var(--text-dim); margin-right: 5px;">○</span>';
+                const statusClass = user.effectiveStatus === 'online' ? '' :
+                    user.effectiveStatus === 'away' ? ' away' : ' offline';
+                const statusIndicator = `<span class="user-status${statusClass}" style="display: inline-block; margin-right: 6px; vertical-align: middle;"></span>`;
 
                 return `
-        <div class="autocomplete-item ${index === 0 ? 'selected' : ''}" 
+        <div class="autocomplete-item ${index === 0 ? 'selected' : ''}"
                 data-nym="${user.nym}"
                 data-pubkey="${user.pubkey}"
                 onclick="nym.selectSpecificAutocomplete('${user.nym}', '${user.pubkey}')">
@@ -16623,7 +16648,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.27.99 ═══<br/>
+═══ Nymchat v3.27.100 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
