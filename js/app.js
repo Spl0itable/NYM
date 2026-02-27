@@ -9860,7 +9860,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             : '';
         const flairHtml = this.getFlairForUser(pubkey);
         document.querySelectorAll(`.message[data-pubkey="${pubkey}"] .message-author`).forEach(el => {
-            el.innerHTML = `&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>&gt;${verifiedBadge}${flairHtml}`;
+            el.innerHTML = `&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}&gt;`;
         });
 
         // Update any visible notification banner from this user
@@ -11228,7 +11228,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const formattedContent = this.formatMessageWithQuotes(message.content);
 
             const baseNym = this.parseNymFromDisplay(message.author);
-            const displayAuthorBase = `&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>&gt;${flairHtml}`;
+            const displayAuthorBase = `&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -11305,7 +11305,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}</span>
+    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
     <span class="message-content ${userColorClass}">${messageContentHtml}</span>
     ${reactionButton}
     ${deliveryCheckmark}
