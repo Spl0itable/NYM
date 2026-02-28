@@ -16245,6 +16245,13 @@ function clearSearch(inputId) {
     }
 }
 
+function scrollToBottom() {
+    const container = document.getElementById('messagesContainer');
+    if (container) {
+        container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+    }
+}
+
 function sendMessage() {
     nym.sendMessage();
 }
@@ -16771,7 +16778,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.28.103 ═══<br/>
+═══ Nymchat v3.29.103 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -17236,10 +17243,41 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 60000); // Check every minute
 
-    // Auto-scroll to bottom when input is focused on mobile
+    // Scroll-to-bottom button and mobile input-buttons hide on scroll
     const messageInput = document.getElementById('messageInput');
     const messagesContainer = document.getElementById('messagesContainer');
+    const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
+    const inputButtons = document.querySelector('.input-buttons');
 
+    if (messagesContainer && scrollToBottomBtn) {
+        let mobileScrollTimer = null;
+
+        messagesContainer.addEventListener('scroll', () => {
+            const distanceFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
+
+            // Show/hide scroll-to-bottom button
+            if (distanceFromBottom > 200) {
+                scrollToBottomBtn.classList.add('visible');
+            } else {
+                scrollToBottomBtn.classList.remove('visible');
+            }
+
+            // On mobile, hide input buttons while scrolling up
+            if (window.innerWidth <= 768 && inputButtons && distanceFromBottom > 200) {
+                inputButtons.classList.add('hidden-on-scroll');
+                scrollToBottomBtn.classList.add('controls-hidden');
+
+                // Show buttons again after scrolling stops
+                if (mobileScrollTimer) clearTimeout(mobileScrollTimer);
+                mobileScrollTimer = setTimeout(() => {
+                    inputButtons.classList.remove('hidden-on-scroll');
+                    scrollToBottomBtn.classList.remove('controls-hidden');
+                }, 800);
+            }
+        }, { passive: true });
+    }
+
+    // Auto-scroll to bottom when input is focused on mobile
     if (messageInput && messagesContainer) {
         messageInput.addEventListener('focus', function () {
             if (window.innerWidth <= 768) {

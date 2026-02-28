@@ -737,6 +737,44 @@ body::after {
     background: rgba(0, 0, 0, 0.15);
 }
 
+.scroll-to-bottom-btn {
+    display: none;
+    position: absolute;
+    bottom: 90px;
+    right: 24px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    color: var(--primary);
+    cursor: pointer;
+    z-index: 150;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition);
+    box-shadow: var(--shadow-md);
+}
+
+.scroll-to-bottom-btn svg {
+    stroke: var(--primary);
+    stroke-width: 2.5;
+    fill: none;
+}
+
+.scroll-to-bottom-btn:hover {
+    background: rgb(from var(--primary) r g b / 0.15);
+    border-color: rgb(from var(--primary) r g b / 0.3);
+    box-shadow: 0 0 15px rgb(from var(--primary) r g b / 0.15);
+    transform: scale(1.1);
+}
+
+.scroll-to-bottom-btn.visible {
+    display: flex;
+}
+
 .message {
     display: flex;
     gap: 10px;
@@ -2763,6 +2801,17 @@ body::after {
         display: flex;
         justify-content: space-between;
         gap: 10px;
+        max-height: 50px;
+        overflow: hidden;
+        transition: max-height 0.25s ease, opacity 0.25s ease, margin-top 0.25s ease;
+        opacity: 1;
+    }
+
+    .input-buttons.hidden-on-scroll {
+        max-height: 0;
+        opacity: 0;
+        margin-top: 0;
+        pointer-events: none;
     }
 
     .icon-btn.input-btn {
@@ -2773,6 +2822,18 @@ body::after {
         flex: 2;
         padding: 10px;
         font-size: 11px;
+    }
+
+    .scroll-to-bottom-btn {
+        bottom: 130px;
+        right: 16px;
+        width: 36px;
+        height: 36px;
+        transition: all var(--transition), bottom 0.25s ease;
+    }
+
+    .scroll-to-bottom-btn.controls-hidden {
+        bottom: 80px;
     }
 
     .zap-amounts {
@@ -3068,6 +3129,16 @@ body.light-mode .icon-btn:hover {
     background: rgba(0, 0, 0, 0.06);
     color: var(--primary);
     border-color: var(--primary);
+}
+
+body.light-mode .scroll-to-bottom-btn {
+    background: rgba(255, 255, 255, 0.85);
+    border-color: rgb(from var(--primary) r g b / 0.2);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .scroll-to-bottom-btn:hover {
+    background: rgb(from var(--primary) r g b / 0.1);
 }
 
 body.light-mode .send-btn {
