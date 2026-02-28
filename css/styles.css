@@ -5078,3 +5078,65 @@ body.light-mode .message.self::before {
 .file-offer-icon.document svg {
     stroke: var(--secondary);
 }
+
+.file-offer-unseeded {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 8px;
+    opacity: 0.7;
+}
+
+.file-offer-unseeded-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    opacity: 0.6;
+}
+
+.file-offer-stop-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-xs);
+    color: var(--danger);
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: 10px;
+    font-family: var(--font-sans);
+    margin-left: auto;
+    transition: all var(--transition);
+}
+
+.file-offer-stop-btn:hover {
+    background: var(--danger);
+    color: var(--bg);
+}
+
+.file-offer-btn.unavailable {
+    opacity: 0.4;
+    border-color: var(--text-dim);
+    color: var(--text-dim);
+    cursor: default;
+}
+
+.file-offer-btn.unavailable:hover {
+    background: transparent;
+    color: var(--text-dim);
+}
+
+.file-offer.torrent {
+    border-color: rgb(from var(--secondary) r g b / 0.3);
+}
+
+.file-offer-btn.torrent-btn {
+    background: rgb(from var(--secondary) r g b / 0.08);
+    border-color: rgb(from var(--secondary) r g b / 0.25);
+    color: var(--secondary);
+}
+
+.file-offer-btn.torrent-btn:hover {
+    background: rgb(from var(--secondary) r g b / 0.15);
+}
