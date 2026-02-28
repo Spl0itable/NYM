@@ -105,13 +105,9 @@
                     </label>
                 </div>
 
-                <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button onclick="nym.closeReportModal()"
-                        style="padding: 10px 20px; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border, var(--border)); color: var(--text); cursor: pointer; border-radius: 12px; font-family: var(--font-sans, sans-serif);">Cancel</button>
-                    <button onclick="nym.submitReport()"
-                        style="padding: 10px 20px; background: var(--warning); border: 1px solid var(--warning); color: #000; cursor: pointer; border-radius: 12px; font-weight: bold; font-family: var(--font-sans, sans-serif);">Submit
-                        Report</button>
-
+                <div class="modal-actions">
+                    <button class="icon-btn" onclick="nym.closeReportModal()">Cancel</button>
+                    <button class="send-btn" onclick="nym.submitReport()">Submit Report</button>
                 </div>
             </div>
         </div>

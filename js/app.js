@@ -11701,21 +11701,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (insertBefore) {
                 container.insertBefore(messageEl, insertBefore);
             } else {
-                const typingIndicator = container.querySelector('.typing-indicator');
-                if (typingIndicator) {
-                    container.insertBefore(messageEl, typingIndicator);
-                } else {
-                    container.appendChild(messageEl);
-                }
+                container.appendChild(messageEl);
             }
         } else {
             // Just append at the end for new messages when not at bottom
-            const typingIndicator = container.querySelector('.typing-indicator');
-            if (typingIndicator) {
-                container.insertBefore(messageEl, typingIndicator);
-            } else {
-                container.appendChild(messageEl);
-            }
+            container.appendChild(messageEl);
         }
 
         // Add existing reactions if any (for both channel messages and PMs)
