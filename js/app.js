@@ -6735,6 +6735,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
         if (!messageEl) return;
 
+        // Capture scroll state before modifying DOM so we can auto-scroll if needed
+        const container = document.getElementById('messagesContainer');
+        const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 50);
+
         const messageZaps = this.zaps.get(messageId);
 
         // Find or create reactions row
@@ -6800,6 +6804,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // Insert after zap badge
                 reactionsRow.insertBefore(addZapBtn, zapBadge.nextSibling);
             }
+        }
+
+        // Auto-scroll to keep zaps visible if user was already at the bottom
+        if (wasAtBottom && container && this.settings.autoscroll) {
+            container.scrollTop = container.scrollHeight;
         }
     }
 
@@ -8389,6 +8398,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
         if (!messageEl) return;
 
+        // Capture scroll state before modifying DOM so we can auto-scroll if needed
+        const container = document.getElementById('messagesContainer');
+        const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 50);
+
         const reactions = this.reactions.get(messageId);
         if (!reactions || reactions.size === 0) {
             // Even if no reactions, update zaps display
@@ -8471,11 +8484,38 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 badge.title = `Click to also react with ${emoji} | ${users}`;
             }
 
-            // Add click handler - NO optimistic update here since sendReaction handles it
+            // Long-press to show reactors modal
+            let longPressTimer = null;
+            let didLongPress = false;
+
+            const startLongPress = (e) => {
+                didLongPress = false;
+                longPressTimer = setTimeout(() => {
+                    didLongPress = true;
+                    e.preventDefault();
+                    this.showReactorsModal(messageId, emoji, badge);
+                }, 500);
+            };
+
+            const cancelLongPress = () => {
+                if (longPressTimer) {
+                    clearTimeout(longPressTimer);
+                    longPressTimer = null;
+                }
+            };
+
+            badge.addEventListener('mousedown', startLongPress);
+            badge.addEventListener('touchstart', startLongPress, { passive: false });
+            badge.addEventListener('mouseup', cancelLongPress);
+            badge.addEventListener('mouseleave', cancelLongPress);
+            badge.addEventListener('touchend', cancelLongPress);
+            badge.addEventListener('touchmove', cancelLongPress);
+
+            // Click handler - only fire if not a long press
             badge.onclick = async (e) => {
                 e.stopPropagation();
+                if (didLongPress) return;
                 if (!hasReacted) {
-                    // Just call sendReaction - it handles optimistic updates
                     await this.sendReaction(messageId, emoji);
                 } else {
                     this.displaySystemMessage(`You already reacted with ${emoji}`);
@@ -8505,6 +8545,83 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.showEnhancedReactionPicker(messageId, addBtn);
         };
         reactionsRow.appendChild(addBtn);
+
+        // Auto-scroll to keep reactions visible if user was already at the bottom
+        if (wasAtBottom && container && this.settings.autoscroll) {
+            container.scrollTop = container.scrollHeight;
+        }
+    }
+
+    showReactorsModal(messageId, emoji, badge) {
+        // Close any existing reactors modal
+        this.closeReactorsModal();
+
+        const reactions = this.reactions.get(messageId);
+        if (!reactions) return;
+        const reactors = reactions.get(emoji);
+        if (!reactors || reactors.size === 0) return;
+
+        // Build user list
+        const userItems = Array.from(reactors.entries()).map(([pubkey, nym]) => {
+            const isYou = pubkey === this.pubkey;
+            const baseNym = this.parseNymFromDisplay(nym);
+            const suffix = this.getPubkeySuffix(pubkey);
+            return `<div class="reactors-modal-user" data-pubkey="${pubkey}">
+                <span class="reactors-modal-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span></span>
+                ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
+            </div>`;
+        }).join('');
+
+        const modal = document.createElement('div');
+        modal.className = 'reactors-modal';
+        modal.innerHTML = `
+            <div class="reactors-modal-header">${emoji} <span class="reactors-modal-count">${reactors.size}</span></div>
+            <div class="reactors-modal-list">${userItems}</div>
+        `;
+
+        document.body.appendChild(modal);
+        this.reactorsModal = modal;
+
+        // Position near the badge
+        const rect = badge.getBoundingClientRect();
+        const modalRect = modal.getBoundingClientRect();
+        const spaceAbove = rect.top;
+        const spaceBelow = window.innerHeight - rect.bottom;
+
+        // Horizontal: align left edge with badge, but keep within viewport
+        let left = rect.left;
+        if (left + modalRect.width > window.innerWidth - 10) {
+            left = window.innerWidth - modalRect.width - 10;
+        }
+        if (left < 10) left = 10;
+        modal.style.left = left + 'px';
+
+        // Vertical: prefer above, fall back to below
+        if (spaceAbove > modalRect.height + 10) {
+            modal.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+        } else {
+            modal.style.top = (rect.bottom + 6) + 'px';
+        }
+
+        // Click user row to open PM
+        modal.querySelectorAll('.reactors-modal-user').forEach(el => {
+            el.addEventListener('click', (e) => {
+                const pubkey = el.dataset.pubkey;
+                if (pubkey !== this.pubkey) {
+                    const user = this.users.get(pubkey);
+                    const baseNym = user ? this.parseNymFromDisplay(user.nym) : `anon`;
+                    this.openUserPM(baseNym, pubkey);
+                }
+                this.closeReactorsModal();
+            });
+        });
+    }
+
+    closeReactorsModal() {
+        if (this.reactorsModal) {
+            this.reactorsModal.remove();
+            this.reactorsModal = null;
+        }
     }
 
     showReactionPicker(messageId, button) {
@@ -12568,6 +12685,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!e.target.closest('.gif-picker') &&
                 !e.target.closest('.icon-btn[title="GIF"]')) {
                 this.closeGifPicker();
+            }
+
+            // Close reactors modal if clicking outside
+            if (!e.target.closest('.reactors-modal') &&
+                !e.target.closest('.reaction-badge')) {
+                this.closeReactorsModal();
             }
 
             // Handle command palette item click
@@ -16796,7 +16919,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.29.104 ═══<br/>
+═══ Nymchat v3.29.105 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16810,7 +16933,7 @@ Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target
 Nymchat is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br/><br/>
 <a href="static/tos.html" target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> | <a href="static/pp.html" target="_blank" rel="noopener" style="color: var(--secondary)">Privacy Policy</a><br/><br/>
 Made with ♥ by <a href="https://nostrservices.com" target="_blank" rel="noopener" style="color: var(--secondary)">21 Million LLC</a><br/><br/>
-Lead developer: <a href="https://njump.me/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas#a8df</a>
+Lead developer: <a href="https://njump.me/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas#a8df</a><br/>
 `);
 }
 
