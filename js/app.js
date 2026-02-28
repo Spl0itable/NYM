@@ -16781,7 +16781,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.28.101 ═══<br/>
+═══ Nymchat v3.28.102 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16880,8 +16880,6 @@ async function checkSavedConnection() {
             nym.displaySystemMessage(`Welcome to Nymchat, ${nym.nym}! Type /help for available commands.`);
             if (isDeveloperLogin) {
                 nym.displaySystemMessage(`Identity verified. You are now logged in as ${nym.nym}.`);
-            } else {
-                nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
             }
             nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
@@ -16988,8 +16986,6 @@ async function initializeNym() {
         nym.displaySystemMessage(`Welcome to Nymchat, ${nym.nym}! Type /help for available commands.`);
         if (isDeveloperLogin) {
             nym.displaySystemMessage(`Identity verified. You are now logged in as ${nym.nym}.`);
-        } else {
-            nym.displaySystemMessage(`Your ephemeral identity is active for this session only.`);
         }
         nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 

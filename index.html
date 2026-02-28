@@ -41,6 +41,14 @@
 </head>
 
 <body>
+    <script>
+        // Apply color mode immediately to prevent flash of wrong theme
+        (function() {
+            var mode = localStorage.getItem('nym_color_mode') || 'auto';
+            var isLight = mode === 'light' || (mode === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches);
+            if (isLight) document.body.classList.add('light-mode');
+        })();
+    </script>
     <div class="mobile-overlay" id="mobileOverlay" onclick="nym.closeSidebar()"></div>
     <button class="mobile-menu-toggle" onclick="toggleSidebar()">☰</button>
 
@@ -71,7 +79,7 @@
                 <div style="margin-bottom: 20px;">
                     <label style="display: block; margin-bottom: 10px; color: var(--text-dim);">Report Type:</label>
                     <select id="reportType"
-                        style="width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border); color: #ffffff; border-radius: 4px;">
+                        style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border, var(--border)); color: #ffffff; border-radius: 12px; font-family: var(--font-sans, sans-serif);">
                         <option value="nudity">Nudity - depictions of nudity, porn, etc.</option>
                         <option value="malware">Malware - virus, trojan, spyware, etc.</option>
                         <option value="profanity">Profanity - hateful speech, etc.</option>
@@ -86,7 +94,7 @@
                     <label style="display: block; margin-bottom: 10px; color: var(--text-dim);">Additional Details
                         (optional):</label>
                     <textarea id="reportDetails" rows="4"
-                        style="width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border); color: #ffffff; border-radius: 4px; resize: vertical;"
+                        style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border, var(--border)); color: #ffffff; border-radius: 12px; resize: vertical; font-family: var(--font-sans, sans-serif);"
                         placeholder="Provide any additional context for this report..."></textarea>
                 </div>
 
@@ -99,9 +107,9 @@
 
                 <div style="display: flex; gap: 10px; justify-content: flex-end;">
                     <button onclick="nym.closeReportModal()"
-                        style="padding: 10px 20px; background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text); cursor: pointer; border-radius: 4px;">Cancel</button>
+                        style="padding: 10px 20px; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border, var(--border)); color: var(--text); cursor: pointer; border-radius: 12px; font-family: var(--font-sans, sans-serif);">Cancel</button>
                     <button onclick="nym.submitReport()"
-                        style="padding: 10px 20px; background: var(--warning); border: 1px solid var(--warning); color: #000; cursor: pointer; border-radius: 4px; font-weight: bold;">Submit
+                        style="padding: 10px 20px; background: var(--warning); border: 1px solid var(--warning); color: #000; cursor: pointer; border-radius: 12px; font-weight: bold; font-family: var(--font-sans, sans-serif);">Submit
                         Report</button>
 
                 </div>
@@ -240,13 +248,7 @@
                 </div>
             </header>
 
-            <div class="messages-container" id="messagesContainer">
-                <div class="system-message">
-                    ═══ Booting up Nymchat ═══
-                </div>
-            </div>
-
-            <div class="typing-indicator" id="typingIndicator"></div>
+            <div class="messages-container" id="messagesContainer"></div>
 
             <div class="input-container">
                 <div class="input-wrapper">
@@ -380,8 +382,8 @@
                 <div class="form-group">
                     <label class="form-label">New Nym nick</label>
                     <div style="display: flex; align-items: center; gap: 0;">
-                        <input type="text" class="form-input" id="newNickInput" placeholder="Enter new nym" maxlength="20" style="flex: 1; border-radius: 4px 0 0 4px;">
-                        <span id="nickSuffixDisplay" class="nym-suffix" style="padding: 8px 10px; background: var(--bg-dark); border: 1px solid var(--border-color); border-left: none; border-radius: 0 4px 4px 0; font-size: 14px; white-space: nowrap;"></span>
+                        <input type="text" class="form-input" id="newNickInput" placeholder="Enter new nym" maxlength="20" style="flex: 1; border-radius: 12px 0 0 12px;">
+                        <span id="nickSuffixDisplay" class="nym-suffix" style="padding: 8px 12px; background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border, var(--border-color)); border-left: none; border-radius: 0 12px 12px 0; font-size: 14px; white-space: nowrap;"></span>
                     </div>
                     <div class="form-hint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
@@ -417,7 +419,7 @@
                 </div>
 
                 <div
-                    style="color: var(--warning); font-size: 12px; margin-top: 15px; padding: 10px; border: 1px solid var(--warning);">
+                    style="color: var(--warning); font-size: 12px; margin-top: 15px; padding: 12px 14px; border: 1px solid rgba(255, 255, 0, 0.2); border-radius: 12px; background: rgba(255, 255, 0, 0.04);">
                     NOTE: Channels are bridged with Bitchat geohash. Messages are
                     public and temporary; sent across the Nostr network. Your nym exists
                     only for this session and will be burned.
@@ -464,7 +466,7 @@
                 <div class="form-group">
                     <label class="form-label">Connected Relays</label>
                     <div id="connectedRelaysList"
-                        style="max-height: 200px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; background: var(--bg);">
+                        style="max-height: 200px; overflow-y: auto; border: 1px solid var(--glass-border, var(--border)); border-radius: 12px; padding: 10px; background: rgba(255,255,255,0.03);">
                         <div style="color: var(--text-dim); font-size: 12px;">Loading relay list...</div>
                     </div>
                     <button class="icon-btn" onclick="nym.refreshRelays()"
