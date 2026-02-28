@@ -5321,8 +5321,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.subscribeToAllRelays();
 
             // Switch to the pinned landing channel (geohash only)
+            // Reset current channel so switchChannel doesn't skip via isSameChannel check,
+            // which would prevent geohash coordinates from being displayed on the landing channel
             setTimeout(() => {
                 const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+                this.currentChannel = '';
+                this.currentGeohash = '';
 
                 if (pinned.type === 'geohash' && pinned.geohash) {
                     this.switchChannel(pinned.geohash, pinned.geohash);
@@ -12626,24 +12630,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     handleInputChange(value) {
-        // Check for emoji autocomplete with :
-        const colonIndex = value.lastIndexOf(':');
-        if (colonIndex !== -1 && colonIndex === value.length - 1 ||
-            (colonIndex !== -1 && value.substring(colonIndex).match(/^:[a-z0-9_+-]*$/))) {
-            const search = value.substring(colonIndex + 1);
-            this.showEmojiAutocomplete(search);
-        } else {
-            this.hideEmojiAutocomplete();
-        }
-
-        // Check for @ mentions
+        // Check for @ mentions first
         const lastAtIndex = value.lastIndexOf('@');
-        if (lastAtIndex !== -1 && lastAtIndex === value.length - 1 ||
-            (lastAtIndex !== -1 && value.substring(lastAtIndex).match(/^@[^\s]*$/))) {
+        const isMentionActive = lastAtIndex !== -1 && (lastAtIndex === value.length - 1 ||
+            value.substring(lastAtIndex).match(/^@[^\s]*$/));
+
+        if (isMentionActive) {
             const search = value.substring(lastAtIndex + 1);
             this.showAutocomplete(search);
+            // Hide emoji autocomplete - colon may be part of a nickname
+            this.hideEmojiAutocomplete();
         } else {
             this.hideAutocomplete();
+
+            // Only check for emoji autocomplete when not in a mention context
+            const colonIndex = value.lastIndexOf(':');
+            if (colonIndex !== -1 && colonIndex === value.length - 1 ||
+                (colonIndex !== -1 && value.substring(colonIndex).match(/^:[a-z0-9_+-]*$/))) {
+                const search = value.substring(colonIndex + 1);
+                this.showEmojiAutocomplete(search);
+            } else {
+                this.hideEmojiAutocomplete();
+            }
         }
 
         // Check for commands
@@ -14266,6 +14274,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Update user list for this channel
         this.updateUserList();
+
+        // Track current channel for auto-ephemeral session resume
+        if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
+            localStorage.setItem('nym_auto_ephemeral_channel', JSON.stringify({
+                channel: channel,
+                geohash: geohash
+            }));
+        }
 
         // Close mobile sidebar on mobile
         if (window.innerWidth <= 768) {
@@ -16636,6 +16652,7 @@ async function saveSettings() {
     } else {
         localStorage.removeItem('nym_auto_ephemeral');
         localStorage.removeItem('nym_auto_ephemeral_nick');
+        localStorage.removeItem('nym_auto_ephemeral_channel');
     }
 
     // Handle hide non-pinned channels setting
@@ -16730,6 +16747,7 @@ function clearLocalStorageCache() {
         if (key && (
             key === 'nym_auto_ephemeral' ||
             key === 'nym_auto_ephemeral_nick' ||
+            key === 'nym_auto_ephemeral_channel' ||
             key === 'nym_dev_nsec' ||
             key === 'nym_active_style' ||
             key === 'nym_active_flair' ||
@@ -16778,7 +16796,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.29.103 ═══<br/>
+═══ Nymchat v3.29.104 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -16883,7 +16901,21 @@ async function checkSavedConnection() {
             // Start tutorial if not seen
             window.maybeStartTutorial(false);
 
-            // Route to channel from URL if present
+            // Resume to last channel from previous auto-ephemeral session
+            const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
+            if (savedChannel) {
+                try {
+                    const { channel, geohash } = JSON.parse(savedChannel);
+                    if (channel && channel !== nym.currentChannel) {
+                        if (geohash) {
+                            nym.addChannel(channel, geohash);
+                        }
+                        nym.switchChannel(channel, geohash || '');
+                    }
+                } catch (e) {}
+            }
+
+            // Route to channel from URL if present (overrides saved channel)
             await routeToUrlChannel();
 
             return; // Exit early
@@ -17019,6 +17051,7 @@ function signOut() {
         // Clear auto-ephemeral preferences on logout
         localStorage.removeItem('nym_auto_ephemeral');
         localStorage.removeItem('nym_auto_ephemeral_nick');
+        localStorage.removeItem('nym_auto_ephemeral_channel');
         localStorage.removeItem('nym_dev_nsec');
         localStorage.removeItem('nym_color_mode');
         nym.cmdQuit();
