@@ -4989,6 +4989,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             deleteOption.style.display = 'none';
         }
 
+        // Hide report option for own messages
+        document.getElementById('ctxReport').style.display = pubkey === this.pubkey ? 'none' : 'block';
+
         // Add active class first to make visible
         menu.classList.add('active');
 
@@ -10513,6 +10516,37 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return window.NostrTools.finalizeEvent(event, this.privkey);
         } else {
             throw new Error('No signing method available');
+        }
+    }
+
+    async publishDeletionEvent(messageId) {
+        try {
+            const event = {
+                kind: 5,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [['e', messageId]],
+                content: '',
+                pubkey: this.pubkey
+            };
+
+            const signedEvent = await this.signEvent(event);
+            this.sendToRelay(['EVENT', signedEvent]);
+
+            // Remove message from DOM
+            const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+            if (messageEl) {
+                messageEl.remove();
+            }
+
+            // Remove message from stored messages
+            this.messages.forEach((msgs, channel) => {
+                const idx = msgs.findIndex(m => m.id === messageId);
+                if (idx !== -1) {
+                    msgs.splice(idx, 1);
+                }
+            });
+        } catch (error) {
+            this.displaySystemMessage('Failed to delete message: ' + error.message);
         }
     }
 
@@ -17398,7 +17432,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.29.107 ═══<br/>
+═══ Nymchat v3.29.108 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
