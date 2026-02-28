@@ -2662,6 +2662,7 @@ body::after {
 
     .mobile-menu-toggle {
         display: block;
+        top: 10px;
     }
 
     .main-content {
@@ -2749,7 +2750,7 @@ body::after {
 
     .chat-header {
         padding: 15px 10px;
-        padding-top: 30px;
+        padding-top: 10px;
         flex-shrink: 0;
     }
 
