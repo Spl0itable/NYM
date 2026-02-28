@@ -3256,6 +3256,10 @@ body.light-mode .shop-header {
     background: rgba(255, 255, 255, 0.04);
 }
 
+body.light-mode .color-mode-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+}
+
 .color-mode-btn.active {
     background: rgb(from var(--primary) r g b / 0.15);
     color: var(--primary);
