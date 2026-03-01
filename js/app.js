@@ -17304,15 +17304,16 @@ function editNick() {
     const suffix = nym.getPubkeySuffix(nym.pubkey);
     document.getElementById('nickSuffixDisplay').textContent = `#${suffix}`;
 
-    // Show current avatar in edit modal
+    // Show current avatar in edit modal and reset upload UI state
     const preview = document.getElementById('nickEditAvatarPreview');
-    const removeBtn = document.getElementById('nickEditAvatarRemoveBtn');
     if (preview) {
         preview.src = nym.getAvatarUrl(nym.pubkey);
     }
-    if (removeBtn) {
-        removeBtn.style.display = nym.userAvatars.has(nym.pubkey) ? 'inline-flex' : 'none';
-    }
+    const hasCustom = nym.userAvatars.has(nym.pubkey);
+    setAvatarUploadState('nickEdit', {
+        spinning: false, statusText: '', statusType: '',
+        btnText: 'Change photo', btnDisabled: false, showRemove: hasCustom
+    });
 
     document.getElementById('nickEditModal').classList.add('active');
 }
@@ -17353,27 +17354,119 @@ function randomizeNick() {
     }
 }
 
-// Avatar upload handler for setup modal (stores file for upload after keypair generation)
-let pendingSetupAvatarFile = null;
+// Pre-generated keypair from setup modal avatar upload (reused in initializeNym)
+let setupKeypair = null;
+// Uploaded avatar URL from setup modal (applied to profile in initializeNym)
+let setupAvatarUrl = null;
 
-function handleSetupAvatarSelect(input) {
+function setAvatarUploadState(prefix, { spinning, statusText, statusType, btnText, btnDisabled, showRemove }) {
+    const spinner = document.getElementById(prefix + 'AvatarSpinner');
+    const status = document.getElementById(prefix + 'AvatarStatus');
+    const uploadBtn = document.getElementById(prefix + 'AvatarUploadBtn');
+    const removeBtn = document.getElementById(prefix + 'AvatarRemoveBtn');
+    if (spinner) spinner.classList.toggle('active', !!spinning);
+    if (status) {
+        status.textContent = statusText || '';
+        status.className = 'avatar-upload-status' + (statusType ? ' ' + statusType : '');
+    }
+    if (uploadBtn && btnText !== undefined) {
+        uploadBtn.textContent = btnText;
+        uploadBtn.disabled = !!btnDisabled;
+    }
+    if (removeBtn && showRemove !== undefined) {
+        removeBtn.style.display = showRemove ? 'inline-flex' : 'none';
+    }
+}
+
+async function handleSetupAvatarSelect(input) {
     const file = input.files[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) {
-        alert('Please select an image file');
+        setAvatarUploadState('setup', { statusText: 'Please select an image file', statusType: 'error' });
         return;
     }
     if (file.size > 5 * 1024 * 1024) {
-        alert('Image must be under 5MB');
+        setAvatarUploadState('setup', { statusText: 'Image must be under 5MB', statusType: 'error' });
         return;
     }
-    pendingSetupAvatarFile = file;
+
     const preview = document.getElementById('setupAvatarPreview');
+
+    // Show local preview immediately
     if (preview) {
-        const reader = new FileReader();
-        reader.onload = (e) => { preview.src = e.target.result; };
-        reader.readAsDataURL(file);
+        const dataUrl = await new Promise(resolve => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.readAsDataURL(file);
+        });
+        preview.src = dataUrl;
     }
+
+    // Show uploading state: spinner on avatar, status bar, disable button
+    setAvatarUploadState('setup', {
+        spinning: true,
+        statusText: 'Uploading avatar...',
+        statusType: 'uploading',
+        btnText: 'Uploading...',
+        btnDisabled: true,
+        showRemove: false
+    });
+
+    try {
+        // Generate keypair in background if not already done
+        if (!setupKeypair) {
+            setupKeypair = await nym.generateKeypair();
+        }
+
+        const url = await nym.uploadAvatar(file);
+
+        if (url) {
+            setupAvatarUrl = url;
+            if (preview) preview.src = url;
+            setAvatarUploadState('setup', {
+                spinning: false,
+                statusText: 'Avatar uploaded successfully',
+                statusType: 'success',
+                btnText: 'Change photo',
+                btnDisabled: false,
+                showRemove: true
+            });
+        } else {
+            if (preview) preview.src = 'https://robohash.org/default.png?set=set1&size=80x80';
+            setAvatarUploadState('setup', {
+                spinning: false,
+                statusText: 'Upload failed — try again',
+                statusType: 'error',
+                btnText: 'Choose photo',
+                btnDisabled: false,
+                showRemove: false
+            });
+        }
+    } catch (error) {
+        if (preview) preview.src = 'https://robohash.org/default.png?set=set1&size=80x80';
+        setAvatarUploadState('setup', {
+            spinning: false,
+            statusText: 'Upload failed — try again',
+            statusType: 'error',
+            btnText: 'Choose photo',
+            btnDisabled: false,
+            showRemove: false
+        });
+    }
+}
+
+function removeSetupAvatar() {
+    setupAvatarUrl = null;
+    if (setupKeypair) {
+        nym.userAvatars.delete(nym.pubkey);
+        localStorage.removeItem('nym_avatar_url');
+    }
+    const preview = document.getElementById('setupAvatarPreview');
+    if (preview) preview.src = 'https://robohash.org/default.png?set=set1&size=80x80';
+    setAvatarUploadState('setup', {
+        spinning: false, statusText: '', statusType: '',
+        btnText: 'Choose photo', btnDisabled: false, showRemove: false
+    });
 }
 
 // Avatar upload handler for nick edit modal (uploads immediately since keypair exists)
@@ -17381,23 +17474,57 @@ async function handleNickEditAvatarSelect(input) {
     const file = input.files[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) {
-        nym.displaySystemMessage('Please select an image file');
+        setAvatarUploadState('nickEdit', { statusText: 'Please select an image file', statusType: 'error' });
         return;
     }
     if (file.size > 5 * 1024 * 1024) {
-        nym.displaySystemMessage('Image must be under 5MB');
+        setAvatarUploadState('nickEdit', { statusText: 'Image must be under 5MB', statusType: 'error' });
         return;
     }
+
     const preview = document.getElementById('nickEditAvatarPreview');
+
+    // Show local preview immediately
     if (preview) {
-        const reader = new FileReader();
-        reader.onload = (e) => { preview.src = e.target.result; };
-        reader.readAsDataURL(file);
+        const dataUrl = await new Promise(resolve => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.readAsDataURL(file);
+        });
+        preview.src = dataUrl;
     }
+
+    // Show uploading state: spinner on avatar, status bar, disable button
+    setAvatarUploadState('nickEdit', {
+        spinning: true,
+        statusText: 'Uploading avatar...',
+        statusType: 'uploading',
+        btnText: 'Uploading...',
+        btnDisabled: true,
+        showRemove: false
+    });
+
     const url = await nym.uploadAvatar(file);
+
     if (url) {
-        nym.displaySystemMessage('Avatar updated');
-        document.getElementById('nickEditAvatarRemoveBtn').style.display = 'inline-flex';
+        if (preview) preview.src = url;
+        setAvatarUploadState('nickEdit', {
+            spinning: false,
+            statusText: 'Avatar updated successfully',
+            statusType: 'success',
+            btnText: 'Change photo',
+            btnDisabled: false,
+            showRemove: true
+        });
+    } else {
+        if (preview) preview.src = nym.getAvatarUrl(nym.pubkey);
+        setAvatarUploadState('nickEdit', {
+            spinning: false,
+            statusText: 'Upload failed — try again',
+            statusType: 'error',
+            btnText: 'Change photo',
+            btnDisabled: false
+        });
     }
 }
 
@@ -17407,8 +17534,10 @@ function removeNickEditAvatar() {
     if (preview) {
         preview.src = nym.getAvatarUrl(nym.pubkey);
     }
-    document.getElementById('nickEditAvatarRemoveBtn').style.display = 'none';
-    nym.displaySystemMessage('Avatar removed');
+    setAvatarUploadState('nickEdit', {
+        spinning: false, statusText: '', statusType: '',
+        btnText: 'Change photo', btnDisabled: false, showRemove: false
+    });
 }
 
 // Developer nsec verification modal state
@@ -17954,7 +18083,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.109 ═══<br/>
+═══ Nymchat v3.31.110 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18121,14 +18250,18 @@ async function initializeNym() {
                 enterBtn.innerHTML = originalBtnText;
                 return;
             }
-            // Verified developer - use their persistent keypair
+            // Verified developer - use their persistent keypair (discard any setup modal keypair)
+            setupKeypair = null;
+            setupAvatarUrl = null;
             nym.applyDeveloperIdentity(result.secretKey, result.pubkey);
             isDeveloperLogin = true;
             localStorage.removeItem('nym_connection_mode');
         } else {
-            // Generate ephemeral keypair
+            // Generate ephemeral keypair (reuse if already created from avatar upload)
             nym.connectionMode = 'ephemeral';
-            await nym.generateKeypair();
+            if (!setupKeypair) {
+                await nym.generateKeypair();
+            }
             nym.nym = nymInput || nym.generateRandomNym();
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
             nym.updateSidebarAvatar();
@@ -18169,23 +18302,22 @@ async function initializeNym() {
                 nym.updateLightningAddressDisplay();
             }
 
-            // Restore avatar from localStorage for ephemeral sessions
-            const savedAvatarUrl = localStorage.getItem('nym_avatar_url');
-            if (savedAvatarUrl) {
-                nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
+            // Apply avatar: either from setup modal upload or from localStorage
+            if (setupAvatarUrl) {
+                // Avatar was already uploaded in the setup modal - just ensure it's applied
+                nym.userAvatars.set(nym.pubkey, setupAvatarUrl);
+                localStorage.setItem('nym_avatar_url', setupAvatarUrl);
                 nym.updateSidebarAvatar();
-            }
-
-            // Upload pending avatar from setup modal if selected
-            if (pendingSetupAvatarFile) {
-                const avatarFile = pendingSetupAvatarFile;
-                pendingSetupAvatarFile = null;
-                nym.uploadAvatar(avatarFile).then(url => {
-                    if (url) {
-                        nym.displaySystemMessage('Avatar uploaded successfully');
-                    }
-                });
+                setupAvatarUrl = null;
+                setupKeypair = null;
+                await nym.saveToNostrProfile();
             } else {
+                // Restore avatar from localStorage for ephemeral sessions
+                const savedAvatarUrl = localStorage.getItem('nym_avatar_url');
+                if (savedAvatarUrl) {
+                    nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
+                    nym.updateSidebarAvatar();
+                }
                 // Publish profile with restored avatar and/or lightning address
                 await nym.saveToNostrProfile();
             }

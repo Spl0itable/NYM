@@ -5239,6 +5239,13 @@ body.light-mode .message.self::before {
     margin-bottom: 4px;
 }
 
+.avatar-preview-wrap {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+}
+
 .avatar-preview {
     width: 48px;
     height: 48px;
@@ -5247,6 +5254,30 @@ body.light-mode .message.self::before {
     border: 2px solid var(--glass-border);
     background: rgba(255, 255, 255, 0.04);
     flex-shrink: 0;
+}
+
+.avatar-upload-spinner {
+    display: none;
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    align-items: center;
+    justify-content: center;
+}
+
+.avatar-upload-spinner.active {
+    display: flex;
+}
+
+.avatar-upload-spinner::after {
+    content: '';
+    width: 22px;
+    height: 22px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
 }
 
 .avatar-upload-controls {
@@ -5278,6 +5309,11 @@ body.light-mode .message.self::before {
     border-color: rgb(from var(--primary) r g b / 0.3);
 }
 
+.avatar-upload-btn:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
 .avatar-remove-btn {
     display: inline-flex;
     align-items: center;
@@ -5300,6 +5336,35 @@ body.light-mode .message.self::before {
     font-size: 11px;
     color: var(--text-dim);
     opacity: 0.7;
+}
+
+.avatar-upload-status {
+    font-size: 11px;
+    line-height: 1.4;
+    padding: 3px 8px;
+    border-radius: var(--radius-xs);
+    display: none;
+}
+
+.avatar-upload-status.uploading {
+    display: block;
+    color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+}
+
+.avatar-upload-status.success {
+    display: block;
+    color: var(--success, #4caf50);
+    background: rgba(76, 175, 80, 0.08);
+    border: 1px solid rgba(76, 175, 80, 0.2);
+}
+
+.avatar-upload-status.error {
+    display: block;
+    color: var(--danger);
+    background: rgba(255, 68, 68, 0.08);
+    border: 1px solid rgba(255, 68, 68, 0.2);
 }
 
 .wallpaper-grid {
