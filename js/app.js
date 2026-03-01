@@ -1030,7 +1030,6 @@ class NYM {
         this.virtualScroll = {
             bufferSize: 50,
             windowSize: 150,
-            messageHeightEstimate: 42,
             currentStartIndex: 0,
             currentEndIndex: 0,
             isScrolling: false,
@@ -12584,22 +12583,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (insertBefore) {
                 container.insertBefore(messageEl, insertBefore);
             } else {
-                // Insert before bottom spacer if it exists, otherwise append
-                const bottomSpacer = container.querySelector('.virtual-scroll-spacer-bottom');
-                if (bottomSpacer) {
-                    container.insertBefore(messageEl, bottomSpacer);
-                } else {
-                    container.appendChild(messageEl);
-                }
-            }
-        } else {
-            // Insert before bottom spacer if it exists, otherwise append
-            const bottomSpacer = container.querySelector('.virtual-scroll-spacer-bottom');
-            if (bottomSpacer) {
-                container.insertBefore(messageEl, bottomSpacer);
-            } else {
                 container.appendChild(messageEl);
             }
+        } else {
+            container.appendChild(messageEl);
         }
 
         // Enforce the virtual scroll DOM window — trim oldest DOM messages if over limit
@@ -12612,31 +12599,21 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             if (domMessages.length > maxInDOM) {
                 const toRemove = domMessages.length - maxInDOM;
-                // Measure actual height of removed elements for accurate spacer
-                let removedHeight = 0;
                 for (let i = 0; i < toRemove; i++) {
-                    removedHeight += domMessages[i].offsetHeight;
                     domMessages[i].remove();
                 }
                 this.virtualScroll.currentStartIndex += toRemove;
 
-                // Grow top spacer by exact removed height
-                let topSpacer = container.querySelector('.virtual-scroll-spacer-top');
-                if (!topSpacer) {
-                    topSpacer = document.createElement('div');
-                    topSpacer.className = 'virtual-scroll-spacer-top';
-                    container.insertBefore(topSpacer, container.firstChild);
-                }
-                const currentHeight = parseFloat(topSpacer.style.height) || 0;
-                topSpacer.style.height = `${currentHeight + removedHeight}px`;
-
-                // Add hint if it doesn't exist yet
-                if (!container.querySelector('.virtual-scroll-hint') && this.virtualScroll.currentStartIndex > 0) {
-                    const hint = document.createElement('div');
+                // Add or update hint for older messages (no spacer — no blank space)
+                let hint = container.querySelector('.virtual-scroll-hint');
+                if (!hint && this.virtualScroll.currentStartIndex > 0) {
+                    hint = document.createElement('div');
                     hint.className = 'system-message virtual-scroll-hint';
                     hint.style.cssText = 'color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
+                    container.insertBefore(hint, container.firstChild);
+                }
+                if (hint && this.virtualScroll.currentStartIndex > 0) {
                     hint.textContent = `↑ Scroll up for ${this.abbreviateNumber(this.virtualScroll.currentStartIndex)} older messages`;
-                    topSpacer.after(hint);
                 }
             }
 
@@ -12649,18 +12626,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.getFilteredMessages(vsStorageKey);
             if (allMessages.length > 0) {
                 this.virtualScroll.currentEndIndex = allMessages.length - 1;
-            }
-
-            // Zero the bottom spacer — we're at the newest messages
-            const bottomSpacer = container.querySelector('.virtual-scroll-spacer-bottom');
-            if (bottomSpacer) {
-                bottomSpacer.style.height = '0px';
-            }
-
-            // Update the hint count if it exists
-            const existingHint = container.querySelector('.virtual-scroll-hint');
-            if (existingHint && this.virtualScroll.currentStartIndex > 0) {
-                existingHint.textContent = `↑ Scroll up for ${this.abbreviateNumber(this.virtualScroll.currentStartIndex)} older messages`;
             }
         }
 
@@ -15453,19 +15418,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // 2. All DOM mutations in sequence
 
-        // Insert the new older messages after the hint
+        // Insert the new older messages after the hint (or at the start)
         const hint = container.querySelector('.virtual-scroll-hint');
         if (hint && hint.nextSibling) {
             container.insertBefore(fragment, hint.nextSibling);
         } else if (hint) {
             container.insertBefore(fragment, hint.nextSibling);
         } else {
-            const topSpacer = container.querySelector('.virtual-scroll-spacer-top');
-            if (topSpacer && topSpacer.nextSibling) {
-                container.insertBefore(fragment, topSpacer.nextSibling);
-            } else {
-                container.insertBefore(fragment, container.firstChild);
-            }
+            container.insertBefore(fragment, container.firstChild);
         }
 
         // Update start index
@@ -15480,44 +15440,20 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
-        // Trim excess messages from bottom — measure actual removed height
+        // Trim excess messages from bottom to maintain window size
         const messageDOMs = container.querySelectorAll('.message[data-message-id]');
         const maxMessages = this.virtualScroll.windowSize;
-        let removedHeight = 0;
 
         if (messageDOMs.length > maxMessages) {
             const toRemove = messageDOMs.length - maxMessages;
             for (let i = messageDOMs.length - 1; i >= messageDOMs.length - toRemove; i--) {
-                removedHeight += messageDOMs[i].offsetHeight;
                 messageDOMs[i].remove();
             }
             this.virtualScroll.currentEndIndex -= toRemove;
         }
 
-        // Update spacers with measured heights
-        // Top spacer shrinks because we loaded older messages into the DOM
-        let topSpacer = container.querySelector('.virtual-scroll-spacer-top');
-        if (topSpacer) {
-            const topHeight = newStartIndex * this.virtualScroll.messageHeightEstimate;
-            topSpacer.style.height = `${Math.max(0, topHeight)}px`;
-            // Remove spacer entirely if we've loaded all messages
-            if (newStartIndex <= 0) {
-                topSpacer.style.height = '0px';
-            }
-        }
-
-        // Bottom spacer grows by exact removed height instead of using estimate
-        let bottomSpacer = container.querySelector('.virtual-scroll-spacer-bottom');
-        if (!bottomSpacer) {
-            bottomSpacer = document.createElement('div');
-            bottomSpacer.className = 'virtual-scroll-spacer-bottom';
-            container.appendChild(bottomSpacer);
-        }
-        const currentBottomHeight = parseFloat(bottomSpacer.style.height) || 0;
-        bottomSpacer.style.height = `${currentBottomHeight + removedHeight}px`;
-
         // 3. Restore scroll position — the net height change tells us how much content
-        // was added above the viewport (new messages + spacer changes)
+        // was added above the viewport (new messages minus trimmed messages)
         const scrollHeightAfter = container.scrollHeight;
         container.scrollTop = scrollTopBefore + (scrollHeightAfter - scrollHeightBefore);
 
@@ -15551,19 +15487,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displayMessageToFragment(msg, fragment);
         });
 
-        // All DOM writes — append new messages at the bottom
-        const bottomSpacer = container.querySelector('.virtual-scroll-spacer-bottom');
-        if (bottomSpacer) {
-            container.insertBefore(fragment, bottomSpacer);
-        } else {
-            container.appendChild(fragment);
-        }
+        // Append new messages at the bottom
+        container.appendChild(fragment);
 
         // Update end index
         this.virtualScroll.currentEndIndex = newEndIndex;
 
         // Trim excess messages from top — measure actual removed height
-        // so we can precisely compensate the spacer
+        // so we can compensate scroll position
         const messageDOMs = container.querySelectorAll('.message[data-message-id]');
         const maxMessages = this.virtualScroll.windowSize;
         let removedHeight = 0;
@@ -15577,36 +15508,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.virtualScroll.currentStartIndex += toRemove;
         }
 
-        // Update spacers — use measured height for the top spacer to prevent jitter
-        const allMessages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
-        let topSpacer = container.querySelector('.virtual-scroll-spacer-top');
-        if (!topSpacer) {
-            topSpacer = document.createElement('div');
-            topSpacer.className = 'virtual-scroll-spacer-top';
-            container.insertBefore(topSpacer, container.firstChild);
+        // Compensate scroll position for removed content above viewport
+        if (removedHeight > 0) {
+            container.scrollTop -= removedHeight;
         }
-        // Grow top spacer by exact removed height instead of using estimate
-        const currentTopHeight = parseFloat(topSpacer.style.height) || 0;
-        topSpacer.style.height = `${currentTopHeight + removedHeight}px`;
 
-        // Bottom spacer based on remaining messages below
-        if (!bottomSpacer) {
-            const newBottom = document.createElement('div');
-            newBottom.className = 'virtual-scroll-spacer-bottom';
-            container.appendChild(newBottom);
-        }
-        const bottomSpacerEl = container.querySelector('.virtual-scroll-spacer-bottom');
-        const bottomHeight = (allMessages.length - 1 - this.virtualScroll.currentEndIndex) * this.virtualScroll.messageHeightEstimate;
-        bottomSpacerEl.style.height = `${Math.max(0, bottomHeight)}px`;
-
-        // Update the hint if it exists
-        const hint = container.querySelector('.virtual-scroll-hint');
-        if (hint && this.virtualScroll.currentStartIndex > 0) {
+        // Update or add the hint for older messages
+        let hint = container.querySelector('.virtual-scroll-hint');
+        if (this.virtualScroll.currentStartIndex > 0) {
+            if (!hint) {
+                hint = document.createElement('div');
+                hint.className = 'system-message virtual-scroll-hint';
+                hint.style.cssText = 'color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
+                container.insertBefore(hint, container.firstChild);
+            }
             hint.textContent = `↑ Scroll up for ${this.abbreviateNumber(this.virtualScroll.currentStartIndex)} older messages`;
         }
 
         // If still near the bottom after loading, chain another load
-        // so the user doesn't scroll into blank space
+        const allMessages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
         const remainingBelow = container.scrollHeight - container.scrollTop - container.clientHeight;
         if (this.virtualScroll.currentEndIndex < allMessages.length - 1 && remainingBelow < 1000) {
             setTimeout(() => {
@@ -15706,14 +15626,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.virtualScroll.currentStartIndex = startIndex;
         this.virtualScroll.currentEndIndex = endIndex;
 
-        // Add top spacer if there are older messages
+        // Add hint at top if there are older messages (no spacer — no blank space)
         if (startIndex > 0) {
-            const topSpacer = document.createElement('div');
-            topSpacer.className = 'virtual-scroll-spacer-top';
-            topSpacer.style.height = `${startIndex * this.virtualScroll.messageHeightEstimate}px`;
-            container.appendChild(topSpacer);
-
-            // Add "scroll up for more" indicator
             const loadMoreDiv = document.createElement('div');
             loadMoreDiv.className = 'system-message virtual-scroll-hint';
             loadMoreDiv.style.cssText = 'color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
@@ -15721,54 +15635,26 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             container.appendChild(loadMoreDiv);
         }
 
-        // Render visible messages in batches to prevent UI freeze
-        // Suppress per-message auto-scroll during batch render — we handle it at the end
+        // Render all visible messages synchronously — 150 messages is fast enough
+        // and avoids blank/flickering content from batched rendering
         const messagesToRender = messages.slice(startIndex, endIndex + 1);
-        const batchSize = 25;
-        let batchIndex = 0;
-        const renderStorageKey = storageKey;
         this.virtualScroll.suppressAutoScroll = true;
 
-        const renderBatch = () => {
-            // Abort if user switched away from this channel during rendering
-            const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-            if (currentKey !== renderStorageKey && !isPM) {
-                this.virtualScroll.suppressAutoScroll = false;
-                return;
-            }
+        for (let i = 0; i < messagesToRender.length; i++) {
+            this.displayMessage(messagesToRender[i]);
+        }
 
-            const end = Math.min(batchIndex + batchSize, messagesToRender.length);
-            for (let i = batchIndex; i < end; i++) {
-                this.displayMessage(messagesToRender[i]);
-            }
-            batchIndex = end;
+        this.virtualScroll.suppressAutoScroll = false;
 
-            if (batchIndex < messagesToRender.length) {
-                requestAnimationFrame(renderBatch);
-            } else {
-                // All messages rendered — re-enable auto-scroll
-                this.virtualScroll.suppressAutoScroll = false;
+        // Initialize virtual scroll handler
+        this.initVirtualScroll(container, storageKey);
 
-                // Add bottom spacer and init scroll
-                const bottomSpacer = document.createElement('div');
-                bottomSpacer.className = 'virtual-scroll-spacer-bottom';
-                bottomSpacer.style.height = '0px';
-                container.appendChild(bottomSpacer);
-
-                // Initialize virtual scroll handler
-                this.initVirtualScroll(container, storageKey);
-
-                // Scroll to bottom if requested (this is the single controlled scroll)
-                if (scrollToBottom && this.settings.autoscroll) {
-                    requestAnimationFrame(() => {
-                        container.scrollTop = container.scrollHeight;
-                    });
-                }
-            }
-        };
-
-        // Render first batch synchronously for immediate feedback, rest async
-        renderBatch();
+        // Scroll to bottom if requested
+        if (scrollToBottom && this.settings.autoscroll) {
+            requestAnimationFrame(() => {
+                container.scrollTop = container.scrollHeight;
+            });
+        }
     }
 
     addChannel(channel, geohash = '') {
@@ -17283,14 +17169,15 @@ function scrollToBottom() {
     const container = document.getElementById('messagesContainer');
     if (!container) return;
 
-    // If virtual scroll has unloaded newer messages (bottom spacer > 0),
-    // re-render from the end so we actually reach the true bottom,
-    // instead of just scrolling to the current partial bottom.
-    const bottomSpacer = container.querySelector('.virtual-scroll-spacer-bottom');
-    if (bottomSpacer && parseFloat(bottomSpacer.style.height) > 0) {
-        const storageKey = container.dataset.virtualScrollKey;
-        const isPM = container.dataset.virtualScrollIsPM === 'true';
-        if (storageKey) {
+    // If virtual scroll has trimmed newer messages, re-render from the end
+    // so we actually reach the true bottom
+    const storageKey = container.dataset.virtualScrollKey;
+    const isPM = container.dataset.virtualScrollIsPM === 'true';
+    if (storageKey) {
+        const messages = isPM
+            ? nym.getFilteredPMMessages(storageKey)
+            : nym.getFilteredMessages(storageKey);
+        if (messages.length > 0 && nym.virtualScroll.currentEndIndex < messages.length - 1) {
             nym.renderMessagesWithVirtualScroll(container, storageKey, true, isPM);
             return;
         }
@@ -18106,7 +17993,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.112 ═══<br/>
+═══ Nymchat v3.31.113 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
