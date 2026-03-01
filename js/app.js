@@ -12603,8 +12603,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Enforce the virtual scroll DOM window — trim oldest DOM messages if over limit
-        // This prevents the DOM from growing unbounded as new messages stream in
-        if (!this.virtualScroll.suppressAutoScroll) {
+        // Only trim from top when user is at the bottom (normal chat flow).
+        // When scrolled up viewing history, let DOM grow temporarily — loadNewerMessages
+        // handles trimming when they scroll back down.
+        if (shouldScroll && !this.virtualScroll.suppressAutoScroll) {
             const domMessages = container.querySelectorAll('.message[data-message-id]');
             const maxInDOM = this.virtualScroll.windowSize;
 
@@ -15518,6 +15520,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // was added above the viewport (new messages + spacer changes)
         const scrollHeightAfter = container.scrollHeight;
         container.scrollTop = scrollTopBefore + (scrollHeightAfter - scrollHeightBefore);
+
+        // If still in the trigger zone after loading (e.g. user was at scrollTop=0),
+        // chain another load so they don't have to scroll down then back up
+        if (this.virtualScroll.currentStartIndex > 0 && container.scrollTop < 200) {
+            setTimeout(() => {
+                this.virtualScroll.isLoading = false;
+                this.handleVirtualScroll(container, storageKey);
+            }, 100);
+        }
     }
 
     // Load newer messages when scrolling down
