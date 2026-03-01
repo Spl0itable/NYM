@@ -4917,7 +4917,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const ctxAvatarNym = document.getElementById('ctxAvatarNym');
         if (ctxAvatarImg) {
             ctxAvatarImg.src = this.getAvatarUrl(pubkey);
-            ctxAvatarImg.onerror = () => { ctxAvatarImg.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
+            ctxAvatarImg.onerror = function() { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
         }
         if (ctxAvatarNym) {
             ctxAvatarNym.innerHTML = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
@@ -5209,8 +5209,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     updateSidebarAvatar() {
         const el = document.getElementById('sidebarAvatar');
         if (el && this.pubkey) {
-            el.src = this.getAvatarUrl(this.pubkey);
-            el.onerror = () => { el.src = `https://robohash.org/${this.pubkey}.png?set=set1&size=80x80`; };
+            const pubkey = this.pubkey;
+            el.src = this.getAvatarUrl(pubkey);
+            el.onerror = function() { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
         }
     }
 
@@ -6364,12 +6365,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Update already-rendered message avatars when a kind 0 profile picture arrives
     updateRenderedAvatars(pubkey, avatarUrl) {
+        const fallback = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`;
         document.querySelectorAll(`img[data-avatar-pubkey="${pubkey}"]`).forEach(img => {
+            img.onerror = function() { this.onerror = null; this.src = fallback; };
             img.src = avatarUrl;
         });
         // Update context menu avatar if open for this user
         const ctxImg = document.getElementById('ctxAvatarImg');
         if (ctxImg && this.contextMenuData?.pubkey === pubkey) {
+            ctxImg.onerror = function() { this.onerror = null; this.src = fallback; };
             ctxImg.src = avatarUrl;
         }
     }
@@ -10525,7 +10529,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
             item.innerHTML = `
-<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" alt="" loading="lazy" onerror="this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">
+<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}</span>
 <div class="channel-badges">
 <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
@@ -10617,7 +10621,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const suffix = this.getPubkeySuffix(pubkey);
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
-        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
 
         // Update UI with formatted nym
         document.getElementById('currentChannel').innerHTML = pmHeaderHtml;
@@ -12307,7 +12311,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const cleanAuthor = this.parseNymFromDisplay(message.author);
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
-            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${message.pubkey}" alt="" loading="lazy" onerror="this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
+            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${message.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
 
             // Get the action content (everything after /me)
             const actionContent = message.content.substring(4);
@@ -12375,7 +12379,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const baseNym = this.parseNymFromDisplay(message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
-            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${message.pubkey}" alt="" loading="lazy" onerror="this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${message.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -13101,7 +13105,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             onclick="nym.openUserPM('${this.escapeHtml(baseNym)}', '${user.pubkey}')"
             oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}')"
             data-nym="${this.escapeHtml(baseNym)}">
-        <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" onerror="this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">
+        <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">
         <span class="user-status ${user.effectiveStatus}"></span>
         <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
     </div>
@@ -13774,7 +13778,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 data-nym="${user.nym}"
                 data-pubkey="${user.pubkey}"
                 onclick="nym.selectSpecificAutocomplete('${user.nym}', '${user.pubkey}')">
-            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${user.pubkey}" alt="" loading="lazy" onerror="this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
+            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${user.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
         </div>
     `;
             }).join('');
@@ -17993,7 +17997,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.113 ═══<br/>
+═══ Nymchat v3.31.114 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
