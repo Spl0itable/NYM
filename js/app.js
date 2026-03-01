@@ -1028,8 +1028,8 @@ class NYM {
         this.messages = new Map();
         this.channelDOMCache = new Map();
         this.virtualScroll = {
-            bufferSize: 30,
-            windowSize: 100,
+            bufferSize: 50,
+            windowSize: 150,
             messageHeightEstimate: 42,
             currentStartIndex: 0,
             currentEndIndex: 0,
@@ -15409,24 +15409,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const scrollHeight = container.scrollHeight;
 
         // Check if scrolled near top (load older messages)
-        if (scrollTop < 200 && this.virtualScroll.currentStartIndex > 0) {
+        if (scrollTop < 1000 && this.virtualScroll.currentStartIndex > 0) {
             this.virtualScroll.isLoading = true;
             this.loadOlderMessages(container, storageKey, isPM);
-            // Delay unlock so scroll position can settle and prevent rapid re-triggers
+            // Brief lock to let scroll position settle before re-triggering
             setTimeout(() => {
                 this.virtualScroll.isLoading = false;
-            }, 150);
+            }, 50);
             return;
         }
 
         // Check if scrolled near bottom (load newer messages)
         const distanceFromBottom = scrollHeight - scrollTop - containerHeight;
-        if (distanceFromBottom < 50 && this.virtualScroll.currentEndIndex < messages.length - 1) {
+        if (distanceFromBottom < 1000 && this.virtualScroll.currentEndIndex < messages.length - 1) {
             this.virtualScroll.isLoading = true;
             this.loadNewerMessages(container, storageKey, isPM);
             setTimeout(() => {
                 this.virtualScroll.isLoading = false;
-            }, 150);
+            }, 50);
         }
     }
 
@@ -15523,11 +15523,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // If still in the trigger zone after loading (e.g. user was at scrollTop=0),
         // chain another load so they don't have to scroll down then back up
-        if (this.virtualScroll.currentStartIndex > 0 && container.scrollTop < 200) {
+        if (this.virtualScroll.currentStartIndex > 0 && container.scrollTop < 1000) {
             setTimeout(() => {
                 this.virtualScroll.isLoading = false;
                 this.handleVirtualScroll(container, storageKey);
-            }, 100);
+            }, 50);
         }
     }
 
@@ -15603,6 +15603,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const hint = container.querySelector('.virtual-scroll-hint');
         if (hint && this.virtualScroll.currentStartIndex > 0) {
             hint.textContent = `↑ Scroll up for ${this.abbreviateNumber(this.virtualScroll.currentStartIndex)} older messages`;
+        }
+
+        // If still near the bottom after loading, chain another load
+        // so the user doesn't scroll into blank space
+        const remainingBelow = container.scrollHeight - container.scrollTop - container.clientHeight;
+        if (this.virtualScroll.currentEndIndex < allMessages.length - 1 && remainingBelow < 1000) {
+            setTimeout(() => {
+                this.virtualScroll.isLoading = false;
+                this.handleVirtualScroll(container, storageKey);
+            }, 50);
         }
     }
 
@@ -17271,21 +17281,22 @@ function clearSearch(inputId) {
 
 function scrollToBottom() {
     const container = document.getElementById('messagesContainer');
-    if (container) {
-        const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-        // For large distances, snap directly to avoid smooth scroll falling short
-        if (distanceToBottom > 2000) {
-            container.scrollTop = container.scrollHeight;
-        } else {
-            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-            // Ensure we actually reach the bottom after the smooth scroll animation
-            setTimeout(() => {
-                if (container.scrollHeight - container.scrollTop - container.clientHeight > 1) {
-                    container.scrollTop = container.scrollHeight;
-                }
-            }, 500);
+    if (!container) return;
+
+    // If virtual scroll has unloaded newer messages (bottom spacer > 0),
+    // re-render from the end so we actually reach the true bottom,
+    // instead of just scrolling to the current partial bottom.
+    const bottomSpacer = container.querySelector('.virtual-scroll-spacer-bottom');
+    if (bottomSpacer && parseFloat(bottomSpacer.style.height) > 0) {
+        const storageKey = container.dataset.virtualScrollKey;
+        const isPM = container.dataset.virtualScrollIsPM === 'true';
+        if (storageKey) {
+            nym.renderMessagesWithVirtualScroll(container, storageKey, true, isPM);
+            return;
         }
     }
+
+    container.scrollTop = container.scrollHeight;
 }
 
 function sendMessage() {
@@ -18095,7 +18106,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.111 ═══<br/>
+═══ Nymchat v3.31.112 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
