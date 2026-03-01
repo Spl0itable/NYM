@@ -72,6 +72,7 @@
     <!-- Report Modal -->
     <div class="modal" id="reportModal" style="display: none;">
         <div class="modal-content" style="max-width: 500px;">
+            <button class="modal-close" onclick="nym.closeReportModal()">✕</button>
             <div class="modal-header">
                 <h2>Report User/Content</h2>
             </div>
@@ -352,6 +353,7 @@
     <!-- P2P File Transfers Modal -->
     <div class="modal" id="p2pTransfersModal">
         <div class="modal-content p2p-modal-content">
+            <button class="modal-close" onclick="closeModal('p2pTransfersModal')">✕</button>
             <div class="modal-header">P2P File Transfers</div>
             <div class="modal-body">
                 <div class="p2p-transfers-list" id="p2pTransfersList">
@@ -367,6 +369,7 @@
     <!-- Developer Nsec Verification Modal -->
     <div class="modal" id="devNsecModal" style="z-index: 1100;">
         <div class="modal-content">
+            <button class="modal-close" onclick="cancelDevNsec()">✕</button>
             <div class="modal-header">Reserved Nickname</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -386,6 +389,7 @@
     <!-- Nick Edit Modal -->
     <div class="modal nick-edit-modal" id="nickEditModal">
         <div class="modal-content">
+            <button class="modal-close" onclick="closeModal('nickEditModal')">✕</button>
             <div class="modal-header">Change Your Nym's nickname</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -406,7 +410,7 @@
                         <div class="avatar-upload-controls">
                             <input type="file" id="nickEditAvatarInput" accept="image/*" style="display: none;" onchange="handleNickEditAvatarSelect(this)">
                             <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                                <button type="button" class="avatar-upload-btn" id="nickEditAvatarUploadBtn" onclick="document.getElementById('nickEditAvatarInput').click()">Change photo</button>
+                                <button type="button" class="avatar-upload-btn" id="nickEditAvatarUploadBtn" onclick="triggerNickEditAvatarUpload()">Change photo</button>
                                 <button type="button" class="avatar-remove-btn" id="nickEditAvatarRemoveBtn" style="display: none;" onclick="removeNickEditAvatar()">Remove</button>
                             </div>
                             <div class="avatar-upload-status" id="nickEditAvatarStatus"></div>
@@ -443,7 +447,7 @@
                         <div class="avatar-upload-controls">
                             <input type="file" id="setupAvatarInput" accept="image/*" style="display: none;" onchange="handleSetupAvatarSelect(this)">
                             <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                                <button type="button" class="avatar-upload-btn" id="setupAvatarUploadBtn" onclick="document.getElementById('setupAvatarInput').click()">Choose photo</button>
+                                <button type="button" class="avatar-upload-btn" id="setupAvatarUploadBtn" onclick="triggerSetupAvatarUpload()">Choose photo</button>
                                 <button type="button" class="avatar-remove-btn" id="setupAvatarRemoveBtn" style="display: none;" onclick="removeSetupAvatar()">Remove</button>
                             </div>
                             <div class="avatar-upload-status" id="setupAvatarStatus"></div>
@@ -481,6 +485,7 @@
     <!-- Settings Modal -->
     <div class="modal" id="settingsModal">
         <div class="modal-content">
+            <button class="modal-close" onclick="closeModal('settingsModal')">✕</button>
             <div class="modal-header">Settings</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -765,6 +770,7 @@
     <!-- Zap Modal -->
     <div class="modal zap-modal" id="zapModal">
         <div class="modal-content">
+            <button class="modal-close" onclick="nym.closeZapModal()">✕</button>
             <div class="modal-header">⚡ Send Lightning Zap</div>
             <div class="modal-body">
                 <div id="zapRecipientInfo" style="text-align: center; margin-bottom: 20px; color: var(--text-dim);">
@@ -838,6 +844,7 @@
     <!-- Share Channel Modal -->
     <div class="modal" id="shareModal">
         <div class="modal-content share-modal">
+            <button class="modal-close" onclick="closeModal('shareModal')">✕</button>
             <div class="modal-header">Share Channel</div>
             <div class="modal-body">
                 <div class="form-group">

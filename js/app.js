@@ -1770,13 +1770,49 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
             this.localActiveFlair = cachedFlair;
         }
 
+        // Restore cached purchases so items show as "purchased" in the shop
+        this._restorePurchasesFromCache();
 
         // Apply to any existing messages immediately
         this.applyShopStylesToOwnMessages();
     }
 
+    _cachePurchases() {
+        try {
+            const data = Array.from(this.userPurchases.entries());
+            const cosmeticsArr = Array.from(this.activeCosmetics || []);
+            localStorage.setItem('nym_purchases_cache', JSON.stringify({
+                purchases: data,
+                activeCosmetics: cosmeticsArr,
+                ts: Date.now()
+            }));
+        } catch (e) { /* ignore */ }
+    }
+
+    _restorePurchasesFromCache() {
+        try {
+            const raw = localStorage.getItem('nym_purchases_cache');
+            if (!raw) return;
+            const cache = JSON.parse(raw);
+            if (!cache || !cache.purchases) return;
+
+            // Only restore if userPurchases is currently empty (avoid overwriting Nostr data)
+            if (this.userPurchases.size === 0) {
+                cache.purchases.forEach(([id, purchase]) => {
+                    this.userPurchases.set(id, purchase);
+                });
+                if (cache.activeCosmetics) {
+                    this.activeCosmetics = new Set(cache.activeCosmetics);
+                }
+            }
+        } catch (e) { /* ignore */ }
+    }
+
     applyCachedShopItemsToNewIdentity() {
         if (!this.pubkey) return;
+
+        // Restore cached purchases so items show as "purchased" in the shop
+        this._restorePurchasesFromCache();
 
         // Load cached active style/flair from localStorage
         const cachedStyle = localStorage.getItem('nym_active_style');
@@ -1791,8 +1827,8 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
             this.localActiveFlair = cachedFlair;
         }
 
-        // If there are any active items, publish them for the new pubkey
-        if (this.activeMessageStyle || this.activeFlair || (this.activeCosmetics && this.activeCosmetics.size > 0)) {
+        // If there are any active items or purchases, publish them for the new pubkey
+        if (this.activeMessageStyle || this.activeFlair || (this.activeCosmetics && this.activeCosmetics.size > 0) || this.userPurchases.size > 0) {
             // Also cache for the new pubkey so others see it immediately
             this.cacheShopActiveItems(this.pubkey, {
                 style: this.activeMessageStyle,
@@ -1800,6 +1836,9 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
                 supporter: this.userPurchases.has('supporter-badge'),
                 cosmetics: Array.from(this.activeCosmetics || [])
             }, Math.floor(Date.now() / 1000));
+
+            // Save purchases to Nostr for the new keypair
+            this.savePurchaseToNostr();
 
             // Broadcast active items for the new pubkey so other users see the styling
             this.publishActiveShopItems();
@@ -2515,19 +2554,39 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
 `;
         }
 
-        // Close modals after delay
-        setTimeout(() => {
-            this.closeZapModal();
-            this.closeShop();
+        // If there's a recovery code, don't auto-close — let the user dismiss manually
+        const hasRecovery = this.connectionMode === 'ephemeral' && recoveryCode;
 
-            // Refresh shop display
-            if (this.activeShopTab) {
-                setTimeout(() => {
-                    this.openShop();
-                    this.switchShopTab('inventory');
-                }, 500);
+        // Replace modal action buttons with a Close button
+        const modalActions = document.querySelector('#zapModal .modal-actions');
+        if (modalActions) {
+            if (hasRecovery) {
+                modalActions.innerHTML = `<button class="send-btn" onclick="nym.dismissShopSuccess()">Close</button>`;
+            } else {
+                modalActions.innerHTML = `<button class="send-btn" onclick="nym.dismissShopSuccess()">Close</button>`;
+                // Auto-close after 5 seconds for non-recovery purchases
+                this._shopSuccessAutoClose = setTimeout(() => {
+                    this.dismissShopSuccess();
+                }, 5000);
             }
-        }, 2000);
+        }
+    }
+
+    dismissShopSuccess() {
+        if (this._shopSuccessAutoClose) {
+            clearTimeout(this._shopSuccessAutoClose);
+            this._shopSuccessAutoClose = null;
+        }
+        this.closeZapModal();
+        this.closeShop();
+
+        // Refresh shop display
+        if (this.activeShopTab) {
+            setTimeout(() => {
+                this.openShop();
+                this.switchShopTab('inventory');
+            }, 500);
+        }
     }
 
     async savePurchaseToNostr(purchaseJustMade = null) {
@@ -2554,6 +2613,7 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
             // Cache to localStorage (CRITICAL)
             localStorage.setItem('nym_active_style', this.activeMessageStyle || '');
             localStorage.setItem('nym_active_flair', this.activeFlair || '');
+            this._cachePurchases();
 
             const purchaseEvent = {
                 kind: 30078,
@@ -2767,6 +2827,9 @@ ${code}
                 this.activeMessageStyle = data.activeStyle || null;
                 this.activeFlair = data.activeFlair || null;
                 this.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
+
+                // Cache purchases locally
+                this._cachePurchases();
 
                 // Save & broadcast so others see it
                 await this.savePurchaseToNostr();
@@ -8227,6 +8290,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (data.activeCosmetics !== undefined) {
                         this.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
                     }
+
+                    // Cache purchases locally for persistence across ephemeral sessions
+                    this._cachePurchases();
 
                     // After loading, broadcast our current active items so others see it
                     this.publishActiveShopItems();
@@ -17879,6 +17945,7 @@ function clearLocalStorageCache() {
             key === 'nym_active_style' ||
             key === 'nym_active_flair' ||
             key === 'nym_shop_active_cache' ||
+            key === 'nym_purchases_cache' ||
             key.startsWith('nym_shop_recovery_')
         )) {
             preserveKeys[key] = localStorage.getItem(key);
@@ -17933,6 +18000,14 @@ function selectWallpaper(type) {
         nym.applyWallpaper(type);
         nym.saveWallpaper(type);
     }
+}
+
+function triggerSetupAvatarUpload() {
+    document.getElementById('setupAvatarInput').click();
+}
+
+function triggerNickEditAvatarUpload() {
+    document.getElementById('nickEditAvatarInput').click();
 }
 
 function triggerWallpaperUpload() {
@@ -17993,7 +18068,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.115 ═══<br/>
+═══ Nymchat v3.31.116 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18291,6 +18366,9 @@ function signOut() {
         localStorage.removeItem('nym_auto_ephemeral_channel');
         localStorage.removeItem('nym_dev_nsec');
         localStorage.removeItem('nym_color_mode');
+        localStorage.removeItem('nym_purchases_cache');
+        localStorage.removeItem('nym_active_style');
+        localStorage.removeItem('nym_active_flair');
         nym.cmdQuit();
     }
 }
