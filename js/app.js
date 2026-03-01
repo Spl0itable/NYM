@@ -12176,21 +12176,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     getNymFromPubkey(pubkey) {
         const user = this.users.get(pubkey);
         if (user) {
-            // Get user's flair
-            const flairHtml = this.getFlairForUser(pubkey);
             // Get clean nym without existing HTML
             const cleanNym = this.parseNymFromDisplay(user.nym);
-            // Return nym with flair included
-            return `${cleanNym}#${this.getPubkeySuffix(pubkey)}${flairHtml}`;
+            return `${cleanNym}#${this.getPubkeySuffix(pubkey)}`;
         }
 
         // Check if we've seen this user in PM conversations
         const pmConvo = Array.from(this.pmConversations.values())
             .find(conv => conv.pubkey === pubkey);
         if (pmConvo && pmConvo.nym) {
-            const flairHtml = this.getFlairForUser(pubkey);
             const cleanNym = this.parseNymFromDisplay(pmConvo.nym);
-            return `${cleanNym}#${this.getPubkeySuffix(pubkey)}${flairHtml}`;
+            return `${cleanNym}#${this.getPubkeySuffix(pubkey)}`;
         }
 
         // Return shortened pubkey as fallback with anon prefix
@@ -12790,8 +12786,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         formatted = formatted
             .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
-            .replace(/<(?!span class="flair|\/span|svg|\/svg|path|\/path|title|\/title|circle|\/circle|rect|\/rect|polyline|\/polyline|polygon|\/polygon|line(?=\s)|\/line|text|\/text|g(?=\s|>|\/)|\/g>)/g, '&lt;')
-            .replace(/>(?![^<]*<\/(?:span|svg|title|path|circle|rect|polyline|polygon|line|text|g)>)/g, '&gt;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
 
         // Code blocks with proper line break handling
@@ -17997,7 +17993,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.114 ═══<br/>
+═══ Nymchat v3.31.115 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
