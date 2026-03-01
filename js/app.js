@@ -17272,7 +17272,19 @@ function clearSearch(inputId) {
 function scrollToBottom() {
     const container = document.getElementById('messagesContainer');
     if (container) {
-        container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+        const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        // For large distances, snap directly to avoid smooth scroll falling short
+        if (distanceToBottom > 2000) {
+            container.scrollTop = container.scrollHeight;
+        } else {
+            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+            // Ensure we actually reach the bottom after the smooth scroll animation
+            setTimeout(() => {
+                if (container.scrollHeight - container.scrollTop - container.clientHeight > 1) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            }, 500);
+        }
     }
 }
 
@@ -18083,7 +18095,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.110 ═══<br/>
+═══ Nymchat v3.31.111 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18626,6 +18638,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (messagesContainer && scrollToBottomBtn) {
         let mobileScrollTimer = null;
+        let isExpandingButtons = false;
 
         messagesContainer.addEventListener('scroll', () => {
             const distanceFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
@@ -18639,25 +18652,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // On mobile, hide input buttons while scrolling up
             if (window.innerWidth <= 768 && inputButtons) {
-                if (distanceFromBottom > 200) {
+                // Skip hiding buttons if they are currently expanding back into view,
+                // because the expansion itself triggers scroll events via layout shift
+                if (distanceFromBottom > 200 && !isExpandingButtons) {
                     inputButtons.classList.add('hidden-on-scroll');
                     scrollToBottomBtn.classList.add('controls-hidden');
                 }
 
                 // Show buttons again after scrolling stops
-                if (mobileScrollTimer) clearTimeout(mobileScrollTimer);
-                mobileScrollTimer = setTimeout(() => {
-                    const wasNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 200;
-                    inputButtons.classList.remove('hidden-on-scroll');
-                    scrollToBottomBtn.classList.remove('controls-hidden');
-                    // When buttons expand back and user is near bottom, auto-scroll
-                    // so the expanding input area doesn't overlap the last message
-                    if (wasNearBottom) {
+                if (!isExpandingButtons) {
+                    if (mobileScrollTimer) clearTimeout(mobileScrollTimer);
+                    mobileScrollTimer = setTimeout(() => {
+                        const wasNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 200;
+                        isExpandingButtons = true;
+                        inputButtons.classList.remove('hidden-on-scroll');
+                        scrollToBottomBtn.classList.remove('controls-hidden');
+                        // Clear the flag after the CSS transition completes (250ms + buffer)
                         setTimeout(() => {
-                            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                        }, 270);
-                    }
-                }, 800);
+                            isExpandingButtons = false;
+                        }, 300);
+                        // When buttons expand back and user is near bottom, auto-scroll
+                        // so the expanding input area doesn't overlap the last message
+                        if (wasNearBottom) {
+                            setTimeout(() => {
+                                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                            }, 270);
+                        }
+                    }, 800);
+                }
             }
         }, { passive: true });
     }
