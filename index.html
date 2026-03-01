@@ -54,6 +54,10 @@
 
     <!-- Context Menu -->
     <div class="context-menu" id="contextMenu">
+        <div class="context-menu-avatar-header" id="ctxAvatarHeader">
+            <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar">
+            <div class="context-menu-avatar-nym" id="ctxAvatarNym"></div>
+        </div>
         <div class="context-menu-item" id="ctxReact">React</div>
         <div class="context-menu-item" id="ctxMention">Mention</div>
         <div class="context-menu-item lightning" id="ctxZap" style="display: none;">⚡ Zap</div>
@@ -129,9 +133,12 @@
           \######  |                                                     
            \______/                                                      
 </pre>
-                <div class="nym-display" onclick="editNick()">
-                    <div class="nym-label">Your Nym (click to edit)</div>
-                    <div class="nym-value" id="currentNym">anonymous</div>
+                <div class="nym-display" onclick="editNick()" style="display: flex; align-items: center; gap: 10px;">
+                    <img id="sidebarAvatar" class="avatar" src="https://robohash.org/default.png?set=set1&size=80x80" alt="" style="width: 32px; height: 32px;">
+                    <div style="flex: 1; min-width: 0;">
+                        <div class="nym-label">Your Nym (click to edit)</div>
+                        <div class="nym-value" id="currentNym">anonymous</div>
+                    </div>
                 </div>
                 <div class="status-indicator">
                     <span class="status-dot" id="statusDot"></span>
@@ -389,6 +396,20 @@
                     </div>
                     <div class="form-hint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
+                <div class="form-group">
+                    <label class="form-label">Avatar</label>
+                    <div class="avatar-upload-section">
+                        <img id="nickEditAvatarPreview" class="avatar-preview" src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar">
+                        <div class="avatar-upload-controls">
+                            <input type="file" id="nickEditAvatarInput" accept="image/*" style="display: none;" onchange="handleNickEditAvatarSelect(this)">
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                <button type="button" class="avatar-upload-btn" onclick="document.getElementById('nickEditAvatarInput').click()">Change photo</button>
+                                <button type="button" class="avatar-remove-btn" id="nickEditAvatarRemoveBtn" style="display: none;" onclick="removeNickEditAvatar()">Remove</button>
+                            </div>
+                            <span class="avatar-upload-hint">Uploaded to blossom.band</span>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="modal-actions">
                 <button class="icon-btn" onclick="randomizeNick()">Randomize</button>
@@ -410,9 +431,19 @@
                         maxlength="20">
                     <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
 
+                    <label class="form-label" style="margin-top: 15px;">Choose Your Avatar (optional)</label>
+                    <div class="avatar-upload-section">
+                        <img id="setupAvatarPreview" class="avatar-preview" src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar">
+                        <div class="avatar-upload-controls">
+                            <input type="file" id="setupAvatarInput" accept="image/*" style="display: none;" onchange="handleSetupAvatarSelect(this)">
+                            <button type="button" class="avatar-upload-btn" onclick="document.getElementById('setupAvatarInput').click()">Choose photo</button>
+                            <span class="avatar-upload-hint">Uploaded to blossom.band</span>
+                        </div>
+                    </div>
+
                     <div id="autoEphemeralGroup" style="margin-top: 15px;">
                         <label style="display: flex; align-items: center; cursor: pointer; font-size: 14px;">
-                            <input type="checkbox" id="autoEphemeralCheckbox"
+                            <input type="checkbox" id="autoEphemeralCheckbox" checked
                                 style="margin-right: 10px; width: auto; cursor: pointer;">
                             <span style="color: var(--text-dim);">Automatically assign new ephemeral nym on each session
                                 restart to skip the welcome screen</span>

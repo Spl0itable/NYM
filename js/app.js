@@ -3929,6 +3929,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.pubkey = pubkey;
         this.nym = 'Luxas';
         document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
+        this.updateSidebarAvatar();
     }
 
     validateGeohashInput(input) {
@@ -4910,6 +4911,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         this.contextMenuData = { nym: baseNym, pubkey, content, messageId };
 
+        // Populate avatar header
+        const ctxAvatarImg = document.getElementById('ctxAvatarImg');
+        const ctxAvatarNym = document.getElementById('ctxAvatarNym');
+        if (ctxAvatarImg) {
+            ctxAvatarImg.src = this.getAvatarUrl(pubkey);
+            ctxAvatarImg.onerror = () => { ctxAvatarImg.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
+        }
+        if (ctxAvatarNym) {
+            ctxAvatarNym.innerHTML = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+        }
+
         // Add slap option if it doesn't exist
         let slapOption = document.getElementById('ctxSlap');
         if (!slapOption) {
@@ -5191,6 +5203,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Get last 4 characters of pubkey
         const suffix = pubkey ? pubkey.slice(-4) : '????';
         return `${nym}<span class="nym-suffix">#${suffix}</span>`;
+    }
+
+    updateSidebarAvatar() {
+        const el = document.getElementById('sidebarAvatar');
+        if (el && this.pubkey) {
+            el.src = this.getAvatarUrl(this.pubkey);
+            el.onerror = () => { el.src = `https://robohash.org/${this.pubkey}.png?set=set1&size=80x80`; };
+        }
     }
 
     getPubkeySuffix(pubkey) {
@@ -6310,6 +6330,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 about: `Nymchat user - ${this.nym}`
             };
 
+            // Include avatar picture if set
+            const avatarUrl = this.userAvatars.get(this.pubkey);
+            if (avatarUrl) {
+                profileToSave.picture = avatarUrl;
+            }
+
             const profileEvent = {
                 kind: 0,
                 created_at: Math.floor(Date.now() / 1000),
@@ -6325,6 +6351,80 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         } catch (error) {
         }
+    }
+
+    getAvatarUrl(pubkey) {
+        // Check custom avatar first
+        const custom = this.userAvatars.get(pubkey);
+        if (custom) return custom;
+        // Fall back to robohash
+        return `https://robohash.org/${pubkey}.png?set=set1&size=80x80`;
+    }
+
+    async uploadAvatar(file) {
+        try {
+            // Compute SHA-256 hash
+            const arrayBuffer = await file.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+            // Create and sign Nostr event for blossom upload auth
+            const now = Math.floor(Date.now() / 1000);
+            const uploadEvent = {
+                kind: 24242,
+                created_at: now,
+                tags: [
+                    ['t', 'upload'],
+                    ['x', hashHex],
+                    ['expiration', String(now + 600)]
+                ],
+                content: 'Uploading blob with SHA-256 hash',
+                pubkey: this.pubkey
+            };
+
+            const signedEvent = await this.signEvent(uploadEvent);
+            const eventBase64 = btoa(JSON.stringify(signedEvent));
+
+            const response = await fetch('https://blossom.band/upload', {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Nostr ${eventBase64}`,
+                    'Content-Type': file.type || 'image/png'
+                },
+                body: file
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.url) {
+                    // Store locally
+                    this.userAvatars.set(this.pubkey, data.url);
+
+                    // Persist for auto-ephemeral reuse
+                    localStorage.setItem('nym_avatar_url', data.url);
+
+                    // Update sidebar avatar
+                    this.updateSidebarAvatar();
+
+                    // Update nostr profile with picture
+                    await this.saveToNostrProfile();
+
+                    return data.url;
+                }
+            }
+            throw new Error(`Upload failed: ${response.status}`);
+        } catch (error) {
+            this.displaySystemMessage('Failed to upload avatar: ' + error.message);
+            return null;
+        }
+    }
+
+    removeAvatar() {
+        this.userAvatars.delete(this.pubkey);
+        localStorage.removeItem('nym_avatar_url');
+        this.updateSidebarAvatar();
+        this.saveToNostrProfile();
     }
 
     async fetchLightningAddressFromProfile(pubkey) {
@@ -7417,7 +7517,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         } catch (_) { }
 
-        const wideFanout = evt && (evt.kind === 7 || evt.kind === 20000 || evt.kind === this.PRESENCE_KIND || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052);
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 7 || evt.kind === 20000 || evt.kind === this.PRESENCE_KIND || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052);
 
         if (wideFanout) {
             // Send to every connected relay for maximum propagation
@@ -7553,7 +7653,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 }
 
-                // Handle profile events (kind 0) for lightning addresses
+                // Handle profile events (kind 0) for lightning addresses and avatars
                 if (event && event.kind === 0) {
                     try {
                         const profile = JSON.parse(event.content);
@@ -7563,6 +7663,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             const lnAddress = profile.lud16 || profile.lud06;
                             this.userLightningAddresses.set(pubkey, lnAddress);
                             this.notifyLightningAddress(pubkey, lnAddress);
+                        }
+
+                        // Extract avatar from profile picture field
+                        if (profile.picture) {
+                            this.userAvatars.set(pubkey, profile.picture);
                         }
 
                         if (profile.name || profile.username || profile.display_name) {
@@ -8046,7 +8151,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Handle synced settings
             this.handleSyncedSettings(event);
         } else if (event.kind === 0) {
-            // Handle profile events (kind 0) for lightning addresses
+            // Handle profile events (kind 0) for lightning addresses and avatars
             try {
                 const profile = JSON.parse(event.content);
                 const pubkey = event.pubkey;
@@ -8056,6 +8161,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const lnAddress = profile.lud16 || profile.lud06;
                     this.userLightningAddresses.set(pubkey, lnAddress);
                     this.notifyLightningAddress(pubkey, lnAddress);
+                }
+
+                // Extract avatar from profile picture field
+                if (profile.picture) {
+                    this.userAvatars.set(pubkey, profile.picture);
                 }
 
                 // Update nym if we don't have one for this user
@@ -10266,7 +10376,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Clean the base nym of any HTML for display
             const cleanBaseNym = this.parseNymFromDisplay(baseNym);
 
+            const pmAvatarSrc = this.getAvatarUrl(pubkey);
             item.innerHTML = `
+<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" alt="" loading="lazy" onerror="this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}</span>
 <div class="channel-badges">
 <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
@@ -10356,11 +10468,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const known = this.users.get(pubkey);
         const baseNym = known ? this.parseNymFromDisplay(known.nym) : this.parseNymFromDisplay(nym);
         const suffix = this.getPubkeySuffix(pubkey);
+        const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
-        document.getElementById('currentChannel').innerHTML = `@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
 
         // Update UI with formatted nym
-        document.getElementById('currentChannel').innerHTML = `@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+        document.getElementById('currentChannel').innerHTML = pmHeaderHtml;
         document.getElementById('channelMeta').textContent = 'Private message';
 
         // Hide share button in PM mode
@@ -10617,6 +10730,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             const profileName = profile.name || profile.username || profile.display_name;
                             this.nym = profileName.substring(0, 20);
                             document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
+                            this.updateSidebarAvatar();
                         }
 
                         // Store and update for OTHER users (Bitchat users, PM contacts)
@@ -12055,7 +12169,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Get clean author name and flair
             const cleanAuthor = this.parseNymFromDisplay(message.author);
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
-            const authorWithFlair = `${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
+            const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
+            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
 
             // Get the action content (everything after /me)
             const actionContent = message.content.substring(4);
@@ -12122,7 +12237,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const formattedContent = this.formatMessageWithQuotes(message.content);
 
             const baseNym = this.parseNymFromDisplay(message.author);
-            const displayAuthorBase = `&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            const avatarSrc = this.getAvatarUrl(message.pubkey);
+            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -12815,11 +12931,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const userColorClass = this.settings.theme === 'bitchat' ? this.getUserColorClass(user.pubkey) : '';
 
+            const avatarSrc = this.getAvatarUrl(user.pubkey);
             return `
-    <div class="user-item list-item ${userColorClass}" 
-            onclick="nym.openUserPM('${this.escapeHtml(baseNym)}', '${user.pubkey}')" 
+    <div class="user-item list-item ${userColorClass}"
+            onclick="nym.openUserPM('${this.escapeHtml(baseNym)}', '${user.pubkey}')"
             oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}')"
             data-nym="${this.escapeHtml(baseNym)}">
+        <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" onerror="this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">
         <span class="user-status ${user.effectiveStatus}"></span>
         <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
     </div>
@@ -13486,12 +13604,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     user.effectiveStatus === 'away' ? ' away' : ' offline';
                 const statusIndicator = `<span class="user-status${statusClass}" style="display: inline-block; margin-right: 6px; vertical-align: middle;"></span>`;
 
+                const acAvatarSrc = this.getAvatarUrl(user.pubkey);
                 return `
         <div class="autocomplete-item ${index === 0 ? 'selected' : ''}"
                 data-nym="${user.nym}"
                 data-pubkey="${user.pubkey}"
                 onclick="nym.selectSpecificAutocomplete('${user.nym}', '${user.pubkey}')">
-            ${statusIndicator}<strong>@${user.displayNym}</strong>
+            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
         </div>
     `;
             }).join('');
@@ -13835,6 +13954,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         this.nym = newNym;
         document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
+        this.updateSidebarAvatar();
 
         const changeMessage = `Your nym's new nick is now ${this.nym}`;
         this.displaySystemMessage(changeMessage);
@@ -16931,6 +17051,17 @@ function editNick() {
     // Show the non-editable suffix next to the input
     const suffix = nym.getPubkeySuffix(nym.pubkey);
     document.getElementById('nickSuffixDisplay').textContent = `#${suffix}`;
+
+    // Show current avatar in edit modal
+    const preview = document.getElementById('nickEditAvatarPreview');
+    const removeBtn = document.getElementById('nickEditAvatarRemoveBtn');
+    if (preview) {
+        preview.src = nym.getAvatarUrl(nym.pubkey);
+    }
+    if (removeBtn) {
+        removeBtn.style.display = nym.userAvatars.has(nym.pubkey) ? 'inline-flex' : 'none';
+    }
+
     document.getElementById('nickEditModal').classList.add('active');
 }
 
@@ -16960,6 +17091,72 @@ function randomizeNick() {
     // Extract base name without #suffix
     const baseName = generated.split('#')[0];
     document.getElementById('newNickInput').value = baseName;
+
+    // Randomize the robohash avatar preview if no custom avatar is set
+    if (!nym.userAvatars.has(nym.pubkey)) {
+        const preview = document.getElementById('nickEditAvatarPreview');
+        if (preview) {
+            preview.src = `https://robohash.org/${encodeURIComponent(baseName)}.png?set=set1&size=80x80`;
+        }
+    }
+}
+
+// Avatar upload handler for setup modal (stores file for upload after keypair generation)
+let pendingSetupAvatarFile = null;
+
+function handleSetupAvatarSelect(input) {
+    const file = input.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+        alert('Please select an image file');
+        return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+        alert('Image must be under 5MB');
+        return;
+    }
+    pendingSetupAvatarFile = file;
+    const preview = document.getElementById('setupAvatarPreview');
+    if (preview) {
+        const reader = new FileReader();
+        reader.onload = (e) => { preview.src = e.target.result; };
+        reader.readAsDataURL(file);
+    }
+}
+
+// Avatar upload handler for nick edit modal (uploads immediately since keypair exists)
+async function handleNickEditAvatarSelect(input) {
+    const file = input.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+        nym.displaySystemMessage('Please select an image file');
+        return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+        nym.displaySystemMessage('Image must be under 5MB');
+        return;
+    }
+    const preview = document.getElementById('nickEditAvatarPreview');
+    if (preview) {
+        const reader = new FileReader();
+        reader.onload = (e) => { preview.src = e.target.result; };
+        reader.readAsDataURL(file);
+    }
+    const url = await nym.uploadAvatar(file);
+    if (url) {
+        nym.displaySystemMessage('Avatar updated');
+        document.getElementById('nickEditAvatarRemoveBtn').style.display = 'inline-flex';
+    }
+}
+
+function removeNickEditAvatar() {
+    nym.removeAvatar();
+    const preview = document.getElementById('nickEditAvatarPreview');
+    if (preview) {
+        preview.src = nym.getAvatarUrl(nym.pubkey);
+    }
+    document.getElementById('nickEditAvatarRemoveBtn').style.display = 'none';
+    nym.displaySystemMessage('Avatar removed');
 }
 
 // Developer nsec verification modal state
@@ -17432,7 +17629,7 @@ function clearLocalStorageCache() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.29.108 ═══<br/>
+═══ Nymchat v3.30.108 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -17501,6 +17698,7 @@ async function checkSavedConnection() {
                 nym.displaySystemMessage('Auto-starting ephemeral session...');
             }
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+            nym.updateSidebarAvatar();
 
             // Connect to relays
             await nym.connectToRelays();
@@ -17518,8 +17716,20 @@ async function checkSavedConnection() {
                     nym.lightningAddress = globalLnAddress;
                     localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
                     nym.updateLightningAddressDisplay();
-                    await nym.saveToNostrProfile();
                 }
+
+                // Restore avatar from localStorage for ephemeral sessions
+                const savedAvatarUrl = localStorage.getItem('nym_avatar_url');
+                if (savedAvatarUrl) {
+                    nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
+                    nym.updateSidebarAvatar();
+                }
+
+                // Publish profile with restored avatar and lightning address
+                await nym.saveToNostrProfile();
+
+                // Re-publish profile after more relays connect
+                setTimeout(() => { nym.saveToNostrProfile(); }, 5000);
             }
 
             // Request notification permission
@@ -17596,6 +17806,7 @@ async function initializeNym() {
             await nym.generateKeypair();
             nym.nym = nymInput || nym.generateRandomNym();
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+            nym.updateSidebarAvatar();
             localStorage.removeItem('nym_connection_mode');
         }
 
@@ -17631,8 +17842,31 @@ async function initializeNym() {
                 nym.lightningAddress = globalLnAddress;
                 localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
                 nym.updateLightningAddressDisplay();
+            }
+
+            // Restore avatar from localStorage for ephemeral sessions
+            const savedAvatarUrl = localStorage.getItem('nym_avatar_url');
+            if (savedAvatarUrl) {
+                nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
+                nym.updateSidebarAvatar();
+            }
+
+            // Upload pending avatar from setup modal if selected
+            if (pendingSetupAvatarFile) {
+                const avatarFile = pendingSetupAvatarFile;
+                pendingSetupAvatarFile = null;
+                nym.uploadAvatar(avatarFile).then(url => {
+                    if (url) {
+                        nym.displaySystemMessage('Avatar uploaded successfully');
+                    }
+                });
+            } else {
+                // Publish profile with restored avatar and/or lightning address
                 await nym.saveToNostrProfile();
             }
+
+            // Re-publish profile after more relays connect
+            setTimeout(() => { nym.saveToNostrProfile(); }, 5000);
         }
 
         // Request notification permission
@@ -17700,6 +17934,12 @@ document.addEventListener('DOMContentLoaded', () => {
     parseUrlChannel();
 
     nym.initialize();
+
+    // Pre-select auto-ephemeral checkbox if previously enabled
+    if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
+        const cb = document.getElementById('autoEphemeralCheckbox');
+        if (cb) cb.checked = true;
+    }
 
     // Scale logo-ascii to fit inside sidebar at any resolution
     (function scaleLogoToFit() {
