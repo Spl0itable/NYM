@@ -133,10 +133,10 @@
           \######  |                                                     
            \______/                                                      
 </pre>
-                <div class="nym-display" onclick="editNick()" style="display: flex; align-items: center; gap: 10px;">
-                    <img id="sidebarAvatar" class="avatar" src="https://robohash.org/default.png?set=set1&size=80x80" alt="" style="width: 32px; height: 32px;">
-                    <div style="flex: 1; min-width: 0;">
-                        <div class="nym-label">Your Nym (click to edit)</div>
+                <div class="nym-display" onclick="editNick()">
+                    <div class="nym-label">Your Nym (click to edit)</div>
+                    <div class="nym-identity">
+                        <img id="sidebarAvatar" class="avatar" src="https://robohash.org/default.png?set=set1&size=80x80" alt="" style="width: 32px; height: 32px;">
                         <div class="nym-value" id="currentNym">anonymous</div>
                     </div>
                 </div>
@@ -406,7 +406,6 @@
                                 <button type="button" class="avatar-upload-btn" onclick="document.getElementById('nickEditAvatarInput').click()">Change photo</button>
                                 <button type="button" class="avatar-remove-btn" id="nickEditAvatarRemoveBtn" style="display: none;" onclick="removeNickEditAvatar()">Remove</button>
                             </div>
-                            <span class="avatar-upload-hint">Uploaded to blossom.band</span>
                         </div>
                     </div>
                 </div>
@@ -437,7 +436,6 @@
                         <div class="avatar-upload-controls">
                             <input type="file" id="setupAvatarInput" accept="image/*" style="display: none;" onchange="handleSetupAvatarSelect(this)">
                             <button type="button" class="avatar-upload-btn" onclick="document.getElementById('setupAvatarInput').click()">Choose photo</button>
-                            <span class="avatar-upload-hint">Uploaded to blossom.band</span>
                         </div>
                     </div>
 
@@ -494,6 +492,54 @@
                         <option value="hacker">Hacker Blue</option>
                         <option value="ghost">Ghost (B&W)</option>
                     </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Chat Wallpaper</label>
+                    <div class="wallpaper-grid" id="wallpaperGrid">
+                        <div class="wallpaper-option selected" data-wallpaper="none" onclick="selectWallpaper('none')">
+                            <div class="wallpaper-preview wallpaper-none">
+                                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            </div>
+                            <span class="wallpaper-label">None</span>
+                        </div>
+                        <div class="wallpaper-option" data-wallpaper="geometric" onclick="selectWallpaper('geometric')">
+                            <div class="wallpaper-preview wallpaper-geometric"></div>
+                            <span class="wallpaper-label">Geometric</span>
+                        </div>
+                        <div class="wallpaper-option" data-wallpaper="circuit" onclick="selectWallpaper('circuit')">
+                            <div class="wallpaper-preview wallpaper-circuit"></div>
+                            <span class="wallpaper-label">Circuit</span>
+                        </div>
+                        <div class="wallpaper-option" data-wallpaper="dots" onclick="selectWallpaper('dots')">
+                            <div class="wallpaper-preview wallpaper-dots"></div>
+                            <span class="wallpaper-label">Dots</span>
+                        </div>
+                        <div class="wallpaper-option" data-wallpaper="waves" onclick="selectWallpaper('waves')">
+                            <div class="wallpaper-preview wallpaper-waves"></div>
+                            <span class="wallpaper-label">Waves</span>
+                        </div>
+                        <div class="wallpaper-option" data-wallpaper="topography" onclick="selectWallpaper('topography')">
+                            <div class="wallpaper-preview wallpaper-topography"></div>
+                            <span class="wallpaper-label">Topography</span>
+                        </div>
+                        <div class="wallpaper-option" data-wallpaper="hexagons" onclick="selectWallpaper('hexagons')">
+                            <div class="wallpaper-preview wallpaper-hexagons"></div>
+                            <span class="wallpaper-label">Hexagons</span>
+                        </div>
+                        <div class="wallpaper-option" data-wallpaper="diamonds" onclick="selectWallpaper('diamonds')">
+                            <div class="wallpaper-preview wallpaper-diamonds"></div>
+                            <span class="wallpaper-label">Diamonds</span>
+                        </div>
+                        <div class="wallpaper-option" data-wallpaper="custom" onclick="triggerWallpaperUpload()" id="customWallpaperOption">
+                            <div class="wallpaper-preview wallpaper-custom" id="customWallpaperPreview">
+                                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                            </div>
+                            <span class="wallpaper-label">Upload</span>
+                        </div>
+                    </div>
+                    <input type="file" id="wallpaperFileInput" accept="image/*" style="display: none" onchange="handleWallpaperUpload(event)">
+                    <div class="form-hint">Choose a background pattern or upload your own image (min 1920x1080)</div>
                 </div>
 
                 <div class="form-group">

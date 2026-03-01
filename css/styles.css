@@ -152,14 +152,22 @@ body::after {
     font-weight: 500;
 }
 
+.nym-identity {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+    min-width: 0;
+}
+
 .nym-value {
     font-size: 15px;
     color: var(--secondary);
-    margin-top: 4px;
     overflow: hidden;
     text-overflow: ellipsis;
     word-break: break-all;
     font-weight: 600;
+    min-width: 0;
 }
 
 .nym-value .nym-suffix {
@@ -734,7 +742,7 @@ body::after {
     flex-direction: column;
     gap: 3px;
     font-size: 14px;
-    background: rgba(0, 0, 0, 0.15);
+    background-color: rgba(0, 0, 0, 0.15);
 }
 
 .scroll-to-bottom-btn {
@@ -3724,7 +3732,7 @@ body.light-mode .sidebar-header {
 }
 
 body.light-mode .messages-container {
-    background: rgba(255, 255, 255, 0.3);
+    background-color: rgba(255, 255, 255, 0.3);
 }
 
 body.light-mode .message.self::before {
@@ -5280,4 +5288,194 @@ body.light-mode .message.self::before {
     font-size: 11px;
     color: var(--text-dim);
     opacity: 0.7;
+}
+
+.wallpaper-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.wallpaper-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    border-radius: 12px;
+    padding: 6px;
+    transition: all 0.2s ease;
+    border: 2px solid transparent;
+}
+
+.wallpaper-option:hover {
+    background: rgba(128, 128, 128, 0.1);
+}
+
+.wallpaper-option.selected {
+    border-color: var(--primary);
+    background: rgb(from var(--primary) r g b / 0.1);
+}
+
+.wallpaper-preview {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+}
+
+body.light-mode .wallpaper-preview {
+    background-color: #ffffff;
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+body.light-mode .wallpaper-preview.wallpaper-geometric {
+    background:
+        linear-gradient(30deg, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.25) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.25) 87.5%),
+        linear-gradient(150deg, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.25) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.25) 87.5%),
+        linear-gradient(30deg, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.25) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.25) 87.5%),
+        linear-gradient(150deg, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.25) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.25) 87.5%),
+        linear-gradient(60deg, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.2) 25%, transparent 25.5%, transparent 75%, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.2) 75%);
+    background-size: 40px 70px;
+    background-position: 0 0, 0 0, 20px 35px, 20px 35px, 0 0;
+}
+
+body.light-mode .wallpaper-preview.wallpaper-circuit {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M10 10h40v40H10z' fill='none' stroke='%23009900' stroke-opacity='0.25' stroke-width='0.5'/%3E%3Ccircle cx='10' cy='10' r='2' fill='%23009900' fill-opacity='0.3'/%3E%3Ccircle cx='50' cy='10' r='2' fill='%23009900' fill-opacity='0.3'/%3E%3Ccircle cx='10' cy='50' r='2' fill='%23009900' fill-opacity='0.3'/%3E%3Ccircle cx='50' cy='50' r='2' fill='%23009900' fill-opacity='0.3'/%3E%3Cpath d='M30 10v15M10 30h15M30 50V35M50 30H35' stroke='%23009900' stroke-opacity='0.2' stroke-width='0.5'/%3E%3Ccircle cx='30' cy='30' r='3' fill='none' stroke='%23009900' stroke-opacity='0.25' stroke-width='0.5'/%3E%3C/svg%3E");
+    background-size: 60px 60px;
+}
+
+body.light-mode .wallpaper-preview.wallpaper-dots {
+    background-image: radial-gradient(circle, rgba(var(--wp-r, 0), var(--wp-g, 180), var(--wp-b, 0), 0.3) 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+body.light-mode .wallpaper-preview.wallpaper-waves {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='20'%3E%3Cpath d='M0 10 Q25 0 50 10 Q75 20 100 10' fill='none' stroke='%23009900' stroke-opacity='0.2' stroke-width='0.8'/%3E%3C/svg%3E");
+    background-size: 100px 20px;
+}
+
+body.light-mode .wallpaper-preview.wallpaper-topography {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cpath d='M20 80 Q35 60 50 65 Q65 70 80 50' fill='none' stroke='%23009900' stroke-opacity='0.2' stroke-width='0.7'/%3E%3Cpath d='M10 60 Q30 40 50 45 Q70 50 90 30' fill='none' stroke='%23009900' stroke-opacity='0.16' stroke-width='0.7'/%3E%3Cpath d='M5 40 Q25 20 50 25 Q75 30 95 10' fill='none' stroke='%23009900' stroke-opacity='0.12' stroke-width='0.7'/%3E%3Cpath d='M15 95 Q40 85 55 88 Q70 91 85 75' fill='none' stroke='%23009900' stroke-opacity='0.14' stroke-width='0.7'/%3E%3C/svg%3E");
+    background-size: 100px 100px;
+}
+
+body.light-mode .wallpaper-preview.wallpaper-hexagons {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 66L0 50L0 16L28 0L56 16L56 50L28 66L28 100' fill='none' stroke='%23009900' stroke-opacity='0.2' stroke-width='0.5'/%3E%3Cpath d='M28 0L28 34L0 50L0 84L28 100L56 84L56 50L28 34' fill='none' stroke='%23009900' stroke-opacity='0.12' stroke-width='0.5'/%3E%3C/svg%3E");
+    background-size: 56px 100px;
+}
+
+body.light-mode .wallpaper-preview.wallpaper-diamonds {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Cpath d='M20 0L40 20L20 40L0 20Z' fill='none' stroke='%23009900' stroke-opacity='0.2' stroke-width='0.5'/%3E%3Cpath d='M20 10L30 20L20 30L10 20Z' fill='none' stroke='%23009900' stroke-opacity='0.12' stroke-width='0.5'/%3E%3C/svg%3E");
+    background-size: 40px 40px;
+}
+
+.wallpaper-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: center;
+}
+
+.wallpaper-option.selected .wallpaper-label {
+    color: var(--primary);
+}
+
+.wallpaper-geometric {
+    background:
+        linear-gradient(30deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.15) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.15) 87.5%),
+        linear-gradient(150deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.15) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.15) 87.5%),
+        linear-gradient(30deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.15) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.15) 87.5%),
+        linear-gradient(150deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.15) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.15) 87.5%),
+        linear-gradient(60deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.12) 25%, transparent 25.5%, transparent 75%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.12) 75%);
+    background-size: 40px 70px;
+    background-position: 0 0, 0 0, 20px 35px, 20px 35px, 0 0;
+}
+
+.wallpaper-circuit {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M10 10h40v40H10z' fill='none' stroke='%2300ff00' stroke-opacity='0.12' stroke-width='0.5'/%3E%3Ccircle cx='10' cy='10' r='2' fill='%2300ff00' fill-opacity='0.15'/%3E%3Ccircle cx='50' cy='10' r='2' fill='%2300ff00' fill-opacity='0.15'/%3E%3Ccircle cx='10' cy='50' r='2' fill='%2300ff00' fill-opacity='0.15'/%3E%3Ccircle cx='50' cy='50' r='2' fill='%2300ff00' fill-opacity='0.15'/%3E%3Cpath d='M30 10v15M10 30h15M30 50V35M50 30H35' stroke='%2300ff00' stroke-opacity='0.1' stroke-width='0.5'/%3E%3Ccircle cx='30' cy='30' r='3' fill='none' stroke='%2300ff00' stroke-opacity='0.12' stroke-width='0.5'/%3E%3C/svg%3E");
+    background-size: 60px 60px;
+}
+
+.wallpaper-dots {
+    background-image: radial-gradient(circle, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.15) 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+.wallpaper-waves {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='20'%3E%3Cpath d='M0 10 Q25 0 50 10 Q75 20 100 10' fill='none' stroke='%2300ff00' stroke-opacity='0.1' stroke-width='0.8'/%3E%3C/svg%3E");
+    background-size: 100px 20px;
+}
+
+.wallpaper-topography {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cpath d='M20 80 Q35 60 50 65 Q65 70 80 50' fill='none' stroke='%2300ff00' stroke-opacity='0.1' stroke-width='0.7'/%3E%3Cpath d='M10 60 Q30 40 50 45 Q70 50 90 30' fill='none' stroke='%2300ff00' stroke-opacity='0.08' stroke-width='0.7'/%3E%3Cpath d='M5 40 Q25 20 50 25 Q75 30 95 10' fill='none' stroke='%2300ff00' stroke-opacity='0.06' stroke-width='0.7'/%3E%3Cpath d='M15 95 Q40 85 55 88 Q70 91 85 75' fill='none' stroke='%2300ff00' stroke-opacity='0.07' stroke-width='0.7'/%3E%3C/svg%3E");
+    background-size: 100px 100px;
+}
+
+.wallpaper-hexagons {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 66L0 50L0 16L28 0L56 16L56 50L28 66L28 100' fill='none' stroke='%2300ff00' stroke-opacity='0.1' stroke-width='0.5'/%3E%3Cpath d='M28 0L28 34L0 50L0 84L28 100L56 84L56 50L28 34' fill='none' stroke='%2300ff00' stroke-opacity='0.06' stroke-width='0.5'/%3E%3C/svg%3E");
+    background-size: 56px 100px;
+}
+
+.wallpaper-diamonds {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Cpath d='M20 0L40 20L20 40L0 20Z' fill='none' stroke='%2300ff00' stroke-opacity='0.1' stroke-width='0.5'/%3E%3Cpath d='M20 10L30 20L20 30L10 20Z' fill='none' stroke='%2300ff00' stroke-opacity='0.06' stroke-width='0.5'/%3E%3C/svg%3E");
+    background-size: 40px 40px;
+}
+
+.wallpaper-custom {
+    background-size: cover;
+    background-position: center;
+}
+
+.messages-container.wallpaper-pattern-geometric {
+    background-image:
+        linear-gradient(30deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.08) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.08) 87.5%),
+        linear-gradient(150deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.08) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.08) 87.5%),
+        linear-gradient(30deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.08) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.08) 87.5%),
+        linear-gradient(150deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.08) 12%, transparent 12.5%, transparent 87%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.08) 87.5%),
+        linear-gradient(60deg, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.06) 25%, transparent 25.5%, transparent 75%, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.06) 75%);
+    background-size: 80px 140px;
+    background-position: 0 0, 0 0, 40px 70px, 40px 70px, 0 0;
+}
+
+.messages-container.wallpaper-pattern-circuit {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Cpath d='M10 10h60v60H10z' fill='none' stroke='%2300ff00' stroke-opacity='0.08' stroke-width='0.5'/%3E%3Ccircle cx='10' cy='10' r='2.5' fill='%2300ff00' fill-opacity='0.1'/%3E%3Ccircle cx='70' cy='10' r='2.5' fill='%2300ff00' fill-opacity='0.1'/%3E%3Ccircle cx='10' cy='70' r='2.5' fill='%2300ff00' fill-opacity='0.1'/%3E%3Ccircle cx='70' cy='70' r='2.5' fill='%2300ff00' fill-opacity='0.1'/%3E%3Cpath d='M40 10v20M10 40h20M40 70V50M70 40H50' stroke='%2300ff00' stroke-opacity='0.07' stroke-width='0.5'/%3E%3Ccircle cx='40' cy='40' r='4' fill='none' stroke='%2300ff00' stroke-opacity='0.08' stroke-width='0.5'/%3E%3C/svg%3E");
+    background-size: 80px 80px;
+}
+
+.messages-container.wallpaper-pattern-dots {
+    background-image: radial-gradient(circle, rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 0.1) 1px, transparent 1px);
+    background-size: 24px 24px;
+}
+
+.messages-container.wallpaper-pattern-waves {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='24'%3E%3Cpath d='M0 12 Q30 0 60 12 Q90 24 120 12' fill='none' stroke='%2300ff00' stroke-opacity='0.07' stroke-width='0.8'/%3E%3C/svg%3E");
+    background-size: 120px 24px;
+}
+
+.messages-container.wallpaper-pattern-topography {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cpath d='M20 100 Q40 75 60 80 Q80 85 100 60' fill='none' stroke='%2300ff00' stroke-opacity='0.07' stroke-width='0.7'/%3E%3Cpath d='M10 70 Q35 45 60 50 Q85 55 110 35' fill='none' stroke='%2300ff00' stroke-opacity='0.06' stroke-width='0.7'/%3E%3Cpath d='M5 45 Q30 22 55 28 Q80 34 105 12' fill='none' stroke='%2300ff00' stroke-opacity='0.05' stroke-width='0.7'/%3E%3Cpath d='M15 115 Q45 100 65 105 Q85 110 105 90' fill='none' stroke='%2300ff00' stroke-opacity='0.05' stroke-width='0.7'/%3E%3C/svg%3E");
+    background-size: 120px 120px;
+}
+
+.messages-container.wallpaper-pattern-hexagons {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 66L0 50L0 16L28 0L56 16L56 50L28 66L28 100' fill='none' stroke='%2300ff00' stroke-opacity='0.07' stroke-width='0.5'/%3E%3Cpath d='M28 0L28 34L0 50L0 84L28 100L56 84L56 50L28 34' fill='none' stroke='%2300ff00' stroke-opacity='0.04' stroke-width='0.5'/%3E%3C/svg%3E");
+    background-size: 56px 100px;
+}
+
+.messages-container.wallpaper-pattern-diamonds {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Cpath d='M24 0L48 24L24 48L0 24Z' fill='none' stroke='%2300ff00' stroke-opacity='0.07' stroke-width='0.5'/%3E%3Cpath d='M24 12L36 24L24 36L12 24Z' fill='none' stroke='%2300ff00' stroke-opacity='0.04' stroke-width='0.5'/%3E%3C/svg%3E");
+    background-size: 48px 48px;
+}
+
+.messages-container.has-custom-wallpaper {
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
 }

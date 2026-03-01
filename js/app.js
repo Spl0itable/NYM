@@ -1863,7 +1863,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
                     if (flairItem) {
                         const flairSpan = document.createElement('span');
                         flairSpan.className = `flair-badge ${this.activeFlair}`;
-                        flairSpan.textContent = flairItem.icon;
+                        flairSpan.innerHTML = flairItem.icon;
                         const suffix = authorEl.querySelector('.nym-suffix');
                         if (suffix) {
                             suffix.after(flairSpan);
@@ -4141,6 +4141,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.loadBlockedChannels();
             this.loadPinnedChannels();
             this.loadHiddenChannels();
+            this.loadWallpaper();
 
             // Load lightning address
             await this.loadLightningAddress();
@@ -6361,6 +6362,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return `https://robohash.org/${pubkey}.png?set=set1&size=80x80`;
     }
 
+    // Update already-rendered message avatars when a kind 0 profile picture arrives
+    updateRenderedAvatars(pubkey, avatarUrl) {
+        document.querySelectorAll(`img[data-avatar-pubkey="${pubkey}"]`).forEach(img => {
+            img.src = avatarUrl;
+        });
+        // Update context menu avatar if open for this user
+        const ctxImg = document.getElementById('ctxAvatarImg');
+        if (ctxImg && this.contextMenuData?.pubkey === pubkey) {
+            ctxImg.src = avatarUrl;
+        }
+    }
+
     async uploadAvatar(file) {
         try {
             // Compute SHA-256 hash
@@ -6425,6 +6438,118 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         localStorage.removeItem('nym_avatar_url');
         this.updateSidebarAvatar();
         this.saveToNostrProfile();
+    }
+
+    // Wallpaper Methods
+    async uploadWallpaper(file) {
+        // Validate minimum image size
+        const minWidth = 1920;
+        const minHeight = 1080;
+
+        const validSize = await new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                URL.revokeObjectURL(img.src);
+                resolve(img.width >= minWidth && img.height >= minHeight);
+            };
+            img.onerror = () => {
+                URL.revokeObjectURL(img.src);
+                resolve(false);
+            };
+            img.src = URL.createObjectURL(file);
+        });
+
+        if (!validSize) {
+            this.displaySystemMessage(`Wallpaper image must be at least ${minWidth}x${minHeight} pixels.`);
+            return null;
+        }
+
+        try {
+            // Compute SHA-256 hash
+            const arrayBuffer = await file.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+            // Create and sign Nostr event for blossom upload auth
+            const now = Math.floor(Date.now() / 1000);
+            const uploadEvent = {
+                kind: 24242,
+                created_at: now,
+                tags: [
+                    ['t', 'upload'],
+                    ['x', hashHex],
+                    ['expiration', String(now + 600)]
+                ],
+                content: 'Uploading blob with SHA-256 hash',
+                pubkey: this.pubkey
+            };
+
+            const signedEvent = await this.signEvent(uploadEvent);
+            const eventBase64 = btoa(JSON.stringify(signedEvent));
+
+            const response = await fetch('https://blossom.band/upload', {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Nostr ${eventBase64}`,
+                    'Content-Type': file.type || 'image/png'
+                },
+                body: file
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.url) {
+                    return data.url;
+                }
+            }
+            throw new Error(`Upload failed: ${response.status}`);
+        } catch (error) {
+            this.displaySystemMessage('Failed to upload wallpaper: ' + error.message);
+            return null;
+        }
+    }
+
+    applyWallpaper(type, customUrl) {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+
+        const presets = ['geometric', 'circuit', 'dots', 'waves', 'topography', 'hexagons', 'diamonds'];
+
+        // Remove any existing wallpaper classes and inline background-image
+        presets.forEach(p => container.classList.remove(`wallpaper-pattern-${p}`));
+        container.classList.remove('has-custom-wallpaper');
+        container.style.backgroundImage = '';
+
+        if (type === 'none' || !type) return;
+
+        if (presets.includes(type)) {
+            container.classList.add(`wallpaper-pattern-${type}`);
+        } else if (type === 'custom' && customUrl) {
+            container.classList.add('has-custom-wallpaper');
+            // Layer a semi-transparent overlay on top of the image for readability
+            const isLight = document.body.classList.contains('light-mode');
+            const overlay = isLight
+                ? 'rgba(245, 245, 242, 0.85)'
+                : 'rgba(10, 10, 15, 0.82)';
+            container.style.backgroundImage = `linear-gradient(${overlay}, ${overlay}), url('${customUrl}')`;
+        }
+    }
+
+    saveWallpaper(type, customUrl) {
+        localStorage.setItem('nym_wallpaper_type', type);
+        if (type === 'custom' && customUrl) {
+            localStorage.setItem('nym_wallpaper_custom_url', customUrl);
+        } else {
+            localStorage.removeItem('nym_wallpaper_custom_url');
+        }
+    }
+
+    loadWallpaper() {
+        const type = localStorage.getItem('nym_wallpaper_type') || 'none';
+        const customUrl = localStorage.getItem('nym_wallpaper_custom_url') || '';
+        this.applyWallpaper(type, customUrl);
+        return { type, customUrl };
     }
 
     async fetchLightningAddressFromProfile(pubkey) {
@@ -7668,6 +7793,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         // Extract avatar from profile picture field
                         if (profile.picture) {
                             this.userAvatars.set(pubkey, profile.picture);
+                            this.updateRenderedAvatars(pubkey, profile.picture);
                         }
 
                         if (profile.name || profile.username || profile.display_name) {
@@ -7889,6 +8015,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
+            // Fetch kind 0 profile for channel message senders we don't have an avatar for.
+            // Await the fetch (same as PMs) so the avatar is available before rendering.
+            if (event.pubkey !== this.pubkey && !this.userAvatars.has(event.pubkey)) {
+                await this.fetchProfileDirect(event.pubkey);
+            }
+
             const message = {
                 id: event.id,
                 author: nym,
@@ -8033,7 +8165,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                     if (flairItem) {
                                         const flairSpan = document.createElement('span');
                                         flairSpan.className = `flair-badge ${normalized.flair}`;
-                                        flairSpan.textContent = flairItem.icon;
+                                        flairSpan.innerHTML = flairItem.icon;
                                         // Insert flair after nym-suffix, before colon/supporter
                                         const suffix = authorEl.querySelector('.nym-suffix');
                                         if (suffix) {
@@ -8166,6 +8298,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // Extract avatar from profile picture field
                 if (profile.picture) {
                     this.userAvatars.set(pubkey, profile.picture);
+                    this.updateRenderedAvatars(pubkey, profile.picture);
                 }
 
                 // Update nym if we don't have one for this user
@@ -10470,7 +10603,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const suffix = this.getPubkeySuffix(pubkey);
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
-        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
 
         // Update UI with formatted nym
         document.getElementById('currentChannel').innerHTML = pmHeaderHtml;
@@ -10731,6 +10864,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             this.nym = profileName.substring(0, 20);
                             document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
                             this.updateSidebarAvatar();
+                        }
+
+                        // Extract avatar from profile picture field
+                        if (profile.picture) {
+                            this.userAvatars.set(event.pubkey, profile.picture);
+                            this.updateRenderedAvatars(event.pubkey, profile.picture);
                         }
 
                         // Store and update for OTHER users (Bitchat users, PM contacts)
@@ -12170,7 +12309,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const cleanAuthor = this.parseNymFromDisplay(message.author);
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
-            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
+            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${message.pubkey}" alt="" loading="lazy" onerror="this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
 
             // Get the action content (everything after /me)
             const actionContent = message.content.substring(4);
@@ -12238,7 +12377,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const baseNym = this.parseNymFromDisplay(message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
-            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${message.pubkey}" alt="" loading="lazy" onerror="this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -13610,7 +13749,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 data-nym="${user.nym}"
                 data-pubkey="${user.pubkey}"
                 onclick="nym.selectSpecificAutocomplete('${user.nym}', '${user.pubkey}')">
-            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
+            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${user.pubkey}" alt="" loading="lazy" onerror="this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
         </div>
     `;
             }).join('');
@@ -17424,6 +17563,9 @@ async function showSettings() {
         readReceiptsSel.value = nym.settings.readReceiptsEnabled !== false ? 'true' : 'false';
     }
 
+    // Initialize wallpaper UI selection
+    initWallpaperUI();
+
     document.getElementById('settingsModal').classList.add('active');
 }
 
@@ -17619,6 +17761,7 @@ function clearLocalStorageCache() {
 
     // Re-apply defaults visually
     nym.applyColorMode();
+    nym.applyWallpaper('none');
     nym.updateChannelPins();
     nym.applyHiddenChannels();
 
@@ -17626,10 +17769,79 @@ function clearLocalStorageCache() {
     closeModal('settingsModal');
 }
 
+// Wallpaper Functions
+function selectWallpaper(type) {
+    // Update selection UI
+    document.querySelectorAll('.wallpaper-option').forEach(opt => {
+        opt.classList.toggle('selected', opt.dataset.wallpaper === type);
+    });
+
+    // If it's not custom, apply immediately
+    if (type !== 'custom') {
+        nym.applyWallpaper(type);
+        nym.saveWallpaper(type);
+    }
+}
+
+function triggerWallpaperUpload() {
+    document.getElementById('wallpaperFileInput').click();
+}
+
+async function handleWallpaperUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    // Show uploading state
+    const customOption = document.getElementById('customWallpaperOption');
+    const customPreview = document.getElementById('customWallpaperPreview');
+    const originalContent = customPreview.innerHTML;
+    customPreview.innerHTML = '<span style="font-size: 10px; color: var(--text-dim);">Uploading...</span>';
+
+    const url = await nym.uploadWallpaper(file);
+
+    if (url) {
+        // Update the custom preview thumbnail
+        customPreview.innerHTML = '';
+        customPreview.style.backgroundImage = `url('${url}')`;
+
+        // Select custom wallpaper
+        document.querySelectorAll('.wallpaper-option').forEach(opt => {
+            opt.classList.toggle('selected', opt.dataset.wallpaper === 'custom');
+        });
+
+        nym.applyWallpaper('custom', url);
+        nym.saveWallpaper('custom', url);
+        nym.displaySystemMessage('Wallpaper uploaded and applied.');
+    } else {
+        customPreview.innerHTML = originalContent;
+    }
+
+    // Reset file input
+    event.target.value = '';
+}
+
+function initWallpaperUI() {
+    const { type, customUrl } = nym.loadWallpaper();
+
+    // Highlight saved selection in settings grid
+    document.querySelectorAll('.wallpaper-option').forEach(opt => {
+        opt.classList.toggle('selected', opt.dataset.wallpaper === type);
+    });
+
+    // If custom, update the preview thumbnail
+    if (type === 'custom' && customUrl) {
+        const customPreview = document.getElementById('customWallpaperPreview');
+        if (customPreview) {
+            customPreview.innerHTML = '';
+            customPreview.style.backgroundImage = `url('${customUrl}')`;
+        }
+    }
+}
+
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.30.108 ═══<br/>
+═══ Nymchat v3.31.108 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18172,15 +18384,25 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // On mobile, hide input buttons while scrolling up
-            if (window.innerWidth <= 768 && inputButtons && distanceFromBottom > 200) {
-                inputButtons.classList.add('hidden-on-scroll');
-                scrollToBottomBtn.classList.add('controls-hidden');
+            if (window.innerWidth <= 768 && inputButtons) {
+                if (distanceFromBottom > 200) {
+                    inputButtons.classList.add('hidden-on-scroll');
+                    scrollToBottomBtn.classList.add('controls-hidden');
+                }
 
                 // Show buttons again after scrolling stops
                 if (mobileScrollTimer) clearTimeout(mobileScrollTimer);
                 mobileScrollTimer = setTimeout(() => {
+                    const wasNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 200;
                     inputButtons.classList.remove('hidden-on-scroll');
                     scrollToBottomBtn.classList.remove('controls-hidden');
+                    // When buttons expand back and user is near bottom, auto-scroll
+                    // so the expanding input area doesn't overlap the last message
+                    if (wasNearBottom) {
+                        setTimeout(() => {
+                            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                        }, 270);
+                    }
                 }, 800);
             }
         }, { passive: true });
