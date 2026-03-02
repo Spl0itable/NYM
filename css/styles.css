@@ -1604,6 +1604,53 @@ body::after {
     position: relative;
 }
 
+.setup-modal-content {
+    max-width: 100%;
+    width: 100%;
+    height: 100%;
+    max-height: 100vh;
+    border-radius: 0;
+    border: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-shadow: none;
+    animation: none;
+}
+
+.setup-modal-header {
+    border-bottom: none;
+    margin-bottom: 16px;
+    padding-bottom: 0;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: normal;
+    display: flex;
+    justify-content: center;
+}
+
+.setup-modal-header .setup-logo {
+    font-size: 6px;
+    margin-bottom: 0;
+}
+
+.setup-modal-content .modal-body {
+    max-width: 500px;
+    width: 90%;
+}
+
+.setup-modal-content .modal-actions {
+    max-width: 500px;
+    width: 90%;
+}
+
+.setup-modal-content > span {
+    max-width: 500px;
+    width: 90%;
+    text-align: center;
+}
+
 .modal-close {
     position: absolute;
     top: 14px;
@@ -2699,6 +2746,14 @@ body::after {
 }
 
 @media (max-width: 768px) {
+    .setup-modal-header .setup-logo {
+        font-size: 3.5px;
+    }
+
+    .setup-modal-content {
+        padding: 20px;
+    }
+
     .gif-picker {
         position: fixed;
         bottom: 60px;
