@@ -1037,7 +1037,6 @@ class NYM {
             suppressAutoScroll: false,
             scrollTimeout: null
         };
-        this._suppressInputButtonHide = false;
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
         this.pendingDMs = new Map();
@@ -10768,12 +10767,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Scroll to bottom
             if (this.settings.autoscroll) {
-                this._suppressInputButtonHide = true;
                 setTimeout(() => {
                     container.scrollTop = container.scrollHeight;
-                    setTimeout(() => {
-                        this._suppressInputButtonHide = false;
-                    }, 300);
                 }, 0);
             }
             return;
@@ -12331,13 +12326,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Now actually display the message in the DOM
         const container = document.getElementById('messagesContainer');
-
-        // If virtual scroll is actively loading older/newer messages, defer this
-        // message to avoid race conditions with DOM trimming and scroll restoration
-        if (this.virtualScroll.isLoading) {
-            return;
-        }
-
         const shouldScroll = !this.virtualScroll.suppressAutoScroll &&
             container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
 
@@ -15173,27 +15161,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             geohash === previousGeohash;
 
         if (isSameChannel) {
-            // Check if the DOM is out of sync with the message store
-            // (e.g. too many messages arrived and virtual scroll state is stale)
-            const container = document.getElementById('messagesContainer');
-            const storageKey = geohash ? `#${geohash}` : channel;
-            const storedCount = (this.messages.get(storageKey) || []).length;
-            const domCount = container ? container.querySelectorAll('.message[data-message-id]').length : 0;
-
-            // If there are stored messages but none in the DOM, force a re-render
-            if (storedCount > 0 && domCount === 0) {
-                // Clear lastChannel so loadChannelMessages won't skip
-                if (container) container.dataset.lastChannel = '';
-                // Fall through to full channel load below
-            } else {
-                // Still ensure the sidebar active state is correct (for initialization)
-                document.querySelectorAll('.channel-item').forEach(item => {
-                    const isActive = item.dataset.channel === channel &&
-                        item.dataset.geohash === geohash;
-                    item.classList.toggle('active', isActive);
-                });
-                return; // Don't reload the same channel
-            }
+            // Still ensure the sidebar active state is correct (for initialization)
+            document.querySelectorAll('.channel-item').forEach(item => {
+                const isActive = item.dataset.channel === channel &&
+                    item.dataset.geohash === geohash;
+                item.classList.toggle('active', isActive);
+            });
+            return; // Don't reload the same channel
         }
 
         this.inPMMode = false;
@@ -15367,12 +15341,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Scroll to bottom
             if (this.settings.autoscroll) {
-                this._suppressInputButtonHide = true;
                 requestAnimationFrame(() => {
                     container.scrollTop = container.scrollHeight;
-                    setTimeout(() => {
-                        this._suppressInputButtonHide = false;
-                    }, 300);
                 });
             }
             return;
@@ -15473,11 +15443,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (scrollTop < 1000 && this.virtualScroll.currentStartIndex > 0) {
             this.virtualScroll.isLoading = true;
             this.loadOlderMessages(container, storageKey, isPM);
-            // Lock long enough for scroll position to settle and prevent
-            // concurrent displayMessage calls from corrupting the DOM
+            // Brief lock to let scroll position settle before re-triggering
             setTimeout(() => {
                 this.virtualScroll.isLoading = false;
-            }, 150);
+            }, 50);
             return;
         }
 
@@ -15488,7 +15457,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.loadNewerMessages(container, storageKey, isPM);
             setTimeout(() => {
                 this.virtualScroll.isLoading = false;
-            }, 150);
+            }, 50);
         }
     }
 
@@ -15560,7 +15529,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             setTimeout(() => {
                 this.virtualScroll.isLoading = false;
                 this.handleVirtualScroll(container, storageKey);
-            }, 150);
+            }, 50);
         }
     }
 
@@ -15629,7 +15598,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             setTimeout(() => {
                 this.virtualScroll.isLoading = false;
                 this.handleVirtualScroll(container, storageKey);
-            }, 150);
+            }, 50);
         }
     }
 
@@ -15737,10 +15706,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const messagesToRender = messages.slice(startIndex, endIndex + 1);
         this.virtualScroll.suppressAutoScroll = true;
 
-        // Suppress input-button hiding during initial render + scroll-to-bottom
-        // so that the programmatic scroll doesn't trigger the hide logic
-        this._suppressInputButtonHide = true;
-
         for (let i = 0; i < messagesToRender.length; i++) {
             this.displayMessage(messagesToRender[i]);
         }
@@ -15754,16 +15719,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (scrollToBottom && this.settings.autoscroll) {
             requestAnimationFrame(() => {
                 container.scrollTop = container.scrollHeight;
-                // Clear the suppression after the scroll-to-bottom settles
-                setTimeout(() => {
-                    this._suppressInputButtonHide = false;
-                }, 300);
             });
-        } else {
-            // Clear suppression after a brief delay if not scrolling
-            setTimeout(() => {
-                this._suppressInputButtonHide = false;
-            }, 300);
         }
     }
 
@@ -17967,7 +17923,7 @@ async function saveSettings() {
         await nym.saveLightningAddress(lightningAddress || null);
     }
 
-    nym.displaySystemMessage('Settings saved');
+    nym.displaySystemMessage('Settings saved locally');
 
     closeModal('settingsModal');
 }
@@ -18112,7 +18068,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.117 ═══<br/>
+═══ Nymchat v3.31.116 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18673,8 +18629,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // On mobile, hide input buttons while scrolling up
             if (window.innerWidth <= 768 && inputButtons) {
                 // Skip hiding buttons if they are currently expanding back into view,
-                // or if we're in the middle of an initial channel render/scroll-to-bottom
-                if (distanceFromBottom > 200 && !isExpandingButtons && !nym._suppressInputButtonHide) {
+                // because the expansion itself triggers scroll events via layout shift
+                if (distanceFromBottom > 200 && !isExpandingButtons) {
                     inputButtons.classList.add('hidden-on-scroll');
                     scrollToBottomBtn.classList.add('controls-hidden');
                 }

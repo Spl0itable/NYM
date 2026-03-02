@@ -6,6 +6,9 @@ import 'package:nym_bar/services/notification_service.dart';
 import 'package:nym_bar/services/firebase_messaging_service.dart';
 import 'package:nym_bar/utils/webview_platform_initializer.dart';
 
+// App theme color to match the PWA dark mode default (--bg: #0a0a0f)
+const Color kAppBackgroundColor = Color(0xFF0A0A0F);
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   configureWebViewPlatform();
@@ -16,10 +19,21 @@ void main() async {
   // Initialize Firebase Messaging placeholder (no actual Firebase dependency)
   await FirebaseMessagingService().initialize();
   
+  // Set edge-to-edge display mode for immersive experience
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  
+  // Configure status bar and navigation bar to match the PWA theme
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
+    // Status bar (top)
+    statusBarColor: kAppBackgroundColor,
+    statusBarIconBrightness: Brightness.light, // Light icons on dark background
+    statusBarBrightness: Brightness.dark, // iOS: dark status bar background
+    // Navigation bar (bottom - Android)
+    systemNavigationBarColor: kAppBackgroundColor,
+    systemNavigationBarIconBrightness: Brightness.light,
+    systemNavigationBarDividerColor: kAppBackgroundColor,
   ));
+  
   runApp(const MyApp());
 }
 
