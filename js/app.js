@@ -17398,41 +17398,49 @@ function setAvatarUploadState(prefix, { spinning, statusText, statusType, btnTex
     }
 }
 
-async function handleSetupAvatarSelect(input) {
-    const file = input.files[0];
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-        setAvatarUploadState('setup', { statusText: 'Please select an image file', statusType: 'error' });
-        return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-        setAvatarUploadState('setup', { statusText: 'Image must be under 5MB', statusType: 'error' });
-        return;
-    }
-
-    const preview = document.getElementById('setupAvatarPreview');
-
-    // Show local preview immediately
-    if (preview) {
-        const dataUrl = await new Promise(resolve => {
-            const reader = new FileReader();
-            reader.onload = (e) => resolve(e.target.result);
-            reader.readAsDataURL(file);
-        });
-        preview.src = dataUrl;
-    }
-
-    // Show uploading state: spinner on avatar, status bar, disable button
-    setAvatarUploadState('setup', {
-        spinning: true,
-        statusText: 'Uploading avatar...',
-        statusType: 'uploading',
-        btnText: 'Uploading...',
-        btnDisabled: true,
-        showRemove: false
-    });
+let _setupAvatarHandling = false;
+async function handleSetupAvatarSelect(eventOrInput) {
+    // Guard against double-execution from both inline onchange and addEventListener
+    if (_setupAvatarHandling) return;
+    _setupAvatarHandling = true;
 
     try {
+        // Support both event-based (event.target.files) and element-based (input.files) access
+        const input = eventOrInput?.target || eventOrInput;
+        const file = input?.files?.[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+            setAvatarUploadState('setup', { statusText: 'Please select an image file', statusType: 'error' });
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            setAvatarUploadState('setup', { statusText: 'Image must be under 5MB', statusType: 'error' });
+            return;
+        }
+
+        const preview = document.getElementById('setupAvatarPreview');
+
+        // Show local preview immediately
+        if (preview) {
+            const dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(file);
+            });
+            preview.src = dataUrl;
+        }
+
+        // Show uploading state: spinner on avatar, status bar, disable button
+        setAvatarUploadState('setup', {
+            spinning: true,
+            statusText: 'Uploading avatar...',
+            statusType: 'uploading',
+            btnText: 'Uploading...',
+            btnDisabled: true,
+            showRemove: false
+        });
+
         // Generate keypair in background if not already done
         if (!setupKeypair) {
             setupKeypair = await nym.generateKeypair();
@@ -17463,6 +17471,7 @@ async function handleSetupAvatarSelect(input) {
             });
         }
     } catch (error) {
+        const preview = document.getElementById('setupAvatarPreview');
         if (preview) preview.src = 'https://robohash.org/default.png?set=set1&size=80x80';
         setAvatarUploadState('setup', {
             spinning: false,
@@ -17472,6 +17481,11 @@ async function handleSetupAvatarSelect(input) {
             btnDisabled: false,
             showRemove: false
         });
+    } finally {
+        // Reset file input for re-selection and clear handling guard
+        const fileInput = document.getElementById('setupAvatarInput');
+        if (fileInput) fileInput.value = '';
+        _setupAvatarHandling = false;
     }
 }
 
@@ -17490,53 +17504,73 @@ function removeSetupAvatar() {
 }
 
 // Avatar upload handler for nick edit modal (uploads immediately since keypair exists)
-async function handleNickEditAvatarSelect(input) {
-    const file = input.files[0];
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-        setAvatarUploadState('nickEdit', { statusText: 'Please select an image file', statusType: 'error' });
-        return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-        setAvatarUploadState('nickEdit', { statusText: 'Image must be under 5MB', statusType: 'error' });
-        return;
-    }
+let _nickEditAvatarHandling = false;
+async function handleNickEditAvatarSelect(eventOrInput) {
+    // Guard against double-execution from both inline onchange and addEventListener
+    if (_nickEditAvatarHandling) return;
+    _nickEditAvatarHandling = true;
 
-    const preview = document.getElementById('nickEditAvatarPreview');
+    try {
+        // Support both event-based (event.target.files) and element-based (input.files) access
+        const input = eventOrInput?.target || eventOrInput;
+        const file = input?.files?.[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+            setAvatarUploadState('nickEdit', { statusText: 'Please select an image file', statusType: 'error' });
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            setAvatarUploadState('nickEdit', { statusText: 'Image must be under 5MB', statusType: 'error' });
+            return;
+        }
 
-    // Show local preview immediately
-    if (preview) {
-        const dataUrl = await new Promise(resolve => {
-            const reader = new FileReader();
-            reader.onload = (e) => resolve(e.target.result);
-            reader.readAsDataURL(file);
-        });
-        preview.src = dataUrl;
-    }
+        const preview = document.getElementById('nickEditAvatarPreview');
 
-    // Show uploading state: spinner on avatar, status bar, disable button
-    setAvatarUploadState('nickEdit', {
-        spinning: true,
-        statusText: 'Uploading avatar...',
-        statusType: 'uploading',
-        btnText: 'Uploading...',
-        btnDisabled: true,
-        showRemove: false
-    });
+        // Show local preview immediately
+        if (preview) {
+            const dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(file);
+            });
+            preview.src = dataUrl;
+        }
 
-    const url = await nym.uploadAvatar(file);
-
-    if (url) {
-        if (preview) preview.src = url;
+        // Show uploading state: spinner on avatar, status bar, disable button
         setAvatarUploadState('nickEdit', {
-            spinning: false,
-            statusText: 'Avatar updated successfully',
-            statusType: 'success',
-            btnText: 'Change photo',
-            btnDisabled: false,
-            showRemove: true
+            spinning: true,
+            statusText: 'Uploading avatar...',
+            statusType: 'uploading',
+            btnText: 'Uploading...',
+            btnDisabled: true,
+            showRemove: false
         });
-    } else {
+
+        const url = await nym.uploadAvatar(file);
+
+        if (url) {
+            if (preview) preview.src = url;
+            setAvatarUploadState('nickEdit', {
+                spinning: false,
+                statusText: 'Avatar updated successfully',
+                statusType: 'success',
+                btnText: 'Change photo',
+                btnDisabled: false,
+                showRemove: true
+            });
+        } else {
+            if (preview) preview.src = nym.getAvatarUrl(nym.pubkey);
+            setAvatarUploadState('nickEdit', {
+                spinning: false,
+                statusText: 'Upload failed — try again',
+                statusType: 'error',
+                btnText: 'Change photo',
+                btnDisabled: false
+            });
+        }
+    } catch (error) {
+        const preview = document.getElementById('nickEditAvatarPreview');
         if (preview) preview.src = nym.getAvatarUrl(nym.pubkey);
         setAvatarUploadState('nickEdit', {
             spinning: false,
@@ -17545,6 +17579,11 @@ async function handleNickEditAvatarSelect(input) {
             btnText: 'Change photo',
             btnDisabled: false
         });
+    } finally {
+        // Reset file input for re-selection and clear handling guard
+        const fileInput = document.getElementById('nickEditAvatarInput');
+        if (fileInput) fileInput.value = '';
+        _nickEditAvatarHandling = false;
     }
 }
 
@@ -18058,6 +18097,29 @@ function triggerWallpaperUpload() {
     document.getElementById('wallpaperFileInput').click();
 }
 
+// Register avatar input change listeners via addEventListener for robust WebView compatibility.
+// The channel image upload uses this same pattern and works reliably in Flutter WebView.
+// This replaces the inline onchange attributes which can fail when files are injected
+// via DataTransfer in embedded WebView environments.
+(function registerAvatarInputListeners() {
+    const setupInput = document.getElementById('setupAvatarInput');
+    if (setupInput) {
+        setupInput.addEventListener('change', function(e) {
+            if (e.target.files && e.target.files[0]) {
+                handleSetupAvatarSelect(e);
+            }
+        });
+    }
+    const nickEditInput = document.getElementById('nickEditAvatarInput');
+    if (nickEditInput) {
+        nickEditInput.addEventListener('change', function(e) {
+            if (e.target.files && e.target.files[0]) {
+                handleNickEditAvatarSelect(e);
+            }
+        });
+    }
+})();
+
 async function handleWallpaperUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -18112,7 +18174,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.117 ═══<br/>
+═══ Nymchat v3.31.118 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
