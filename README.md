@@ -113,6 +113,41 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 **Channel Commands:**
 - `/share` - Share current channel URL
 
+## Running PWA Locally
+
+You can load Nymchat directly on your own machine by opening the `index.html` file in your browser:
+
+1. Clone or download this repository
+2. Open `index.html` in any modern web browser (Chrome, Firefox, Safari, Edge)
+3. That's it — Nymchat will connect to the Nostr relay network and you can start chatting
+
+No build tools, web server, or dependencies are required. The entire web app is self-contained in the `index.html`, `css/`, and `js/` directories.
+
+## Mobile App (iOS & Android)
+
+Nymchat is also available as an open source Flutter app for iOS and Android. The source code is located in the [`android-ios-app/`](android-ios-app/) directory.
+
+The Flutter app is a native shell wrapper around the Nymchat PWA, providing:
+- **Push Notifications** - Native push notifications for new messages
+- **Seamless External Browsing** - Links open in the system browser
+- **Native Performance** - Smooth, native-feeling experience on both platforms
+
+### Building the Flutter App
+
+1. Ensure you have the [Flutter SDK](https://flutter.dev/docs/get-started/install) installed (requires SDK ^3.6.0)
+2. Navigate to the app directory:
+   ```
+   cd android-ios-app
+   ```
+3. Install dependencies:
+   ```
+   flutter pub get
+   ```
+4. Run on your device or emulator:
+   ```
+   flutter run
+   ```
+   
 ## Contributing
 
 Please feel free to submit a Pull Request.
