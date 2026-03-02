@@ -20,7 +20,7 @@
     --text-bright: #00ffaa;
     --border: rgb(from var(--primary) r g b / 0.2);
     --font-mono: 'Courier New', 'Consolas', 'Monaco', monospace;
-    --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', system-ui, sans-serif;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
     --glass-bg: rgba(15, 15, 30, 0.6);
     --glass-border: rgba(255, 255, 255, 0.08);
     --glass-glow: rgb(from var(--primary) r g b / 0.06);

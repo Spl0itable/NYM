@@ -1215,6 +1215,9 @@ class NYM {
         this.lightningAddress = null;
         this.userLightningAddresses = new Map();
         this.userAvatars = new Map();
+        this.avatarBlobCache = new Map();
+        this.avatarBlobInflight = new Map();
+        this.profileFetchedAt = new Map();
         this.profileFetchQueue = [];
         this.profileFetchTimer = null;
         this.profileFetchBatchDelay = 100;
@@ -6420,11 +6423,35 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     getAvatarUrl(pubkey) {
-        // Check custom avatar first
+        // Prefer cached blob URL (instant, no network)
+        const blob = this.avatarBlobCache.get(pubkey);
+        if (blob) return blob;
+        // Check custom avatar URL
         const custom = this.userAvatars.get(pubkey);
         if (custom) return custom;
         // Fall back to robohash
         return `https://robohash.org/${pubkey}.png?set=set1&size=80x80`;
+    }
+
+    // Fetch an avatar image and cache it as a blob object URL.
+    // Deduplicates concurrent requests for the same pubkey.
+    cacheAvatarImage(pubkey, url) {
+        if (this.avatarBlobCache.has(pubkey)) return Promise.resolve();
+        if (this.avatarBlobInflight.has(pubkey)) return this.avatarBlobInflight.get(pubkey);
+        const p = fetch(url, { mode: 'cors' })
+            .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+            .then(blob => {
+                // Revoke old blob URL if avatar changed
+                const old = this.avatarBlobCache.get(pubkey);
+                if (old) URL.revokeObjectURL(old);
+                const objectUrl = URL.createObjectURL(blob);
+                this.avatarBlobCache.set(pubkey, objectUrl);
+                this.updateRenderedAvatars(pubkey, objectUrl);
+            })
+            .catch(() => {})  // silently ignore – original URL still works as fallback
+            .finally(() => { this.avatarBlobInflight.delete(pubkey); });
+        this.avatarBlobInflight.set(pubkey, p);
+        return p;
     }
 
     // Update already-rendered message avatars when a kind 0 profile picture arrives
@@ -6481,6 +6508,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (data.url) {
                     // Store locally
                     this.userAvatars.set(this.pubkey, data.url);
+                    this.cacheAvatarImage(this.pubkey, data.url);
 
                     // Persist for auto-ephemeral reuse
                     localStorage.setItem('nym_avatar_url', data.url);
@@ -6502,6 +6530,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     removeAvatar() {
+        const oldBlob = this.avatarBlobCache.get(this.pubkey);
+        if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(this.pubkey); }
         this.userAvatars.delete(this.pubkey);
         localStorage.removeItem('nym_avatar_url');
         this.updateSidebarAvatar();
@@ -7860,7 +7890,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                         // Extract avatar from profile picture field
                         if (profile.picture) {
+                            const prevUrl = this.userAvatars.get(pubkey);
+                            if (prevUrl !== profile.picture) {
+                                const oldBlob = this.avatarBlobCache.get(pubkey);
+                                if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
+                            }
                             this.userAvatars.set(pubkey, profile.picture);
+                            this.cacheAvatarImage(pubkey, profile.picture);
                             this.updateRenderedAvatars(pubkey, profile.picture);
                         }
 
@@ -8083,10 +8119,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
-            // Fetch kind 0 profile for channel message senders we don't have an avatar for.
-            // Await the fetch (same as PMs) so the avatar is available before rendering.
-            if (event.pubkey !== this.pubkey && !this.userAvatars.has(event.pubkey)) {
-                await this.fetchProfileDirect(event.pubkey);
+            // Fetch kind 0 profile for channel message senders we haven't seen,
+            // or re-fetch if the cached profile is stale (older than 5 minutes)
+            // so avatar/name changes are picked up for active users.
+            if (event.pubkey !== this.pubkey) {
+                const lastFetch = this.profileFetchedAt.get(event.pubkey) || 0;
+                const stale = Date.now() - lastFetch > 5 * 60 * 1000;
+                if (!this.userAvatars.has(event.pubkey) || stale) {
+                    this.profileFetchedAt.set(event.pubkey, Date.now());
+                    await this.fetchProfileDirect(event.pubkey);
+                }
             }
 
             const message = {
@@ -8368,7 +8410,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 // Extract avatar from profile picture field
                 if (profile.picture) {
+                    const prevUrl = this.userAvatars.get(pubkey);
+                    if (prevUrl !== profile.picture) {
+                        const oldBlob = this.avatarBlobCache.get(pubkey);
+                        if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
+                    }
                     this.userAvatars.set(pubkey, profile.picture);
+                    this.cacheAvatarImage(pubkey, profile.picture);
                     this.updateRenderedAvatars(pubkey, profile.picture);
                 }
 
@@ -10958,7 +11006,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                         // Extract avatar from profile picture field
                         if (profile.picture) {
+                            const prevUrl = this.userAvatars.get(event.pubkey);
+                            if (prevUrl !== profile.picture) {
+                                const oldBlob = this.avatarBlobCache.get(event.pubkey);
+                                if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(event.pubkey); }
+                            }
                             this.userAvatars.set(event.pubkey, profile.picture);
+                            this.cacheAvatarImage(event.pubkey, profile.picture);
                             this.updateRenderedAvatars(event.pubkey, profile.picture);
                         }
 
@@ -17249,6 +17303,8 @@ async function handleSetupAvatarSelect(event) {
 function removeSetupAvatar() {
     setupAvatarUrl = null;
     if (setupKeypair) {
+        const oldBlob = nym.avatarBlobCache.get(nym.pubkey);
+        if (oldBlob) { URL.revokeObjectURL(oldBlob); nym.avatarBlobCache.delete(nym.pubkey); }
         nym.userAvatars.delete(nym.pubkey);
         localStorage.removeItem('nym_avatar_url');
     }
@@ -17882,7 +17938,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.123 ═══<br/>
+═══ Nymchat v3.31.124 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -17975,6 +18031,7 @@ async function checkSavedConnection() {
                 const savedAvatarUrl = localStorage.getItem('nym_avatar_url');
                 if (savedAvatarUrl) {
                     nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
+                    nym.cacheAvatarImage(nym.pubkey, savedAvatarUrl);
                     nym.updateSidebarAvatar();
                 }
 
@@ -18105,6 +18162,7 @@ async function initializeNym() {
             if (setupAvatarUrl) {
                 // Avatar was already uploaded in the setup modal - just ensure it's applied
                 nym.userAvatars.set(nym.pubkey, setupAvatarUrl);
+                nym.cacheAvatarImage(nym.pubkey, setupAvatarUrl);
                 localStorage.setItem('nym_avatar_url', setupAvatarUrl);
                 nym.updateSidebarAvatar();
                 setupAvatarUrl = null;
@@ -18115,6 +18173,7 @@ async function initializeNym() {
                 const savedAvatarUrl = localStorage.getItem('nym_avatar_url');
                 if (savedAvatarUrl) {
                     nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
+                    nym.cacheAvatarImage(nym.pubkey, savedAvatarUrl);
                     nym.updateSidebarAvatar();
                 }
                 // Publish profile with restored avatar and/or lightning address
