@@ -746,10 +746,6 @@ body::after {
     background-color: rgba(0, 0, 0, 0.15);
 }
 
-.virtual-scroll-hint {
-    overflow-anchor: none;
-    flex-shrink: 0;
-}
 
 .scroll-to-bottom-btn {
     display: none;

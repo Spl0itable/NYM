@@ -1028,8 +1028,7 @@ class NYM {
         this.messages = new Map();
         this.channelDOMCache = new Map();
         this.virtualScroll = {
-            bufferSize: 50,
-            windowSize: 150,
+            windowSize: 100,
             currentStartIndex: 0,
             currentEndIndex: 0,
             isScrolling: false,
@@ -1061,7 +1060,7 @@ class NYM {
         this.channelSubscriptions = new Map();
         this.channelLoadedFromRelays = new Set();
         this.channelSubscriptionBatchSize = 10;
-        this.channelMessageLimit = 200;
+        this.channelMessageLimit = 100;
         this.settings = this.loadSettings();
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
         if (this.pinnedLandingChannel.type === 'geohash' && this.pinnedLandingChannel.geohash) {
@@ -5572,26 +5571,26 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         relay.subscriptions.add(subId);
 
-        const since24h = Math.floor(Date.now() / 1000) - 86400;
+        const since1h = Math.floor(Date.now() / 1000) - 3600;
 
         const filters = [
-            // Messages in geohash channels (past 24hrs)
+            // Messages in geohash channels (past 1hr)
             {
                 kinds: [20000],
-                since: since24h,
+                since: since1h,
                 limit: 100,
             },
             // Presence broadcasts (away/online status)
             {
                 kinds: [this.PRESENCE_KIND],
-                since: since24h,
+                since: since1h,
                 limit: 100,
             },
             // Reactions for geohash channels
             {
                 kinds: [7],
                 "#k": ["20000"],
-                since: since24h,
+                since: since1h,
                 limit: 100,
             },
             // Reactions for PMs
@@ -5665,7 +5664,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.channelLoadedFromRelays.add(channelKey);
 
         const subId = "nym-ch-" + Math.random().toString(36).substring(7);
-        const since24h = Math.floor(Date.now() / 1000) - 86400; // 24 hours ago
+        const since1h = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
         let filters = [];
 
         // Only geohash channels supported
@@ -5673,13 +5672,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             {
                 kinds: [20000],
                 "#g": [channelKey],
-                since: since24h,
+                since: since1h,
                 limit: this.channelMessageLimit
             },
             {
                 kinds: [7],
                 "#k": ["20000"],
-                since: since24h,
+                since: since1h,
                 limit: this.channelMessageLimit
             }
         ];
@@ -5711,7 +5710,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Only geohash channels
         const geohashChannels = [];
-        const since24h = Math.floor(Date.now() / 1000) - 86400;
+        const since1h = Math.floor(Date.now() / 1000) - 3600;
 
         channels.forEach(({ key, type }) => {
             // Skip already loaded channels
@@ -5726,7 +5725,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             filters.push({
                 kinds: [20000],
                 "#g": geohashChannels,
-                since: since24h,
+                since: since1h,
                 limit: this.channelMessageLimit * geohashChannels.length
             });
             // Mark as loaded
@@ -9898,10 +9897,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 nymMessageId: isKnownBitchat ? null : nymMessageId,  // For tracking Nymchat delivery/read receipts
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
-            // Cap PM conversations at 500 messages
+            // Cap PM conversations at 100 messages
             const sentPmList = this.pmMessages.get(conversationKey);
-            if (sentPmList && sentPmList.length > 500) {
-                this.pmMessages.set(conversationKey, sentPmList.slice(-500));
+            if (sentPmList && sentPmList.length > 100) {
+                this.pmMessages.set(conversationKey, sentPmList.slice(-100));
             }
 
             // Track for automatic retry if delivery receipt not received
@@ -9975,10 +9974,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 nymMessageId,  // For tracking Nymchat delivery/read receipts
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
-            // Cap PM conversations at 500 messages
+            // Cap PM conversations at 100 messages
             const sentPmList2 = this.pmMessages.get(conversationKey);
-            if (sentPmList2 && sentPmList2.length > 500) {
-                this.pmMessages.set(conversationKey, sentPmList2.slice(-500));
+            if (sentPmList2 && sentPmList2.length > 100) {
+                this.pmMessages.set(conversationKey, sentPmList2.slice(-100));
             }
 
             // Track for automatic retry if delivery receipt not received
@@ -10385,9 +10384,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             list.push(msg);
             list.sort((a, b) => a.timestamp - b.timestamp);
-            // Cap PM conversations at 500 messages to prevent memory bloat
-            if (list.length > 500) {
-                list = list.slice(-500);
+            // Cap PM conversations at 100 messages to prevent memory bloat
+            if (list.length > 100) {
+                list = list.slice(-100);
             }
             this.pmMessages.set(conversationKey, list);
 
@@ -11034,16 +11033,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 throw new Error('Not connected to relay');
             }
 
+            const now = Math.floor(Date.now() / 1000);
             const tags = [
                 ['n', this.nym]
             ];
 
             const kind = 20000; // Geohash channels use kind 20000
             tags.push(['g', geohash || 'nym']);
+            tags.push(['expiration', String(now + 3600)]); // Expire after 1 hour
 
             let event = {
                 kind: kind,
-                created_at: Math.floor(Date.now() / 1000),
+                created_at: now,
                 tags: tags,
                 content: content,
                 pubkey: this.pubkey
@@ -11313,6 +11314,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         let kind;
 
+        const now = Math.floor(Date.now() / 1000);
+
         if (this.currentGeohash) {
             kind = 20000; // Geohash channel kind
             tags.push(['g', this.currentGeohash]);
@@ -11321,10 +11324,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
+        tags.push(['expiration', String(now + 3600)]); // Expire after 1 hour
+
         // Create and sign the file offer event
         const event = {
             kind: kind,
-            created_at: Math.floor(Date.now() / 1000),
+            created_at: now,
             tags: tags,
             content: `Sharing file through Nymchat: ${file.name} (${this.formatFileSize(file.size)})`,
             pubkey: this.pubkey
@@ -12052,16 +12057,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.p2pFileOffers.set(offerId, fileOffer);
 
         // Build tags for the Nostr event
+        const now = Math.floor(Date.now() / 1000);
         const tags = [
             ['n', this.nym],
             ['offer', JSON.stringify(fileOffer)],
-            ['g', this.currentGeohash]
+            ['g', this.currentGeohash],
+            ['expiration', String(now + 3600)] // Expire after 1 hour
         ];
 
         // Create and broadcast the file offer event
         const event = {
             kind: 20000,
-            created_at: Math.floor(Date.now() / 1000),
+            created_at: now,
             tags: tags,
             content: `Sharing file via torrent: ${displayName} (${this.formatFileSize(displaySize)})`,
             pubkey: this.pubkey
@@ -12308,10 +12315,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     return a.timestamp.getTime() - b.timestamp.getTime();
                 });
 
-                // Prune in-memory messages if exceeding limit (500 max)
+                // Prune in-memory messages if exceeding limit (100 max)
                 const messages = this.messages.get(storageKey);
-                if (messages && messages.length > 500) {
-                    this.messages.set(storageKey, messages.slice(-500));
+                if (messages && messages.length > 100) {
+                    this.messages.set(storageKey, messages.slice(-100));
                 }
             }
 
@@ -12670,11 +12677,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             container.appendChild(messageEl);
         }
 
-        // Enforce the virtual scroll DOM window — trim oldest DOM messages if over limit
-        // Only trim from top when user is at the bottom (normal chat flow).
-        // When scrolled up viewing history, let DOM grow temporarily — loadNewerMessages
-        // handles trimming when they scroll back down.
-        if (shouldScroll && !this.virtualScroll.suppressAutoScroll) {
+        // Enforce hard cap of 100 messages in DOM — always prune oldest messages
+        // regardless of scroll position to keep memory usage low
+        {
             const domMessages = container.querySelectorAll('.message[data-message-id]');
             const maxInDOM = this.virtualScroll.windowSize;
 
@@ -12684,18 +12689,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     domMessages[i].remove();
                 }
                 this.virtualScroll.currentStartIndex += toRemove;
-
-                // Add or update hint for older messages (no spacer — no blank space)
-                let hint = container.querySelector('.virtual-scroll-hint');
-                if (!hint && this.virtualScroll.currentStartIndex > 0) {
-                    hint = document.createElement('div');
-                    hint.className = 'system-message virtual-scroll-hint';
-                    hint.style.cssText = 'color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
-                    container.insertBefore(hint, container.firstChild);
-                }
-                if (hint && this.virtualScroll.currentStartIndex > 0) {
-                    hint.textContent = `↑ Scroll up for ${this.abbreviateNumber(this.virtualScroll.currentStartIndex)} older messages`;
-                }
             }
 
             // Keep virtual scroll end index in sync
@@ -15457,223 +15450,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         container.addEventListener('scroll', container._virtualScrollHandler, { passive: true });
     }
 
-    // Handle scroll events for virtual scrolling
+    // Handle scroll events — with 100-message hard cap, no virtual scroll loading needed
     handleVirtualScroll(container, storageKey) {
-        // Prevent re-entrant calls while loading
-        if (this.virtualScroll.isLoading) {
-            return;
-        }
-
-        // Get context from container
-        const isPM = container.dataset.virtualScrollIsPM === 'true';
-        const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
-
-        if (messages.length <= this.virtualScroll.windowSize) {
-            return; // No need for virtual scrolling with few messages
-        }
-
-        const scrollTop = container.scrollTop;
-        const containerHeight = container.clientHeight;
-        const scrollHeight = container.scrollHeight;
-
-        // Check if scrolled near top (load older messages)
-        if (scrollTop < 1000 && this.virtualScroll.currentStartIndex > 0) {
-            this.virtualScroll.isLoading = true;
-            this.loadOlderMessages(container, storageKey, isPM);
-            // Lock long enough for scroll position to settle and prevent
-            // concurrent displayMessage calls from corrupting the DOM
-            setTimeout(() => {
-                this.virtualScroll.isLoading = false;
-            }, 150);
-            return;
-        }
-
-        // Check if scrolled near bottom (load newer messages)
-        const distanceFromBottom = scrollHeight - scrollTop - containerHeight;
-        if (distanceFromBottom < 1000 && this.virtualScroll.currentEndIndex < messages.length - 1) {
-            this.virtualScroll.isLoading = true;
-            this.loadNewerMessages(container, storageKey, isPM);
-            setTimeout(() => {
-                this.virtualScroll.isLoading = false;
-            }, 150);
-        }
-    }
-
-    // Load older messages when scrolling up
-    loadOlderMessages(container, storageKey, isPM = false) {
-        const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
-        if (messages.length === 0 || this.virtualScroll.currentStartIndex <= 0) return;
-
-        const loadCount = Math.min(this.virtualScroll.bufferSize, this.virtualScroll.currentStartIndex);
-        const newStartIndex = this.virtualScroll.currentStartIndex - loadCount;
-
-        // Get messages to prepend
-        const messagesToAdd = messages.slice(newStartIndex, this.virtualScroll.currentStartIndex);
-
-        // Build fragment off-DOM
-        const fragment = document.createDocumentFragment();
-        messagesToAdd.forEach(msg => {
-            this.displayMessageToFragment(msg, fragment);
-        });
-
-        // 1. Read current scroll state once before any mutations
-        const scrollHeightBefore = container.scrollHeight;
-        const scrollTopBefore = container.scrollTop;
-
-        // 2. All DOM mutations in sequence
-
-        // Insert the new older messages after the hint (or at the start)
-        const hint = container.querySelector('.virtual-scroll-hint');
-        if (hint && hint.nextSibling) {
-            container.insertBefore(fragment, hint.nextSibling);
-        } else if (hint) {
-            container.insertBefore(fragment, hint.nextSibling);
-        } else {
-            container.insertBefore(fragment, container.firstChild);
-        }
-
-        // Update start index
-        this.virtualScroll.currentStartIndex = newStartIndex;
-
-        // Update or remove the hint
-        if (hint) {
-            if (newStartIndex <= 0) {
-                hint.remove();
-            } else {
-                hint.textContent = `↑ Scroll up for ${this.abbreviateNumber(newStartIndex)} older messages`;
-            }
-        }
-
-        // Trim excess messages from bottom to maintain window size
-        const messageDOMs = container.querySelectorAll('.message[data-message-id]');
-        const maxMessages = this.virtualScroll.windowSize;
-
-        if (messageDOMs.length > maxMessages) {
-            const toRemove = messageDOMs.length - maxMessages;
-            for (let i = messageDOMs.length - 1; i >= messageDOMs.length - toRemove; i--) {
-                messageDOMs[i].remove();
-            }
-            this.virtualScroll.currentEndIndex -= toRemove;
-        }
-
-        // 3. Restore scroll position — the net height change tells us how much content
-        // was added above the viewport (new messages minus trimmed messages)
-        const scrollHeightAfter = container.scrollHeight;
-        container.scrollTop = scrollTopBefore + (scrollHeightAfter - scrollHeightBefore);
-
-        // If still in the trigger zone after loading (e.g. user was at scrollTop=0),
-        // chain another load so they don't have to scroll down then back up
-        if (this.virtualScroll.currentStartIndex > 0 && container.scrollTop < 1000) {
-            setTimeout(() => {
-                this.virtualScroll.isLoading = false;
-                this.handleVirtualScroll(container, storageKey);
-            }, 150);
-        }
-    }
-
-    // Load newer messages when scrolling down
-    loadNewerMessages(container, storageKey, isPM = false) {
-        const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
-        if (messages.length === 0 || this.virtualScroll.currentEndIndex >= messages.length - 1) return;
-
-        const loadCount = Math.min(
-            this.virtualScroll.bufferSize,
-            messages.length - 1 - this.virtualScroll.currentEndIndex
-        );
-        const newEndIndex = this.virtualScroll.currentEndIndex + loadCount;
-
-        // Get messages to append
-        const messagesToAdd = messages.slice(this.virtualScroll.currentEndIndex + 1, newEndIndex + 1);
-
-        // Build fragment off-DOM
-        const fragment = document.createDocumentFragment();
-        messagesToAdd.forEach(msg => {
-            this.displayMessageToFragment(msg, fragment);
-        });
-
-        // Append new messages at the bottom
-        container.appendChild(fragment);
-
-        // Update end index
-        this.virtualScroll.currentEndIndex = newEndIndex;
-
-        // Trim excess messages from top — measure actual removed height
-        // so we can compensate scroll position
-        const messageDOMs = container.querySelectorAll('.message[data-message-id]');
-        const maxMessages = this.virtualScroll.windowSize;
-        let removedHeight = 0;
-
-        if (messageDOMs.length > maxMessages) {
-            const toRemove = messageDOMs.length - maxMessages;
-            for (let i = 0; i < toRemove; i++) {
-                removedHeight += messageDOMs[i].offsetHeight;
-                messageDOMs[i].remove();
-            }
-            this.virtualScroll.currentStartIndex += toRemove;
-        }
-
-        // Compensate scroll position for removed content above viewport
-        if (removedHeight > 0) {
-            container.scrollTop -= removedHeight;
-        }
-
-        // Update or add the hint for older messages
-        let hint = container.querySelector('.virtual-scroll-hint');
-        if (this.virtualScroll.currentStartIndex > 0) {
-            if (!hint) {
-                hint = document.createElement('div');
-                hint.className = 'system-message virtual-scroll-hint';
-                hint.style.cssText = 'color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
-                container.insertBefore(hint, container.firstChild);
-            }
-            hint.textContent = `↑ Scroll up for ${this.abbreviateNumber(this.virtualScroll.currentStartIndex)} older messages`;
-        }
-
-        // If still near the bottom after loading, chain another load
-        const allMessages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
-        const remainingBelow = container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (this.virtualScroll.currentEndIndex < allMessages.length - 1 && remainingBelow < 1000) {
-            setTimeout(() => {
-                this.virtualScroll.isLoading = false;
-                this.handleVirtualScroll(container, storageKey);
-            }, 150);
-        }
-    }
-
-    // Display a message to a document fragment (for batch operations)
-    displayMessageToFragment(message, fragment) {
-        // Use an offscreen container to avoid swapping IDs on the real container
-        // which causes expensive style recalculations
-        if (!this._offscreenMessageContainer) {
-            this._offscreenMessageContainer = document.createElement('div');
-            this._offscreenMessageContainer.id = 'offscreenMessageContainer';
-            this._offscreenMessageContainer.style.cssText = 'position:absolute;left:-9999px;top:-9999px;visibility:hidden;pointer-events:none;';
-            document.body.appendChild(this._offscreenMessageContainer);
-        }
-
-        const offscreen = this._offscreenMessageContainer;
-        const originalContainer = document.getElementById('messagesContainer');
-
-        // Suppress auto-scroll since we're rendering to an offscreen fragment
-        this.virtualScroll.suppressAutoScroll = true;
-
-        // Swap IDs briefly for displayMessage to find the container
-        const originalId = originalContainer.id;
-        originalContainer.id = 'messagesContainer_backup';
-        offscreen.id = 'messagesContainer';
-
-        // Display the message
-        this.displayMessage(message);
-
-        // Move rendered element to fragment
-        while (offscreen.firstChild) {
-            fragment.appendChild(offscreen.firstChild);
-        }
-
-        // Restore IDs
-        offscreen.id = 'offscreenMessageContainer';
-        originalContainer.id = originalId;
-        this.virtualScroll.suppressAutoScroll = false;
+        return;
     }
 
 
@@ -15730,17 +15509,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.virtualScroll.currentStartIndex = startIndex;
         this.virtualScroll.currentEndIndex = endIndex;
 
-        // Add hint at top if there are older messages (no spacer — no blank space)
-        if (startIndex > 0) {
-            const loadMoreDiv = document.createElement('div');
-            loadMoreDiv.className = 'system-message virtual-scroll-hint';
-            loadMoreDiv.style.cssText = 'color: var(--text-dim); font-size: 12px; text-align: center; padding: 10px;';
-            loadMoreDiv.textContent = `↑ Scroll up for ${this.abbreviateNumber(startIndex)} older messages`;
-            container.appendChild(loadMoreDiv);
-        }
-
-        // Render all visible messages synchronously — 150 messages is fast enough
-        // and avoids blank/flickering content from batched rendering
+        // Render all visible messages synchronously
         const messagesToRender = messages.slice(startIndex, endIndex + 1);
         this.virtualScroll.suppressAutoScroll = true;
 
@@ -18113,7 +17882,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.122 ═══<br/>
+═══ Nymchat v3.31.123 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18597,18 +18366,18 @@ document.addEventListener('DOMContentLoaded', () => {
             // Skip current channel
             if (channel === currentKey) return;
 
-            // Prune inactive channels to 500 messages max
-            if (messages.length > 500) {
-                nym.messages.set(channel, messages.slice(-500));
+            // Prune inactive channels to 100 messages max
+            if (messages.length > 100) {
+                nym.messages.set(channel, messages.slice(-100));
             }
         });
 
-        // Prune PM conversations to 500 messages max
+        // Prune PM conversations to 100 messages max
         const currentPMKey = nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null;
         nym.pmMessages.forEach((messages, convKey) => {
             if (convKey === currentPMKey) return;
-            if (messages.length > 500) {
-                nym.pmMessages.set(convKey, messages.slice(-500));
+            if (messages.length > 100) {
+                nym.pmMessages.set(convKey, messages.slice(-100));
             }
         });
 
