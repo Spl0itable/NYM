@@ -1576,7 +1576,6 @@ body::after {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     z-index: 1000;
@@ -1825,7 +1824,6 @@ body::after {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.7);
     backdrop-filter: blur(30px);
     -webkit-backdrop-filter: blur(30px);
     z-index: 2000;
@@ -3422,7 +3420,6 @@ body.light-mode .geohash-info-item {
 }
 
 body.light-mode .shop-modal {
-    background: rgba(0, 0, 0, 0.25);
     backdrop-filter: blur(15px);
 }
 
@@ -3721,10 +3718,6 @@ body.light-mode .message.mentioned {
     background: rgba(0, 0, 0, 0.03);
 }
 
-body.light-mode .zap-modal {
-    background: rgba(0, 0, 0, 0.4);
-}
-
 body.light-mode .autocomplete-dropdown,
 body.light-mode .emoji-autocomplete {
     background: rgba(255, 255, 255, 0.92);
@@ -3804,7 +3797,6 @@ body.light-mode .message-time:hover::after {
 }
 
 body.light-mode .image-modal-close {
-    background: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -3834,7 +3826,6 @@ body.light-mode .message.self::before {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     z-index: 900;
