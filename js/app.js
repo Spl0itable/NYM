@@ -4982,7 +4982,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const ctxAvatarNym = document.getElementById('ctxAvatarNym');
         if (ctxAvatarImg) {
             ctxAvatarImg.src = this.getAvatarUrl(pubkey);
-            ctxAvatarImg.onerror = function() { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
+            ctxAvatarImg.onerror = function () { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
         }
         if (ctxAvatarNym) {
             ctxAvatarNym.innerHTML = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
@@ -5276,7 +5276,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (el && this.pubkey) {
             const pubkey = this.pubkey;
             el.src = this.getAvatarUrl(pubkey);
-            el.onerror = function() { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
+            el.onerror = function () { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
         }
     }
 
@@ -6446,7 +6446,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.avatarBlobCache.set(pubkey, objectUrl);
                 this.updateRenderedAvatars(pubkey, objectUrl);
             })
-            .catch(() => {})  // silently ignore – original URL still works as fallback
+            .catch(() => { })  // silently ignore – original URL still works as fallback
             .finally(() => { this.avatarBlobInflight.delete(pubkey); });
         this.avatarBlobInflight.set(pubkey, p);
         return p;
@@ -6456,13 +6456,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     updateRenderedAvatars(pubkey, avatarUrl) {
         const fallback = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`;
         document.querySelectorAll(`img[data-avatar-pubkey="${pubkey}"]`).forEach(img => {
-            img.onerror = function() { this.onerror = null; this.src = fallback; };
+            img.onerror = function () { this.onerror = null; this.src = fallback; };
             img.src = avatarUrl;
         });
         // Update context menu avatar if open for this user
         const ctxImg = document.getElementById('ctxAvatarImg');
         if (ctxImg && this.contextMenuData?.pubkey === pubkey) {
-            ctxImg.onerror = function() { this.onerror = null; this.src = fallback; };
+            ctxImg.onerror = function () { this.onerror = null; this.src = fallback; };
             ctxImg.src = avatarUrl;
         }
     }
@@ -6621,28 +6621,28 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     applyWallpaper(type, customUrl) {
-        const container = document.getElementById('messagesContainer');
-        if (!container) return;
+        const layer = document.getElementById('wallpaperLayer');
+        if (!layer) return;
 
         const presets = ['geometric', 'circuit', 'dots', 'waves', 'topography', 'hexagons', 'diamonds'];
 
         // Remove any existing wallpaper classes and inline background-image
-        presets.forEach(p => container.classList.remove(`wallpaper-pattern-${p}`));
-        container.classList.remove('has-custom-wallpaper');
-        container.style.backgroundImage = '';
+        presets.forEach(p => layer.classList.remove(`wallpaper-pattern-${p}`));
+        layer.classList.remove('has-custom-wallpaper');
+        layer.style.backgroundImage = '';
 
         if (type === 'none' || !type) return;
 
         if (presets.includes(type)) {
-            container.classList.add(`wallpaper-pattern-${type}`);
+            layer.classList.add(`wallpaper-pattern-${type}`);
         } else if (type === 'custom' && customUrl) {
-            container.classList.add('has-custom-wallpaper');
+            layer.classList.add('has-custom-wallpaper');
             // Layer a semi-transparent overlay on top of the image for readability
             const isLight = document.body.classList.contains('light-mode');
             const overlay = isLight
                 ? 'rgba(245, 245, 242, 0.85)'
                 : 'rgba(10, 10, 15, 0.82)';
-            container.style.backgroundImage = `linear-gradient(${overlay}, ${overlay}), url('${customUrl}')`;
+            layer.style.backgroundImage = `linear-gradient(${overlay}, ${overlay}), url('${customUrl}')`;
         }
     }
 
@@ -6656,7 +6656,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     loadWallpaper() {
-        const type = localStorage.getItem('nym_wallpaper_type') || 'none';
+        const type = localStorage.getItem('nym_wallpaper_type') || 'geometric';
         const customUrl = localStorage.getItem('nym_wallpaper_custom_url') || '';
         this.applyWallpaper(type, customUrl);
         return { type, customUrl };
@@ -17500,7 +17500,7 @@ async function changeRelay() {
 async function showSettings() {
     nym.updateRelayStatus();
 
-    // Load color mode setting
+    // Load color mode setting (auto-save and auto-apply on click)
     const colorModeGroup = document.getElementById('colorModeGroup');
     if (colorModeGroup) {
         const currentMode = nym.getColorMode();
@@ -17509,6 +17509,8 @@ async function showSettings() {
             btn.onclick = () => {
                 colorModeGroup.querySelectorAll('.color-mode-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
+                localStorage.setItem('nym_color_mode', btn.dataset.mode);
+                nym.applyColorMode();
             };
         });
     }
@@ -17673,7 +17675,14 @@ async function showSettings() {
         });
     }
 
-    document.getElementById('themeSelect').value = nym.settings.theme;
+    const themeSelect = document.getElementById('themeSelect');
+    themeSelect.value = nym.settings.theme;
+    themeSelect.onchange = function () {
+        nym.settings.theme = this.value;
+        nym.applyTheme(this.value);
+        nym.saveSettings();
+    };
+
     document.getElementById('soundSelect').value = nym.settings.sound;
     document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
     document.getElementById('timestampSelect').value = nym.settings.showTimestamps;
@@ -17997,7 +18006,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.126 ═══<br/>
+═══ Nymchat v3.31.127 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18123,7 +18132,7 @@ async function checkSavedConnection() {
                         }
                         nym.switchChannel(channel, geohash || '');
                     }
-                } catch (e) {}
+                } catch (e) { }
             }
 
             // Route to channel from URL if present (overrides saved channel)

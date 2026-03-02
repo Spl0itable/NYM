@@ -49,6 +49,7 @@
             if (isLight) document.body.classList.add('light-mode');
         })();
     </script>
+    <div id="wallpaperLayer"></div>
     <div class="mobile-overlay" id="mobileOverlay" onclick="nym.closeSidebar()"></div>
     <button class="mobile-menu-toggle" onclick="toggleSidebar()">☰</button>
 
@@ -367,7 +368,7 @@
     </div>
 
     <!-- Developer Nsec Verification Modal -->
-    <div class="modal" id="devNsecModal" style="z-index: 1100;">
+    <div class="modal" id="devNsecModal">
         <div class="modal-content">
             <button class="modal-close" onclick="cancelDevNsec()">✕</button>
             <div class="modal-header">Reserved Nickname</div>
@@ -390,7 +391,7 @@
     <div class="modal nick-edit-modal" id="nickEditModal">
         <div class="modal-content">
             <button class="modal-close" onclick="closeModal('nickEditModal')">✕</button>
-            <div class="modal-header">Change Your Nym's nickname</div>
+            <div class="modal-header">Change Nickname & Avatar</div>
             <div class="modal-body">
                 <div class="form-group">
                     <label class="form-label">New Nym nick</label>
