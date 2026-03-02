@@ -168,6 +168,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Legal
 
+If you choose to use Nymchat on 21 Million LLC operated infrastructure and domain (nymchat.app), your use is subject to the below Terms of Service and Privacy Policy. Otherwise, should you operate Nymchat locally or on an external service, you can safely ignore and are exempt.
+
 - [Terms of Service](https://web.nymchat.app/static/tos)
 - [Privacy Policy](https://web.nymchat.app/static/pp)
 
