@@ -1,3 +1,20 @@
+@font-face {
+    font-family: 'ColorEmoji';
+    src: local('Apple Color Emoji'),
+         local('Segoe UI Emoji'),
+         local('Segoe UI Symbol'),
+         local('Noto Color Emoji'),
+         local('Android Emoji'),
+         local('EmojiSymbols');
+    unicode-range:
+        U+200D,
+        U+203C-2049,
+        U+2122-2B55,
+        U+FE0F,
+        U+1F000-1FAFF,
+        U+E0020-E007F;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -20,7 +37,7 @@
     --text-bright: #00ffaa;
     --border: rgb(from var(--primary) r g b / 0.2);
     --font-mono: 'Courier New', 'Consolas', 'Monaco', monospace;
-    --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+    --font-sans: 'ColorEmoji', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', system-ui, sans-serif;
     --glass-bg: rgba(15, 15, 30, 0.6);
     --glass-border: rgba(255, 255, 255, 0.08);
     --glass-glow: rgb(from var(--primary) r g b / 0.06);
@@ -737,7 +754,7 @@ body::after {
 .messages-container {
     flex: 1;
     overflow-y: auto;
-    overflow-anchor: auto;
+    overflow-anchor: none;
     padding: 8px 20px 16px;
     display: flex;
     flex-direction: column;
@@ -869,12 +886,10 @@ body::after {
 @keyframes messageIn {
     from {
         opacity: 0;
-        transform: translateX(-20px);
     }
 
     to {
         opacity: 1;
-        transform: translateX(0);
     }
 }
 
@@ -1333,6 +1348,17 @@ body::after {
     word-break: break-word;
     color: var(--text);
     overflow-wrap: anywhere;
+}
+
+.emoji {
+    font-family: 'ColorEmoji';
+    font-style: normal;
+    font-weight: normal;
+    line-height: 1;
+}
+
+.emoji-only .emoji {
+    font-size: 2em;
 }
 
 .message-quote {
@@ -1952,6 +1978,7 @@ body::after {
 
 .emoji-item-emoji {
     font-size: 18px;
+    font-family: 'ColorEmoji';
 }
 
 .emoji-item-name {
@@ -2167,6 +2194,7 @@ body::after {
     padding: 8px;
     cursor: pointer;
     font-size: 18px;
+    font-family: 'ColorEmoji';
     transition: all var(--transition);
     text-align: center;
 }
@@ -3079,6 +3107,7 @@ body::after {
     padding: 8px;
     cursor: pointer;
     font-size: 18px;
+    font-family: 'ColorEmoji';
     transition: all var(--transition);
 }
 

@@ -1031,13 +1031,11 @@ class NYM {
             windowSize: 100,
             currentStartIndex: 0,
             currentEndIndex: 0,
-            isScrolling: false,
-            isLoading: false,
-            suppressAutoScroll: false,
-            scrollTimeout: null
+            suppressAutoScroll: false
         };
         this._suppressInputButtonHide = false;
         this.userScrolledUp = false;
+        this._scrollRAF = null;
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
         this.pendingDMs = new Map();
@@ -7073,7 +7071,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed
         const container = document.getElementById('messagesContainer');
-        const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 50);
+        const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
 
         const messageZaps = this.zaps.get(messageId);
 
@@ -7143,8 +7141,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         // Auto-scroll to keep zaps visible if user was already at the bottom
-        if (wasAtBottom && container && this.settings.autoscroll && !this.userScrolledUp) {
-            container.scrollTop = container.scrollHeight;
+        if (wasAtBottom) {
+            this._scheduleScrollToBottom();
         }
     }
 
@@ -7892,12 +7890,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         if (profile.picture) {
                             const prevUrl = this.userAvatars.get(pubkey);
                             if (prevUrl !== profile.picture) {
+                                // Avatar URL changed — revoke old blob and re-fetch
                                 const oldBlob = this.avatarBlobCache.get(pubkey);
                                 if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
+                                this.userAvatars.set(pubkey, profile.picture);
+                                // cacheAvatarImage will call updateRenderedAvatars with the blob URL when done
+                                this.cacheAvatarImage(pubkey, profile.picture);
+                                // Temporarily show the raw URL while blob is being fetched
+                                this.updateRenderedAvatars(pubkey, profile.picture);
+                            } else if (!this.avatarBlobCache.has(pubkey)) {
+                                // Same URL but no blob cached yet — trigger fetch
+                                this.userAvatars.set(pubkey, profile.picture);
+                                this.cacheAvatarImage(pubkey, profile.picture);
                             }
-                            this.userAvatars.set(pubkey, profile.picture);
-                            this.cacheAvatarImage(pubkey, profile.picture);
-                            this.updateRenderedAvatars(pubkey, profile.picture);
+                            // If same URL and blob already cached, do nothing — avatars are fine
                         }
 
                         if (profile.name || profile.username || profile.display_name) {
@@ -8414,10 +8420,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (prevUrl !== profile.picture) {
                         const oldBlob = this.avatarBlobCache.get(pubkey);
                         if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
+                        this.userAvatars.set(pubkey, profile.picture);
+                        this.cacheAvatarImage(pubkey, profile.picture);
+                        this.updateRenderedAvatars(pubkey, profile.picture);
+                    } else if (!this.avatarBlobCache.has(pubkey)) {
+                        this.userAvatars.set(pubkey, profile.picture);
+                        this.cacheAvatarImage(pubkey, profile.picture);
                     }
-                    this.userAvatars.set(pubkey, profile.picture);
-                    this.cacheAvatarImage(pubkey, profile.picture);
-                    this.updateRenderedAvatars(pubkey, profile.picture);
                 }
 
                 // Update nym if we don't have one for this user
@@ -8778,7 +8787,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed
         const container = document.getElementById('messagesContainer');
-        const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 50);
+        const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
 
         const reactions = this.reactions.get(messageId);
         if (!reactions || reactions.size === 0) {
@@ -8925,8 +8934,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         reactionsRow.appendChild(addBtn);
 
         // Auto-scroll to keep reactions visible if user was already at the bottom
-        if (wasAtBottom && container && this.settings.autoscroll && !this.userScrolledUp) {
-            container.scrollTop = container.scrollHeight;
+        if (wasAtBottom) {
+            this._scheduleScrollToBottom();
         }
     }
 
@@ -10813,7 +10822,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Re-init virtual scroll handler (isPM = true)
             container.dataset.virtualScrollKey = conversationKey;
             container.dataset.virtualScrollIsPM = 'true';
-            this.initVirtualScroll(container, conversationKey);
 
             // Scroll to bottom
             if (this.settings.autoscroll) {
@@ -11010,10 +11018,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             if (prevUrl !== profile.picture) {
                                 const oldBlob = this.avatarBlobCache.get(event.pubkey);
                                 if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(event.pubkey); }
+                                this.userAvatars.set(event.pubkey, profile.picture);
+                                this.cacheAvatarImage(event.pubkey, profile.picture);
+                                this.updateRenderedAvatars(event.pubkey, profile.picture);
+                            } else if (!this.avatarBlobCache.has(event.pubkey)) {
+                                this.userAvatars.set(event.pubkey, profile.picture);
+                                this.cacheAvatarImage(event.pubkey, profile.picture);
                             }
-                            this.userAvatars.set(event.pubkey, profile.picture);
-                            this.cacheAvatarImage(event.pubkey, profile.picture);
-                            this.updateRenderedAvatars(event.pubkey, profile.picture);
                         }
 
                         // Store and update for OTHER users (Bitchat users, PM contacts)
@@ -12395,15 +12406,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Now actually display the message in the DOM
         const container = document.getElementById('messagesContainer');
 
-        // If virtual scroll is actively loading older/newer messages, defer this
-        // message to avoid race conditions with DOM trimming and scroll restoration
-        if (this.virtualScroll.isLoading) {
-            return;
-        }
 
+        // Check if user is near the bottom BEFORE we add the new message to DOM.
+        // We use a generous threshold so rapid message bursts don't lose the "at bottom" state.
+        const isNearBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 150;
         const shouldScroll = !this.virtualScroll.suppressAutoScroll &&
-            !this.userScrolledUp &&
-            container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+            !this.userScrolledUp && isNearBottom;
 
         // Clamp timestamp to now so messages never appear in the future
         const now = new Date();
@@ -12625,10 +12633,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 messageContentHtml = formattedContent;
             }
 
+            // Detect emoji-only messages (1-6 emoji with optional whitespace, no other text)
+            const emojiOnlyClass = !message.isFileOffer && this.isEmojiOnly(message.content) ? ' emoji-only' : '';
+
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
     <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
-    <span class="message-content ${userColorClass}">${messageContentHtml}</span>
+    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}</span>
     ${reactionButton}
     ${deliveryCheckmark}
 `;
@@ -12767,47 +12778,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.updateMessageZaps(message.id);
         }
 
-        // Track scroll position before adding images
-        const scrollBeforeImages = container.scrollTop;
-        const heightBeforeImages = container.scrollHeight;
-        const isAtBottom = shouldScroll;
-        // Capture suppression state now — it may change by the time images load
-        const wasSuppressed = this.virtualScroll.suppressAutoScroll;
+        // Scroll handling: use coalesced rAF to batch scroll operations.
+        // When images are present, also scroll after they load.
+        if (shouldScroll) {
+            this._scheduleScrollToBottom();
 
-        // Wait for any images in the message to load and adjust scroll
-        const images = messageEl.querySelectorAll('img');
-        if (images.length > 0) {
-            let loadedImages = 0;
-            const totalImages = images.length;
-
-            const handleImageLoad = () => {
-                loadedImages++;
-                if (loadedImages === totalImages && !wasSuppressed) {
-                    // All images loaded — adjust scroll position
-                    if (this.settings.autoscroll && isAtBottom) {
-                        // Scroll to bottom if we were at bottom before
-                        container.scrollTop = container.scrollHeight;
-                    } else if (!isAtBottom) {
-                        // Maintain scroll position for older messages
-                        const heightAfterImages = container.scrollHeight;
-                        const heightDiff = heightAfterImages - heightBeforeImages;
-                        container.scrollTop = scrollBeforeImages + heightDiff;
+            // If message has images, schedule another scroll after they load
+            const images = messageEl.querySelectorAll('img:not(.avatar-message)');
+            if (images.length > 0) {
+                let loaded = 0;
+                const total = images.length;
+                const onLoad = () => {
+                    if (++loaded === total && !this.userScrolledUp) {
+                        this._scheduleScrollToBottom();
                     }
-                }
-            };
-
-            images.forEach(img => {
-                if (img.complete) {
-                    handleImageLoad();
-                } else {
-                    img.addEventListener('load', handleImageLoad, { once: true });
-                    img.addEventListener('error', handleImageLoad, { once: true });
-                }
-            });
-        } else if (!wasSuppressed) {
-            // No images, just handle scrolling normally
-            if (this.settings.autoscroll && shouldScroll) {
-                container.scrollTop = container.scrollHeight;
+                };
+                images.forEach(img => {
+                    if (img.complete) onLoad();
+                    else {
+                        img.addEventListener('load', onLoad, { once: true });
+                        img.addEventListener('error', onLoad, { once: true });
+                    }
+                });
             }
         }
 
@@ -13012,10 +13004,31 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         formatted = formatted.replace(/(^|\s)&lt;3($|\s)/g, '$1❤️$2');
         formatted = formatted.replace(/(^|\s)\/\\($|\s)/g, '$1⚠️$2');
 
+        // Wrap emoji characters in <span class="emoji"> to isolate them from --font-sans
+        // This regex matches Unicode emoji: emoticons, symbols, dingbats, skin tones,
+        // regional indicators, variation selectors, ZWJ sequences, and keycap sequences.
+        formatted = formatted.replace(
+            /(?:<[^>]+>)|(\p{Emoji_Presentation}|\p{Extended_Pictographic})(\u{FE0F}|\u{FE0E})?(\u{200D}(\p{Emoji_Presentation}|\p{Extended_Pictographic})(\u{FE0F}|\u{FE0E})?)*/gu,
+            (match, emoji) => {
+                // If this is an HTML tag, skip it
+                if (!emoji) return match;
+                return `<span class="emoji">${match}</span>`;
+            }
+        );
+
         // Line breaks
         formatted = formatted.replace(/\n/g, '<br>');
 
         return formatted;
+    }
+
+    // Check if a raw message is emoji-only (1-6 emoji, optional whitespace, no other text)
+    isEmojiOnly(content) {
+        if (!content) return false;
+        // Strip whitespace and check if remaining chars are all emoji (up to 6)
+        const stripped = content.replace(/\s/g, '');
+        const emojiPattern = /^(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:\u{200D}(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?)*){1,6}$/u;
+        return emojiPattern.test(stripped);
     }
 
     expandImage(src) {
@@ -13069,12 +13082,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         messageEl.innerHTML = content;
         container.appendChild(messageEl);
 
-        if (this.settings.autoscroll && !this.userScrolledUp) {
-            const isNearBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
-            if (isNearBottom) {
-                container.scrollTop = container.scrollHeight;
-            }
-        }
+        this._scheduleScrollToBottom();
+    }
+
+    // Coalesced scroll-to-bottom: batches multiple scroll requests into one rAF frame.
+    // This prevents layout thrashing when many messages arrive in quick succession.
+    _scheduleScrollToBottom(force = false) {
+        if (!force && (!this.settings.autoscroll || this.userScrolledUp)) return;
+        if (!force && this.virtualScroll.suppressAutoScroll) return;
+        if (this._scrollRAF) return; // already scheduled
+
+        this._scrollRAF = requestAnimationFrame(() => {
+            this._scrollRAF = null;
+            const container = document.getElementById('messagesContainer');
+            if (!container) return;
+            container.scrollTop = container.scrollHeight;
+        });
     }
 
     handlePresenceEvent(event) {
@@ -15416,9 +15439,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.virtualScroll.currentStartIndex = cached.virtualScrollState.currentStartIndex;
             this.virtualScroll.currentEndIndex = cached.virtualScrollState.currentEndIndex;
 
-            // Re-init virtual scroll handler
-            this.initVirtualScroll(container, storageKey);
-
             // Scroll to bottom
             if (this.settings.autoscroll) {
                 this._suppressInputButtonHide = true;
@@ -15484,32 +15504,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     // Initialize virtual scroll for a container
-    initVirtualScroll(container, storageKey) {
-        // Remove any existing scroll listener
-        if (container._virtualScrollHandler) {
-            container.removeEventListener('scroll', container._virtualScrollHandler);
-        }
-
-        // Create scroll handler with rAF-based debouncing for smooth scrolling
-        container._virtualScrollHandler = () => {
-            if (this.virtualScroll.scrollTimeout) {
-                cancelAnimationFrame(this.virtualScroll.scrollTimeout);
-            }
-
-            this.virtualScroll.scrollTimeout = requestAnimationFrame(() => {
-                this.handleVirtualScroll(container, storageKey);
-            });
-        };
-
-        container.addEventListener('scroll', container._virtualScrollHandler, { passive: true });
-    }
-
-    // Handle scroll events — with 100-message hard cap, no virtual scroll loading needed
-    handleVirtualScroll(container, storageKey) {
-        return;
-    }
-
-
 
     // Get filtered messages for a storage key (applies block filters)
     getFilteredMessages(storageKey) {
@@ -15576,9 +15570,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         this.virtualScroll.suppressAutoScroll = false;
-
-        // Initialize virtual scroll handler
-        this.initVirtualScroll(container, storageKey);
 
         // Scroll to bottom if requested
         if (scrollToBottom && this.settings.autoscroll) {
@@ -17117,6 +17108,12 @@ function scrollToBottom() {
     // User explicitly wants to go to the bottom — clear the scrolled-up flag
     nym.userScrolledUp = false;
 
+    // Cancel any pending coalesced scroll so we can do it immediately
+    if (nym._scrollRAF) {
+        cancelAnimationFrame(nym._scrollRAF);
+        nym._scrollRAF = null;
+    }
+
     // If virtual scroll has trimmed newer messages, re-render from the end
     // so we actually reach the true bottom
     const storageKey = container.dataset.virtualScrollKey;
@@ -17131,7 +17128,10 @@ function scrollToBottom() {
         }
     }
 
+    // Force scroll to bottom immediately, then again on next frame to handle
+    // any pending layout changes (images loading, animations, etc.)
     container.scrollTop = container.scrollHeight;
+    nym._scheduleScrollToBottom(true);
 }
 
 function sendMessage() {
@@ -17938,7 +17938,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.124 ═══<br/>
+═══ Nymchat v3.31.125 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18496,14 +18496,15 @@ document.addEventListener('DOMContentLoaded', () => {
             // This flag prevents new messages from yanking the user back to the
             // bottom while they are reading older messages. It is cleared when
             // the user scrolls back near the bottom or clicks the scroll-to-bottom button.
-            if (distanceFromBottom > 200) {
+            // Use a single threshold (150px) to avoid a dead zone between set/clear.
+            if (distanceFromBottom > 150) {
                 nym.userScrolledUp = true;
-            } else if (distanceFromBottom <= 50) {
+            } else {
                 nym.userScrolledUp = false;
             }
 
             // Show/hide scroll-to-bottom button
-            if (distanceFromBottom > 200) {
+            if (distanceFromBottom > 150) {
                 scrollToBottomBtn.classList.add('visible');
             } else {
                 scrollToBottomBtn.classList.remove('visible');
@@ -18534,7 +18535,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         // so the expanding input area doesn't overlap the last message
                         if (wasNearBottom && !nym.userScrolledUp) {
                             setTimeout(() => {
-                                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                                nym._scheduleScrollToBottom();
                             }, 270);
                         }
                     }, 800);
@@ -18548,7 +18549,7 @@ document.addEventListener('DOMContentLoaded', () => {
         messageInput.addEventListener('focus', function () {
             if (window.innerWidth <= 768 && !nym.userScrolledUp) {
                 setTimeout(() => {
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    nym._scheduleScrollToBottom();
                 }, 300);
             }
         });
