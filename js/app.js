@@ -16201,8 +16201,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
-        // Re-sort channels by activity
-        this.sortChannelsByActivity();
+        // Re-sort channels by activity (debounced to prevent DOM thrashing
+        // that makes channel links unclickable during rapid message bursts)
+        if (this._sortDebounceTimer) clearTimeout(this._sortDebounceTimer);
+        this._sortDebounceTimer = setTimeout(() => {
+            this._sortDebounceTimer = null;
+            this.sortChannelsByActivity();
+        }, 300);
     }
 
     sortChannelsByActivity() {
@@ -16281,8 +16286,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return bUnread - aUnread;
         });
 
-        // Clear and re-append
-        channelList.innerHTML = '';
+        // Skip DOM rebuild if order hasn't changed (avoids breaking in-progress clicks)
+        const currentOrder = Array.from(channelList.querySelectorAll('.channel-item'));
+        const orderChanged = channels.length !== currentOrder.length ||
+            channels.some((ch, i) => ch !== currentOrder[i]);
+
+        if (!orderChanged) return;
+
+        // Re-append in sorted order (appendChild moves existing nodes without cloning)
         channels.forEach(channel => channelList.appendChild(channel));
 
         // Re-add view more button
@@ -18188,7 +18199,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.119 ═══<br/>
+═══ Nymchat v3.31.120 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
