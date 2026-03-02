@@ -1,0 +1,70 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        // AGP 8.5.1+ for automatic 16 KB page-size support
+        classpath 'com.android.tools.build:gradle:8.7.3'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+
+// Use JVM Toolchain to force consistent JVM 17 across all modules (app + plugins)
+subprojects { project ->
+    // Configure Java Toolchain for all subprojects
+    project.plugins.withId("org.jetbrains.kotlin.android") {
+        project.kotlin {
+            jvmToolchain(17)
+        }
+    }
+    
+    // Apply to Android app modules
+    project.plugins.withId("com.android.application") {
+        project.android {
+            compileSdkVersion 35
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+        }
+    }
+    
+    // Apply to Android library modules (including Flutter plugins)
+    project.plugins.withId("com.android.library") {
+        project.android {
+            compileSdkVersion 35
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+        }
+    }
+}
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
