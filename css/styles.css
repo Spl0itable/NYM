@@ -7,10 +7,22 @@
          local('Android Emoji'),
          local('EmojiSymbols');
     unicode-range:
+        U+00A9,
+        U+00AE,
         U+200D,
         U+203C-2049,
-        U+2122-2B55,
-        U+FE0F,
+        U+20E3,
+        U+2122-21AA,
+        U+2194-2199,
+        U+231A-23FF,
+        U+2600-27BF,
+        U+2934-2935,
+        U+2B05-2B55,
+        U+3030,
+        U+303D,
+        U+3297,
+        U+3299,
+        U+FE00-FE0F,
         U+1F000-1FAFF,
         U+E0020-E007F;
 }
@@ -55,6 +67,7 @@
 
 body {
     font-family: var(--font-sans);
+    line-height: 1.4;
     background: var(--bg);
     color: var(--text);
     height: 100vh;
@@ -91,12 +104,14 @@ body::after {
 
 .mobile-overlay {
     display: none;
-    position: unset;
+    position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.5);
+    background: none;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     z-index: 9998;
 }
 
@@ -108,7 +123,6 @@ body::after {
     display: flex;
     height: 100vh;
     position: relative;
-    z-index: 1;
 }
 
 .sidebar {
@@ -1895,7 +1909,7 @@ body::after {
     position: fixed;
     top: 12px;
     right: 12px;
-    z-index: 2;
+    z-index: 10000;
     background: rgba(20, 20, 35, 0.8);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -3449,7 +3463,7 @@ body.light-mode .shop-modal {
 }
 
 body.light-mode .mobile-overlay {
-    background: rgba(0, 0, 0, 0.2);
+    background: none;
 }
 
 body.light-mode .tutorial-highlight {

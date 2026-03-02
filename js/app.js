@@ -6504,6 +6504,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (response.ok) {
                 const data = await response.json();
                 if (data.url) {
+                    // Clear old cached blob so cacheAvatarImage will fetch the new one
+                    const oldBlob = this.avatarBlobCache.get(this.pubkey);
+                    if (oldBlob) URL.revokeObjectURL(oldBlob);
+                    this.avatarBlobCache.delete(this.pubkey);
+
                     // Store locally
                     this.userAvatars.set(this.pubkey, data.url);
                     this.cacheAvatarImage(this.pubkey, data.url);
@@ -6514,8 +6519,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     // Update sidebar avatar
                     this.updateSidebarAvatar();
 
+                    // Update rendered avatars immediately
+                    this.updateRenderedAvatars(this.pubkey, data.url);
+
                     // Update nostr profile with picture
                     await this.saveToNostrProfile();
+
+                    // Broadcast avatar update so other users clear their cache
+                    this.publishAvatarUpdate(data.url);
 
                     return data.url;
                 }
@@ -6533,7 +6544,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.userAvatars.delete(this.pubkey);
         localStorage.removeItem('nym_avatar_url');
         this.updateSidebarAvatar();
+        this.updateRenderedAvatars(this.pubkey, this.getAvatarUrl(this.pubkey));
         this.saveToNostrProfile();
+        // Broadcast avatar removal so other users clear their cache
+        this.publishAvatarUpdate('');
     }
 
     // Wallpaper Methods
@@ -10610,8 +10624,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
             : '';
         const flairHtml = this.getFlairForUser(pubkey);
+        const avatarSrc = this.getAvatarUrl(pubkey);
         document.querySelectorAll(`.message[data-pubkey="${pubkey}"] .message-author`).forEach(el => {
-            el.innerHTML = `&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}&gt;`;
+            el.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}&gt;`;
         });
 
         // Update any visible notification banner from this user
@@ -11182,6 +11197,31 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.sendToRelay(["EVENT", signedEvent]);
         } catch (error) {
             // Silently fail - presence is best-effort
+        }
+    }
+
+    async publishAvatarUpdate(avatarUrl) {
+        try {
+            if (!this.connected) return;
+
+            const tags = [
+                ['n', this.nym],
+                ['status', 'online'],
+                ['avatar-update', avatarUrl]
+            ];
+
+            let event = {
+                kind: this.PRESENCE_KIND,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: tags,
+                content: '',
+                pubkey: this.pubkey
+            };
+
+            const signedEvent = await this.signEvent(event);
+            this.sendToRelay(["EVENT", signedEvent]);
+        } catch (error) {
+            // Silently fail - avatar update broadcast is best-effort
         }
     }
 
@@ -13104,6 +13144,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const nymTag = event.tags.find(t => t[0] === 'n');
         const statusTag = event.tags.find(t => t[0] === 'status');
         const awayTag = event.tags.find(t => t[0] === 'away');
+        const avatarUpdateTag = event.tags.find(t => t[0] === 'avatar-update');
 
         if (!statusTag) return;
 
@@ -13120,6 +13161,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const lastTimestamp = this.presenceTimestamps.get(pubkey) || 0;
         if (eventTime < lastTimestamp) return;
         this.presenceTimestamps.set(pubkey, eventTime);
+
+        // Handle avatar update: clear cached avatar and re-fetch
+        if (avatarUpdateTag) {
+            const newAvatarUrl = avatarUpdateTag[1];
+            const oldBlob = this.avatarBlobCache.get(pubkey);
+            if (oldBlob) URL.revokeObjectURL(oldBlob);
+            this.avatarBlobCache.delete(pubkey);
+
+            if (newAvatarUrl) {
+                this.userAvatars.set(pubkey, newAvatarUrl);
+                this.cacheAvatarImage(pubkey, newAvatarUrl);
+                this.updateRenderedAvatars(pubkey, newAvatarUrl);
+            } else {
+                // Avatar removed - fall back to robohash
+                this.userAvatars.delete(pubkey);
+                this.updateRenderedAvatars(pubkey, this.getAvatarUrl(pubkey));
+            }
+        }
 
         // Update away messages map for this user
         if (status === 'away' && awayTag) {
@@ -17938,21 +17997,17 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.125 ═══<br/>
+═══ Nymchat v3.31.126 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
 <br/>
-Created for ephemeral, anonymous communication.<br/>
-Your identity exists only for this session.<br/>
-No accounts. No persistence. Just nyms.<br/>
-<br/>
 Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br/>
 <br/>
-Nymchat is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br/><br/>
-<a href="static/tos.html" target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> | <a href="static/pp.html" target="_blank" rel="noopener" style="color: var(--secondary)">Privacy Policy</a><br/><br/>
-Made with ♥ by <a href="https://nostrservices.com" target="_blank" rel="noopener" style="color: var(--secondary)">21 Million LLC</a><br/><br/>
+Nymchat is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br/>
+Made with ♥ by <a href="https://nostrservices.com" target="_blank" rel="noopener" style="color: var(--secondary)">21 Million LLC</a><br/>
 Lead developer: <a href="https://njump.me/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas#a8df</a><br/>
+<a href="static/tos.html" target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> | <a href="static/pp.html" target="_blank" rel="noopener" style="color: var(--secondary)">Privacy Policy</a><br/>
 `);
 }
 
