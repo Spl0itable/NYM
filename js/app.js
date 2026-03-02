@@ -17400,16 +17400,23 @@ function setAvatarUploadState(prefix, { spinning, statusText, statusType, btnTex
 
 let _setupAvatarHandling = false;
 async function handleSetupAvatarSelect(eventOrInput) {
-    // Guard against double-execution from both inline onchange and addEventListener
+    // Guard against double-execution from both addEventListener and direct bridge calls
     if (_setupAvatarHandling) return;
     _setupAvatarHandling = true;
 
     try {
-        // Support both event-based (event.target.files) and element-based (input.files) access
-        const input = eventOrInput?.target || eventOrInput;
-        const file = input?.files?.[0];
+        // Extract file from: File object (direct), Event (event.target.files), or element (input.files)
+        let file;
+        if (eventOrInput instanceof File) {
+            file = eventOrInput;
+        } else if (eventOrInput instanceof Blob) {
+            file = eventOrInput;
+        } else {
+            const input = eventOrInput?.target || eventOrInput;
+            file = input?.files?.[0];
+        }
         if (!file) return;
-        if (!file.type.startsWith('image/')) {
+        if (file.type && !file.type.startsWith('image/')) {
             setAvatarUploadState('setup', { statusText: 'Please select an image file', statusType: 'error' });
             return;
         }
@@ -17506,16 +17513,23 @@ function removeSetupAvatar() {
 // Avatar upload handler for nick edit modal (uploads immediately since keypair exists)
 let _nickEditAvatarHandling = false;
 async function handleNickEditAvatarSelect(eventOrInput) {
-    // Guard against double-execution from both inline onchange and addEventListener
+    // Guard against double-execution from both addEventListener and direct bridge calls
     if (_nickEditAvatarHandling) return;
     _nickEditAvatarHandling = true;
 
     try {
-        // Support both event-based (event.target.files) and element-based (input.files) access
-        const input = eventOrInput?.target || eventOrInput;
-        const file = input?.files?.[0];
+        // Extract file from: File object (direct), Event (event.target.files), or element (input.files)
+        let file;
+        if (eventOrInput instanceof File) {
+            file = eventOrInput;
+        } else if (eventOrInput instanceof Blob) {
+            file = eventOrInput;
+        } else {
+            const input = eventOrInput?.target || eventOrInput;
+            file = input?.files?.[0];
+        }
         if (!file) return;
-        if (!file.type.startsWith('image/')) {
+        if (file.type && !file.type.startsWith('image/')) {
             setAvatarUploadState('nickEdit', { statusText: 'Please select an image file', statusType: 'error' });
             return;
         }
@@ -18174,7 +18188,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.118 ═══<br/>
+═══ Nymchat v3.31.119 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
