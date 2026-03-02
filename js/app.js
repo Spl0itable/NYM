@@ -1038,6 +1038,7 @@ class NYM {
             scrollTimeout: null
         };
         this._suppressInputButtonHide = false;
+        this.userScrolledUp = false;
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
         this.pendingDMs = new Map();
@@ -7113,7 +7114,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         // Auto-scroll to keep zaps visible if user was already at the bottom
-        if (wasAtBottom && container && this.settings.autoscroll) {
+        if (wasAtBottom && container && this.settings.autoscroll && !this.userScrolledUp) {
             container.scrollTop = container.scrollHeight;
         }
     }
@@ -8877,7 +8878,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         reactionsRow.appendChild(addBtn);
 
         // Auto-scroll to keep reactions visible if user was already at the bottom
-        if (wasAtBottom && container && this.settings.autoscroll) {
+        if (wasAtBottom && container && this.settings.autoscroll && !this.userScrolledUp) {
             container.scrollTop = container.scrollHeight;
         }
     }
@@ -10681,6 +10682,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentPM = pubkey;
         this.currentChannel = null;
         this.currentGeohash = null;
+        this.userScrolledUp = false;
 
         // Format the nym with pubkey suffix for display
         const known = this.users.get(pubkey);
@@ -12339,6 +12341,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         const shouldScroll = !this.virtualScroll.suppressAutoScroll &&
+            !this.userScrolledUp &&
             container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
 
         // Clamp timestamp to now so messages never appear in the future
@@ -13019,8 +13022,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         messageEl.innerHTML = content;
         container.appendChild(messageEl);
 
-        if (this.settings.autoscroll) {
-            container.scrollTop = container.scrollHeight;
+        if (this.settings.autoscroll && !this.userScrolledUp) {
+            const isNearBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+            if (isNearBottom) {
+                container.scrollTop = container.scrollHeight;
+            }
         }
     }
 
@@ -15200,6 +15206,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentPM = null;
         this.currentChannel = channel;
         this.currentGeohash = geohash;
+        this.userScrolledUp = false;
 
         // Handle geo-relay connections for Bitchat compatibility
         // Clean up previous geo relays if switching away from a geohash channel
@@ -17284,6 +17291,9 @@ function scrollToBottom() {
     const container = document.getElementById('messagesContainer');
     if (!container) return;
 
+    // User explicitly wants to go to the bottom — clear the scrolled-up flag
+    nym.userScrolledUp = false;
+
     // If virtual scroll has trimmed newer messages, re-render from the end
     // so we actually reach the true bottom
     const storageKey = container.dataset.virtualScrollKey;
@@ -18193,7 +18203,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.120 ═══<br/>
+═══ Nymchat v3.31.121 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18744,6 +18754,16 @@ document.addEventListener('DOMContentLoaded', () => {
         messagesContainer.addEventListener('scroll', () => {
             const distanceFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
 
+            // Track whether user has intentionally scrolled away from the bottom.
+            // This flag prevents new messages from yanking the user back to the
+            // bottom while they are reading older messages. It is cleared when
+            // the user scrolls back near the bottom or clicks the scroll-to-bottom button.
+            if (distanceFromBottom > 200) {
+                nym.userScrolledUp = true;
+            } else if (distanceFromBottom <= 50) {
+                nym.userScrolledUp = false;
+            }
+
             // Show/hide scroll-to-bottom button
             if (distanceFromBottom > 200) {
                 scrollToBottomBtn.classList.add('visible');
@@ -18774,7 +18794,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         }, 300);
                         // When buttons expand back and user is near bottom, auto-scroll
                         // so the expanding input area doesn't overlap the last message
-                        if (wasNearBottom) {
+                        if (wasNearBottom && !nym.userScrolledUp) {
                             setTimeout(() => {
                                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
                             }, 270);
@@ -18785,10 +18805,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }, { passive: true });
     }
 
-    // Auto-scroll to bottom when input is focused on mobile
+    // Auto-scroll to bottom when input is focused on mobile (only if near bottom)
     if (messageInput && messagesContainer) {
         messageInput.addEventListener('focus', function () {
-            if (window.innerWidth <= 768) {
+            if (window.innerWidth <= 768 && !nym.userScrolledUp) {
                 setTimeout(() => {
                     messagesContainer.scrollTop = messagesContainer.scrollHeight;
                 }, 300);
