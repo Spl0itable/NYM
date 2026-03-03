@@ -762,6 +762,29 @@
 
                 <div class="form-group"
                     style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
+                    <label class="form-label">Transfer Settings to Another User</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" class="form-input" id="settingsTransferPubkeyInput"
+                            placeholder="Recipient hex pubkey (64 chars)" style="flex: 1;">
+                        <button class="icon-btn" onclick="nym.executeSettingsTransfer()"
+                            style="white-space: nowrap;">Send</button>
+                    </div>
+                    <div id="settingsTransferError"
+                        style="display: none; color: var(--danger); font-size: 12px; margin-top: 6px;"></div>
+                    <div class="form-hint">Transfers your nickname, avatar, and all preferences to the specified pubkey
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Pending Settings Transfers</label>
+                    <div id="pendingSettingsTransfers"
+                        style="max-height: 200px; overflow-y: auto; border: 1px solid var(--glass-border, var(--border)); border-radius: 12px; padding: 10px; background: rgba(255,255,255,0.03);">
+                        <div style="color: var(--text-dim); font-size: 12px;">No pending transfers</div>
+                    </div>
+                </div>
+
+                <div class="form-group"
+                    style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
                     <button class="icon-btn" id="clearCacheBtn" onclick="clearLocalStorageCache()"
                         style="width: 100%; color: var(--danger); border-color: var(--danger);">
                         Clear Local Storage Cache

@@ -1019,6 +1019,7 @@ class NYM {
         this.pubkey = null;
         this.privkey = null;
         this.nym = null;
+        this.pendingSettingsTransfers = [];
         this.powDifficulty = 12;
         this.enablePow = false;
         this.connectionMode = 'ephemeral';
@@ -1367,7 +1368,28 @@ class NYM {
             'pt': '🇵🇹', 'ie': '🇮🇪', 'za': '🇿🇦', 'ng': '🇳🇬', 'eg': '🇪🇬',
             'ar': '🇦🇷', 'th': '🇹🇭', 'vn': '🇻🇳', 'id': '🇮🇩', 'ph': '🇵🇭',
             'sg': '🇸🇬', 'nz': '🇳🇿', 'sa': '🇸🇦', 'ae': '🇦🇪', 'il': '🇮🇱',
-            'tw': '🇹🇼', 'hk': '🇭🇰', 'pr': '🇵🇷', 'cu': '🇨🇺', 'jm': '🇯🇲'
+            'tw': '🇹🇼', 'hk': '🇭🇰', 'pr': '🇵🇷', 'cu': '🇨🇺', 'jm': '🇯🇲',
+            // Aliases (restore original shortcodes that were renamed during expansion)
+            'ok': '👌', 'money': '🤑', 'hearts': '💕', 'celebrate': '🙌',
+            'sunglasses': '😎', 'nauseous': '🤢', 'cold_sweat': '😰',
+            'scream_cat': '🙀', 'exploding': '🤯', 'clock': '🕐', 'sunset': '🌆',
+            'joy': '😂', '+1': '👍', '-1': '👎', 'thumbs_up': '👍', 'thumbs_down': '👎',
+            'fingers_crossed': '🤞', 'raised_hands': '🙌', 'pray_hands': '🙏',
+            'flex': '💪', 'eyes_emoji': '👀', 'tongue_out': '😛', 'lol': '😂',
+            'crying': '😭', 'smiling': '😊', 'kissing_heart': '😘', 'winking': '😉',
+            'grinning_face': '😀', 'happy': '😊', 'smiley_face': '😃',
+            'rolling_eyes': '🙄', 'face_palm': '🤦', 'shrugging': '🤷',
+            'clapping': '👏', 'wave_hand': '👋', 'fist': '✊', 'punch': '👊',
+            'pointing_up': '☝️', 'pointing_down': '👇', 'pointing_left': '👈', 'pointing_right': '👉',
+            'red_heart': '❤️', 'love_heart': '❤️', 'heartbreak': '💔',
+            'skull_emoji': '💀', 'poo': '💩', 'hundred': '💯', 'flames': '🔥',
+            'sparkle': '✨', 'zap': '⚡', 'snow_emoji': '❄️', 'rain_emoji': '🌧️',
+            'sun_emoji': '☀️', 'moon_emoji': '🌙', 'earth': '🌍', 'globe': '🌎',
+            'usa': '🇺🇸', 'uk': '🇬🇧', 'canada': '🇨🇦', 'japan': '🇯🇵', 'germany': '🇩🇪',
+            'france': '🇫🇷', 'brazil': '🇧🇷', 'mexico': '🇲🇽', 'italy': '🇮🇹',
+            'pizza_emoji': '🍕', 'beer_emoji': '🍺', 'coffee_emoji': '☕', 'wine_emoji': '🍷',
+            'rocket_emoji': '🚀', 'car_emoji': '🚗', 'airplane_emoji': '✈️',
+            'money_bag': '💰', 'cash': '💵', 'btc': '₿'
         };
         this.discoveredChannelsIndex = 0;
         this.swipeStartX = null;
@@ -2827,23 +2849,22 @@ TRANSFER TO PUBKEY
 
         this.sendToRelay(subscription);
 
-        // Also subscribe to incoming shop item transfers (from other users to us)
-        const transferSubId = "shop-transfers-" + Math.random().toString(36).substring(7);
+        // Subscribe to incoming transfers (shop items & settings) from other users.
+        // Uses only the standard #p tag filter (relays reliably index single-letter tags).
+        // The d-tag routing in handleEvent() distinguishes shop vs settings transfers.
+        // This subscription stays open for the session so transfers are received in real-time.
+        const transferSubId = "transfers-" + Math.random().toString(36).substring(7);
         const transferSub = [
             "REQ",
             transferSubId,
             {
                 kinds: [30078],
                 "#p": [this.pubkey],
-                "#transfer-to": [this.pubkey],
                 limit: 50
             }
         ];
 
         this.sendToRelay(transferSub);
-        setTimeout(() => {
-            this.sendToRelay(["CLOSE", transferSubId]);
-        }, 5000);
 
         // Wait for response
         return new Promise((resolve) => {
@@ -3142,7 +3163,7 @@ ${code}
             const modal = document.getElementById('transferModal');
             if (modal) modal.remove();
 
-            this.displaySystemMessage(`✅ Transfer event sent! ${item.name} has been shared with ${recipientPubkey.substring(0, 8)}...`);
+            this.displaySystemMessage(`Transfer event sent! ${item.name} has been shared with ${recipientPubkey.substring(0, 8)}...`);
 
             // Refresh the inventory tab if open
             if (this.activeShopTab === 'inventory') {
@@ -3156,11 +3177,17 @@ ${code}
 
     handleShopTransferEvent(event) {
         try {
+            // Verify event signature
+            if (!window.NostrTools.verifyEvent(event)) return;
+
             const transferTo = event.tags.find(t => t[0] === 'transfer-to');
             if (!transferTo || transferTo[1] !== this.pubkey) return;
 
             const data = JSON.parse(event.content);
             if (!data.itemId || !data.fromPubkey) return;
+
+            // Verify the event was actually signed by the claimed sender
+            if (event.pubkey !== data.fromPubkey) return;
 
             // Verify this item exists in the shop
             const item = this.getShopItemById(data.itemId);
@@ -3187,10 +3214,93 @@ ${code}
             this.savePurchaseToNostr();
             this.publishActiveShopItems();
 
-            this.displaySystemMessage(`🎁 You received "${data.itemName}" from ${data.fromPubkey.substring(0, 8)}...! Check your Flair Shop inventory.`);
+            this.displaySystemMessage(`You received "${data.itemName}" from ${data.fromPubkey.substring(0, 8)}...! Check your Flair Shop inventory.`);
         } catch (e) {
             // Silently ignore malformed transfer events
         }
+    }
+
+    async executeSettingsTransfer() {
+        const input = document.getElementById('settingsTransferPubkeyInput');
+        const errorEl = document.getElementById('settingsTransferError');
+        if (!input || !errorEl) return;
+
+        const recipientPubkey = input.value.trim().toLowerCase();
+        errorEl.style.display = 'none';
+
+        if (!/^[0-9a-f]{64}$/.test(recipientPubkey)) {
+            errorEl.textContent = 'Invalid pubkey. Must be 64 hex characters.';
+            errorEl.style.display = 'block';
+            return;
+            if (s.blurOthersImages !== undefined) {
+                this.blurOthersImages = s.blurOthersImages;
+                localStorage.setItem(`nym_image_blur_${this.pubkey}`, s.blurOthersImages.toString());
+            }
+            if (s.lightningAddress) {
+                this.lightningAddress = s.lightningAddress;
+                localStorage.setItem(`nym_lightning_address_${this.pubkey}`, s.lightningAddress);
+            }
+            if (s.dmForwardSecrecyEnabled !== undefined) {
+                this.settings.dmForwardSecrecyEnabled = s.dmForwardSecrecyEnabled;
+                localStorage.setItem('nym_dm_forward_secrecy', s.dmForwardSecrecyEnabled);
+            }
+            if (s.dmTTLSeconds !== undefined) {
+                this.settings.dmTTLSeconds = s.dmTTLSeconds;
+                localStorage.setItem('nym_dm_ttl', s.dmTTLSeconds);
+            }
+            if (s.readReceiptsEnabled !== undefined) {
+                this.settings.readReceiptsEnabled = s.readReceiptsEnabled;
+                localStorage.setItem('nym_read_receipts', s.readReceiptsEnabled);
+            }
+            if (s.pinnedLandingChannel) {
+                this.pinnedLandingChannel = s.pinnedLandingChannel;
+                this.settings.pinnedLandingChannel = s.pinnedLandingChannel;
+                localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(s.pinnedLandingChannel));
+            }
+
+            // Save synced settings to Nostr
+            this.saveSyncedSettings();
+        }
+
+        // Remove from pending
+        this.pendingSettingsTransfers = this.pendingSettingsTransfers.filter(t => t.eventId !== eventId);
+        this.renderPendingSettingsTransfers();
+        this.displaySystemMessage(`Settings from ${transfer.fromNym} applied successfully!`);
+    }
+
+    rejectSettingsTransfer(eventId) {
+        const transfer = this.pendingSettingsTransfers.find(t => t.eventId === eventId);
+        this.pendingSettingsTransfers = this.pendingSettingsTransfers.filter(t => t.eventId !== eventId);
+        this.renderPendingSettingsTransfers();
+        if (transfer) {
+            this.displaySystemMessage(`Settings transfer from ${transfer.fromNym} rejected.`);
+        }
+    }
+
+    renderPendingSettingsTransfers() {
+        const container = document.getElementById('pendingSettingsTransfers');
+        if (!container) return;
+
+        if (this.pendingSettingsTransfers.length === 0) {
+            container.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No pending transfers</div>';
+            return;
+        }
+
+        container.innerHTML = this.pendingSettingsTransfers.map(t => {
+            const date = new Date(t.transferredAt * 1000).toLocaleString();
+            return `
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; margin-bottom: 6px; background: rgba(255,255,255,0.03); border: 1px solid var(--glass-border); border-radius: 8px;">
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-size: 13px; color: var(--text); font-weight: 500;">${this.escapeHtml(t.fromNym)}</div>
+                        <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${date}</div>
+                        <div style="font-size: 11px; color: var(--text-dim);">Includes: ${t.nickname ? 'nickname' : ''}${t.avatarUrl ? ', avatar' : ''}${t.settings ? ', preferences' : ''}</div>
+                    </div>
+                    <div style="display: flex; gap: 6px; margin-left: 8px;">
+                        <button onclick="nym.acceptSettingsTransfer('${t.eventId}')" style="padding: 4px 10px; background: var(--primary); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">Accept</button>
+                        <button onclick="nym.rejectSettingsTransfer('${t.eventId}')" style="padding: 4px 10px; background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 6px; cursor: pointer; font-size: 12px;">Reject</button>
+                    </div>
+                </div>`;
+        }).join('');
     }
 
     handleShopItemBroadcast(event) {
@@ -5977,6 +6087,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     "#d": ["nym-shop-purchases", "nym-shop-active"],
                     limit: 100
                 },
+                // Incoming transfers (shop items & settings) from other users
+                {
+                    kinds: [30078],
+                    "#p": [this.pubkey],
+                    limit: 50
+                },
                 // P2P signaling addressed to me
                 {
                     kinds: [25051],
@@ -8713,6 +8829,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Shop item transfers (from another user to us)
             if (dTag[1]?.startsWith('nym-shop-transfer-') && event.pubkey !== this.pubkey) {
                 this.handleShopTransferEvent(event);
+            }
+
+            // Settings transfers (from another user to us)
+            if (dTag[1]?.startsWith('nym-settings-transfer-') && event.pubkey !== this.pubkey) {
+                this.handleSettingsTransferEvent(event);
             }
         } else if (event.kind === 7) {
             // Handle reactions (NIP-25)
@@ -16001,7 +16122,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (!isPM && messages.length >= this.channelMessageLimit) {
             const notice = document.createElement('div');
             notice.className = 'system-message channel-history-limit';
-            notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void — only the last 100 messages are kept.';
+            notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void — only the latest 100 messages are shown.';
             container.appendChild(notice);
         }
 
@@ -18193,6 +18314,9 @@ async function showSettings() {
     // Initialize wallpaper UI selection
     initWallpaperUI();
 
+    // Render pending settings transfers
+    nym.renderPendingSettingsTransfers();
+
     document.getElementById('settingsModal').classList.add('active');
 }
 
@@ -18477,7 +18601,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.32.128 ═══<br/>
+═══ Nymchat v3.33.128 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -19034,7 +19158,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (channelMessages.length >= nym.channelMessageLimit && !messagesContainer.querySelector('.channel-history-limit')) {
                     const notice = document.createElement('div');
                     notice.className = 'system-message channel-history-limit';
-                    notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void \u2014 only the last 100 messages are shown.';
+                    notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void \u2014 only the latest 100 messages are shown.';
                     messagesContainer.insertBefore(notice, messagesContainer.firstChild);
                 }
             }

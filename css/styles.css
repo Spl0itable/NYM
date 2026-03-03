@@ -2310,7 +2310,7 @@ body::after {
 
 .emoji-grid {
     display: grid;
-    grid-template-columns: repeat(8, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 5px;
 }
 
@@ -3267,7 +3267,7 @@ body::after {
 
 .emoji-picker-grid {
     display: grid;
-    grid-template-columns: repeat(8, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 2px;
 }
 
@@ -3298,7 +3298,7 @@ body::after {
 
     .emoji-picker-grid,
     .emoji-grid {
-        grid-template-columns: repeat(7, 1fr);
+        grid-template-columns: repeat(5, 1fr);
     }
 }
 
