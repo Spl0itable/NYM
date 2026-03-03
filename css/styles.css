@@ -1,29 +1,57 @@
 @font-face {
     font-family: 'ColorEmoji';
     src: local('Apple Color Emoji'),
-         local('Segoe UI Emoji'),
-         local('Segoe UI Symbol'),
-         local('Noto Color Emoji'),
-         local('Android Emoji'),
-         local('EmojiSymbols');
+        local('Segoe UI Emoji'),
+        local('Segoe UI Symbol'),
+        local('Noto Color Emoji'),
+        local('Android Emoji'),
+        local('EmojiSymbols');
     unicode-range:
         U+00A9,
         U+00AE,
         U+200D,
         U+203C-2049,
         U+20E3,
-        U+2122-21AA,
+        U+2122,
+        U+2139,
         U+2194-2199,
-        U+231A-23FF,
+        U+21A9-21AA,
+        U+231A-231B,
+        U+2328,
+        U+23CF,
+        U+23E9-23F3,
+        U+23F8-23FA,
+        U+24C2,
+        U+25AA-25AB,
+        U+25B6,
+        U+25C0,
+        U+25FB-25FE,
         U+2600-27BF,
+        U+2702-27B0,
         U+2934-2935,
-        U+2B05-2B55,
+        U+2B05-2B07,
+        U+2B1B-2B1C,
+        U+2B50,
+        U+2B55,
         U+3030,
         U+303D,
         U+3297,
         U+3299,
         U+FE00-FE0F,
-        U+1F000-1FAFF,
+        U+1F000-1F02F,
+        U+1F0A0-1F0FF,
+        U+1F100-1F1FF,
+        U+1F200-1F2FF,
+        U+1F300-1F5FF,
+        U+1F600-1F64F,
+        U+1F680-1F6FF,
+        U+1F700-1F77F,
+        U+1F780-1F7FF,
+        U+1F800-1F8FF,
+        U+1F900-1F9FF,
+        U+1FA00-1FA6F,
+        U+1FA70-1FAFF,
+        U+1FB00-1FBFF,
         U+E0020-E007F;
 }
 
@@ -1356,6 +1384,69 @@ body::after {
     font-weight: 100;
 }
 
+.nym-suffix-clickable {
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.nym-suffix-clickable:hover {
+    opacity: 1;
+}
+
+.pubkey-tooltip {
+    position: unset;
+    top: calc(100% + 8px);
+    right: 0;
+    background: rgba(15, 15, 30, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm, 8px);
+    padding: 12px;
+    z-index: 1000;
+    min-width: 320px;
+    max-width: 420px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.pubkey-tooltip-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+}
+
+.pubkey-tooltip-value {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 12px;
+    color: var(--primary, #7c6fe0);
+    word-break: break-all;
+    line-height: 1.5;
+    padding: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    user-select: all;
+    text-wrap: auto;
+}
+
+.pubkey-tooltip-copy {
+    margin-top: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 5px 14px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.pubkey-tooltip-copy:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
 .message-author.self {
     color: var(--primary);
 }
@@ -1373,10 +1464,14 @@ body::after {
 }
 
 .emoji {
-    font-family: 'ColorEmoji';
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', 'EmojiSymbols', 'ColorEmoji', sans-serif;
     font-style: normal;
     font-weight: normal;
     line-height: 1;
+    display: inline;
+    vertical-align: baseline;
+    text-rendering: auto;
+    -webkit-font-smoothing: antialiased;
 }
 
 .emoji-only .emoji {
@@ -1501,6 +1596,14 @@ body::after {
     font-size: 12px;
     max-width: fit-content;
     font-weight: 450;
+}
+
+.channel-history-limit {
+    color: var(--text-dim);
+    font-style: italic;
+    border-color: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.02);
+    padding: 12px 20px;
 }
 
 .action-message {
@@ -1690,7 +1793,7 @@ body::after {
     width: 90%;
 }
 
-.setup-modal-content > span {
+.setup-modal-content>span {
     max-width: 500px;
     width: 90%;
     text-align: center;
@@ -2003,7 +2106,7 @@ body::after {
 
 .emoji-item-emoji {
     font-size: 18px;
-    font-family: 'ColorEmoji';
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', 'EmojiSymbols', sans-serif;
 }
 
 .emoji-item-name {
@@ -2219,7 +2322,7 @@ body::after {
     padding: 8px;
     cursor: pointer;
     font-size: 18px;
-    font-family: 'ColorEmoji';
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', 'EmojiSymbols', sans-serif;
     transition: all var(--transition);
     text-align: center;
 }
@@ -3111,30 +3214,73 @@ body::after {
     border-radius: var(--radius-md);
     padding: 12px;
     display: none;
-    grid-template-columns: repeat(8, 1fr);
-    gap: 4px;
-    max-width: 340px;
-    max-height: 200px;
+    flex-direction: column;
+    max-width: 360px;
+    max-height: 400px;
     overflow-y: auto;
-    overflow-x: scroll;
+    overflow-x: hidden;
     box-shadow: var(--shadow-lg);
     margin-bottom: 8px;
     z-index: 500;
 }
 
 .emoji-picker.active {
+    display: flex;
+}
+
+.emoji-picker-search {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-bottom: 8px;
+    background: rgba(20, 20, 35, 0.9);
+}
+
+.emoji-picker-search-input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xs);
+    color: #ffffff;
+    padding: 7px 10px;
+    font-size: 12px;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.emoji-picker-search-input:focus {
+    border-color: var(--primary);
+}
+
+.emoji-picker-section {
+    margin-bottom: 10px;
+}
+
+.emoji-picker-section-title {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    letter-spacing: 1px;
+    padding: 2px 0;
+}
+
+.emoji-picker-grid {
     display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 2px;
 }
 
 .emoji-btn {
     background: transparent;
     border: 1px solid transparent;
     border-radius: var(--radius-xs);
-    padding: 8px;
+    padding: 6px;
     cursor: pointer;
     font-size: 18px;
-    font-family: 'ColorEmoji';
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', 'EmojiSymbols', sans-serif;
     transition: all var(--transition);
+    text-align: center;
 }
 
 .emoji-btn:hover {
@@ -3144,9 +3290,15 @@ body::after {
 
 @media (max-width: 480px) {
 
-    .emoji-picker,
-    .enhanced-emoji-modal {
-        grid-template-columns: repeat(6, 1fr);
+    .emoji-picker {
+        right: 5px;
+        left: 5px;
+        max-width: none;
+    }
+
+    .emoji-picker-grid,
+    .emoji-grid {
+        grid-template-columns: repeat(7, 1fr);
     }
 }
 
@@ -3489,22 +3641,69 @@ body.light-mode .tutorial-card {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
-body.light-mode .bitchat-user-0 { color: #a33500; }
-body.light-mode .bitchat-user-1 { color: #9a6000; }
-body.light-mode .bitchat-user-2 { color: #6b5800; }
-body.light-mode .bitchat-user-3 { color: #444444; }
-body.light-mode .bitchat-user-4 { color: #1a5588; }
-body.light-mode .bitchat-user-5 { color: #5c2699; }
-body.light-mode .bitchat-user-6 { color: #880020; }
-body.light-mode .bitchat-user-7 { color: #a30050; }
-body.light-mode .bitchat-user-8 { color: #445088; }
-body.light-mode .bitchat-user-9 { color: #503399; }
-body.light-mode .bitchat-user-10 { color: #a32800; }
-body.light-mode .bitchat-user-11 { color: #0d5c50; }
-body.light-mode .bitchat-user-12 { color: #a32870; }
-body.light-mode .bitchat-user-13 { color: #005e5e; }
-body.light-mode .bitchat-user-14 { color: #a35000; }
-body.light-mode .bitchat-user-15 { color: #2855a3; }
+body.light-mode .bitchat-user-0 {
+    color: #a33500;
+}
+
+body.light-mode .bitchat-user-1 {
+    color: #9a6000;
+}
+
+body.light-mode .bitchat-user-2 {
+    color: #6b5800;
+}
+
+body.light-mode .bitchat-user-3 {
+    color: #444444;
+}
+
+body.light-mode .bitchat-user-4 {
+    color: #1a5588;
+}
+
+body.light-mode .bitchat-user-5 {
+    color: #5c2699;
+}
+
+body.light-mode .bitchat-user-6 {
+    color: #880020;
+}
+
+body.light-mode .bitchat-user-7 {
+    color: #a30050;
+}
+
+body.light-mode .bitchat-user-8 {
+    color: #445088;
+}
+
+body.light-mode .bitchat-user-9 {
+    color: #503399;
+}
+
+body.light-mode .bitchat-user-10 {
+    color: #a32800;
+}
+
+body.light-mode .bitchat-user-11 {
+    color: #0d5c50;
+}
+
+body.light-mode .bitchat-user-12 {
+    color: #a32870;
+}
+
+body.light-mode .bitchat-user-13 {
+    color: #005e5e;
+}
+
+body.light-mode .bitchat-user-14 {
+    color: #a35000;
+}
+
+body.light-mode .bitchat-user-15 {
+    color: #2855a3;
+}
 
 body.light-mode .flair-crown {
     color: #b8960a;
@@ -3645,7 +3844,7 @@ body.light-mode .message.style-satoshi .message-content {
     background-color: rgba(196, 122, 21, 0.1);
 }
 
-body.light-mode .message.style-satoshi .message-content > * {
+body.light-mode .message.style-satoshi .message-content>* {
     background: linear-gradient(135deg, #c47a15 0%, #aa6600 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -4108,6 +4307,11 @@ body.light-mode .message.self::before {
 .shop-buy-btn:hover {
     background: rgba(247, 147, 26, 0.22);
     box-shadow: 0 0 15px rgba(247, 147, 26, 0.15);
+}
+
+.shop-transfer-btn:hover {
+    background: rgba(0, 255, 170, 0.18) !important;
+    box-shadow: 0 0 15px rgba(0, 255, 170, 0.15);
 }
 
 .shop-category-title {
@@ -5178,9 +5382,12 @@ body.light-mode .message.self::before {
 }
 
 @keyframes pulse {
-    0%, 100% {
+
+    0%,
+    100% {
         opacity: 1;
     }
+
     50% {
         opacity: 0.5;
     }
@@ -5525,7 +5732,7 @@ body.light-mode .message.self::before {
     justify-content: center;
     color: var(--text-dim);
     background: rgba(0, 0, 0, 0.3);
-    border: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+    border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
 }
 
 body.light-mode .wallpaper-preview {

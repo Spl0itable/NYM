@@ -397,7 +397,7 @@
                     <label class="form-label">New Nym nick</label>
                     <div style="display: flex; align-items: center; gap: 0;">
                         <input type="text" class="form-input" id="newNickInput" placeholder="Enter new nym" maxlength="20" style="flex: 1; border-radius: 12px 0 0 12px;">
-                        <span id="nickSuffixDisplay" class="nym-suffix" style="padding: 8px 12px; background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border, var(--border-color)); border-left: none; border-radius: 0 12px 12px 0; font-size: 14px; white-space: nowrap;"></span>
+                        <span id="nickSuffixDisplay" class="nym-suffix nym-suffix-clickable" style="padding: 8px 12px; background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border, var(--border-color)); border-left: none; border-radius: 0 12px 12px 0; font-size: 14px; white-space: nowrap; cursor: pointer; position: relative;" title="Click to view full pubkey"></span>
                     </div>
                     <div class="form-hint">Your ephemeral pseudonym nickname for this session</div>
                 </div>

@@ -1119,91 +1119,255 @@ class NYM {
         this.awayMessages = new Map();
         this.recentEmojis = [];
         this.allEmojis = {
-            'smileys': ['😊', '😂', '🤣', '😍', '🥰', '😘', '😎', '🤔', '😢', '😭', '😡', '🤬', '😱', '😨', '😰', '😥', '😓', '🤗', '🤭', '🤫', '🤥', '😶', '😐', '😑', '😬', '🙄', '😯', '😦', '😧', '😮', '😲', '🥱', '😴', '🤤', '😪', '😵', '🤐', '🥴', '🤢', '🤮', '🤧', '😷', '🤒', '🤕', '🤑', '🤠', '😈', '👿', '👹', '👺', '🤡', '💩', '👻', '💀', '☠️', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'],
-            'gestures': ['👍', '👎', '👌', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '👇', '☝️', '✋', '🤚', '🖐️', '🖖', '👋', '🤏', '✍️', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '🫂', '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '🧠', '🦷', '🦴', '👀', '👁️', '👅', '👄', '💋'],
-            'hearts': ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '☮️', '✝️', '☪️', '🕉️', '☸️', '✡️', '🔯', '🕎', '☯️', '☦️', '🛐', '⛎', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓'],
-            'symbols': ['💯', '💢', '💥', '💫', '💦', '💨', '🕳️', '💣', '💬', '👁️‍🗨️', '🗨️', '🗯️', '💭', '💤', '✨', '🌟', '💫', '⭐', '🌠', '🔥', '💥', '☄️', '🎆', '🎇', '🎈', '🎉', '🎊', '🎋', '🎍', '🎎', '🎏', '🎐', '🎑', '🧧', '🎀', '🎁', '🎗️', '🎟️', '🎫'],
-            'objects': ['⌚', '📱', '📲', '💻', '⌨️', '🖥️', '🖨️', '🖱️', '🖲️', '🕹️', '🗜️', '💽', '💾', '💿', '📀', '📼', '📷', '📸', '📹', '🎥', '📽️', '🎞️', '📞', '☎️', '📟', '📠', '📺', '📻', '🎙️', '🎚️', '🎛️', '⏱️', '⏲️', '⏰', '🕰️', '⌛', '⏳', '📡', '🔋', '🔌', '💡', '🔦', '🕯️', '🗑️', '🛢️', '💸', '💵', '💴', '💶', '💷', '💰', '💳', '🧾', '💎', '⚖️', '🔧', '🔨', '⚒️', '🛠️', '⛏️', '🔩', '⚙️', '⛓️', '🔫', '💣', '🔪', '🗡️', '⚔️', '🛡️', '🚬', '⚰️', '⚱️', '🏺', '🔮', '📿', '💈', '⚗️', '🔭', '🔬', '🕳️', '💊', '💉', '🩸', '🩹', '🩺', '🌡️', '🏷️', '🔖', '🚿', '🛁', '🛀', '🚰', '🚽', '🧻', '🧼', '🧽', '🧴', '🪒', '🧹', '🧺', '🔑', '🗝️', '🛏️', '🛋️', '🚪', '🪑', '🚿', '🛁', '🛀', '🧴', '🧷', '🧹', '🧺', '🧻', '🧼', '🧽', '🧯', '🛒', '🚬', '⚰️', '⚱️', '🗿'],
-            'food': ['🍏', '🍎', '🍐', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥', '🥝', '🍅', '🍆', '🥑', '🥦', '🥬', '🥒', '🌶️', '🌽', '🥕', '🧄', '🧅', '🥔', '🍠', '🥐', '🥯', '🍞', '🥖', '🥨', '🧀', '🥚', '🍳', '🧈', '🥞', '🧇', '🥓', '🥩', '🍗', '🍖', '🦴', '🌭', '🍔', '🍟', '🍕', '🥪', '🥙', '🧆', '🌮', '🌯', '🥗', '🥘', '🥫', '🍝', '🍜', '🍲', '🍛', '🍣', '🍱', '🥟', '🦪', '🍤', '🍙', '🍚', '🍘', '🍥', '🥠', '🥮', '🍢', '🍡', '🍧', '🍨', '🍦', '🥧', '🧁', '🍰', '🎂', '🍮', '🍭', '🍬', '🍫', '🍿', '🍩', '🍪', '🌰', '🥜', '🍯', '🥛', '🍼', '☕', '🍵', '🧃', '🥤', '🍶', '🍺', '🍻', '🥂', '🍷', '🥃', '🍸', '🍹', '🧉', '🍾', '🧊'],
-            'activities': ['⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '🥅', '⛳', '🪁', '🏹', '🎣', '🤿', '🥊', '🥋', '🎽', '🛹', '🛷', '⛸️', '🥌', '🎿', '⛷️', '🏂', '🪂', '🏋️', '🤼', '🤸', '🤺', '🤾', '🏌️', '🏇', '🧘', '🏄', '🏊', '🤽', '🚣', '🧗', '🚴', '🚵', '🎪', '🎭', '🎨', '🎬', '🎤', '🎧', '🎼', '🎹', '🥁', '🎷', '🎺', '🎸', '🪕', '🎻', '🎲', '♟️', '🎯', '🎳', '🎮', '🎰', '🧩'],
-            'nature': ['🐵', '🐒', '🦍', '🦧', '🐶', '🐕', '🦮', '🐕‍🦺', '🐩', '🐺', '🦊', '🦝', '🐱', '🐈', '🐈‍⬛', '🦁', '🐯', '🐅', '🐆', '🐴', '🐎', '🦄', '🦓', '🦌', '🦬', '🐮', '🐂', '🐃', '🐄', '🐷', '🐖', '🐗', '🐽', '🐏', '🐑', '🐐', '🐪', '🐫', '🦙', '🦒', '🐘', '🦣', '🦏', '🦛', '🐭', '🐁', '🐀', '🐹', '🐰', '🐇', '🐿️', '🦫', '🦔', '🦇', '🐻', '🐻‍❄️', '🐨', '🐼', '🦥', '🦦', '🦨', '🦘', '🦡', '🐾', '🦃', '🐔', '🐓', '🐣', '🐤', '🐥', '🐦', '🐧', '🕊️', '🦅', '🦆', '🦢', '🦉', '🦤', '🪶', '🦩', '🦚', '🦜', '🐸', '🐊', '🐢', '🦎', '🐍', '🐲', '🐉', '🦕', '🦖', '🐳', '🐋', '🐬', '🦭', '🐟', '🐠', '🐡', '🦈', '🐙', '🐚', '🐌', '🦋', '🐛', '🐜', '🐝', '🪲', '🐞', '🦗', '🪳', '🕷️', '🕸️', '🦂', '🦟', '🪰', '🪱', '🦠', '💐', '🌸', '💮', '🏵️', '🌹', '🥀', '🌺', '🌻', '🌼', '🌷', '🌱', '🪴', '🌲', '🌳', '🌴', '🌵', '🌾', '🌿', '☘️', '🍀', '🍁', '🍂', '🍃']
+            'smileys': ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '☺️', '😚', '😙', '🥲', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🫢', '🫣', '🤫', '🤔', '🫡', '🤐', '🤨', '😐', '😑', '😶', '🫥', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '😵‍💫', '🤯', '🤠', '🥳', '🥸', '😎', '🤓', '🧐', '😕', '🫤', '😟', '☹️', '🙁', '😮', '😯', '😲', '😳', '🥺', '🥹', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'],
+            'people': ['👶', '🧒', '👦', '👧', '🧑', '👱', '👨', '🧔', '👩', '🧓', '👴', '👵', '🙍', '🙎', '🙅', '🙆', '💁', '🙋', '🧏', '🙇', '🤦', '🤷', '👮', '🕵️', '💂', '🥷', '👷', '🫅', '🤴', '👸', '👳', '👲', '🧕', '🤵', '👰', '🤰', '🫃', '🫄', '🤱', '👼', '🎅', '🤶', '🦸', '🦹', '🧙', '🧚', '🧛', '🧜', '🧝', '🧞', '🧟', '🧌', '💆', '💇', '🚶', '🧍', '🧎', '🏃', '💃', '🕺', '🕴️', '👯', '🧖', '🧗', '🤸', '🏌️', '🏇', '⛷️', '🏂', '🏋️', '🤼', '🤽', '🤾', '🤺', '⛹️', '🧘', '🛀', '🛌', '👭', '👫', '👬', '💏', '💑', '👪', '👨‍👩‍👦', '👨‍👩‍👧', '👨‍👩‍👧‍👦', '👨‍👩‍👦‍👦', '👨‍👩‍👧‍👧', '🗣️', '👤', '👥', '🫂'],
+            'gestures': ['👍', '👎', '👌', '🤌', '🤏', '✌️', '🤞', '🫰', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '🫵', '👋', '🤚', '🖐️', '✋', '🖖', '🫱', '🫲', '🫳', '🫴', '👏', '🙌', '🫶', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳', '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '🧠', '🫀', '🫁', '🦷', '🦴', '👀', '👁️', '👅', '👄', '🫦', '💋'],
+            'hearts': ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '❤️‍🔥', '❤️‍🩹', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '♥️'],
+            'symbols': ['💯', '💢', '💥', '💫', '💦', '💨', '🕳️', '💣', '💬', '👁️‍🗨️', '🗨️', '🗯️', '💭', '💤', '✨', '🌟', '💫', '⭐', '🌠', '🔥', '☄️', '🎆', '🎇', '🎈', '🎉', '🎊', '🎋', '🎍', '🎎', '🎏', '🎐', '🎑', '🧧', '🎀', '🎁', '🎗️', '🎟️', '🎫', '🔮', '🧿', '🪬', '🎮', '🕹️', '🎰', '🎲', '♟️', '🧩', '🧸', '🪅', '🪩', '🪆', '♠️', '♥️', '♦️', '♣️', '🀄', '🃏', '🔇', '🔈', '🔉', '🔊', '📢', '📣', '📯', '🔔', '🔕', '🎵', '🎶', '🎼', '☮️', '✝️', '☪️', '🕉️', '☸️', '✡️', '🔯', '🕎', '☯️', '☦️', '🛐', '⛎', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓', '🆔', '⚛️', '🉑', '☢️', '☣️', '📴', '📳', '🈶', '🈚', '🈸', '🈺', '🈷️', '✴️', '🆚', '💮', '🉐', '㊙️', '㊗️', '🈴', '🈵', '🈹', '🈲', '🅰️', '🅱️', '🆎', '🆑', '🅾️', '🆘', '❌', '⭕', '🛑', '⛔', '📛', '🚫', '💯', '💢', '♨️', '🚷', '🚯', '🚳', '🚱', '🔞', '📵', '🚭', '❗', '❕', '❓', '❔', '‼️', '⁉️', '🔅', '🔆', '〽️', '⚠️', '🚸', '🔱', '⚜️', '🔰', '♻️', '✅', '🈯', '💹', '❇️', '✳️', '❎', '🌐', '💠', 'Ⓜ️', '🌀', '💤', '🏧', '🚾', '♿', '🅿️', '🛗', '🈳', '🈂️', '🛂', '🛃', '🛄', '🛅', '🚹', '🚺', '🚼', '⚧️', '🚻', '🚮', '🎦', '📶', '🈁', '🔣', 'ℹ️', '🔤', '🔡', '🔠', '🆖', '🆗', '🆙', '🆒', '🆕', '🆓', '0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟', '🔢', '#️⃣', '*️⃣', '⏏️', '▶️', '⏸️', '⏯️', '⏹️', '⏺️', '⏭️', '⏮️', '⏩', '⏪', '⏫', '⏬', '◀️', '🔼', '🔽', '➡️', '⬅️', '⬆️', '⬇️', '↗️', '↘️', '↙️', '↖️', '↕️', '↔️', '↩️', '↪️', '⤴️', '⤵️', '🔀', '🔁', '🔂', '🔄', '🔃', '➕', '➖', '➗', '✖️', '🟰', '♾️', '💲', '💱', '™️', '©️', '®️', '〰️', '➰', '➿', '🔚', '🔙', '🔛', '🔝', '🔜', '✔️', '☑️', '🔘', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚪', '🟤', '🔺', '🔻', '🔸', '🔹', '🔶', '🔷', '🔳', '🔲', '▪️', '▫️', '◾', '◽', '◼️', '◻️', '🟥', '🟧', '🟨', '🟩', '🟦', '🟪', '⬛', '⬜', '🟫', '🔈', '🔉', '🔊', '🔇', '📣', '📢', '🔔', '🔕', '🃏', '🀄', '🎴', '🔁', '🔂', '🔀'],
+            'objects': ['⌚', '📱', '📲', '💻', '⌨️', '🖥️', '🖨️', '🖱️', '🖲️', '🕹️', '🗜️', '💽', '💾', '💿', '📀', '📼', '📷', '📸', '📹', '🎥', '📽️', '🎞️', '📞', '☎️', '📟', '📠', '📺', '📻', '🎙️', '🎚️', '🎛️', '⏱️', '⏲️', '⏰', '🕰️', '⌛', '⏳', '📡', '🔋', '🪫', '🔌', '💡', '🔦', '🕯️', '🪔', '🧯', '🛢️', '💸', '💵', '💴', '💶', '💷', '🪙', '💰', '💳', '🪪', '🧾', '💎', '⚖️', '🪜', '🧰', '🪛', '🔧', '🔨', '⚒️', '🛠️', '⛏️', '🪚', '🔩', '⚙️', '🪤', '⛓️', '🧲', '🔫', '💣', '🧨', '🪓', '🔪', '🗡️', '⚔️', '🛡️', '🚬', '⚰️', '🪦', '⚱️', '🏺', '🔮', '📿', '🧿', '🪬', '💈', '⚗️', '🔭', '🔬', '🕳️', '🩻', '🩹', '🩺', '💊', '💉', '🩸', '🌡️', '🧬', '🦠', '🧫', '🧪', '🏷️', '🔖', '🚽', '🪠', '🚿', '🛁', '🛀', '🪥', '🪒', '🧻', '🧼', '🫧', '🪣', '🧽', '🧴', '🛏️', '🛋️', '🪑', '🚪', '🪞', '🪟', '🧹', '🧺', '🧯', '🛒', '🚬', '⚰️', '⚱️', '🗿', '🪧', '🪪'],
+            'clothing': ['👓', '🕶️', '🥽', '🥼', '🦺', '👔', '👕', '👖', '🧣', '🧤', '🧥', '🧦', '👗', '👘', '🥻', '🩱', '🩲', '🩳', '👙', '👚', '👛', '👜', '👝', '🛍️', '🎒', '🩴', '👞', '👟', '🥾', '🥿', '👠', '👡', '🩰', '👢', '👑', '👒', '🎩', '🎓', '🧢', '🪖', '⛑️', '📿', '💄', '💍', '💎', '🪭', '🪮'],
+            'nature': ['🐵', '🐒', '🦍', '🦧', '🐶', '🐕', '🦮', '🐕‍🦺', '🐩', '🐺', '🦊', '🦝', '🐱', '🐈', '🐈‍⬛', '🦁', '🐯', '🐅', '🐆', '🐴', '🐎', '🦄', '🦓', '🦌', '🫎', '🦬', '🐮', '🐂', '🐃', '🐄', '🐷', '🐖', '🐗', '🐽', '🐏', '🐑', '🐐', '🐪', '🐫', '🦙', '🦒', '🐘', '🦣', '🦏', '🦛', '🐭', '🐁', '🐀', '🐹', '🐰', '🐇', '🐿️', '🦫', '🦔', '🦇', '🐻', '🐻‍❄️', '🐨', '🐼', '🦥', '🦦', '🦨', '🦘', '🦡', '🐾', '🦃', '🐔', '🐓', '🐣', '🐤', '🐥', '🐦', '🐧', '🕊️', '🦅', '🦆', '🦢', '🦉', '🦤', '🪶', '🦩', '🦚', '🦜', '🪽', '🐦‍⬛', '🪿', '🐸', '🐊', '🐢', '🦎', '🐍', '🐲', '🐉', '🦕', '🦖', '🐳', '🐋', '🐬', '🦭', '🐟', '🐠', '🐡', '🦈', '🐙', '🐚', '🪸', '🪼', '🐌', '🦋', '🐛', '🐜', '🐝', '🪲', '🐞', '🦗', '🪳', '🕷️', '🕸️', '🦂', '🦟', '🪰', '🪱', '🦠', '💐', '🌸', '💮', '🏵️', '🌹', '🥀', '🌺', '🌻', '🌼', '🌷', '🪷', '🌱', '🪴', '🌲', '🌳', '🌴', '🌵', '🌾', '🌿', '☘️', '🍀', '🍁', '🍂', '🍃', '🪹', '🪺', '🍄', '🪨', '🪵'],
+            'food': ['🍏', '🍎', '🍐', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🫐', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥', '🥝', '🍅', '🍆', '🥑', '🥦', '🥬', '🥒', '🌶️', '🫑', '🌽', '🥕', '🧄', '🧅', '🥔', '🍠', '🫘', '🥐', '🥯', '🍞', '🫓', '🥖', '🥨', '🧀', '🥚', '🍳', '🧈', '🥞', '🧇', '🥓', '🥩', '🍗', '🍖', '🦴', '🌭', '🍔', '🍟', '🍕', '🫔', '🥪', '🥙', '🧆', '🌮', '🌯', '🫕', '🥗', '🥘', '🫙', '🥫', '🍝', '🍜', '🍲', '🍛', '🍣', '🍱', '🥟', '🦪', '🍤', '🍙', '🍚', '🍘', '🍥', '🥠', '🥮', '🍢', '🍡', '🍧', '🍨', '🍦', '🥧', '🧁', '🍰', '🎂', '🍮', '🍭', '🍬', '🍫', '🍿', '🍩', '🍪', '🌰', '🥜', '🍯', '🥛', '🍼', '🫗', '☕', '🫖', '🍵', '🧃', '🥤', '🧋', '🍶', '🍺', '🍻', '🥂', '🍷', '🥃', '🍸', '🍹', '🧉', '🍾', '🧊', '🥄', '🍴', '🍽️', '🥣', '🥡', '🥢', '🫙'],
+            'activities': ['⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '🪃', '🥅', '⛳', '🪁', '🏹', '🎣', '🤿', '🥊', '🥋', '🎽', '🛹', '🛼', '🛷', '⛸️', '🥌', '🎿', '⛷️', '🏂', '🪂', '🏋️', '🤼', '🤸', '🤺', '🤾', '🏌️', '🏇', '🧘', '🏄', '🏊', '🤽', '🚣', '🧗', '🚴', '🚵', '🎪', '🎭', '🎨', '🎬', '🎤', '🎧', '🎼', '🎹', '🥁', '🪘', '🎷', '🎺', '🪗', '🎸', '🪕', '🎻', '🪈', '🎲', '🎯', '🎳', '🎰', '🧩'],
+            'travel': ['🚗', '🚕', '🚙', '🚌', '🚎', '🏎️', '🚓', '🚑', '🚒', '🚐', '🛻', '🚚', '🚛', '🚜', '🦯', '🦽', '🦼', '🛴', '🚲', '🛵', '🏍️', '🛺', '🛞', '🚨', '🚔', '🚍', '🚘', '🚖', '🛞', '🚡', '🚠', '🚟', '🚃', '🚋', '🚞', '🚝', '🚄', '🚅', '🚈', '🚂', '🚆', '🚇', '🚊', '🚉', '✈️', '🛫', '🛬', '🛩️', '💺', '🛰️', '🚀', '🛸', '🚁', '🛶', '⛵', '🚤', '🛥️', '🛳️', '⛴️', '🚢', '⚓', '🪝', '⛽', '🚧', '🚦', '🚥', '🚏', '🗺️', '🗿', '🗽', '🗼', '🏰', '🏯', '🏟️', '🎡', '🎢', '🎠', '⛲', '⛱️', '🏖️', '🏝️', '🏜️', '🌋', '⛰️', '🏔️', '🗻', '🏕️', '🛖', '🏠', '🏡', '🏘️', '🏚️', '🏗️', '🏭', '🏢', '🏬', '🏣', '🏤', '🏥', '🏦', '🏨', '🏪', '🏫', '🏩', '💒', '🏛️', '⛪', '🕌', '🕍', '🛕', '🕋', '⛩️', '🛤️', '🛣️', '🗾', '🎑', '🏞️', '🌅', '🌄', '🌠', '🎇', '🎆', '🌇', '🌆', '🏙️', '🌃', '🌌', '🌉', '🌁'],
+            'weather': ['☀️', '🌤️', '⛅', '🌥️', '☁️', '🌦️', '🌧️', '⛈️', '🌩️', '🌨️', '❄️', '☃️', '⛄', '🌬️', '💨', '🌪️', '🌫️', '🌈', '☔', '💧', '🌊', '🔥', '🌙', '🌛', '🌜', '🌚', '🌕', '🌖', '🌗', '🌘', '🌑', '🌒', '🌓', '🌔', '🌍', '🌎', '🌏', '🪐', '⭐', '🌟', '✨', '💫', '☄️'],
+            'flags': ['🏳️', '🏴', '🏁', '🚩', '🏳️‍🌈', '🏳️‍⚧️', '🏴‍☠️', '🇺🇸', '🇬🇧', '🇨🇦', '🇦🇺', '🇩🇪', '🇫🇷', '🇯🇵', '🇰🇷', '🇨🇳', '🇮🇳', '🇧🇷', '🇲🇽', '🇪🇸', '🇮🇹', '🇷🇺', '🇸🇪', '🇳🇴', '🇩🇰', '🇫🇮', '🇳🇱', '🇧🇪', '🇦🇹', '🇨🇭', '🇵🇱', '🇺🇦', '🇹🇷', '🇬🇷', '🇵🇹', '🇮🇪', '🇿🇦', '🇳🇬', '🇪🇬', '🇰🇪', '🇦🇷', '🇨🇱', '🇨🇴', '🇵🇪', '🇻🇪', '🇹🇭', '🇻🇳', '🇮🇩', '🇵🇭', '🇲🇾', '🇸🇬', '🇳🇿', '🇸🇦', '🇦🇪', '🇮🇱', '🇵🇰', '🇧🇩', '🇭🇰', '🇹🇼', '🇨🇿', '🇭🇺', '🇷🇴', '🇭🇷', '🇷🇸', '🇧🇬', '🇸🇰', '🇸🇮', '🇱🇹', '🇱🇻', '🇪🇪', '🇮🇸', '🇱🇺', '🇲🇹', '🇨🇾', '🇯🇲', '🇹🇹', '🇧🇸', '🇧🇧', '🇵🇷', '🇨🇺', '🇩🇴', '🇭🇹', '🇵🇦', '🇨🇷', '🇬🇹', '🇭🇳', '🇸🇻', '🇳🇮', '🇧🇴', '🇪🇨', '🇺🇾', '🇵🇾', '🇬🇾']
         };
         this.emojiMap = {
-            'smile': '😊', 'laugh': '😂', 'rofl': '🤣', 'love': '😍', 'heart_eyes': '🥰',
-            'kiss': '😘', 'cool': '😎', 'thinking': '🤔', 'cry': '😢', 'sob': '😭',
-            'angry': '😡', 'rage': '🤬', 'scream': '😱', 'fearful': '😨', 'anxious': '😰',
-            'sad': '😥', 'disappointed': '😓', 'hug': '🫂', 'shush': '🤭', 'quiet': '🤫',
-            'lying': '🤥', 'neutral': '😐', 'expressionless': '😑', 'grimace': '😬', 'eye_roll': '🙄',
-            'surprised': '😯', 'frowning': '😦', 'anguished': '😧', 'shocked': '😮', 'astonished': '😲',
-            'yawn': '🥱', 'sleeping': '😴', 'drool': '🤤', 'sleepy': '😪', 'dizzy': '😵',
-            'zipper': '🤐', 'woozy': '🥴', 'sick': '🤢', 'vomit': '🤮', 'sneeze': '🤧',
-            'mask': '😷', 'thermometer': '🤒', 'bandage': '🤕', 'money': '🤑', 'cowboy': '🤠',
-            'devil': '😈', 'imp': '👿', 'ogre': '👹', 'goblin': '👺', 'clown': '🤡',
-            'poop': '💩', 'ghost': '👻', 'skull': '💀', 'alien': '👽', 'robot': '🤖',
-            'jack': '🎃', 'cat_smile': '😺', 'cat_grin': '😸', 'cat_joy': '😹', 'cat_love': '😻',
-            'cat_smirk': '😼', 'cat_kiss': '😽', 'cat_scream': '🙀', 'cat_cry': '😿', 'cat_angry': '😾',
-            'thumbsup': '👍', 'thumbsdown': '👎', 'ok': '👌', 'peace': '✌️', 'crossed': '🤞',
-            'rock': '🤟', 'metal': '🤘', 'call': '🤙', 'left': '👈', 'right': '👉',
-            'up': '👆', 'down': '👇', 'point': '☝️', 'hand': '✋', 'backhand': '🤚',
-            'vulcan': '🖖', 'wave': '👋', 'pinch': '🤏', 'writing': '✍️', 'clap': '👏',
-            'raised': '🙌', 'open': '👐', 'palms': '🤲', 'handshake': '🤝', 'pray': '🙏',
-            'muscle': '💪', 'ear': '👂', 'nose': '👃', 'brain': '🧠', 'eyes': '👀',
+            // Smileys & faces
+            'grinning': '😀', 'smiley': '😃', 'grin': '😄', 'beaming': '😁', 'laughing': '😆',
+            'sweat_smile': '😅', 'rofl': '🤣', 'laugh': '😂', 'slightly_smiling': '🙂', 'upside_down': '🙃',
+            'wink': '😉', 'smile': '😊', 'innocent': '😇', 'heart_eyes': '🥰', 'love': '😍',
+            'star_struck': '🤩', 'kiss': '😘', 'kissing': '😗', 'relaxed': '☺️', 'kissing_closed': '😚',
+            'kissing_smiling': '😙', 'holding_tears': '🥲', 'yum': '😋', 'stuck_out': '😛', 'stuck_out_wink': '😜',
+            'zany': '🤪', 'stuck_out_closed': '😝', 'money_face': '🤑', 'hug': '🤗', 'shush': '🤭',
+            'peeking': '🫣', 'quiet': '🤫', 'thinking': '🤔', 'salute': '🫡', 'zipper': '🤐',
+            'raised_eyebrow': '🤨', 'neutral': '😐', 'expressionless': '😑', 'no_mouth': '😶', 'dotted_face': '🫥',
+            'smirk': '😏', 'unamused': '😒', 'eye_roll': '🙄', 'grimace': '😬', 'lying': '🤥',
+            'relieved': '😌', 'pensive': '😔', 'sleepy': '😪', 'drool': '🤤', 'sleeping': '😴',
+            'mask': '😷', 'thermometer': '🤒', 'bandage': '🤕', 'sick': '🤢', 'vomit': '🤮',
+            'sneeze': '🤧', 'hot': '🥵', 'cold': '🥶', 'woozy': '🥴', 'dizzy': '😵',
+            'spiral_eyes': '😵‍💫', 'mind_blown': '🤯', 'cowboy': '🤠', 'partying': '🥳', 'disguise': '🥸',
+            'cool': '😎', 'nerd': '🤓', 'monocle': '🧐', 'confused': '😕', 'diagonal_mouth': '🫤',
+            'worried': '😟', 'frowning': '☹️', 'slightly_frowning': '🙁', 'shocked': '😮', 'surprised': '😯',
+            'astonished': '😲', 'flushed': '😳', 'pleading': '🥺', 'face_holding_tears': '🥹', 'anguished': '😧',
+            'fearful': '😨', 'anxious': '😰', 'sad': '😥', 'cry': '😢', 'sob': '😭',
+            'scream': '😱', 'confounded': '😖', 'persevere': '😣', 'disappointed': '😞', 'sweat': '😓',
+            'weary': '😩', 'tired': '😫', 'yawn': '🥱', 'triumph': '😤', 'pouting': '😡',
+            'angry': '😠', 'rage': '🤬', 'devil': '😈', 'imp': '👿', 'skull': '💀',
+            'skull_crossbones': '☠️', 'poop': '💩', 'clown': '🤡', 'ogre': '👹', 'goblin': '👺',
+            'ghost': '👻', 'alien': '👽', 'space_invader': '👾', 'robot': '🤖', 'jack': '🎃',
+            'cat_smile': '😺', 'cat_grin': '😸', 'cat_joy': '😹', 'cat_love': '😻', 'cat_smirk': '😼',
+            'cat_kiss': '😽', 'cat_scream': '🙀', 'cat_cry': '😿', 'cat_angry': '😾',
+            // People
+            'baby': '👶', 'child': '🧒', 'boy': '👦', 'girl': '👧', 'person': '🧑',
+            'blond': '👱', 'man': '👨', 'bearded': '🧔', 'woman': '👩', 'older_person': '🧓',
+            'old_man': '👴', 'old_woman': '👵', 'frowning_person': '🙍', 'pouting_person': '🙎', 'no_good': '🙅',
+            'ok_person': '🙆', 'tipping': '💁', 'raising_hand': '🙋', 'deaf_person': '🧏', 'bowing': '🙇',
+            'facepalm': '🤦', 'shrug': '🤷', 'police_officer': '👮', 'detective': '🕵️', 'guard': '💂',
+            'ninja': '🥷', 'construction': '👷', 'royalty': '🫅', 'prince': '🤴', 'princess': '👸',
+            'turban': '👳', 'skullcap': '👲', 'headscarf': '🧕', 'tuxedo': '🤵', 'bride': '👰',
+            'pregnant': '🤰', 'pregnant_man': '🫃', 'pregnant_person': '🫄', 'breast_feeding': '🤱', 'angel': '👼',
+            'santa': '🎅', 'mrs_claus': '🤶', 'superhero': '🦸', 'supervillain': '🦹', 'mage': '🧙',
+            'fairy': '🧚', 'vampire': '🧛', 'merperson': '🧜', 'elf': '🧝', 'genie': '🧞',
+            'zombie': '🧟', 'troll': '🧌', 'massage': '💆', 'haircut': '💇', 'walking': '🚶',
+            'standing': '🧍', 'kneeling': '🧎', 'running': '🏃', 'dancer': '💃', 'man_dancing': '🕺',
+            'levitate': '🕴️', 'people_dancing': '👯', 'sauna': '🧖', 'climbing': '🧗', 'cartwheeling': '🤸',
+            'golfer': '🏌️', 'horse_racing': '🏇', 'skier': '⛷️', 'snowboarder': '🏂', 'weight_lifter': '🏋️',
+            'wrestlers': '🤼', 'water_polo': '🤽', 'handball': '🤾', 'fencer': '🤺', 'basketball_player': '⛹️',
+            'meditating': '🧘', 'bath': '🛀', 'sleeping_person': '🛌', 'women_holding_hands': '👭', 'couple': '👫',
+            'men_holding_hands': '👬', 'kiss_couple': '💏', 'couple_heart': '💑', 'family': '👪',
+            'speaking_head': '🗣️', 'silhouette': '👤', 'silhouettes': '👥', 'people_hugging': '🫂',
+            // Gestures & body
+            'thumbsup': '👍', 'thumbsdown': '👎', 'ok_hand': '👌', 'pinched': '🤌', 'pinch': '🤏',
+            'peace': '✌️', 'crossed': '🤞', 'hand_with_fingers': '🫰', 'rock': '🤟', 'metal': '🤘',
+            'call': '🤙', 'left': '👈', 'right': '👉', 'up': '👆', 'middle_finger': '🖕',
+            'down': '👇', 'point': '☝️', 'point_at_you': '🫵', 'wave': '👋', 'backhand': '🤚',
+            'fingers_splayed': '🖐️', 'hand': '✋', 'vulcan': '🖖', 'rightward_hand': '🫱', 'leftward_hand': '🫲',
+            'palm_down': '🫳', 'palm_up': '🫴', 'clap': '👏', 'raised': '🙌', 'heart_hands': '🫶',
+            'open': '👐', 'palms': '🤲', 'handshake': '🤝', 'pray': '🙏', 'writing': '✍️',
+            'nail_polish': '💅', 'selfie': '🤳', 'muscle': '💪', 'mechanical_arm': '🦾', 'mechanical_leg': '🦿',
+            'leg': '🦵', 'foot': '🦶', 'ear': '👂', 'hearing_aid': '🦻', 'nose': '👃',
+            'brain': '🧠', 'anatomical_heart': '🫀', 'lungs': '🫁', 'tooth': '🦷', 'bone': '🦴',
+            'eyes': '👀', 'eye': '👁️', 'tongue': '👅', 'lips': '👄', 'biting_lip': '🫦', 'kiss_mark': '💋',
+            // Hearts
             'heart': '❤️', 'orange_heart': '🧡', 'yellow_heart': '💛', 'green_heart': '💚',
             'blue_heart': '💙', 'purple_heart': '💜', 'black_heart': '🖤', 'white_heart': '🤍',
-            'brown_heart': '🤎', 'broken': '💔', 'exclamation_heart': '❣️', 'hearts': '💕',
-            'revolving': '💞', 'heartbeat': '💓', 'growing': '💗', 'sparkling': '💖',
-            'cupid': '💘', 'gift_heart': '💝', 'heart_decoration': '💟',
-            '100': '💯', 'boom': '💥', 'fire': '🔥', 'star': '⭐', 'sparkles': '✨',
-            'lightning': '⚡', 'warning': '⚠️', 'check': '✅', 'x': '❌', 'question': '❓',
-            'exclamation': '❗', 'bangbang': '‼️', 'interrobang': '⁉️', 'zzz': '💤',
-            'party': '🎉', 'tada': '🎊', 'gift': '🎁', 'trophy': '🏆', 'medal': '🥇',
-            'soccer': '⚽', 'baseball': '⚾', 'basketball': '🏀', 'football': '🏈', 'tennis': '🎾',
-            'volleyball': '🏐', 'rugby': '🏉', 'pool': '🎱', 'ping_pong': '🏓', 'badminton': '🏸',
-            'hockey': '🏒', 'golf': '⛳', 'fishing': '🎣', 'boxing': '🥊', 'martial_arts': '🥋',
-            'running': '🏃', 'walking': '🚶', 'cyclist': '🚴', 'mountain': '⛰️', 'camping': '🏕️',
-            'beach': '🏖️', 'sunrise': '🌅', 'sunset': '🌆', 'night': '🌃', 'stars': '🌟',
-            'rainbow': '🌈', 'sun': '☀️', 'moon': '🌙', 'cloud': '☁️', 'rain': '🌧️',
-            'snow': '❄️', 'snowman': '⛄', 'thunder': '⛈️', 'tornado': '🌪️', 'fog': '🌫️',
-            'apple': '🍎', 'banana': '🍌', 'strawberry': '🍓', 'cherry': '🍒', 'peach': '🍑',
-            'watermelon': '🍉', 'grapes': '🍇', 'lemon': '🍋', 'orange': '🍊', 'pineapple': '🍍',
-            'mango': '🥭', 'avocado': '🥑', 'broccoli': '🥦', 'corn': '🌽', 'carrot': '🥕',
-            'hot_pepper': '🌶️', 'potato': '🥔', 'bread': '🍞', 'cheese': '🧀', 'egg': '🥚',
-            'bacon': '🥓', 'hamburger': '🍔', 'fries': '🍟', 'pizza': '🍕', 'hotdog': '🌭',
-            'sandwich': '🥪', 'taco': '🌮', 'burrito': '🌯', 'sushi': '🍣', 'ramen': '🍜',
-            'spaghetti': '🍝', 'cake': '🎂', 'birthday': '🎂', 'pie': '🥧', 'donut': '🍩',
-            'cookie': '🍪', 'chocolate': '🍫', 'candy': '🍬', 'lollipop': '🍭', 'honey': '🍯',
-            'coffee': '☕', 'tea': '🍵', 'beer': '🍺', 'beers': '🍻', 'wine': '🍷',
-            'cocktail': '🍸', 'tropical': '🍹', 'champagne': '🍾', 'sake': '🍶', 'milk': '🥛',
-            'computer': '💻', 'desktop': '🖥️', 'printer': '🖨️', 'keyboard': '⌨️', 'mouse': '🖱️',
-            'trackball': '🖲️', 'joystick': '🕹️', 'cd': '💿', 'dvd': '📀', 'vhs': '📼',
-            'camera': '📷', 'video': '📹', 'movie': '🎥', 'phone': '📱', 'telephone': '☎️',
-            'tv': '📺', 'radio': '📻', 'speaker': '🔊', 'mute': '🔇', 'bell': '🔔',
-            'alarm': '⏰', 'stopwatch': '⏱️', 'timer': '⏲️', 'clock': '🕐', 'hourglass': '⌛',
-            'mag': '🔍', 'bulb': '💡', 'flashlight': '🔦', 'candle': '🕯️', 'book': '📖',
-            'books': '📚', 'newspaper': '📰', 'scroll': '📜', 'memo': '📝', 'pencil': '✏️',
-            'pen': '🖊️', 'paintbrush': '🖌️', 'crayon': '🖍️', 'scissors': '✂️', 'pushpin': '📌',
-            'paperclip': '📎', 'link': '🔗', 'chains': '⛓️', 'lock': '🔒', 'unlock': '🔓',
-            'key': '🔑', 'hammer': '🔨', 'axe': '🪓', 'pick': '⛏️', 'wrench': '🔧',
-            'screwdriver': '🪛', 'gear': '⚙️', 'clamp': '🗜️', 'balance': '⚖️', 'magnet': '🧲',
-            'ladder': '🪜', 'test_tube': '🧪', 'petri': '🧫', 'dna': '🧬', 'microscope': '🔬',
-            'telescope': '🔭', 'satellite': '📡', 'syringe': '💉', 'pill': '💊', 'adhesive': '🩹',
-            'stethoscope': '🩺', 'thermometer_face': '🌡️', 'broom': '🧹', 'basket': '🧺', 'roll': '🧻',
-            'soap': '🧼', 'sponge': '🧽', 'bucket': '🪣', 'toothbrush': '🪥',
-            'gaming': '🎮', 'dice': '🎲', 'dart': '🎯', 'bowling': '🎳', 'slot': '🎰',
-            'puzzle': '🧩', 'teddy': '🧸', 'spades': '♠️', 'hearts_suit': '♥️', 'diamonds': '♦️',
-            'clubs': '♣️', 'chess': '♟️', 'mahjong': '🀄',
-            'car': '🚗', 'taxi': '🚕', 'bus': '🚌', 'truck': '🚚', 'racing': '🏎️',
-            'ambulance': '🚑', 'firetruck': '🚒', 'police': '🚓', 'motorcycle': '🏍️', 'bike': '🚲',
-            'scooter': '🛴', 'skateboard': '🛹', 'train': '🚆', 'metro': '🚇', 'tram': '🚊',
-            'monorail': '🚝', 'railway': '🚞', 'helicopter': '🚁', 'airplane': '✈️', 'rocket': '🚀',
-            'ufo': '🛸', 'ship': '🚢', 'boat': '⛵', 'speedboat': '🚤', 'anchor': '⚓',
-            'shrug': '🤷', 'facepalm': '🤦', 'celebrate': '🙌', 'mind_blown': '🤯',
-            'money_face': '🤑', 'nerd': '🤓', 'sunglasses': '😎', 'upside_down': '🙃',
-            'wink': '😉', 'stuck_out': '😛', 'zany': '🤪', 'raised_eyebrow': '🤨',
-            'smirk': '😏', 'unamused': '😒', 'sweat': '😅', 'cold_sweat': '😰',
-            'scream_cat': '🙀', 'pouting': '😡', 'triumph': '😤', 'relieved': '😌',
-            'pensive': '😔', 'confused': '😕', 'worried': '😟', 'flushed': '😳',
-            'hot': '🥵', 'cold': '🥶', 'exploding': '🤯', 'monocle': '🧐', 'nauseous': '🤢'
+            'brown_heart': '🤎', 'heart_on_fire': '❤️‍🔥', 'mending_heart': '❤️‍🩹', 'broken': '💔',
+            'exclamation_heart': '❣️', 'two_hearts': '💕', 'revolving': '💞', 'heartbeat': '💓',
+            'growing': '💗', 'sparkling': '💖', 'cupid': '💘', 'gift_heart': '💝', 'heart_decoration': '💟',
+            // Symbols & misc
+            '100': '💯', 'anger': '💢', 'boom': '💥', 'dizzy_symbol': '💫', 'sweat_drops': '💦',
+            'dash': '💨', 'hole': '🕳️', 'bomb': '💣', 'speech': '💬', 'eye_speech': '👁️‍🗨️',
+            'left_speech': '🗨️', 'right_anger': '🗯️', 'thought': '💭', 'zzz': '💤',
+            'sparkles': '✨', 'stars': '🌟', 'star': '⭐', 'shooting_star': '🌠', 'fire': '🔥',
+            'comet': '☄️', 'fireworks': '🎆', 'sparkler': '🎇', 'balloon': '🎈', 'party': '🎉',
+            'tada': '🎊', 'tanabata': '🎋', 'pine': '🎍', 'dolls': '🎎', 'carp_streamer': '🎏',
+            'wind_chime': '🎐', 'moon_viewing': '🎑', 'red_envelope': '🧧', 'ribbon': '🎀', 'gift': '🎁',
+            'reminder_ribbon': '🎗️', 'ticket': '🎟️', 'admission': '🎫', 'crystal_ball': '🔮', 'nazar': '🧿',
+            'hamsa': '🪬', 'gaming': '🎮', 'joystick': '🕹️', 'slot': '🎰', 'dice': '🎲',
+            'chess': '♟️', 'puzzle': '🧩', 'teddy': '🧸', 'pinata': '🪅', 'mirror_ball': '🪩',
+            'nesting_dolls': '🪆', 'spades': '♠️', 'hearts_suit': '♥️', 'diamonds': '♦️', 'clubs': '♣️',
+            'mahjong': '🀄', 'joker': '🃏', 'music': '🎵', 'notes': '🎶', 'musical_score': '🎼',
+            'warning': '⚠️', 'check': '✅', 'x': '❌', 'question': '❓', 'exclamation': '❗',
+            'bangbang': '‼️', 'interrobang': '⁉️', 'lightning': '⚡', 'trophy': '🏆', 'medal': '🥇',
+            'silver_medal': '🥈', 'bronze_medal': '🥉', 'sports_medal': '🏅', 'military_medal': '🎖️',
+            'copyright': '©️', 'registered': '®️', 'tm': '™️', 'infinity': '♾️',
+            'peace_symbol': '☮️', 'cross': '✝️', 'star_crescent': '☪️', 'om': '🕉️', 'wheel_dharma': '☸️',
+            'star_david': '✡️', 'yin_yang': '☯️', 'atom': '⚛️', 'radioactive': '☢️', 'biohazard': '☣️',
+            'recycle': '♻️',
+            // Objects
+            'watch': '⌚', 'phone': '📱', 'calling': '📲', 'computer': '💻', 'keyboard': '⌨️',
+            'desktop': '🖥️', 'printer': '🖨️', 'mouse': '🖱️', 'trackball': '🖲️', 'cd': '💿',
+            'dvd': '📀', 'vhs': '📼', 'camera': '📷', 'camera_flash': '📸', 'video': '📹',
+            'movie': '🎥', 'projector': '📽️', 'film': '🎞️', 'telephone': '☎️', 'pager': '📟',
+            'fax': '📠', 'tv': '📺', 'radio': '📻', 'microphone': '🎙️', 'level_slider': '🎚️',
+            'control_knobs': '🎛️', 'stopwatch': '⏱️', 'timer': '⏲️', 'alarm': '⏰', 'mantelpiece_clock': '🕰️',
+            'hourglass': '⌛', 'hourglass_flowing': '⏳', 'satellite_dish': '📡', 'battery': '🔋', 'low_battery': '🪫',
+            'plug': '🔌', 'bulb': '💡', 'flashlight': '🔦', 'candle': '🕯️', 'lamp': '🪔',
+            'fire_extinguisher': '🧯', 'oil': '🛢️', 'dollar': '💵', 'yen': '💴', 'euro': '💶',
+            'pound': '💷', 'coin': '🪙', 'money_bag': '💰', 'credit_card': '💳', 'id_card': '🪪',
+            'receipt': '🧾', 'gem': '💎', 'balance': '⚖️', 'ladder': '🪜', 'toolbox': '🧰',
+            'screwdriver': '🪛', 'wrench': '🔧', 'hammer': '🔨', 'hammer_wrench': '🛠️', 'pick': '⛏️',
+            'saw': '🪚', 'nut_bolt': '🔩', 'gear': '⚙️', 'mousetrap': '🪤', 'chains': '⛓️',
+            'magnet': '🧲', 'gun': '🔫', 'bomb': '💣', 'firecracker': '🧨', 'axe': '🪓',
+            'knife': '🔪', 'dagger': '🗡️', 'crossed_swords': '⚔️', 'shield': '🛡️', 'coffin': '⚰️',
+            'headstone': '🪦', 'urn': '⚱️', 'amphora': '🏺', 'barber': '💈', 'alembic': '⚗️',
+            'telescope': '🔭', 'microscope': '🔬', 'xray': '🩻', 'adhesive': '🩹', 'stethoscope': '🩺',
+            'pill': '💊', 'syringe': '💉', 'drop_blood': '🩸', 'thermometer_obj': '🌡️', 'dna': '🧬',
+            'microbe': '🦠', 'petri': '🧫', 'test_tube': '🧪', 'label': '🏷️', 'bookmark': '🔖',
+            'toilet': '🚽', 'plunger': '🪠', 'shower': '🚿', 'bathtub': '🛁', 'toothbrush': '🪥',
+            'razor': '🪒', 'roll': '🧻', 'soap': '🧼', 'bubbles': '🫧', 'bucket': '🪣',
+            'sponge': '🧽', 'lotion': '🧴', 'bed': '🛏️', 'couch': '🛋️', 'chair': '🪑',
+            'door': '🚪', 'mirror': '🪞', 'window': '🪟', 'broom': '🧹', 'basket': '🧺',
+            'cart': '🛒', 'moai': '🗿', 'placard': '🪧',
+            'book': '📖', 'books': '📚', 'newspaper': '📰', 'scroll': '📜', 'memo': '📝',
+            'pencil': '✏️', 'pen': '🖊️', 'paintbrush': '🖌️', 'crayon': '🖍️', 'scissors': '✂️',
+            'pushpin': '📌', 'paperclip': '📎', 'link': '🔗', 'lock': '🔒', 'unlock': '🔓',
+            'key': '🔑', 'old_key': '🗝️', 'mag': '🔍', 'bell': '🔔', 'no_bell': '🔕',
+            'speaker': '🔊', 'mute': '🔇',
+            // Clothing
+            'glasses': '👓', 'sunglasses_obj': '🕶️', 'goggles': '🥽', 'lab_coat': '🥼', 'safety_vest': '🦺',
+            'necktie': '👔', 'tshirt': '👕', 'jeans': '👖', 'scarf': '🧣', 'gloves': '🧤',
+            'coat': '🧥', 'socks': '🧦', 'dress': '👗', 'kimono': '👘', 'sari': '🥻',
+            'swimsuit': '🩱', 'briefs': '🩲', 'shorts': '🩳', 'bikini': '👙', 'blouse': '👚',
+            'purse': '👛', 'handbag': '👜', 'pouch': '👝', 'shopping': '🛍️', 'backpack': '🎒',
+            'thong_sandal': '🩴', 'shoe': '👞', 'sneaker': '👟', 'hiking_boot': '🥾', 'flat_shoe': '🥿',
+            'heel': '👠', 'sandal': '👡', 'ballet': '🩰', 'boot': '👢', 'crown': '👑',
+            'womans_hat': '👒', 'top_hat': '🎩', 'graduation': '🎓', 'cap': '🧢', 'helmet': '🪖',
+            'rescue_helmet': '⛑️', 'lipstick': '💄', 'ring': '💍',
+            // Nature & animals
+            'monkey_face': '🐵', 'monkey': '🐒', 'gorilla': '🦍', 'orangutan': '🦧', 'dog': '🐶',
+            'dog2': '🐕', 'guide_dog': '🦮', 'service_dog': '🐕‍🦺', 'poodle': '🐩', 'wolf': '🐺',
+            'fox': '🦊', 'raccoon': '🦝', 'cat': '🐱', 'cat2': '🐈', 'black_cat': '🐈‍⬛',
+            'lion': '🦁', 'tiger': '🐯', 'tiger2': '🐅', 'leopard': '🐆', 'horse': '🐴',
+            'horse2': '🐎', 'unicorn': '🦄', 'zebra': '🦓', 'deer': '🦌', 'moose': '🫎',
+            'bison': '🦬', 'cow': '🐮', 'ox': '🐂', 'water_buffalo': '🐃', 'cow2': '🐄',
+            'pig': '🐷', 'pig2': '🐖', 'boar': '🐗', 'pig_nose': '🐽', 'ram': '🐏',
+            'sheep': '🐑', 'goat': '🐐', 'camel': '🐪', 'two_hump_camel': '🐫', 'llama': '🦙',
+            'giraffe': '🦒', 'elephant': '🐘', 'mammoth': '🦣', 'rhino': '🦏', 'hippo': '🦛',
+            'mouse_face': '🐭', 'mouse2': '🐁', 'rat': '🐀', 'hamster': '🐹', 'rabbit': '🐰',
+            'rabbit2': '🐇', 'chipmunk': '🐿️', 'beaver': '🦫', 'hedgehog': '🦔', 'bat': '🦇',
+            'bear': '🐻', 'polar_bear': '🐻‍❄️', 'koala': '🐨', 'panda': '🐼', 'sloth': '🦥',
+            'otter': '🦦', 'skunk': '🦨', 'kangaroo': '🦘', 'badger': '🦡', 'paw_prints': '🐾',
+            'turkey': '🦃', 'chicken': '🐔', 'rooster': '🐓', 'hatching_chick': '🐣', 'baby_chick': '🐤',
+            'chick': '🐥', 'bird': '🐦', 'penguin': '🐧', 'dove': '🕊️', 'eagle': '🦅',
+            'duck': '🦆', 'swan': '🦢', 'owl': '🦉', 'dodo': '🦤', 'feather': '🪶',
+            'flamingo': '🦩', 'peacock': '🦚', 'parrot': '🦜', 'wing': '🪽', 'black_bird': '🐦‍⬛',
+            'goose': '🪿', 'frog': '🐸', 'crocodile': '🐊', 'turtle': '🐢', 'lizard': '🦎',
+            'snake': '🐍', 'dragon_face': '🐲', 'dragon': '🐉', 'sauropod': '🦕', 'trex': '🦖',
+            'whale': '🐳', 'whale2': '🐋', 'dolphin': '🐬', 'seal': '🦭', 'fish': '🐟',
+            'tropical_fish': '🐠', 'blowfish': '🐡', 'shark': '🦈', 'octopus': '🐙', 'shell': '🐚',
+            'coral': '🪸', 'jellyfish': '🪼', 'snail': '🐌', 'butterfly': '🦋', 'bug': '🐛',
+            'ant': '🐜', 'bee': '🐝', 'beetle': '🪲', 'ladybug': '🐞', 'cricket': '🦗',
+            'cockroach': '🪳', 'spider': '🕷️', 'web': '🕸️', 'scorpion': '🦂', 'mosquito': '🦟',
+            'fly': '🪰', 'worm': '🪱', 'bouquet': '💐', 'cherry_blossom': '🌸', 'flower_white': '💮',
+            'rosette': '🏵️', 'rose': '🌹', 'wilted': '🥀', 'hibiscus': '🌺', 'sunflower': '🌻',
+            'blossom': '🌼', 'tulip': '🌷', 'lotus': '🪷', 'seedling': '🌱', 'potted_plant': '🪴',
+            'evergreen': '🌲', 'deciduous': '🌳', 'palm': '🌴', 'cactus': '🌵', 'rice': '🌾',
+            'herb': '🌿', 'shamrock': '☘️', 'four_leaf': '🍀', 'maple_leaf': '🍁', 'fallen_leaf': '🍂',
+            'leaves': '🍃', 'nest': '🪹', 'nest_eggs': '🪺', 'mushroom': '🍄', 'rock': '🪨', 'wood': '🪵',
+            // Food & drink
+            'green_apple': '🍏', 'apple': '🍎', 'pear': '🍐', 'orange': '🍊', 'lemon': '🍋',
+            'banana': '🍌', 'watermelon': '🍉', 'grapes': '🍇', 'strawberry': '🍓', 'blueberries': '🫐',
+            'melon': '🍈', 'cherry': '🍒', 'peach': '🍑', 'mango': '🥭', 'pineapple': '🍍',
+            'coconut': '🥥', 'kiwi': '🥝', 'tomato': '🍅', 'eggplant': '🍆', 'avocado': '🥑',
+            'broccoli': '🥦', 'leafy_green': '🥬', 'cucumber': '🥒', 'hot_pepper': '🌶️', 'bell_pepper': '🫑',
+            'corn': '🌽', 'carrot': '🥕', 'garlic': '🧄', 'onion': '🧅', 'potato': '🥔',
+            'sweet_potato': '🍠', 'beans': '🫘', 'croissant': '🥐', 'bagel': '🥯', 'bread': '🍞',
+            'flatbread': '🫓', 'baguette': '🥖', 'pretzel': '🥨', 'cheese': '🧀', 'egg': '🥚',
+            'cooking': '🍳', 'butter': '🧈', 'pancakes': '🥞', 'waffle': '🧇', 'bacon': '🥓',
+            'steak': '🥩', 'poultry_leg': '🍗', 'meat': '🍖', 'bone': '🦴', 'hotdog': '🌭',
+            'hamburger': '🍔', 'fries': '🍟', 'pizza': '🍕', 'tamale': '🫔', 'sandwich': '🥪',
+            'pita': '🥙', 'falafel': '🧆', 'taco': '🌮', 'burrito': '🌯', 'fondue': '🫕',
+            'salad': '🥗', 'stew': '🥘', 'jar': '🫙', 'canned': '🥫', 'spaghetti': '🍝',
+            'ramen': '🍜', 'soup': '🍲', 'curry': '🍛', 'sushi': '🍣', 'bento': '🍱',
+            'dumpling': '🥟', 'oyster': '🦪', 'shrimp': '🍤', 'rice_ball': '🍙', 'rice_bowl': '🍚',
+            'rice_cracker': '🍘', 'fish_cake': '🍥', 'fortune_cookie': '🥠', 'moon_cake': '🥮', 'oden': '🍢',
+            'dango': '🍡', 'ice_shaved': '🍧', 'ice_cream': '🍨', 'cone': '🍦', 'pie': '🥧',
+            'cupcake': '🧁', 'cake': '🎂', 'birthday': '🎂', 'custard': '🍮', 'lollipop': '🍭',
+            'candy': '🍬', 'chocolate': '🍫', 'popcorn': '🍿', 'donut': '🍩', 'cookie': '🍪',
+            'chestnut': '🌰', 'peanuts': '🥜', 'honey': '🍯', 'milk': '🥛', 'baby_bottle': '🍼',
+            'pouring_liquid': '🫗', 'coffee': '☕', 'teapot': '🫖', 'tea': '🍵', 'juice': '🧃',
+            'cup_straw': '🥤', 'boba': '🧋', 'sake': '🍶', 'beer': '🍺', 'beers': '🍻',
+            'clinking': '🥂', 'wine': '🍷', 'tumbler': '🥃', 'cocktail': '🍸', 'tropical': '🍹',
+            'mate': '🧉', 'champagne': '🍾', 'ice_cube': '🧊', 'spoon': '🥄', 'fork_knife': '🍴',
+            'plate': '🍽️', 'bowl_spoon': '🥣', 'takeout': '🥡', 'chopsticks': '🥢',
+            // Activities & sports
+            'soccer': '⚽', 'basketball': '🏀', 'football': '🏈', 'baseball': '⚾', 'softball': '🥎',
+            'tennis': '🎾', 'volleyball': '🏐', 'rugby': '🏉', 'flying_disc': '🥏', 'pool': '🎱',
+            'yo_yo': '🪀', 'ping_pong': '🏓', 'badminton': '🏸', 'hockey': '🏒', 'field_hockey': '🏑',
+            'lacrosse': '🥍', 'cricket_game': '🏏', 'boomerang': '🪃', 'goal_net': '🥅', 'golf': '⛳',
+            'kite': '🪁', 'bow_arrow': '🏹', 'fishing': '🎣', 'diving_mask': '🤿', 'boxing': '🥊',
+            'martial_arts': '🥋', 'running_shirt': '🎽', 'skateboard': '🛹', 'roller_skate': '🛼', 'sled': '🛷',
+            'ice_skate': '⛸️', 'curling': '🥌', 'ski': '🎿', 'circus': '🎪', 'performing_arts': '🎭',
+            'art': '🎨', 'clapper': '🎬', 'microphone2': '🎤', 'headphones': '🎧', 'piano': '🎹',
+            'drum': '🥁', 'long_drum': '🪘', 'sax': '🎷', 'trumpet': '🎺', 'accordion': '🪗',
+            'guitar': '🎸', 'banjo': '🪕', 'violin': '🎻', 'flute': '🪈', 'dart': '🎯',
+            'bowling': '🎳',
+            // Travel & places
+            'car': '🚗', 'taxi': '🚕', 'suv': '🚙', 'bus': '🚌', 'trolleybus': '🚎',
+            'racing': '🏎️', 'police_car': '🚓', 'ambulance': '🚑', 'firetruck': '🚒', 'minibus': '🚐',
+            'pickup_truck': '🛻', 'truck': '🚚', 'articulated': '🚛', 'tractor': '🚜', 'scooter': '🛴',
+            'bike': '🚲', 'motor_scooter': '🛵', 'motorcycle': '🏍️', 'auto_rickshaw': '🛺', 'wheel': '🛞',
+            'police_light': '🚨', 'oncoming_police': '🚔', 'train': '🚆', 'metro': '🚇', 'tram': '🚊',
+            'station': '🚉', 'bullet_train': '🚄', 'high_speed': '🚅', 'monorail': '🚝', 'railway': '🚞',
+            'airplane': '✈️', 'departure': '🛫', 'arrival': '🛬', 'small_airplane': '🛩️', 'seat': '💺',
+            'satellite': '🛰️', 'rocket': '🚀', 'ufo': '🛸', 'helicopter': '🚁', 'canoe': '🛶',
+            'boat': '⛵', 'speedboat': '🚤', 'motor_boat': '🛥️', 'passenger_ship': '🛳️', 'ferry': '⛴️',
+            'ship': '🚢', 'anchor': '⚓', 'hook': '🪝', 'fuel_pump': '⛽', 'construction_sign': '🚧',
+            'traffic_light': '🚦', 'vertical_traffic': '🚥', 'bus_stop': '🚏', 'world_map': '🗺️',
+            'statue_liberty': '🗽', 'tokyo_tower': '🗼', 'castle': '🏰', 'japanese_castle': '🏯',
+            'stadium': '🏟️', 'ferris_wheel': '🎡', 'roller_coaster': '🎢', 'carousel': '🎠', 'fountain': '⛲',
+            'beach_umbrella': '⛱️', 'beach': '🏖️', 'island': '🏝️', 'desert': '🏜️', 'volcano': '🌋',
+            'mountain': '⛰️', 'snow_mountain': '🏔️', 'mount_fuji': '🗻', 'camping': '🏕️', 'hut': '🛖',
+            'house': '🏠', 'house_garden': '🏡', 'derelict': '🏚️', 'building_construction': '🏗️', 'factory': '🏭',
+            'office': '🏢', 'department_store': '🏬', 'post_office': '🏣', 'hospital': '🏥', 'bank': '🏦',
+            'hotel': '🏨', 'convenience': '🏪', 'school': '🏫', 'love_hotel': '🏩', 'wedding': '💒',
+            'classical': '🏛️', 'church': '⛪', 'mosque': '🕌', 'synagogue': '🕍', 'hindu_temple': '🛕',
+            'kaaba': '🕋', 'shinto_shrine': '⛩️', 'railway_track': '🛤️', 'road': '🛣️',
+            'sunrise': '🌅', 'sunrise_city': '🌄', 'night': '🌃', 'milky_way': '🌌', 'bridge_night': '🌉',
+            // Weather
+            'sun': '☀️', 'sun_clouds': '🌤️', 'partly_cloudy': '⛅', 'sun_behind_cloud': '🌥️', 'cloud': '☁️',
+            'sun_rain': '🌦️', 'rain': '🌧️', 'thunder': '⛈️', 'lightning_cloud': '🌩️', 'snow_cloud': '🌨️',
+            'snow': '❄️', 'snowman_snow': '☃️', 'snowman': '⛄', 'wind_face': '🌬️', 'wind': '💨',
+            'tornado': '🌪️', 'fog': '🌫️', 'rainbow': '🌈', 'umbrella_rain': '☔', 'droplet': '💧',
+            'wave': '🌊', 'moon': '🌙', 'crescent_moon': '🌛', 'last_quarter_face': '🌜', 'new_moon_face': '🌚',
+            'full_moon': '🌕', 'waning_gibbous': '🌖', 'last_quarter': '🌗', 'waning_crescent': '🌘',
+            'new_moon': '🌑', 'waxing_crescent': '🌒', 'first_quarter': '🌓', 'waxing_gibbous': '🌔',
+            'earth_africa': '🌍', 'earth_americas': '🌎', 'earth_asia': '🌏', 'ringed_planet': '🪐',
+            // Flags
+            'white_flag': '🏳️', 'black_flag': '🏴', 'checkered_flag': '🏁', 'triangular_flag': '🚩',
+            'rainbow_flag': '🏳️‍🌈', 'transgender_flag': '🏳️‍⚧️', 'pirate_flag': '🏴‍☠️',
+            'us': '🇺🇸', 'gb': '🇬🇧', 'ca': '🇨🇦', 'au': '🇦🇺', 'de': '🇩🇪',
+            'fr': '🇫🇷', 'jp': '🇯🇵', 'kr': '🇰🇷', 'cn': '🇨🇳', 'india': '🇮🇳',
+            'br': '🇧🇷', 'mx': '🇲🇽', 'es': '🇪🇸', 'it': '🇮🇹', 'ru': '🇷🇺',
+            'se': '🇸🇪', 'no': '🇳🇴', 'dk': '🇩🇰', 'fi': '🇫🇮', 'nl': '🇳🇱',
+            'ch': '🇨🇭', 'pl': '🇵🇱', 'ua': '🇺🇦', 'tr': '🇹🇷', 'gr': '🇬🇷',
+            'pt': '🇵🇹', 'ie': '🇮🇪', 'za': '🇿🇦', 'ng': '🇳🇬', 'eg': '🇪🇬',
+            'ar': '🇦🇷', 'th': '🇹🇭', 'vn': '🇻🇳', 'id': '🇮🇩', 'ph': '🇵🇭',
+            'sg': '🇸🇬', 'nz': '🇳🇿', 'sa': '🇸🇦', 'ae': '🇦🇪', 'il': '🇮🇱',
+            'tw': '🇹🇼', 'hk': '🇭🇰', 'pr': '🇵🇷', 'cu': '🇨🇺', 'jm': '🇯🇲'
         };
         this.discoveredChannelsIndex = 0;
         this.swipeStartX = null;
@@ -2160,6 +2324,12 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
                     html += `<div class="shop-item-preview"><span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span></div>`;
                 }
 
+                // Transfer button for all purchased items
+                html += `
+<button class="shop-buy-btn shop-transfer-btn" onclick="nym.promptTransferShopItem('${itemId}')" style="margin-top: 8px; width: 100%; background: linear-gradient(135deg, rgba(0, 255, 170, 0.12), rgba(0, 255, 170, 0.05)); border-color: rgba(0, 255, 170, 0.3); color: var(--text-bright);">
+TRANSFER TO PUBKEY
+</button>`;
+
                 html += `</div>`;
             });
 
@@ -2657,6 +2827,24 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
 
         this.sendToRelay(subscription);
 
+        // Also subscribe to incoming shop item transfers (from other users to us)
+        const transferSubId = "shop-transfers-" + Math.random().toString(36).substring(7);
+        const transferSub = [
+            "REQ",
+            transferSubId,
+            {
+                kinds: [30078],
+                "#p": [this.pubkey],
+                "#transfer-to": [this.pubkey],
+                limit: 50
+            }
+        ];
+
+        this.sendToRelay(transferSub);
+        setTimeout(() => {
+            this.sendToRelay(["CLOSE", transferSubId]);
+        }, 5000);
+
         // Wait for response
         return new Promise((resolve) => {
             setTimeout(() => {
@@ -2848,6 +3036,161 @@ ${code}
 
         this.displaySystemMessage('❌ Invalid recovery code');
         return false;
+    }
+
+    promptTransferShopItem(itemId) {
+        const item = this.getShopItemById(itemId);
+        if (!item) return;
+
+        if (!this.userPurchases.has(itemId)) {
+            this.displaySystemMessage('❌ You do not own this item');
+            return;
+        }
+
+        // Create a modal prompt for entering the recipient pubkey
+        const modal = document.createElement('div');
+        modal.className = 'modal active';
+        modal.id = 'transferModal';
+        modal.innerHTML = `
+<div class="modal-content" style="max-width: 420px;">
+    <button class="modal-close" onclick="document.getElementById('transferModal').remove()">✕</button>
+    <h3 style="color: var(--text-bright); margin-bottom: 15px;">Transfer Item</h3>
+    <div style="margin-bottom: 15px;">
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+            <span>${item.icon}</span>
+            <strong>${item.name}</strong>
+        </div>
+        <p style="font-size: 12px; color: var(--text-dim); margin-bottom: 15px;">
+            Enter the recipient's hex pubkey (64 characters). This will send a Nostr event granting them access to this item on their devices.
+        </p>
+        <input type="text" id="transferPubkeyInput" placeholder="Recipient hex pubkey (64 chars)"
+            style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--glass-border); border-radius: 8px; color: var(--text); font-family: var(--font-mono); font-size: 12px;" />
+        <p id="transferError" style="color: var(--danger); font-size: 11px; margin-top: 5px; display: none;"></p>
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <button class="send-btn" onclick="nym.executeTransferShopItem('${itemId}')" style="flex: 1;">Confirm Transfer</button>
+        <button class="send-btn" onclick="document.getElementById('transferModal').remove()" style="flex: 1; background: var(--bg-tertiary);">Cancel</button>
+    </div>
+</div>`;
+        document.body.appendChild(modal);
+
+        // Focus the input
+        setTimeout(() => document.getElementById('transferPubkeyInput')?.focus(), 100);
+    }
+
+    async executeTransferShopItem(itemId) {
+        const input = document.getElementById('transferPubkeyInput');
+        const errorEl = document.getElementById('transferError');
+        if (!input || !errorEl) return;
+
+        const recipientPubkey = input.value.trim().toLowerCase();
+
+        // Validate hex pubkey (64 hex chars)
+        if (!/^[0-9a-f]{64}$/.test(recipientPubkey)) {
+            errorEl.textContent = 'Invalid pubkey. Must be 64 hex characters.';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        if (recipientPubkey === this.pubkey) {
+            errorEl.textContent = 'Cannot transfer to yourself.';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        const item = this.getShopItemById(itemId);
+        if (!item || !this.userPurchases.has(itemId)) {
+            errorEl.textContent = 'Item not found in your inventory.';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        const purchase = this.userPurchases.get(itemId);
+
+        try {
+            // Publish a transfer event (kind 30078 with d tag "nym-shop-transfer")
+            const transferPayload = {
+                itemId: itemId,
+                itemName: item.name,
+                itemType: item.type,
+                fromPubkey: this.pubkey,
+                toPubkey: recipientPubkey,
+                originalPurchase: purchase,
+                transferredAt: Math.floor(Date.now() / 1000)
+            };
+
+            const transferEvent = {
+                kind: 30078,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [
+                    ['d', `nym-shop-transfer-${itemId}-${recipientPubkey}`],
+                    ['title', 'Nymchat Shop Item Transfer'],
+                    ['p', recipientPubkey],
+                    ['transfer-item', itemId],
+                    ['transfer-to', recipientPubkey]
+                ],
+                content: JSON.stringify(transferPayload),
+                pubkey: this.pubkey
+            };
+
+            const signedEvent = await this.signEvent(transferEvent);
+            if (signedEvent) {
+                this.sendToRelay(['EVENT', signedEvent]);
+            }
+
+            // Close the transfer modal
+            const modal = document.getElementById('transferModal');
+            if (modal) modal.remove();
+
+            this.displaySystemMessage(`✅ Transfer event sent! ${item.name} has been shared with ${recipientPubkey.substring(0, 8)}...`);
+
+            // Refresh the inventory tab if open
+            if (this.activeShopTab === 'inventory') {
+                this.renderInventoryTab(document.getElementById('shopBody'));
+            }
+        } catch (error) {
+            errorEl.textContent = 'Failed to send transfer event. Please try again.';
+            errorEl.style.display = 'block';
+        }
+    }
+
+    handleShopTransferEvent(event) {
+        try {
+            const transferTo = event.tags.find(t => t[0] === 'transfer-to');
+            if (!transferTo || transferTo[1] !== this.pubkey) return;
+
+            const data = JSON.parse(event.content);
+            if (!data.itemId || !data.fromPubkey) return;
+
+            // Verify this item exists in the shop
+            const item = this.getShopItemById(data.itemId);
+            if (!item) return;
+
+            // Skip if we already own this item
+            if (this.userPurchases.has(data.itemId)) return;
+
+            // Add the item to our purchases
+            const purchase = {
+                itemId: data.itemId,
+                amount: data.originalPurchase?.amount || 0,
+                timestamp: data.transferredAt || Math.floor(Date.now() / 1000),
+                txid: `transfer_from_${data.fromPubkey.substring(0, 8)}_${Date.now()}`,
+                transferredFrom: data.fromPubkey
+            };
+
+            this.userPurchases.set(data.itemId, purchase);
+
+            // Cache purchases locally
+            this._cachePurchases();
+
+            // Save to Nostr so it persists
+            this.savePurchaseToNostr();
+            this.publishActiveShopItems();
+
+            this.displaySystemMessage(`🎁 You received "${data.itemName}" from ${data.fromPubkey.substring(0, 8)}...! Check your Flair Shop inventory.`);
+        } catch (e) {
+            // Silently ignore malformed transfer events
+        }
     }
 
     handleShopItemBroadcast(event) {
@@ -8366,6 +8709,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 } catch (error) {
                 }
             }
+
+            // Shop item transfers (from another user to us)
+            if (dTag[1]?.startsWith('nym-shop-transfer-') && event.pubkey !== this.pubkey) {
+                this.handleShopTransferEvent(event);
+            }
         } else if (event.kind === 7) {
             // Handle reactions (NIP-25)
             this.handleReaction(event);
@@ -10827,6 +11175,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         if (cached && cached.messageCount === pmMessages.length) {
             // Message count unchanged, restore cached DOM instantly
+            container.innerHTML = '';
             container.appendChild(cached.fragment);
             this.channelDOMCache.delete(conversationKey);
 
@@ -13045,10 +13394,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         formatted = formatted.replace(/(^|\s)\/\\($|\s)/g, '$1⚠️$2');
 
         // Wrap emoji characters in <span class="emoji"> to isolate them from --font-sans
-        // This regex matches Unicode emoji: emoticons, symbols, dingbats, skin tones,
-        // regional indicators, variation selectors, ZWJ sequences, and keycap sequences.
+        // This regex matches all Unicode emoji including: emoticons, symbols, dingbats,
+        // skin tone modifiers, regional indicator flag sequences, variation selectors,
+        // ZWJ sequences, keycap sequences (#️⃣ 0️⃣-9️⃣), and tag flag sequences.
         formatted = formatted.replace(
-            /(?:<[^>]+>)|(\p{Emoji_Presentation}|\p{Extended_Pictographic})(\u{FE0F}|\u{FE0E})?(\u{200D}(\p{Emoji_Presentation}|\p{Extended_Pictographic})(\u{FE0F}|\u{FE0E})?)*/gu,
+            /(?:<[^>]+>)|((?:[\u{1F1E0}-\u{1F1FF}]{2})|(?:[#*0-9]\u{FE0F}?\u{20E3})|(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?(?:\u{200D}(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?)*)(?:[\u{E0020}-\u{E007E}]+\u{E007F})?)/gu,
             (match, emoji) => {
                 // If this is an HTML tag, skip it
                 if (!emoji) return match;
@@ -13067,7 +13417,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (!content) return false;
         // Strip whitespace and check if remaining chars are all emoji (up to 6)
         const stripped = content.replace(/\s/g, '');
-        const emojiPattern = /^(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:\u{200D}(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?)*){1,6}$/u;
+        // Matches flag sequences, keycap sequences, and all ZWJ/skin-tone emoji
+        const singleEmoji = '(?:[\\u{1F1E0}-\\u{1F1FF}]{2})|(?:[#*0-9]\\u{FE0F}?\\u{20E3})|(?:(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?(?:\\u{200D}(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?)*)(?:[\\u{E0020}-\\u{E007E}]+\\u{E007F})?';
+        const emojiPattern = new RegExp(`^(?:${singleEmoji}){1,6}$`, 'u');
         return emojiPattern.test(stripped);
     }
 
@@ -15645,6 +15997,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.virtualScroll.currentStartIndex = startIndex;
         this.virtualScroll.currentEndIndex = endIndex;
 
+        // If this channel has reached the message limit, show a notice at the top
+        if (!isPM && messages.length >= this.channelMessageLimit) {
+            const notice = document.createElement('div');
+            notice.className = 'system-message channel-history-limit';
+            notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void — only the last 100 messages are kept.';
+            container.appendChild(notice);
+        }
+
         // Render all visible messages synchronously
         const messagesToRender = messages.slice(startIndex, endIndex + 1);
         this.virtualScroll.suppressAutoScroll = true;
@@ -16326,18 +16686,71 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     setupEmojiPicker() {
-        const emojis = this.recentEmojis.length > 0 ? this.recentEmojis :
-            ['😊', '😂', '🤣', '❤️', '👍', '🔥', '✨', '🎉', '💯', '🤔', '😎', '🚀',
-                '💻', '🌟', '⚡', '🎯', '💡', '🤖', '👻', '🎭', '🌈', '🍕', '☕', '🎮'];
         const picker = document.getElementById('emojiPicker');
+        if (!picker) return;
 
-        picker.innerHTML = '';
-        emojis.forEach(emoji => {
-            const btn = document.createElement('button');
-            btn.className = 'emoji-btn';
-            btn.textContent = emoji;
-            btn.onclick = () => this.insertEmoji(emoji);
-            picker.appendChild(btn);
+        // Build reverse lookup for names
+        const emojiToNames = {};
+        Object.entries(this.emojiMap).forEach(([name, emoji]) => {
+            if (!emojiToNames[emoji]) emojiToNames[emoji] = [];
+            emojiToNames[emoji].push(name);
+        });
+
+        let html = `<div class="emoji-picker-search">
+            <input type="text" class="emoji-picker-search-input" placeholder="Search emoji..." id="emojiPickerSearch">
+        </div>`;
+
+        // Recent emojis section
+        if (this.recentEmojis.length > 0) {
+            html += `<div class="emoji-picker-section" data-category="recent">
+                <div class="emoji-picker-section-title">Recent</div>
+                <div class="emoji-picker-grid">
+                    ${this.recentEmojis.map(emoji => {
+                const names = emojiToNames[emoji] || [];
+                return `<button class="emoji-btn" data-emoji="${emoji}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
+            }).join('')}
+                </div>
+            </div>`;
+        }
+
+        // All category sections
+        Object.entries(this.allEmojis).forEach(([category, emojis]) => {
+            html += `<div class="emoji-picker-section" data-category="${category}">
+                <div class="emoji-picker-section-title">${category.charAt(0).toUpperCase() + category.slice(1)}</div>
+                <div class="emoji-picker-grid">
+                    ${emojis.map(emoji => {
+                const names = emojiToNames[emoji] || [];
+                return `<button class="emoji-btn" data-emoji="${emoji}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
+            }).join('')}
+                </div>
+            </div>`;
+        });
+
+        picker.innerHTML = html;
+
+        // Search handler
+        const searchInput = picker.querySelector('#emojiPickerSearch');
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => {
+                const search = e.target.value.toLowerCase();
+                picker.querySelectorAll('.emoji-btn').forEach(btn => {
+                    const names = btn.dataset.names || '';
+                    const shouldShow = !search ||
+                        btn.textContent.includes(search) ||
+                        names.toLowerCase().includes(search);
+                    btn.style.display = shouldShow ? '' : 'none';
+                });
+                picker.querySelectorAll('.emoji-picker-section').forEach(section => {
+                    const hasVisible = Array.from(section.querySelectorAll('.emoji-btn'))
+                        .some(btn => btn.style.display !== 'none');
+                    section.style.display = hasVisible ? '' : 'none';
+                });
+            });
+        }
+
+        // Click handlers
+        picker.querySelectorAll('.emoji-btn').forEach(btn => {
+            btn.onclick = () => this.insertEmoji(btn.dataset.emoji || btn.textContent);
         });
     }
 
@@ -17248,7 +17661,36 @@ function editNick() {
     document.getElementById('newNickInput').value = baseNym;
     // Show the non-editable suffix next to the input
     const suffix = nym.getPubkeySuffix(nym.pubkey);
-    document.getElementById('nickSuffixDisplay').textContent = `#${suffix}`;
+    const suffixEl = document.getElementById('nickSuffixDisplay');
+    suffixEl.textContent = `#${suffix}`;
+    suffixEl.title = 'Click to view full pubkey';
+
+    // Click handler to show full pubkey tooltip
+    suffixEl.onclick = (e) => {
+        e.stopPropagation();
+        // Remove any existing tooltip
+        const existing = document.getElementById('pubkeyTooltip');
+        if (existing) { existing.remove(); return; }
+
+        const tooltip = document.createElement('div');
+        tooltip.id = 'pubkeyTooltip';
+        tooltip.className = 'pubkey-tooltip';
+        tooltip.innerHTML = `
+            <div class="pubkey-tooltip-label">Full Hex Pubkey</div>
+            <div class="pubkey-tooltip-value">${nym.pubkey}</div>
+            <button class="pubkey-tooltip-copy" onclick="event.stopPropagation(); navigator.clipboard.writeText('${nym.pubkey}'); this.textContent='Copied!'; setTimeout(() => this.textContent='Copy', 1200);">Copy</button>
+        `;
+        suffixEl.appendChild(tooltip);
+
+        // Close on outside click
+        const closeTooltip = (ev) => {
+            if (!tooltip.contains(ev.target) && ev.target !== suffixEl) {
+                tooltip.remove();
+                document.removeEventListener('click', closeTooltip);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeTooltip), 0);
+    };
 
     // Show current avatar in edit modal and reset upload UI state
     const preview = document.getElementById('nickEditAvatarPreview');
@@ -18035,7 +18477,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.128 ═══<br/>
+═══ Nymchat v3.32.128 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18584,6 +19026,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         messagesContainer.addEventListener('scroll', () => {
             const distanceFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
+
+            // When scrolled to the very top, show history limit notice if channel is at capacity
+            if (messagesContainer.scrollTop <= 5 && !nym.inPMMode) {
+                const storageKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
+                const channelMessages = nym.messages.get(storageKey) || [];
+                if (channelMessages.length >= nym.channelMessageLimit && !messagesContainer.querySelector('.channel-history-limit')) {
+                    const notice = document.createElement('div');
+                    notice.className = 'system-message channel-history-limit';
+                    notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void \u2014 only the last 100 messages are shown.';
+                    messagesContainer.insertBefore(notice, messagesContainer.firstChild);
+                }
+            }
 
             // Track whether user has intentionally scrolled away from the bottom.
             // This flag prevents new messages from yanking the user back to the
