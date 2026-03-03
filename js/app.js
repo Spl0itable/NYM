@@ -1020,6 +1020,7 @@ class NYM {
         this.privkey = null;
         this.nym = null;
         this.pendingSettingsTransfers = [];
+        this.dismissedTransferEvents = new Set(JSON.parse(localStorage.getItem('nym_dismissed_transfers') || '[]'));
         this.powDifficulty = 12;
         this.enablePow = false;
         this.connectionMode = 'ephemeral';
@@ -3189,12 +3190,18 @@ ${code}
             // Verify the event was actually signed by the claimed sender
             if (event.pubkey !== data.fromPubkey) return;
 
+            // Skip if already handled
+            if (this.dismissedTransferEvents.has(event.id)) return;
+
             // Verify this item exists in the shop
             const item = this.getShopItemById(data.itemId);
             if (!item) return;
 
             // Skip if we already own this item
             if (this.userPurchases.has(data.itemId)) return;
+
+            // Mark as handled so relays don't re-trigger it
+            this.dismissTransferEvent(event.id);
 
             // Add the item to our purchases
             const purchase = {
@@ -3262,7 +3269,11 @@ ${code}
                     dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
                     dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
                     readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,
-                    pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' }
+                    pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
+                    wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'geometric',
+                    wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
+                    colorMode: this.getColorMode(),
+                    nickStyle: this.settings.nickStyle || 'fancy'
                 }
             };
 
@@ -3306,7 +3317,8 @@ ${code}
             // Verify the event was actually signed by the claimed sender
             if (event.pubkey !== data.fromPubkey) return;
 
-            // Check if we already have this pending transfer (by event id)
+            // Check if we already handled or have this pending transfer
+            if (this.dismissedTransferEvents.has(event.id)) return;
             if (this.pendingSettingsTransfers.some(t => t.eventId === event.id)) return;
 
             // Add to pending list
@@ -3338,8 +3350,7 @@ ${code}
         if (transfer.nickname) {
             this.nym = transfer.nickname;
             localStorage.setItem(`nym_nickname_${this.pubkey}`, transfer.nickname);
-            const nickDisplay = document.getElementById('nickDisplay');
-            if (nickDisplay) nickDisplay.textContent = transfer.nickname;
+            document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
             this.saveToNostrProfile();
         }
 
@@ -3388,29 +3399,105 @@ ${code}
             }
             if (s.dmForwardSecrecyEnabled !== undefined) {
                 this.settings.dmForwardSecrecyEnabled = s.dmForwardSecrecyEnabled;
-                localStorage.setItem('nym_dm_forward_secrecy', s.dmForwardSecrecyEnabled);
+                localStorage.setItem('nym_dm_fwdsec_enabled', String(s.dmForwardSecrecyEnabled));
             }
             if (s.dmTTLSeconds !== undefined) {
                 this.settings.dmTTLSeconds = s.dmTTLSeconds;
-                localStorage.setItem('nym_dm_ttl', s.dmTTLSeconds);
+                localStorage.setItem('nym_dm_ttl_seconds', String(s.dmTTLSeconds));
             }
             if (s.readReceiptsEnabled !== undefined) {
                 this.settings.readReceiptsEnabled = s.readReceiptsEnabled;
-                localStorage.setItem('nym_read_receipts', s.readReceiptsEnabled);
+                localStorage.setItem('nym_read_receipts_enabled', String(s.readReceiptsEnabled));
             }
             if (s.pinnedLandingChannel) {
                 this.pinnedLandingChannel = s.pinnedLandingChannel;
                 this.settings.pinnedLandingChannel = s.pinnedLandingChannel;
                 localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(s.pinnedLandingChannel));
             }
+            if (s.wallpaperType !== undefined) {
+                this.saveWallpaper(s.wallpaperType, s.wallpaperCustomUrl || '');
+                this.applyWallpaper(s.wallpaperType, s.wallpaperCustomUrl || '');
+            }
+            if (s.colorMode) {
+                localStorage.setItem('nym_color_mode', s.colorMode);
+                this.applyColorMode();
+            }
+            if (s.nickStyle) {
+                this.settings.nickStyle = s.nickStyle;
+                localStorage.setItem('nym_nick_style', s.nickStyle);
+            }
 
             // Save synced settings to Nostr
             this.saveSyncedSettings();
         }
 
-        // Remove from pending
+        // Remove from pending and mark as dismissed so relays don't re-trigger it
         this.pendingSettingsTransfers = this.pendingSettingsTransfers.filter(t => t.eventId !== eventId);
+        this.dismissTransferEvent(eventId);
         this.renderPendingSettingsTransfers();
+
+        // Update sidebar avatar
+        this.updateSidebarAvatar();
+
+        // Update settings modal UI if open
+        if (document.getElementById('settingsModal').classList.contains('active')) {
+            const s = transfer.settings;
+            if (s) {
+                if (s.theme) document.getElementById('themeSelect').value = s.theme;
+                if (s.sound !== undefined) document.getElementById('soundSelect').value = s.sound;
+                if (s.autoscroll !== undefined) document.getElementById('autoscrollSelect').value = String(s.autoscroll);
+                if (s.showTimestamps !== undefined) {
+                    document.getElementById('timestampSelect').value = String(s.showTimestamps);
+                    const timeFormatGroup = document.getElementById('timeFormatGroup');
+                    if (timeFormatGroup) timeFormatGroup.style.display = s.showTimestamps ? 'block' : 'none';
+                }
+                if (s.timeFormat !== undefined) document.getElementById('timeFormatSelect').value = s.timeFormat;
+                if (s.sortByProximity !== undefined) {
+                    const el = document.getElementById('proximitySelect');
+                    if (el) el.value = String(s.sortByProximity);
+                }
+                if (s.blurOthersImages !== undefined) {
+                    const el = document.getElementById('blurImagesSelect');
+                    if (el) el.value = String(s.blurOthersImages);
+                }
+                if (s.lightningAddress) {
+                    const el = document.getElementById('lightningAddressInput');
+                    if (el) el.value = s.lightningAddress;
+                }
+                if (s.dmForwardSecrecyEnabled !== undefined) {
+                    const el = document.getElementById('dmForwardSecrecySelect');
+                    if (el) el.value = String(s.dmForwardSecrecyEnabled);
+                    const ttlGroup = document.getElementById('dmTTLGroup');
+                    if (ttlGroup) ttlGroup.style.display = s.dmForwardSecrecyEnabled ? 'block' : 'none';
+                }
+                if (s.dmTTLSeconds !== undefined) {
+                    const el = document.getElementById('dmTTLSelect');
+                    if (el) el.value = String(s.dmTTLSeconds);
+                }
+                if (s.readReceiptsEnabled !== undefined) {
+                    const el = document.getElementById('readReceiptsSelect');
+                    if (el) el.value = String(s.readReceiptsEnabled);
+                }
+                if (s.nickStyle) {
+                    const el = document.getElementById('nickStyleSelect');
+                    if (el) el.value = s.nickStyle;
+                }
+                if (s.colorMode) {
+                    const colorModeGroup = document.getElementById('colorModeGroup');
+                    if (colorModeGroup) {
+                        colorModeGroup.querySelectorAll('.color-mode-btn').forEach(btn => {
+                            btn.classList.toggle('active', btn.dataset.mode === s.colorMode);
+                        });
+                    }
+                }
+                if (s.wallpaperType !== undefined) {
+                    document.querySelectorAll('.wallpaper-option').forEach(opt => {
+                        opt.classList.toggle('selected', opt.dataset.wallpaper === s.wallpaperType);
+                    });
+                }
+            }
+        }
+
         this.displaySystemMessage(`Settings from ${transfer.fromNym} applied successfully!`);
     }
 
@@ -3418,9 +3505,15 @@ ${code}
         const transfer = this.pendingSettingsTransfers.find(t => t.eventId === eventId);
         this.pendingSettingsTransfers = this.pendingSettingsTransfers.filter(t => t.eventId !== eventId);
         this.renderPendingSettingsTransfers();
+        this.dismissTransferEvent(eventId);
         if (transfer) {
             this.displaySystemMessage(`Settings transfer from ${transfer.fromNym} rejected.`);
         }
+    }
+
+    dismissTransferEvent(eventId) {
+        this.dismissedTransferEvents.add(eventId);
+        localStorage.setItem('nym_dismissed_transfers', JSON.stringify([...this.dismissedTransferEvents]));
     }
 
     renderPendingSettingsTransfers() {
@@ -3442,8 +3535,8 @@ ${code}
                         <div style="font-size: 11px; color: var(--text-dim);">Includes: ${t.nickname ? 'nickname' : ''}${t.avatarUrl ? ', avatar' : ''}${t.settings ? ', preferences' : ''}</div>
                     </div>
                     <div style="display: flex; gap: 6px; margin-left: 8px;">
-                        <button onclick="nym.acceptSettingsTransfer('${t.eventId}')" style="padding: 4px 10px; background: var(--primary); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">Accept</button>
-                        <button onclick="nym.rejectSettingsTransfer('${t.eventId}')" style="padding: 4px 10px; background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 6px; cursor: pointer; font-size: 12px;">Reject</button>
+                        <button class="icon-btn" onclick="nym.acceptSettingsTransfer('${t.eventId}')" style="padding: 4px 10px; font-size: 12px;">Accept</button>
+                        <button class="icon-btn" onclick="nym.rejectSettingsTransfer('${t.eventId}')" style="padding: 4px 10px; font-size: 12px; color: var(--danger); border-color: var(--danger);">Reject</button>
                     </div>
                 </div>`;
         }).join('');
@@ -18747,7 +18840,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.33.128 ═══<br/>
+═══ Nymchat v3.33.129 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

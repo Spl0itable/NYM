@@ -56,12 +56,12 @@
     <!-- Context Menu -->
     <div class="context-menu" id="contextMenu">
         <div class="context-menu-avatar-header" id="ctxAvatarHeader">
-            <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar">
+            <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar" style="cursor: pointer;" onclick="event.stopPropagation(); nym.expandImage(this.src); document.getElementById('contextMenu').classList.remove('active');">
             <div class="context-menu-avatar-nym" id="ctxAvatarNym"></div>
         </div>
         <div class="context-menu-item" id="ctxReact">React</div>
         <div class="context-menu-item" id="ctxMention">Mention</div>
-        <div class="context-menu-item lightning" id="ctxZap" style="display: none;">⚡ Zap</div>
+        <div class="context-menu-item lightning" id="ctxZap" style="display: none;">Zap Bitcoin ⚡</div>
         <div class="context-menu-item" id="ctxPM">Private Message</div>
         <div class="context-menu-item" id="ctxQuote">Quote Message</div>
         <div class="context-menu-item" id="ctxCopyPubkey">Copy Pubkey</div>
