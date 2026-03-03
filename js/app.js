@@ -3232,6 +3232,152 @@ ${code}
             errorEl.textContent = 'Invalid pubkey. Must be 64 hex characters.';
             errorEl.style.display = 'block';
             return;
+        }
+
+        if (recipientPubkey === this.pubkey) {
+            errorEl.textContent = 'Cannot transfer settings to yourself.';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        try {
+            const avatarUrl = this.userAvatars.get(this.pubkey) || localStorage.getItem('nym_avatar_url') || '';
+
+            const settingsPayload = {
+                fromPubkey: this.pubkey,
+                fromNym: this.nym,
+                toPubkey: recipientPubkey,
+                transferredAt: Math.floor(Date.now() / 1000),
+                nickname: this.nym,
+                avatarUrl: avatarUrl,
+                settings: {
+                    theme: this.settings.theme,
+                    sound: this.settings.sound,
+                    autoscroll: this.settings.autoscroll,
+                    showTimestamps: this.settings.showTimestamps,
+                    timeFormat: this.settings.timeFormat,
+                    sortByProximity: this.settings.sortByProximity,
+                    blurOthersImages: this.blurOthersImages,
+                    lightningAddress: this.lightningAddress,
+                    dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
+                    dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
+                    readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,
+                    pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' }
+                }
+            };
+
+            const transferEvent = {
+                kind: 30078,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [
+                    ['d', `nym-settings-transfer-${this.pubkey}-${recipientPubkey}`],
+                    ['title', 'Nymchat Settings Transfer'],
+                    ['p', recipientPubkey],
+                    ['settings-transfer-to', recipientPubkey]
+                ],
+                content: JSON.stringify(settingsPayload),
+                pubkey: this.pubkey
+            };
+
+            const signedEvent = await this.signEvent(transferEvent);
+            if (signedEvent) {
+                this.sendToRelay(['EVENT', signedEvent]);
+            }
+
+            input.value = '';
+            this.displaySystemMessage(`Settings transfer sent to ${recipientPubkey.substring(0, 8)}...!`);
+        } catch (error) {
+            errorEl.textContent = 'Failed to send settings transfer. Please try again.';
+            errorEl.style.display = 'block';
+        }
+    }
+
+    handleSettingsTransferEvent(event) {
+        try {
+            // Verify event signature
+            if (!window.NostrTools.verifyEvent(event)) return;
+
+            const transferTo = event.tags.find(t => t[0] === 'settings-transfer-to');
+            if (!transferTo || transferTo[1] !== this.pubkey) return;
+
+            const data = JSON.parse(event.content);
+            if (!data.fromPubkey || !data.settings) return;
+
+            // Verify the event was actually signed by the claimed sender
+            if (event.pubkey !== data.fromPubkey) return;
+
+            // Check if we already have this pending transfer (by event id)
+            if (this.pendingSettingsTransfers.some(t => t.eventId === event.id)) return;
+
+            // Add to pending list
+            this.pendingSettingsTransfers.push({
+                eventId: event.id,
+                fromPubkey: data.fromPubkey,
+                fromNym: data.fromNym || data.fromPubkey.substring(0, 8) + '...',
+                nickname: data.nickname,
+                avatarUrl: data.avatarUrl,
+                settings: data.settings,
+                transferredAt: data.transferredAt || event.created_at
+            });
+
+            // Notify user via system message
+            this.displaySystemMessage(`Settings received from ${data.fromPubkey.substring(0, 8)}...! Approve from settings modal.`);
+
+            // Update the pending transfers UI if the settings modal is open
+            this.renderPendingSettingsTransfers();
+        } catch (e) {
+            // Silently ignore malformed transfer events
+        }
+    }
+
+    acceptSettingsTransfer(eventId) {
+        const transfer = this.pendingSettingsTransfers.find(t => t.eventId === eventId);
+        if (!transfer) return;
+
+        // Apply nickname
+        if (transfer.nickname) {
+            this.nym = transfer.nickname;
+            localStorage.setItem(`nym_nickname_${this.pubkey}`, transfer.nickname);
+            const nickDisplay = document.getElementById('nickDisplay');
+            if (nickDisplay) nickDisplay.textContent = transfer.nickname;
+            this.saveToNostrProfile();
+        }
+
+        // Apply avatar
+        if (transfer.avatarUrl) {
+            this.userAvatars.set(this.pubkey, transfer.avatarUrl);
+            localStorage.setItem('nym_avatar_url', transfer.avatarUrl);
+            this.cacheAvatarImage(this.pubkey, transfer.avatarUrl);
+        }
+
+        // Apply settings
+        const s = transfer.settings;
+        if (s) {
+            if (s.theme) {
+                this.settings.theme = s.theme;
+                this.applyTheme(s.theme);
+                localStorage.setItem('nym_theme', s.theme);
+            }
+            if (s.sound !== undefined) {
+                this.settings.sound = s.sound;
+                localStorage.setItem('nym_sound', s.sound);
+            }
+            if (s.autoscroll !== undefined) {
+                this.settings.autoscroll = s.autoscroll;
+                localStorage.setItem('nym_autoscroll', s.autoscroll);
+            }
+            if (s.showTimestamps !== undefined) {
+                this.settings.showTimestamps = s.showTimestamps;
+                localStorage.setItem('nym_timestamps', s.showTimestamps);
+            }
+            if (s.timeFormat !== undefined) {
+                this.settings.timeFormat = s.timeFormat;
+                localStorage.setItem('nym_time_format', s.timeFormat);
+            }
+            if (s.sortByProximity !== undefined) {
+                this.settings.sortByProximity = s.sortByProximity;
+                localStorage.setItem('nym_sort_proximity', s.sortByProximity);
+            }
             if (s.blurOthersImages !== undefined) {
                 this.blurOthersImages = s.blurOthersImages;
                 localStorage.setItem(`nym_image_blur_${this.pubkey}`, s.blurOthersImages.toString());
