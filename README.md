@@ -19,7 +19,7 @@ A lightweight ephemeral chat client built on Nostr protocol, bridged with [Bitch
 
 ## Overview
 
-Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (PWA) chat messenger that uses Nostr's ephemeral events (kind 20000) for geohash-based location channels and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting.
+Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (PWA) chat messenger that uses [Nostr](https://github.com/nostr-protocol/nostr)'s ephemeral events (kind 20000) for geohash-based location channels and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting.
 
 ![Nymchat Screenshot](https://nymchat.app/images/nymchat-app.png)
 
@@ -168,7 +168,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Legal
 
-If you choose to use Nymchat on 21 Million LLC operated infrastructure and domain (nymchat.app), your use is subject to the below Terms of Service and Privacy Policy. Otherwise, should you operate Nymchat locally or on an external service, you can safely ignore and are exempt.
+If you choose to use Nymchat on 21 Million LLC operated infrastructure and domain (nymchat.app), your use is subject to the below Terms of Service and Privacy Policy.
 
 - [Terms of Service](https://web.nymchat.app/static/tos)
 - [Privacy Policy](https://web.nymchat.app/static/pp)
