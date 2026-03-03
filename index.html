@@ -6,8 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Nymchat</title>
-    <meta name="description"
-        content="Ephemeral anonymous chat messaging. Bridged with Bitchat geohash channels.">
+    <meta name="description" content="Ephemeral anonymous chat messaging. Bridged with Bitchat geohash channels.">
     <link rel="manifest"
         href="data:application/json;base64,eyJuYW1lIjoiTnltY2hhdCIsInNob3J0X25hbWUiOiJOeW1jaGF0Iiwic3RhcnRfdXJsIjoiaHR0cHM6Ly93ZWIubnltY2hhdC5hcHAiLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsInRoZW1lX2NvbG9yIjoiIzAwMDAwMCIsImJhY2tncm91bmRfY29sb3IiOiIjMDAwMDAwIiwiaWNvbnMiOlt7InNyYyI6Imh0dHBzOi8vbnltY2hhdC5hcHAvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiMTkyeDE5MiIsInR5cGUiOiJpbWFnZS9wbmcifSx7InNyYyI6Imh0dHBzOi8vbnltY2hhdC5hcHAvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiNTEyeDUxMiIsInR5cGUiOiJpbWFnZS9wbmcifV19">
     <link rel="icon" type="image/x-icon" href="https://nymchat.app/images/favicon.ico">
@@ -43,7 +42,7 @@
 <body>
     <script>
         // Apply color mode immediately to prevent flash of wrong theme
-        (function() {
+        (function () {
             var mode = localStorage.getItem('nym_color_mode') || 'auto';
             var isLight = mode === 'light' || (mode === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches);
             if (isLight) document.body.classList.add('light-mode');
@@ -56,18 +55,98 @@
     <!-- Context Menu -->
     <div class="context-menu" id="contextMenu">
         <div class="context-menu-avatar-header" id="ctxAvatarHeader">
-            <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar" style="cursor: pointer;" onclick="event.stopPropagation(); nym.expandImage(this.src); document.getElementById('contextMenu').classList.remove('active');">
+            <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar" style="cursor: pointer;"
+                onclick="event.stopPropagation(); nym.expandImage(this.src); document.getElementById('contextMenu').classList.remove('active');">
             <div class="context-menu-avatar-nym" id="ctxAvatarNym"></div>
         </div>
-        <div class="context-menu-item" id="ctxReact">React</div>
-        <div class="context-menu-item" id="ctxMention">Mention</div>
-        <div class="context-menu-item lightning" id="ctxZap" style="display: none;">Zap Bitcoin ⚡</div>
-        <div class="context-menu-item" id="ctxPM">Private Message</div>
-        <div class="context-menu-item" id="ctxQuote">Quote Message</div>
-        <div class="context-menu-item" id="ctxCopyPubkey">Copy Pubkey</div>
-        <div class="context-menu-item report" id="ctxReport">Report</div>
-        <div class="context-menu-item danger" id="ctxDeleteMessage">Delete Message</div>
-        <div class="context-menu-item danger" id="ctxBlock">Block User</div>
+        <div class="context-menu-item" id="ctxReact">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <circle cx="8" cy="8" r="6" />
+                <circle cx="6" cy="7" r="0.5" fill="currentColor" />
+                <circle cx="10" cy="7" r="0.5" fill="currentColor" />
+                <path d="M 5.5 9.5 Q 8 11.5 10.5 9.5" stroke-linecap="round" />
+            </svg>
+            React
+        </div>
+
+        <div class="context-menu-item" id="ctxMention">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <circle cx="8" cy="8" r="5" />
+                <circle cx="8" cy="8" r="2" />
+                <path d="M 10 8 C 10 9.1 9.1 10 8 10" stroke-linecap="round" />
+                <path d="M 10 8 L 10 10 Q 10.5 11 11.5 10.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            Mention
+        </div>
+
+        <div class="context-menu-item" id="ctxPM">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <rect x="2" y="4" width="12" height="9" rx="1" />
+                <path d="M 2 5 L 8 9 L 14 5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            Private Message
+        </div>
+
+        <div class="context-menu-item lightning" id="ctxZap" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"
+                style="vertical-align: middle; margin-right: 8px;">
+                <path d="M 9 2 L 4 9 H 7 L 7 14 L 12 7 H 9 Z" />
+            </svg>
+            Zap Bitcoin
+        </div>
+
+        <div class="context-menu-item" id="ctxQuote">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"
+                style="vertical-align: middle; margin-right: 8px;">
+                <path d="M 3 6 C 3 4.5 4 3 6 3 C 6 4.5 5 5 4 5.5 C 3.5 5.8 3 6.3 3 7 L 3 9 L 6 9 L 6 6 Z" />
+                <path d="M 9 6 C 9 4.5 10 3 12 3 C 12 4.5 11 5 10 5.5 C 9.5 5.8 9 6.3 9 7 L 9 9 L 12 9 L 12 6 Z" />
+            </svg>
+            Quote Message
+        </div>
+
+        <div class="context-menu-item" id="ctxCopyPubkey">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <rect x="5" y="5" width="8" height="9" rx="1" />
+                <path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round" />
+            </svg>
+            Copy Pubkey
+        </div>
+
+        <div class="context-menu-item report" id="ctxReport">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M 8 5 L 8 8.5" stroke-linecap="round" stroke-width="2" />
+                <circle cx="8" cy="10.5" r="0.8" fill="currentColor" stroke="none" />
+            </svg>
+            Report
+        </div>
+
+        <div class="context-menu-item danger" id="ctxDeleteMessage">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <path d="M 3 5 L 13 5" stroke-linecap="round" />
+                <path d="M 5 5 L 5 13 C 5 13.55 5.45 14 6 14 L 10 14 C 10.55 14 11 13.55 11 13 L 11 5"
+                    stroke-linejoin="round" />
+                <path d="M 6.5 2 L 9.5 2" stroke-linecap="round" />
+                <path d="M 7 7 L 7 11.5" stroke-linecap="round" />
+                <path d="M 9 7 L 9 11.5" stroke-linecap="round" />
+            </svg>
+            Delete Message
+        </div>
+
+        <div class="context-menu-item danger" id="ctxBlock">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <circle cx="8" cy="8" r="6" />
+                <line x1="3.75" y1="3.75" x2="12.25" y2="12.25" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+            Block User
+        </div>
     </div>
 
     <!-- Report Modal -->
@@ -122,7 +201,7 @@
     <div class="container">
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-<pre class="logo-ascii">
+                <pre class="logo-ascii">
                                             ##\                  ##\     
                                             ## |                 ## |    
 #######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\   
@@ -138,7 +217,9 @@
                 <div class="nym-display" onclick="editNick()">
                     <div class="nym-label">Your Nym (click to edit)</div>
                     <div class="nym-identity">
-                        <img id="sidebarAvatar" class="avatar" src="https://robohash.org/default.png?set=set1&size=80x80" alt="" style="width: 32px; height: 32px;">
+                        <img id="sidebarAvatar" class="avatar"
+                            src="https://robohash.org/default.png?set=set1&size=80x80" alt=""
+                            style="width: 32px; height: 32px;">
                         <div class="nym-value" id="currentNym">anonymous</div>
                     </div>
                 </div>
@@ -255,7 +336,8 @@
 
             <div class="messages-container" id="messagesContainer"></div>
 
-            <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" onclick="scrollToBottom()" title="Scroll to bottom">
+            <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" onclick="scrollToBottom()"
+                title="Scroll to bottom">
                 <svg viewBox="0 0 24 24" width="20" height="20">
                     <polyline points="6 9 12 15 18 9"></polyline>
                 </svg>
@@ -376,8 +458,11 @@
                 <div class="form-group">
                     <label class="form-label">"Luxas" is reserved for the Nymchat developer.</label>
                     <div class="form-hint" style="margin-bottom: 10px;">Paste your nsec to verify your identity:</div>
-                    <input type="password" class="form-input" id="devNsecInput" placeholder="nsec1..." autocomplete="off">
-                    <div id="devNsecError" style="color: var(--danger); font-size: 12px; margin-top: 5px; display: none;">Invalid nsec - does not match the developer pubkey.</div>
+                    <input type="password" class="form-input" id="devNsecInput" placeholder="nsec1..."
+                        autocomplete="off">
+                    <div id="devNsecError"
+                        style="color: var(--danger); font-size: 12px; margin-top: 5px; display: none;">Invalid nsec -
+                        does not match the developer pubkey.</div>
                 </div>
             </div>
             <div class="modal-actions">
@@ -396,8 +481,11 @@
                 <div class="form-group">
                     <label class="form-label">New Nym nick</label>
                     <div style="display: flex; align-items: center; gap: 0;">
-                        <input type="text" class="form-input" id="newNickInput" placeholder="Enter new nym" maxlength="20" style="flex: 1; border-radius: 12px 0 0 12px;">
-                        <span id="nickSuffixDisplay" class="nym-suffix nym-suffix-clickable" style="padding: 8px 12px; background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border, var(--border-color)); border-left: none; border-radius: 0 12px 12px 0; font-size: 14px; white-space: nowrap; cursor: pointer; position: relative;" title="Click to view full pubkey"></span>
+                        <input type="text" class="form-input" id="newNickInput" placeholder="Enter new nym"
+                            maxlength="20" style="flex: 1; border-radius: 12px 0 0 12px;">
+                        <span id="nickSuffixDisplay" class="nym-suffix nym-suffix-clickable"
+                            style="padding: 8px 12px; background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border, var(--border-color)); border-left: none; border-radius: 0 12px 12px 0; font-size: 14px; white-space: nowrap; cursor: pointer; position: relative;"
+                            title="Click to view full pubkey"></span>
                     </div>
                     <div class="form-hint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
@@ -405,14 +493,18 @@
                     <label class="form-label">Avatar</label>
                     <div class="avatar-upload-section">
                         <div class="avatar-preview-wrap">
-                            <img id="nickEditAvatarPreview" class="avatar-preview" src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar">
+                            <img id="nickEditAvatarPreview" class="avatar-preview"
+                                src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar">
                             <div class="avatar-upload-spinner" id="nickEditAvatarSpinner"></div>
                         </div>
                         <div class="avatar-upload-controls">
-                            <input type="file" id="nickEditAvatarInput" accept="image/*" style="display: none" onchange="handleNickEditAvatarSelect(event)">
+                            <input type="file" id="nickEditAvatarInput" accept="image/*" style="display: none"
+                                onchange="handleNickEditAvatarSelect(event)">
                             <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                                <button type="button" class="avatar-upload-btn" id="nickEditAvatarUploadBtn" onclick="triggerNickEditAvatarUpload()">Change photo</button>
-                                <button type="button" class="avatar-remove-btn" id="nickEditAvatarRemoveBtn" style="display: none;" onclick="removeNickEditAvatar()">Remove</button>
+                                <button type="button" class="avatar-upload-btn" id="nickEditAvatarUploadBtn"
+                                    onclick="triggerNickEditAvatarUpload()">Change photo</button>
+                                <button type="button" class="avatar-remove-btn" id="nickEditAvatarRemoveBtn"
+                                    style="display: none;" onclick="removeNickEditAvatar()">Remove</button>
                             </div>
                             <div class="avatar-upload-status" id="nickEditAvatarStatus"></div>
                         </div>
@@ -430,7 +522,8 @@
     <!-- Initial Setup Modal -->
     <div class="modal active" id="setupModal">
         <div class="modal-content setup-modal-content">
-            <div class="modal-header setup-modal-header"><pre class="logo-ascii setup-logo">
+            <div class="modal-header setup-modal-header">
+                <pre class="logo-ascii setup-logo">
                                             ##\                  ##\
                                             ## |                 ## |
 #######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\
@@ -442,7 +535,8 @@
           ##\   ## |
           \######  |
            \______/
-</pre></div>
+</pre>
+            </div>
             <div class="modal-body">
                 <div class="form-group" id="nymGroup">
                     <label class="form-label">Choose Your Nickname (optional)</label>
@@ -453,14 +547,18 @@
                     <label class="form-label" style="margin-top: 15px;">Choose Your Avatar (optional)</label>
                     <div class="avatar-upload-section">
                         <div class="avatar-preview-wrap">
-                            <img id="setupAvatarPreview" class="avatar-preview" src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar">
+                            <img id="setupAvatarPreview" class="avatar-preview"
+                                src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar">
                             <div class="avatar-upload-spinner" id="setupAvatarSpinner"></div>
                         </div>
                         <div class="avatar-upload-controls">
-                            <input type="file" id="setupAvatarInput" accept="image/*" style="display: none" onchange="handleSetupAvatarSelect(event)">
+                            <input type="file" id="setupAvatarInput" accept="image/*" style="display: none"
+                                onchange="handleSetupAvatarSelect(event)">
                             <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                                <button type="button" class="avatar-upload-btn" id="setupAvatarUploadBtn" onclick="triggerSetupAvatarUpload()">Choose photo</button>
-                                <button type="button" class="avatar-remove-btn" id="setupAvatarRemoveBtn" style="display: none;" onclick="removeSetupAvatar()">Remove</button>
+                                <button type="button" class="avatar-upload-btn" id="setupAvatarUploadBtn"
+                                    onclick="triggerSetupAvatarUpload()">Choose photo</button>
+                                <button type="button" class="avatar-remove-btn" id="setupAvatarRemoveBtn"
+                                    style="display: none;" onclick="removeSetupAvatar()">Remove</button>
                             </div>
                             <div class="avatar-upload-status" id="setupAvatarStatus"></div>
                         </div>
@@ -486,11 +584,10 @@
             <div class="modal-actions" style="margin-bottom:20px;">
                 <button class="send-btn" id="enterNymBtn" onclick="initializeNym()">Enter</button>
             </div>
-            <span style="color: var(--text-dim);">By entering, you agree to our <a
-                    href="static/tos.html" target="_blank" rel="noopener"
-                    style="color: var(--secondary)">Terms of Service</a> and <a
-                    href="static/pp.html" target="_blank" rel="noopener"
-                    style="color: var(--secondary)">Privacy Policy</a>.</span>
+            <span style="color: var(--text-dim);">By entering, you agree to our <a href="static/tos.html"
+                    target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> and <a
+                    href="static/pp.html" target="_blank" rel="noopener" style="color: var(--secondary)">Privacy
+                    Policy</a>.</span>
         </div>
     </div>
 
@@ -527,7 +624,11 @@
                     <div class="wallpaper-grid" id="wallpaperGrid">
                         <div class="wallpaper-option selected" data-wallpaper="none" onclick="selectWallpaper('none')">
                             <div class="wallpaper-preview wallpaper-none">
-                                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                </svg>
                             </div>
                             <span class="wallpaper-label">None</span>
                         </div>
@@ -547,7 +648,8 @@
                             <div class="wallpaper-preview wallpaper-waves"></div>
                             <span class="wallpaper-label">Waves</span>
                         </div>
-                        <div class="wallpaper-option" data-wallpaper="topography" onclick="selectWallpaper('topography')">
+                        <div class="wallpaper-option" data-wallpaper="topography"
+                            onclick="selectWallpaper('topography')">
                             <div class="wallpaper-preview wallpaper-topography"></div>
                             <span class="wallpaper-label">Topography</span>
                         </div>
@@ -559,14 +661,21 @@
                             <div class="wallpaper-preview wallpaper-diamonds"></div>
                             <span class="wallpaper-label">Diamonds</span>
                         </div>
-                        <div class="wallpaper-option" data-wallpaper="custom" onclick="triggerWallpaperUpload()" id="customWallpaperOption">
+                        <div class="wallpaper-option" data-wallpaper="custom" onclick="triggerWallpaperUpload()"
+                            id="customWallpaperOption">
                             <div class="wallpaper-preview wallpaper-custom" id="customWallpaperPreview">
-                                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
                             </div>
                             <span class="wallpaper-label">Upload</span>
                         </div>
                     </div>
-                    <input type="file" id="wallpaperFileInput" accept="image/*" style="display: none" onchange="handleWallpaperUpload(event)">
+                    <input type="file" id="wallpaperFileInput" accept="image/*" style="display: none"
+                        onchange="handleWallpaperUpload(event)">
                     <div class="form-hint">Choose a background pattern or upload your own image (min 1920x1080)</div>
                 </div>
 
@@ -590,10 +699,10 @@
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label">⚡ Lightning Address</label>
+                    <label class="form-label">⚡ Bitcoin Lightning Address</label>
                     <input type="text" class="form-input" id="lightningAddressInput"
                         placeholder="your@lightning-address.com">
-                    <div class="form-hint">Your Lightning address for receiving zaps</div>
+                    <div class="form-hint">Your Bitcoin Lightning address for receiving zaps</div>
                 </div>
 
                 <div class="form-group">

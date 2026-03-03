@@ -2265,7 +2265,7 @@ body::after {
     display: none;
     box-shadow: var(--shadow-lg);
     z-index: 600;
-    max-width: 350px;
+    width: 350px;
     max-height: 400px;
     overflow-y: auto;
 }

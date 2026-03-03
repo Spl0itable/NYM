@@ -3090,7 +3090,7 @@ ${code}
         <p id="transferError" style="color: var(--danger); font-size: 11px; margin-top: 5px; display: none;"></p>
     </div>
     <div style="display: flex; gap: 10px;">
-        <button class="send-btn" onclick="nym.executeTransferShopItem('${itemId}')" style="flex: 1;">Confirm Transfer</button>
+        <button class="send-btn" onclick="nym.executeTransferShopItem('${itemId}')" style="flex: 1;">Confirm</button>
         <button class="send-btn" onclick="document.getElementById('transferModal').remove()" style="flex: 1; background: var(--bg-tertiary);">Cancel</button>
     </div>
 </div>`;
@@ -5457,7 +5457,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             slapOption = document.createElement('div');
             slapOption.className = 'context-menu-item';
             slapOption.id = 'ctxSlap';
-            slapOption.textContent = 'Slap with Trout 🐟';
+            slapOption.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" style="vertical-align: middle; margin-right: 8px;"><path d="M 1 8 Q 3 4 8 4 Q 11 4 13 6 L 15 4.5 L 15 11.5 L 13 10 Q 11 12 8 12 Q 3 12 1 8 Z" fill="none" /><circle cx="5" cy="7.5" r="0.7" fill="currentColor" stroke="none" /><path d="M 9 6.5 Q 10 8 9 9.5" stroke-linecap="round" /></svg>Slap with Trout';
 
             // Insert after PM option
             const pmOption = document.getElementById('ctxPM');
@@ -5474,7 +5474,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             hugOption = document.createElement('div');
             hugOption.className = 'context-menu-item';
             hugOption.id = 'ctxHug';
-            hugOption.textContent = 'Give warm Hug 🫂';
+            hugOption.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle; margin-right: 8px;"><circle cx="6" cy="5" r="2" /><circle cx="10" cy="5" r="2" /><path d="M 2 14 C 2 10 4 9 6 9 C 7 9 7.5 9.5 8 10 C 8.5 9.5 9 9 10 9 C 12 9 14 10 14 14" stroke-linecap="round" stroke-linejoin="round" /><path d="M 4 11.5 Q 8 9 12 11.5" stroke-linecap="round" /></svg>Give warm Hug';
 
             // Insert after slap option
             if (slapOption && slapOption.nextSibling) {
@@ -5687,7 +5687,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             slapOption = document.createElement('div');
             slapOption.className = 'context-menu-item';
             slapOption.id = 'ctxSlap';
-            slapOption.textContent = 'Slap with Trout 🐟';
+            slapOption.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" style="vertical-align: middle; margin-right: 8px;"><path d="M 1 8 Q 3 4 8 4 Q 11 4 13 6 L 15 4.5 L 15 11.5 L 13 10 Q 11 12 8 12 Q 3 12 1 8 Z" fill="none" /><circle cx="5" cy="7.5" r="0.7" fill="currentColor" stroke="none" /><path d="M 9 6.5 Q 10 8 9 9.5" stroke-linecap="round" /></svg>Slap with Trout';
 
             // Insert after PM option
             const pmOption = document.getElementById('ctxPM');
@@ -5707,7 +5707,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             hugOption = document.createElement('div');
             hugOption.className = 'context-menu-item';
             hugOption.id = 'ctxHug';
-            hugOption.textContent = 'Give warm Hug 🫂';
+            hugOption.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle; margin-right: 8px;"><circle cx="6" cy="5" r="2" /><circle cx="10" cy="5" r="2" /><path d="M 2 14 C 2 10 4 9 6 9 C 7 9 7.5 9.5 8 10 C 8.5 9.5 9 9 10 9 C 12 9 14 10 14 14" stroke-linecap="round" stroke-linejoin="round" /><path d="M 4 11.5 Q 8 9 12 11.5" stroke-linecap="round" /></svg>Give warm Hug';
 
             if (slapOption && slapOption.nextSibling) {
                 slapOption.parentNode.insertBefore(hugOption, slapOption.nextSibling);
@@ -5738,7 +5738,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             blockOption.style.display = 'none';
         } else {
             blockOption.style.display = 'block';
-            blockOption.textContent = this.blockedUsers.has(baseNym) ? 'Unblock User' : 'Block User';
+            const blockSvg = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle; margin-right: 8px;"><circle cx="8" cy="8" r="6" /><line x1="3.75" y1="3.75" x2="12.25" y2="12.25" stroke-width="1.5" stroke-linecap="round" /></svg>';
+blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock User' : 'Block User');
         }
 
         // Hide PM option if it's yourself
@@ -18840,7 +18841,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.33.129 ═══<br/>
+═══ Nymchat v3.33.130 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
