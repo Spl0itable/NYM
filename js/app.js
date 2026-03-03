@@ -13297,29 +13297,58 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         });
 
-        // Build HTML
-        userListContent.innerHTML = displayUsers.map((user) => {
+        // Build updated DOM by reusing existing nodes where possible
+        // so that unchanged avatar <img> elements are never removed/re-added
+        // (which would cause visible flickering).
+        const existingItems = new Map();
+        userListContent.querySelectorAll('.user-item[data-pubkey]').forEach(el => {
+            existingItems.set(el.dataset.pubkey, el);
+        });
+
+        const fragment = document.createDocumentFragment();
+
+        displayUsers.forEach((user) => {
             const baseNym = this.parseNymFromDisplay(user.nym);
             const suffix = this.getPubkeySuffix(user.pubkey);
             const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
             const verifiedBadge = this.isVerifiedDeveloper(user.pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>`
                 : '';
-
             const userColorClass = this.settings.theme === 'bitchat' ? this.getUserColorClass(user.pubkey) : '';
-
             const avatarSrc = this.getAvatarUrl(user.pubkey);
-            return `
-    <div class="user-item list-item ${userColorClass}"
-            onclick="nym.openUserPM('${this.escapeHtml(baseNym)}', '${user.pubkey}')"
-            oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}')"
-            data-nym="${this.escapeHtml(baseNym)}">
-        <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">
-        <span class="user-status ${user.effectiveStatus}"></span>
-        <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
-    </div>
-`;
-        }).join('');
+
+            let el = existingItems.get(user.pubkey);
+            if (el) {
+                // Reuse existing DOM node — only update mutable parts
+                existingItems.delete(user.pubkey);
+                const statusSpan = el.querySelector('.user-status');
+                if (statusSpan) statusSpan.className = `user-status ${user.effectiveStatus}`;
+                const img = el.querySelector('img.avatar-user-list');
+                if (img && img.getAttribute('src') !== avatarSrc) img.src = avatarSrc;
+                el.className = `user-item list-item ${userColorClass}`;
+                fragment.appendChild(el);
+            } else {
+                // Create new element for a user not previously in the list
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = `<div class="user-item list-item ${userColorClass}"
+                        onclick="nym.openUserPM('${this.escapeHtml(baseNym)}', '${user.pubkey}')"
+                        oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}')"
+                        data-pubkey="${user.pubkey}"
+                        data-nym="${this.escapeHtml(baseNym)}">
+                    <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" data-avatar-pubkey="${user.pubkey}" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">
+                    <span class="user-status ${user.effectiveStatus}"></span>
+                    <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
+                </div>`;
+                fragment.appendChild(wrapper.firstElementChild);
+            }
+        });
+
+        // Remove users no longer in the list
+        existingItems.forEach(el => el.remove());
+
+        // Replace content — moves existing nodes (preserving loaded images)
+        userListContent.textContent = '';
+        userListContent.appendChild(fragment);
 
         this.updateViewMoreButton('userListContent');
 
@@ -18006,7 +18035,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.31.127 ═══<br/>
+═══ Nymchat v3.31.128 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
