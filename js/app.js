@@ -13519,6 +13519,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
+        // Prune oldest messages from DOM to stay at the 100 message cap
+        {
+            const domMessages = container.querySelectorAll('[data-message-id]');
+            if (domMessages.length > this.channelMessageLimit) {
+                const toRemove = domMessages.length - this.channelMessageLimit;
+                for (let i = 0; i < toRemove; i++) {
+                    domMessages[i].remove();
+                }
+            }
+        }
+
         // Add existing reactions if any (for both channel messages and PMs)
         if (message.id && this.reactions.has(message.id)) {
             this.updateMessageReactions(message.id);
@@ -18831,7 +18842,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.33.132 ═══<br/>
+═══ Nymchat v3.33.133 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
