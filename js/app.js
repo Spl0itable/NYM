@@ -2825,12 +2825,24 @@ TRANSFER TO PUBKEY
                 id, ...data
             }));
 
+            // Collect recovery codes from localStorage so they are persisted to relays
+            const recoveryCodes = {};
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('nym_shop_recovery_')) {
+                    try {
+                        recoveryCodes[key.replace('nym_shop_recovery_', '')] = JSON.parse(localStorage.getItem(key));
+                    } catch (_) { }
+                }
+            }
+
             const purchaseData = {
                 purchases: allPurchases,
                 activeStyle: this.activeMessageStyle || null,
                 activeFlair: this.activeFlair || null,
                 activeCosmetics: Array.from(this.activeCosmetics || []),
-                supporterActive: this.supporterBadgeActive !== false
+                supporterActive: this.supporterBadgeActive !== false,
+                recoveryCodes: Object.keys(recoveryCodes).length > 0 ? recoveryCodes : undefined
             };
 
             // Cache to localStorage (CRITICAL)
@@ -5718,7 +5730,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             ctxAvatarImg.onerror = function () { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
         }
         if (ctxAvatarNym) {
-            ctxAvatarNym.innerHTML = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+            let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+            if (this.isVerifiedDeveloper(pubkey)) {
+                nymHtml += `<div class="context-menu-dev-label">Nymchat Developer</div>`;
+            }
+            ctxAvatarNym.innerHTML = nymHtml;
         }
 
         // Add slap option if it doesn't exist
@@ -9104,6 +9120,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         localStorage.setItem('nym_supporter_active', this.supporterBadgeActive ? 'true' : 'false');
                     }
 
+                    // Restore recovery codes from relay data to localStorage
+                    if (data.recoveryCodes && typeof data.recoveryCodes === 'object') {
+                        Object.entries(data.recoveryCodes).forEach(([code, payload]) => {
+                            const key = 'nym_shop_recovery_' + code;
+                            if (!localStorage.getItem(key)) {
+                                try {
+                                    localStorage.setItem(key, JSON.stringify(payload));
+                                } catch (_) { }
+                            }
+                        });
+                    }
+
                     // Cache purchases locally for persistence across ephemeral sessions
                     this._cachePurchases();
 
@@ -9203,18 +9231,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 }
 
-                // Update nym if we don't have one for this user
+                // Update nym if we don't have one for this user or they have a default name
                 if (profile.name || profile.username || profile.display_name) {
                     const profileName = profile.name || profile.username || profile.display_name;
-                    if (!this.users.has(pubkey) || this.users.get(pubkey).nym.startsWith('anon-')) {
-                        const existingUser = this.users.get(pubkey);
+                    const truncatedName = profileName.substring(0, 20);
+                    const existingUser = this.users.get(pubkey);
+                    if (!existingUser || /^anon/i.test(existingUser.nym)) {
                         this.users.set(pubkey, {
-                            nym: profileName.substring(0, 20),
+                            nym: truncatedName,
                             pubkey: pubkey,
                             lastSeen: existingUser?.lastSeen || 0,
                             status: existingUser?.status || 'online',
                             channels: existingUser?.channels || new Set()
                         });
+                    }
+                    // Update PM sidebar and header if this user has a PM conversation
+                    if (pubkey !== this.pubkey) {
+                        this.updatePMNicknameFromProfile(pubkey, truncatedName);
                     }
                 }
             } catch (e) {
@@ -11416,6 +11449,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             el.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}&gt;`;
         });
 
+        // Update PM header title if currently viewing this user's PM
+        if (this.inPMMode && this.currentPM === pubkey) {
+            const pmAvatarSrc = this.getAvatarUrl(pubkey);
+            const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>`;
+            const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+            const channelEl = document.getElementById('currentChannel');
+            if (channelEl) channelEl.innerHTML = pmHeaderHtml;
+        }
+
         // Update any visible notification banner from this user
         const notif = document.querySelector(`.notification[data-pubkey="${pubkey}"] .notification-title`);
         if (notif) {
@@ -11671,6 +11713,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.addPMConversation(baseNym, pubkey);
         // Open the PM
         this.openPM(baseNym, pubkey);
+
+        // Proactively fetch kind 0 profile to update nickname/avatar
+        const known = this.users.get(pubkey);
+        if (!known || /^anon$/i.test(this.parseNymFromDisplay(known.nym))) {
+            this.fetchProfileDirect(pubkey);
+        }
     }
 
     isMentioned(content) {
@@ -18078,32 +18126,29 @@ function editNick() {
     suffixEl.textContent = `#${suffix}`;
     suffixEl.title = 'Click to view full pubkey';
 
-    // Click handler to show full pubkey tooltip
+    // Click handler to toggle full pubkey slide-out
     suffixEl.onclick = (e) => {
         e.stopPropagation();
-        // Remove any existing tooltip
-        const existing = document.getElementById('pubkeyTooltip');
-        if (existing) { existing.remove(); return; }
-
-        const tooltip = document.createElement('div');
-        tooltip.id = 'pubkeyTooltip';
-        tooltip.className = 'pubkey-tooltip';
-        tooltip.innerHTML = `
-            <div class="pubkey-tooltip-label">Full Hex Pubkey</div>
-            <div class="pubkey-tooltip-value">${nym.pubkey}</div>
-            <button class="pubkey-tooltip-copy" onclick="event.stopPropagation(); navigator.clipboard.writeText('${nym.pubkey}'); this.textContent='Copied!'; setTimeout(() => this.textContent='Copy', 1200);">Copy</button>
-        `;
-        suffixEl.appendChild(tooltip);
-
-        // Close on outside click
-        const closeTooltip = (ev) => {
-            if (!tooltip.contains(ev.target) && ev.target !== suffixEl) {
-                tooltip.remove();
-                document.removeEventListener('click', closeTooltip);
-            }
-        };
-        setTimeout(() => document.addEventListener('click', closeTooltip), 0);
+        const slideout = document.getElementById('pubkeySlideout');
+        if (!slideout) return;
+        const valueEl = document.getElementById('pubkeySlideoutValue');
+        const copyBtn = document.getElementById('pubkeySlideoutCopy');
+        if (valueEl) valueEl.textContent = nym.pubkey;
+        if (copyBtn) {
+            copyBtn.textContent = 'Copy';
+            copyBtn.onclick = (ev) => {
+                ev.stopPropagation();
+                navigator.clipboard.writeText(nym.pubkey);
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
+            };
+        }
+        slideout.classList.toggle('open');
     };
+
+    // Reset pubkey slide-out state
+    const pubkeySlideout = document.getElementById('pubkeySlideout');
+    if (pubkeySlideout) pubkeySlideout.classList.remove('open');
 
     // Show current avatar in edit modal and reset upload UI state
     const preview = document.getElementById('nickEditAvatarPreview');

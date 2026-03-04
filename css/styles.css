@@ -1393,23 +1393,25 @@ body::after {
     opacity: 1;
 }
 
-.pubkey-tooltip {
-    position: unset;
-    top: calc(100% + 8px);
-    right: 0;
-    background: rgba(15, 15, 30, 0.95);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid var(--glass-border);
-    border-radius: var(--radius-sm, 8px);
-    padding: 12px;
-    z-index: 1000;
-    min-width: 320px;
-    max-width: 420px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+.pubkey-slideout {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease, margin-top 0.3s ease, padding 0.3s ease;
+    margin-top: 0;
+    padding: 0 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: var(--radius-xs, 8px);
+    border: 1px solid transparent;
 }
 
-.pubkey-tooltip-label {
+.pubkey-slideout.open {
+    max-height: 160px;
+    margin-top: 8px;
+    padding: 10px;
+    border-color: var(--glass-border);
+}
+
+.pubkey-slideout-label {
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -1417,10 +1419,10 @@ body::after {
     margin-bottom: 6px;
 }
 
-.pubkey-tooltip-value {
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+.pubkey-slideout-value {
+    font-family: var(--font-mono);
     font-size: 12px;
-    color: var(--primary, #7c6fe0);
+    color: var(--primary);
     word-break: break-all;
     line-height: 1.5;
     padding: 8px;
@@ -1428,10 +1430,9 @@ body::after {
     border-radius: 4px;
     border: 1px solid rgba(255, 255, 255, 0.06);
     user-select: all;
-    text-wrap: auto;
 }
 
-.pubkey-tooltip-copy {
+.pubkey-slideout-copy {
     margin-top: 8px;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid var(--glass-border);
@@ -1439,12 +1440,32 @@ body::after {
     color: var(--text);
     padding: 5px 14px;
     font-size: 11px;
+    font-family: var(--font-sans);
     cursor: pointer;
     transition: all 0.2s;
 }
 
-.pubkey-tooltip-copy:hover {
+.pubkey-slideout-copy:hover {
     background: rgba(255, 255, 255, 0.14);
+}
+
+body.light-mode .pubkey-slideout {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+body.light-mode .pubkey-slideout-value {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .pubkey-slideout-copy {
+    background: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.1);
+    color: var(--text);
+}
+
+body.light-mode .pubkey-slideout-copy:hover {
+    background: rgba(0, 0, 0, 0.1);
 }
 
 .message-author.self {
@@ -2343,50 +2364,41 @@ body::after {
     justify-content: center;
     width: 16px;
     height: 16px;
-    margin-left: 5px;
-    margin-right: 5px;
+    margin-left: 4px;
+    margin-right: 2px;
     position: relative;
     cursor: help;
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: transform 0.2s;
     vertical-align: middle;
+    flex-shrink: 0;
 }
 
 .verified-badge::before {
     content: "";
     position: absolute;
     inset: 0;
-    background: var(--primary);
-    --lobes: conic-gradient(from 0deg,
-            #000 0 22.5deg, transparent 22.5deg 45deg,
-            #000 45deg 67.5deg, transparent 67.5deg 90deg,
-            #000 90deg 112.5deg, transparent 112.5deg 135deg,
-            #000 135deg 157.5deg, transparent 157.5deg 180deg,
-            #000 180deg 202.5deg, transparent 202.5deg 225deg,
-            #000 225deg 247.5deg, transparent 247.5deg 270deg,
-            #000 270deg 292.5deg, transparent 292.5deg 315deg,
-            #000 315deg 337.5deg, transparent 337.5deg 360deg);
-    --round: radial-gradient(circle at 50% 50%, #000 70%, transparent 71%);
-    -webkit-mask: var(--lobes), var(--round);
-    -webkit-mask-composite: source-in;
-    mask: var(--lobes);
-    mask-composite: intersect;
+    background: #1DA1F2;
+    border-radius: 50%;
 }
 
 .verified-badge::after {
-    content: "✔";
+    content: "✓";
     position: absolute;
-    top: 55%;
+    top: 50%;
     left: 50%;
-    transform: translate(-50%, -52%);
-    font-size: 25px;
-    font-weight: 900;
-    color: #1DA1F2;
+    transform: translate(-50%, -50%);
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
     line-height: 1;
 }
 
 .verified-badge:hover {
-    transform: scale(1.1);
-    box-shadow: 0 0 10px var(--primary);
+    transform: scale(1.15);
+}
+
+body.light-mode .verified-badge::before {
+    background: #1a8cd8;
 }
 
 .share-channel-btn {
@@ -3849,9 +3861,7 @@ body.light-mode .message.style-satoshi .message-content {
 }
 
 body.light-mode .message.style-satoshi .message-content>* {
-    background: linear-gradient(135deg, #c47a15 0%, #aa6600 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: #c47a15;
 }
 
 body.light-mode .style-preview-satoshi {
@@ -4603,10 +4613,12 @@ body.light-mode .message.self::before {
 .message.style-satoshi .message-content>* {
     position: relative;
     z-index: 1;
-    background: linear-gradient(135deg, #f7931a 0%, #f9a826 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: #f7931a;
     font-weight: bold;
+}
+
+.message.style-satoshi .message-content>*::selection {
+    background: rgba(247, 147, 26, 0.3);
 }
 
 .message.style-matrix .message-content {
@@ -5579,6 +5591,14 @@ body.light-mode .message.self::before {
     font-weight: 100;
 }
 
+.context-menu-dev-label {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-top: 2px;
+    letter-spacing: 0.5px;
+}
+
 .avatar-upload-section {
     display: flex;
     align-items: center;
@@ -5909,6 +5929,7 @@ body.light-mode .wallpaper-preview.wallpaper-diamonds {
     max-width: 560px;
     width: 94%;
     padding: 24px;
+    font-family: var(--font-sans);
 }
 
 .relay-stats-cards {
@@ -5939,6 +5960,7 @@ body.light-mode .wallpaper-preview.wallpaper-diamonds {
 }
 
 .relay-stat-label {
+    font-family: var(--font-sans);
     font-size: 10px;
     color: var(--text-dim);
     margin-top: 4px;
@@ -5952,6 +5974,7 @@ body.light-mode .wallpaper-preview.wallpaper-diamonds {
 }
 
 .relay-stats-section-title {
+    font-family: var(--font-sans);
     font-size: 11px;
     font-weight: 600;
     color: var(--text-dim);
@@ -5988,6 +6011,7 @@ body.light-mode .wallpaper-preview.wallpaper-diamonds {
     padding: 8px 12px;
     gap: 10px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    font-family: var(--font-sans);
     font-size: 12px;
     transition: background var(--transition);
 }
@@ -6029,6 +6053,7 @@ body.light-mode .wallpaper-preview.wallpaper-diamonds {
 }
 
 .relay-stats-type {
+    font-family: var(--font-sans);
     font-size: 9px;
     padding: 2px 6px;
     border-radius: 4px;
