@@ -8350,6 +8350,8 @@ blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock Us
                     const msg = msgs.find(m => m.id === eventId);
                     if (msg && msg.deliveryStatus === 'sent') {
                         msg.deliveryStatus = 'failed';
+                        // Invalidate cached DOM for this conversation since status changed
+                        this.channelDOMCache.delete(pending.conversationKey);
                         // Update the UI checkmark if visible
                         if (this.inPMMode && this.currentPM === pending.recipientPubkey) {
                             const msgEl = document.querySelector(`[data-message-id="${eventId}"]`);
@@ -11063,6 +11065,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                                 msg.deliveryStatus = receiptType;
                                 // Remove from pending retry queue since delivery confirmed
                                 this.pendingDMs.delete(msg.id);
+                                // Invalidate cached DOM for this conversation since status changed
+                                this.channelDOMCache.delete(convKey);
                                 // Update in-place without re-rendering to avoid flicker
                                 const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
                                 if (msgEl) {
@@ -11100,6 +11104,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                                 msg.deliveryStatus = receiptType;
                                 // Remove from pending retry queue since delivery confirmed
                                 this.pendingDMs.delete(msg.id);
+                                // Invalidate cached DOM for this conversation since status changed
+                                this.channelDOMCache.delete(convKey);
                                 // Update in-place without re-rendering to avoid flicker
                                 const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
                                 if (msgEl) {
@@ -11223,7 +11229,30 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const wrapped = await this.sendNIP17PM(content, recipientPubkey);
             return !!wrapped;
         } catch (error) {
-            this.displaySystemMessage('Failed to send PM: ' + error.message);
+            // Store the failed message in pmMessages so it persists across navigation
+            const conversationKey = this.getPMConversationKey(recipientPubkey);
+            if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+            const failedId = 'failed-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+            const failedMsg = {
+                id: failedId,
+                author: this.nym,
+                pubkey: this.pubkey,
+                content,
+                timestamp: new Date(),
+                isOwn: true,
+                isPM: true,
+                conversationKey,
+                conversationPubkey: recipientPubkey,
+                eventKind: 1059,
+                deliveryStatus: 'failed'
+            };
+            this.pmMessages.get(conversationKey).push(failedMsg);
+            // Invalidate cached DOM for this conversation
+            this.channelDOMCache.delete(conversationKey);
+            // Display the failed message if currently viewing this PM
+            if (this.inPMMode && this.currentPM === recipientPubkey) {
+                this.displayMessage(failedMsg);
+            }
             return false;
         }
     }
@@ -11530,11 +11559,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = conversationKey;
 
-        // Try to restore from DOM cache if message count hasn't changed
+        // Try to restore from DOM cache if messages haven't changed
         const pmMessages = this.pmMessages.get(conversationKey) || [];
         const cached = this.channelDOMCache.get(conversationKey);
+        const currentFingerprint = this._computeMessageFingerprint(pmMessages);
 
-        if (cached && cached.messageCount === pmMessages.length) {
+        if (cached && cached.messageCount === pmMessages.length &&
+            cached.messageFingerprint === currentFingerprint) {
             // Message count unchanged, restore cached DOM instantly
             container.innerHTML = '';
             container.appendChild(cached.fragment);
@@ -13202,6 +13233,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Check for action messages
         if (message.content.startsWith('/me ')) {
             messageEl.className = 'action-message';
+            messageEl.dataset.messageId = message.id;
+            messageEl.dataset.timestamp = message.timestamp.getTime();
 
             // Get clean author name and flair
             const cleanAuthor = this.parseNymFromDisplay(message.author);
@@ -13465,12 +13498,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             });
         }
 
-        // Only sort by timestamp if we're scrolled to the bottom or if this is historical
-        const isScrolledToBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100;
-        const shouldSort = isScrolledToBottom || message.isHistorical;
-
-        if (shouldSort) {
-            // Find the correct position to insert the message based on timestamp
+        // Always insert messages in correct timestamp order to prevent out-of-order display
+        {
             const existingMessages = Array.from(container.querySelectorAll('.message[data-timestamp]'));
             const messageTimestamp = message.timestamp.getTime();
 
@@ -13488,8 +13517,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             } else {
                 container.appendChild(messageEl);
             }
-        } else {
-            container.appendChild(messageEl);
         }
 
         // Enforce hard cap of 100 messages in DOM — always prune oldest messages
@@ -16190,11 +16217,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             fragment.appendChild(container.firstChild);
         }
 
-        // Get message count for cache invalidation
+        // Get message count and fingerprint for cache invalidation
         const messages = this.messages.get(previousKey) || this.pmMessages.get(previousKey) || [];
         this.channelDOMCache.set(previousKey, {
             fragment,
             messageCount: messages.length,
+            messageFingerprint: this._computeMessageFingerprint(messages),
             virtualScrollState: {
                 currentStartIndex: this.virtualScroll.currentStartIndex,
                 currentEndIndex: this.virtualScroll.currentEndIndex
@@ -16206,6 +16234,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const oldestKey = this.channelDOMCache.keys().next().value;
             this.channelDOMCache.delete(oldestKey);
         }
+    }
+
+    // Compute a lightweight fingerprint of messages for cache invalidation.
+    // Detects changes in count, message IDs, and delivery status.
+    _computeMessageFingerprint(messages) {
+        if (!messages || messages.length === 0) return '';
+        // Use last 10 messages for efficiency — most changes happen at the tail
+        const tail = messages.slice(-10);
+        return tail.map(m => `${m.id}:${m.deliveryStatus || ''}`).join('|');
     }
 
     loadChannelMessages(displayName) {
@@ -16226,11 +16263,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = storageKey;
 
-        // Try to restore from cache if message count hasn't changed
+        // Try to restore from cache if messages haven't changed
         const channelMessages = this.messages.get(storageKey) || [];
         const cached = this.channelDOMCache.get(storageKey);
+        const currentFingerprint = this._computeMessageFingerprint(channelMessages);
 
-        if (cached && cached.messageCount === channelMessages.length) {
+        if (cached && cached.messageCount === channelMessages.length &&
+            cached.messageFingerprint === currentFingerprint) {
             // Message count unchanged, restore cached DOM instantly
             container.innerHTML = '';
             container.appendChild(cached.fragment);
@@ -18841,7 +18880,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.33.130 ═══<br/>
+═══ Nymchat v3.33.131 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
