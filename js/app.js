@@ -1826,7 +1826,9 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         this.otherUsersShopItems = new Map();
         this.shopItemsCache = new Map();
         this.activeCosmetics = new Set();
+        this.supporterBadgeActive = localStorage.getItem('nym_supporter_active') !== 'false';
         this.loadShopActiveCache();
+        this._restorePurchasesFromCache();
         setTimeout(() => {
             const cachedStyle = localStorage.getItem('nym_active_style');
             const cachedFlair = localStorage.getItem('nym_active_flair');
@@ -1903,7 +1905,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         return {
             style: this.activeMessageStyle || null,
             flair: this.activeFlair || null,
-            supporter: this.userPurchases.has('supporter-badge'),
+            supporter: this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false,
             cosmetics: Array.from(this.activeCosmetics || [])
         };
     }
@@ -2055,8 +2057,9 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
                 msg.classList.add(this.activeMessageStyle);
             }
 
-            // Add supporter badge if owned
-            if (this.userPurchases.has('supporter-badge')) {
+            // Add supporter badge if owned and active
+            const supporterActive = this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false;
+            if (supporterActive) {
                 msg.classList.add('supporter-style');
             }
 
@@ -2075,6 +2078,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
                         if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
                             setTimeout(() => {
                                 contentEl.classList.add('cosmetic-redacted-message');
+                                contentEl.textContent = '';
                             }, 10000);
                         }
                     }
@@ -2102,7 +2106,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
                 // Update supporter badge
                 const existingSupporter = authorEl.querySelector('.supporter-badge');
                 if (existingSupporter) existingSupporter.remove();
-                if (this.userPurchases.has('supporter-badge')) {
+                if (supporterActive) {
                     const badge = document.createElement('span');
                     badge.className = 'supporter-badge';
                     badge.innerHTML = '<span class="supporter-badge-icon">\u{1F3C6}</span><span class="supporter-badge-text">Supporter</span>';
@@ -2128,6 +2132,9 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         // Save & broadcast
         this.savePurchaseToNostr();
         this.publishActiveShopItems();
+
+        // Apply to own messages immediately
+        this.applyShopStylesToOwnMessages();
 
         // Refresh inventory tab if open
         if (document.getElementById('shopModal').classList.contains('active') &&
@@ -2343,8 +2350,12 @@ ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
 ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
                 } else if (item.type === 'supporter') {
-                    // Supporter has no toggle (always on once owned)
+                    const isActive = this.supporterBadgeActive !== false;
                     html += `<div class="shop-item-preview"><span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span></div>`;
+                    html += `
+<button class="shop-buy-btn" onclick="nym.activateSupporter()" style="margin-top: 10px; width: 100%;">
+${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
+</button>`;
                 }
 
                 // Transfer button for all purchased items
@@ -2685,7 +2696,12 @@ TRANSFER TO PUBKEY
     async handleShopPaymentSuccess() {
         if (!this.currentPurchaseContext || !this.currentShopInvoice) return;
 
+        // Capture context and nullify immediately to prevent duplicate handling
+        // (both invoice polling and zap receipt events can trigger this)
         const { itemId, item, amount } = this.currentPurchaseContext;
+        const shopInvoice = this.currentShopInvoice;
+        this.currentPurchaseContext = null;
+        this.currentShopInvoice = null;
 
         // Clear check intervals and subscriptions
         if (this.shopPaymentCheckInterval) {
@@ -2714,7 +2730,7 @@ TRANSFER TO PUBKEY
             itemId: itemId,
             amount: amount,
             timestamp: Math.floor(Date.now() / 1000),
-            txid: this.currentShopInvoice.zapRequestId || 'shop_' + Date.now()
+            txid: shopInvoice.zapRequestId || 'shop_' + Date.now()
         };
 
         // Store purchase locally
@@ -2802,7 +2818,8 @@ TRANSFER TO PUBKEY
                 purchases: allPurchases,
                 activeStyle: this.activeMessageStyle || null,
                 activeFlair: this.activeFlair || null,
-                activeCosmetics: Array.from(this.activeCosmetics || [])
+                activeCosmetics: Array.from(this.activeCosmetics || []),
+                supporterActive: this.supporterBadgeActive !== false
             };
 
             // Cache to localStorage (CRITICAL)
@@ -2889,7 +2906,7 @@ TRANSFER TO PUBKEY
             return {
                 style: this.activeMessageStyle,
                 flair: this.activeFlair,
-                supporter: this.userPurchases.has('supporter-badge'),
+                supporter: this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false,
                 cosmetics: Array.from(this.activeCosmetics || [])
             };
         }
@@ -2959,6 +2976,26 @@ TRANSFER TO PUBKEY
         this.savePurchaseToNostr();
         this.publishActiveShopItems();
         this.displaySystemMessage(`✅ Activated ${this.getShopItemById(flairId).name}`);
+        this.renderInventoryTab(document.getElementById('shopBody'));
+        this.applyShopStylesToOwnMessages();
+    }
+
+    activateSupporter() {
+        if (!this.userPurchases.has('supporter-badge')) return;
+
+        // Toggle supporter badge
+        if (this.supporterBadgeActive !== false) {
+            this.supporterBadgeActive = false;
+            localStorage.setItem('nym_supporter_active', 'false');
+            this.displaySystemMessage('❎ Deactivated Nymchat Supporter badge');
+        } else {
+            this.supporterBadgeActive = true;
+            localStorage.setItem('nym_supporter_active', 'true');
+            this.displaySystemMessage('✅ Activated Nymchat Supporter badge');
+        }
+
+        this.savePurchaseToNostr();
+        this.publishActiveShopItems();
         this.renderInventoryTab(document.getElementById('shopBody'));
         this.applyShopStylesToOwnMessages();
     }
@@ -8980,6 +9017,7 @@ blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock Us
                                         if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
                                             setTimeout(() => {
                                                 contentEl.classList.add('cosmetic-redacted-message');
+                                                contentEl.textContent = '';
                                             }, 10000);
                                         }
                                     }
@@ -9053,6 +9091,11 @@ blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock Us
 
                     if (data.activeCosmetics !== undefined) {
                         this.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
+                    }
+
+                    if (data.supporterActive !== undefined) {
+                        this.supporterBadgeActive = data.supporterActive;
+                        localStorage.setItem('nym_supporter_active', this.supporterBadgeActive ? 'true' : 'false');
                     }
 
                     // Cache purchases locally for persistence across ephemeral sessions
@@ -13448,7 +13491,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (activeStyle) {
                 messageEl.classList.add(activeStyle);
             }
-            if (this.userPurchases.has('supporter-badge')) {
+            if (this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false) {
                 messageEl.classList.add('supporter-style');
             }
             if (this.activeCosmetics && this.activeCosmetics.size > 0) {
@@ -13465,6 +13508,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
                             setTimeout(() => {
                                 contentEl.classList.add('cosmetic-redacted-message');
+                                contentEl.textContent = '';
                             }, 10000);
                         }
                     }
@@ -13484,6 +13528,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
                         setTimeout(() => {
                             contentEl.classList.add('cosmetic-redacted-message');
+                            contentEl.textContent = '';
                         }, 10000);
                     }
                 }
@@ -18842,7 +18887,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.33.133 ═══<br/>
+═══ Nymchat v3.33.134 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
