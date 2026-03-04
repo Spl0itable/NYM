@@ -3883,12 +3883,12 @@ body.light-mode .message.supporter-style .message-header {
 }
 
 body.light-mode .message .message-author.cosmetic-redacted {
-    color: #333333 !important;
-    opacity: 0.6;
+    color: #1a1a1a !important;
+    opacity: 0.75;
 }
 
 body.light-mode .message-content.cosmetic-redacted-message {
-    background: rgba(0, 0, 0, 0.1) !important;
+    background: rgba(0, 0, 0, 0.12) !important;
     color: transparent !important;
 }
 

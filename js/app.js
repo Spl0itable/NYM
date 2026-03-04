@@ -7176,7 +7176,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.avatarBlobCache.set(pubkey, objectUrl);
                 this.updateRenderedAvatars(pubkey, objectUrl);
             })
-            .catch(() => { })  // silently ignore – original URL still works as fallback
+            .catch(() => {
+                // Blob fetch failed (CORS, network, etc.) — fall back to raw URL
+                this.updateRenderedAvatars(pubkey, url);
+            })
             .finally(() => { this.avatarBlobInflight.delete(pubkey); });
         this.avatarBlobInflight.set(pubkey, p);
         return p;
@@ -8640,10 +8643,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                 const oldBlob = this.avatarBlobCache.get(pubkey);
                                 if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
                                 this.userAvatars.set(pubkey, profile.picture);
-                                // cacheAvatarImage will call updateRenderedAvatars with the blob URL when done
+                                // cacheAvatarImage will call updateRenderedAvatars once with the blob URL when done
+                                // (avoid calling updateRenderedAvatars twice which causes visible flickering)
                                 this.cacheAvatarImage(pubkey, profile.picture);
-                                // Temporarily show the raw URL while blob is being fetched
-                                this.updateRenderedAvatars(pubkey, profile.picture);
                             } else if (!this.avatarBlobCache.has(pubkey)) {
                                 // Same URL but no blob cached yet — trigger fetch
                                 this.userAvatars.set(pubkey, profile.picture);
