@@ -5776,7 +5776,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } else {
             blockOption.style.display = 'block';
             const blockSvg = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle; margin-right: 8px;"><circle cx="8" cy="8" r="6" /><line x1="3.75" y1="3.75" x2="12.25" y2="12.25" stroke-width="1.5" stroke-linecap="round" /></svg>';
-blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock User' : 'Block User');
+            blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock User' : 'Block User');
         }
 
         // Hide PM option if it's yourself
@@ -6140,7 +6140,6 @@ blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock Us
             const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
             document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
 
-
             // Start subscriptions on all connected relays
             this.subscribeToAllRelays();
 
@@ -6158,11 +6157,6 @@ blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock Us
                     this.switchChannel('nym', 'nym');
                 }
             }, 100);
-
-            // Update status to show we're connected
-            this.updateConnectionStatus();
-            this.displaySystemMessage(`Connected to the Nostr network via multiple relays...`);
-
 
             // Now connect to remaining broadcast relays in background
             this.broadcastRelays.forEach(relayUrl => {
@@ -18887,7 +18881,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.33.134 ═══<br/>
+═══ Nymchat v3.33.135 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -18936,20 +18930,17 @@ async function checkSavedConnection() {
                         await nym.generateKeypair();
                         nym.nym = nym.generateRandomNym();
                         nym.connectionMode = 'ephemeral';
-                        nym.displaySystemMessage('Auto-starting ephemeral session...');
                     }
                 } else {
                     await nym.generateKeypair();
                     nym.nym = nym.generateRandomNym();
                     nym.connectionMode = 'ephemeral';
-                    nym.displaySystemMessage('Auto-starting ephemeral session...');
                 }
             } else {
                 // Generate ephemeral keypair
                 await nym.generateKeypair();
                 nym.nym = savedNick || nym.generateRandomNym();
                 nym.connectionMode = 'ephemeral';
-                nym.displaySystemMessage('Auto-starting ephemeral session...');
             }
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
             nym.updateSidebarAvatar();
@@ -18991,13 +18982,6 @@ async function checkSavedConnection() {
             if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
                 Notification.requestPermission();
             }
-
-            // Welcome message
-            nym.displaySystemMessage(`Welcome to Nymchat, ${nym.nym}! Type /help for available commands.`);
-            if (isDeveloperLogin) {
-                nym.displaySystemMessage(`Identity verified. You are now logged in as ${nym.nym}.`);
-            }
-            nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
             // Start tutorial if not seen
             window.maybeStartTutorial(false);
@@ -19140,13 +19124,6 @@ async function initializeNym() {
 
         // Close setup modal
         closeModal('setupModal');
-
-        // Welcome messages
-        nym.displaySystemMessage(`Welcome to Nymchat, ${nym.nym}! Type /help for available commands.`);
-        if (isDeveloperLogin) {
-            nym.displaySystemMessage(`Identity verified. You are now logged in as ${nym.nym}.`);
-        }
-        nym.displaySystemMessage(`Click on any nym's nickname for more options.`);
 
         // Route to channel from URL if present
         await routeToUrlChannel();
