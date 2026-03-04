@@ -221,7 +221,7 @@
                         <div class="nym-value" id="currentNym">anonymous</div>
                     </div>
                 </div>
-                <div class="status-indicator">
+                <div class="status-indicator" onclick="openRelayStats()" style="cursor: pointer;" title="View network stats">
                     <span class="status-dot" id="statusDot"></span>
                     <span id="connectionStatus">Disconnected</span>
                 </div>
@@ -470,6 +470,49 @@
         </div>
     </div>
 
+    <!-- Relay Stats Modal -->
+    <div class="modal" id="relayStatsModal">
+        <div class="modal-content relay-stats-content">
+            <button class="modal-close" onclick="closeModal('relayStatsModal')">&#x2715;</button>
+            <div class="modal-header">Network Stats</div>
+            <div class="modal-body" style="padding: 0;">
+                <!-- Summary Cards -->
+                <div class="relay-stats-cards">
+                    <div class="relay-stat-card">
+                        <div class="relay-stat-value" id="rsConnected">0</div>
+                        <div class="relay-stat-label">Connected</div>
+                    </div>
+                    <div class="relay-stat-card">
+                        <div class="relay-stat-value" id="rsLatency">--</div>
+                        <div class="relay-stat-label">Avg Latency</div>
+                    </div>
+                    <div class="relay-stat-card">
+                        <div class="relay-stat-value" id="rsEventsTotal">0</div>
+                        <div class="relay-stat-label">Events</div>
+                    </div>
+                    <div class="relay-stat-card">
+                        <div class="relay-stat-value" id="rsDataTransfer">0 B</div>
+                        <div class="relay-stat-label">Data In</div>
+                    </div>
+                </div>
+
+                <!-- Throughput Graph -->
+                <div class="relay-stats-section">
+                    <div class="relay-stats-section-title">Throughput (events/sec)</div>
+                    <div class="relay-stats-graph-wrap">
+                        <canvas id="rsThroughputCanvas" width="440" height="100"></canvas>
+                    </div>
+                </div>
+
+                <!-- Relay List -->
+                <div class="relay-stats-section">
+                    <div class="relay-stats-section-title">Relays</div>
+                    <div class="relay-stats-relay-list" id="rsRelayList"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Nick Edit Modal -->
     <div class="modal nick-edit-modal" id="nickEditModal">
         <div class="modal-content">
@@ -683,8 +726,12 @@
                         style="max-height: 200px; overflow-y: auto; border: 1px solid var(--glass-border, var(--border)); border-radius: 12px; padding: 10px; background: rgba(255,255,255,0.03);">
                         <div style="color: var(--text-dim); font-size: 12px;">Loading relay list...</div>
                     </div>
-                    <button class="icon-btn" onclick="nym.refreshRelays()"
-                        style="margin-top: 10px; width: 100%;">Refresh Relay List</button>
+                    <div style="display: flex; gap: 8px; margin-top: 10px;">
+                        <button class="icon-btn" onclick="nym.refreshRelays()"
+                            style="flex: 1;">Refresh Relay List</button>
+                        <button class="icon-btn" onclick="closeModal('settingsModal'); openRelayStats();"
+                            style="flex: 1; color: var(--secondary);">Network Stats</button>
+                    </div>
                 </div>
 
                 <div class="form-group">

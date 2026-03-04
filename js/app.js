@@ -449,6 +449,17 @@ class NYM {
         this.relayPool = new Map();
         this.blacklistedRelays = new Set();
         this.relayKinds = new Map();
+        this.relayStats = {
+            eventsPerRelay: new Map(),
+            bytesReceived: 0,
+            latencyPerRelay: new Map(),
+            throughputHistory: [],
+            eventsThisSecond: 0,
+            totalEvents: 0,
+            startTime: Date.now()
+        };
+        this._relayStatsInterval = null;
+        this._relayStatsAnimFrame = null;
         this.relayVerificationTimeout = 10000;
         this.monitorRelays = ['wss://relay.nostr.watch', 'wss://monitorlizard.nostr1.com'];
         this.broadcastRelays = [
@@ -6584,6 +6595,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
 
                 const ws = new WebSocket(relayUrl);
+                const wsCreatedAt = Date.now();
                 let verificationTimeout;
                 let connectionTimeout;
 
@@ -6599,6 +6611,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 ws.onopen = () => {
                     clearTimeout(connectionTimeout);
+
+                    // Track connection latency
+                    this.relayStats.latencyPerRelay.set(relayUrl, Date.now() - wsCreatedAt);
 
                     this.relayPool.set(relayUrl, {
                         ws,
@@ -6648,7 +6663,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 ws.onmessage = (event) => {
                     try {
+                        // Track relay stats
+                        const dataLen = typeof event.data === 'string' ? event.data.length : (event.data.byteLength || 0);
+                        this.relayStats.bytesReceived += dataLen;
                         const msg = JSON.parse(event.data);
+                        if (Array.isArray(msg) && msg[0] === 'EVENT') {
+                            this.relayStats.totalEvents++;
+                            this.relayStats.eventsThisSecond++;
+                            const prev = this.relayStats.eventsPerRelay.get(relayUrl) || 0;
+                            this.relayStats.eventsPerRelay.set(relayUrl, prev + 1);
+                        }
                         this.handleRelayMessage(msg, relayUrl);
                     } catch (e) {
                     }
@@ -18883,7 +18907,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.33.135 ═══<br/>
+═══ Nymchat v3.34.135 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -19530,5 +19554,272 @@ async function routeToUrlChannel() {
 
         // Clear the URL hash to clean up
         history.replaceState(null, null, window.location.pathname);
+    }
+}
+
+// ── Relay Stats Modal ──
+
+function openRelayStats() {
+    const modal = document.getElementById('relayStatsModal');
+    if (!modal) return;
+    modal.classList.add('active');
+    startRelayStatsLoop();
+}
+
+function closeRelayStatsModal() {
+    stopRelayStatsLoop();
+    closeModal('relayStatsModal');
+}
+
+// Wire up close button and backdrop click
+(function () {
+    const observer = new MutationObserver(() => {
+        const modal = document.getElementById('relayStatsModal');
+        if (!modal) return;
+        observer.disconnect();
+
+        // Close when clicking backdrop
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeRelayStatsModal();
+        });
+
+        // Override close button
+        const closeBtn = modal.querySelector('.modal-close');
+        if (closeBtn) {
+            closeBtn.onclick = (e) => { e.stopPropagation(); closeRelayStatsModal(); };
+        }
+
+        // Stop stats loop when modal is hidden
+        const mo = new MutationObserver(() => {
+            if (!modal.classList.contains('active')) stopRelayStatsLoop();
+        });
+        mo.observe(modal, { attributes: true, attributeFilter: ['class'] });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    // Also try immediately
+    const modal = document.getElementById('relayStatsModal');
+    if (modal) {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeRelayStatsModal();
+        });
+        const closeBtn = modal.querySelector('.modal-close');
+        if (closeBtn) {
+            closeBtn.onclick = (e) => { e.stopPropagation(); closeRelayStatsModal(); };
+        }
+        const mo = new MutationObserver(() => {
+            if (!modal.classList.contains('active')) stopRelayStatsLoop();
+        });
+        mo.observe(modal, { attributes: true, attributeFilter: ['class'] });
+    }
+})();
+
+let _rsInterval = null;
+let _rsAnimFrame = null;
+
+function startRelayStatsLoop() {
+    stopRelayStatsLoop();
+
+    // Throughput sampling: once per second, push eventsThisSecond into history
+    _rsInterval = setInterval(() => {
+        if (typeof nym === 'undefined') return;
+        const s = nym.relayStats;
+        s.throughputHistory.push(s.eventsThisSecond);
+        if (s.throughputHistory.length > 60) s.throughputHistory.shift();
+        s.eventsThisSecond = 0;
+    }, 1000);
+
+    // Render loop
+    function tick() {
+        renderRelayStats();
+        _rsAnimFrame = requestAnimationFrame(tick);
+    }
+    _rsAnimFrame = requestAnimationFrame(tick);
+}
+
+function stopRelayStatsLoop() {
+    if (_rsInterval) { clearInterval(_rsInterval); _rsInterval = null; }
+    if (_rsAnimFrame) { cancelAnimationFrame(_rsAnimFrame); _rsAnimFrame = null; }
+}
+
+function formatBytes(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+    return (b / 1073741824).toFixed(2) + ' GB';
+}
+
+function renderRelayStats() {
+    if (typeof nym === 'undefined') return;
+    const s = nym.relayStats;
+    const pool = nym.relayPool;
+
+    // Count connected
+    let connected = 0;
+    pool.forEach((relay) => {
+        if (relay.ws && relay.ws.readyState === WebSocket.OPEN) connected++;
+    });
+
+    // Average latency
+    let latSum = 0, latCount = 0;
+    s.latencyPerRelay.forEach((ms, url) => {
+        if (pool.has(url)) { latSum += ms; latCount++; }
+    });
+    const avgLat = latCount > 0 ? Math.round(latSum / latCount) : null;
+
+    // Update summary cards
+    const elConn = document.getElementById('rsConnected');
+    const elLat = document.getElementById('rsLatency');
+    const elEvt = document.getElementById('rsEventsTotal');
+    const elData = document.getElementById('rsDataTransfer');
+
+    if (elConn) elConn.textContent = connected;
+    if (elLat) elLat.textContent = avgLat !== null ? avgLat + 'ms' : '--';
+    if (elEvt) elEvt.textContent = s.totalEvents > 9999 ? (s.totalEvents / 1000).toFixed(1) + 'k' : s.totalEvents;
+    if (elData) elData.textContent = formatBytes(s.bytesReceived);
+
+    // Draw throughput graph
+    drawThroughputGraph(s.throughputHistory);
+
+    // Relay list
+    renderRelayList(pool, s);
+}
+
+function drawThroughputGraph(history) {
+    const canvas = document.getElementById('rsThroughputCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    // High-DPI
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = rect.width;
+    const h = rect.height;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        ctx.scale(dpr, dpr);
+    }
+
+    ctx.clearRect(0, 0, w, h);
+
+    const data = history.length > 0 ? history : [0];
+    const maxVal = Math.max(1, ...data);
+    const points = 60;
+    const stepX = w / (points - 1);
+
+    // Get the primary color from CSS
+    const primaryColor = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() || '#00ff00';
+
+    // Fill gradient
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, hexToRgba(primaryColor, 0.25));
+    grad.addColorStop(1, hexToRgba(primaryColor, 0.02));
+
+    ctx.beginPath();
+    const startIdx = Math.max(0, points - data.length);
+    ctx.moveTo(startIdx * stepX, h);
+    for (let i = 0; i < data.length; i++) {
+        const x = (startIdx + i) * stepX;
+        const y = h - (data[i] / maxVal) * (h - 4) - 2;
+        if (i === 0) ctx.lineTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.lineTo((startIdx + data.length - 1) * stepX, h);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Line
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+        const x = (startIdx + i) * stepX;
+        const y = h - (data[i] / maxVal) * (h - 4) - 2;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = primaryColor;
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Scale labels
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-dim').trim() || '#8a8a9a';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(maxVal + '/s', w - 2, 10);
+    ctx.fillText('0', w - 2, h - 2);
+}
+
+function hexToRgba(hex, alpha) {
+    // Handle common CSS color values
+    if (hex.startsWith('rgb')) {
+        const match = hex.match(/[\d.]+/g);
+        if (match && match.length >= 3) {
+            return `rgba(${match[0]}, ${match[1]}, ${match[2]}, ${alpha})`;
+        }
+    }
+    hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function renderRelayList(pool, stats) {
+    const listEl = document.getElementById('rsRelayList');
+    if (!listEl) return;
+
+    // Build sorted relay entries
+    const entries = [];
+    pool.forEach((relay, url) => {
+        const isOpen = relay.ws && relay.ws.readyState === WebSocket.OPEN;
+        entries.push({
+            url,
+            type: relay.type || 'read',
+            open: isOpen,
+            events: stats.eventsPerRelay.get(url) || 0,
+            latency: stats.latencyPerRelay.get(url) || null
+        });
+    });
+
+    // Sort: connected first, then by events descending
+    entries.sort((a, b) => {
+        if (a.open !== b.open) return a.open ? -1 : 1;
+        return b.events - a.events;
+    });
+
+    if (entries.length === 0) {
+        listEl.innerHTML = '<div style="padding: 16px; text-align: center; color: var(--text-dim); font-size: 12px;">No relays connected</div>';
+        return;
+    }
+
+    // Only rebuild DOM if count changed; otherwise update in-place for performance
+    const existing = listEl.querySelectorAll('.relay-stats-row');
+    if (existing.length !== entries.length) {
+        let html = '';
+        entries.forEach((e, i) => {
+            const shortUrl = e.url.replace('wss://', '').replace('ws://', '');
+            html += `<div class="relay-stats-row" data-rs-idx="${i}">` +
+                `<span class="relay-stats-dot ${e.open ? 'open' : 'closed'}"></span>` +
+                `<span class="relay-stats-url" title="${e.url}">${shortUrl}</span>` +
+                `<span class="relay-stats-type ${e.type}">${e.type}</span>` +
+                `<span class="relay-stats-latency">${e.latency !== null ? e.latency + 'ms' : '--'}</span>` +
+                `<span class="relay-stats-events">${e.events} evt</span>` +
+                `</div>`;
+        });
+        listEl.innerHTML = html;
+    } else {
+        // Update in-place
+        entries.forEach((e, i) => {
+            const row = existing[i];
+            if (!row) return;
+            const dot = row.querySelector('.relay-stats-dot');
+            if (dot) { dot.className = `relay-stats-dot ${e.open ? 'open' : 'closed'}`; }
+            const evtEl = row.querySelector('.relay-stats-events');
+            if (evtEl) evtEl.textContent = e.events + ' evt';
+            const latEl = row.querySelector('.relay-stats-latency');
+            if (latEl) latEl.textContent = e.latency !== null ? e.latency + 'ms' : '--';
+        });
     }
 }
