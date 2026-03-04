@@ -15,7 +15,7 @@
 
 # Nymchat
 
-A lightweight ephemeral chat client built on Nostr protocol, bridged with [Bitchat](https://bitchat.free) for anonymous, temporary messaging.
+A lightweight ephemeral chat client built on [Nostr](https://github.com/nostr-protocol/nostr) protocol, bridged with [Bitchat](https://bitchat.free) for anonymous, temporary messaging.
 
 ## Overview
 
