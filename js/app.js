@@ -2313,10 +2313,10 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
                 html += '</div>';
             }
 
-            // Active cosmetics
+            // Active special items
             if (this.activeCosmetics.size > 0) {
                 html += '<div class="shop-active-items">';
-                html += '<div class="shop-active-items-title">Active Cosmetics</div>';
+                html += '<div class="shop-active-items-title">Active Special Items</div>';
                 this.activeCosmetics.forEach(id => {
                     const it = this.getShopItemById(id);
                     if (it) html += `<div class="shop-active-item">${it.icon} ${it.name}</div>`;
@@ -2943,7 +2943,7 @@ TRANSFER TO PUBKEY
             localStorage.setItem('nym_active_style', '');
             this.savePurchaseToNostr();
             this.publishActiveShopItems();
-            this.displaySystemMessage(`❎ Deactivated ${this.getShopItemById(styleId).name}`);
+            this.displaySystemMessage(`Deactivated ${this.getShopItemById(styleId).name}`);
             this.renderInventoryTab(document.getElementById('shopBody'));
             this.applyShopStylesToOwnMessages();
             return;
@@ -2958,7 +2958,7 @@ TRANSFER TO PUBKEY
 
         this.savePurchaseToNostr();
         this.publishActiveShopItems();
-        this.displaySystemMessage(`✅ Activated ${this.getShopItemById(styleId).name}`);
+        this.displaySystemMessage(`Activated ${this.getShopItemById(styleId).name}`);
         this.renderInventoryTab(document.getElementById('shopBody'));
         this.applyShopStylesToOwnMessages();
     }
@@ -2971,7 +2971,7 @@ TRANSFER TO PUBKEY
             localStorage.setItem('nym_active_flair', '');
             this.savePurchaseToNostr();
             this.publishActiveShopItems();
-            this.displaySystemMessage(`❎ Deactivated ${this.getShopItemById(flairId).name}`);
+            this.displaySystemMessage(`Deactivated ${this.getShopItemById(flairId).name}`);
             this.renderInventoryTab(document.getElementById('shopBody'));
             this.applyShopStylesToOwnMessages();
             return;
@@ -2986,7 +2986,7 @@ TRANSFER TO PUBKEY
 
         this.savePurchaseToNostr();
         this.publishActiveShopItems();
-        this.displaySystemMessage(`✅ Activated ${this.getShopItemById(flairId).name}`);
+        this.displaySystemMessage(`Activated ${this.getShopItemById(flairId).name}`);
         this.renderInventoryTab(document.getElementById('shopBody'));
         this.applyShopStylesToOwnMessages();
     }
@@ -2998,11 +2998,11 @@ TRANSFER TO PUBKEY
         if (this.supporterBadgeActive !== false) {
             this.supporterBadgeActive = false;
             localStorage.setItem('nym_supporter_active', 'false');
-            this.displaySystemMessage('❎ Deactivated Nymchat Supporter badge');
+            this.displaySystemMessage('Deactivated Nymchat Supporter badge');
         } else {
             this.supporterBadgeActive = true;
             localStorage.setItem('nym_supporter_active', 'true');
-            this.displaySystemMessage('✅ Activated Nymchat Supporter badge');
+            this.displaySystemMessage('Activated Nymchat Supporter badge');
         }
 
         this.savePurchaseToNostr();
@@ -3042,7 +3042,7 @@ TRANSFER TO PUBKEY
 
             this.displaySystemMessage(`
 ⚠️ EPHEMERAL PURCHASE RECOVERY CODE ⚠️
-Save this code to restore this purchase in a new session on same device:
+Save this code to restore this purchase in a new session across device:
 ${code}
 `);
             return code;
@@ -18893,7 +18893,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.34.136 ═══<br/>
+═══ Nymchat v3.34.137 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
