@@ -8857,7 +8857,7 @@ blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock Us
                 author: nym,
                 pubkey: event.pubkey,
                 content: event.content,
-                timestamp: new Date(event.created_at * 1000),
+                timestamp: new Date(Math.min(event.created_at * 1000, Date.now())),
                 channel: geohash ? geohash : 'unknown',
                 geohash: geohash,
                 isOwn: event.pubkey === this.pubkey,
@@ -11157,7 +11157,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 author: isOwn ? this.nym : senderName,
                 pubkey: senderPubkey,
                 content: messageContent,
-                timestamp: new Date(tsSec * 1000),
+                timestamp: new Date(Math.min(tsSec * 1000, Date.now())),
                 isOwn,
                 isPM: true,
                 conversationKey,
@@ -13234,7 +13234,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (message.content.startsWith('/me ')) {
             messageEl.className = 'action-message';
             messageEl.dataset.messageId = message.id;
-            messageEl.dataset.timestamp = message.timestamp.getTime();
+            messageEl.dataset.timestamp = displayTimestamp.getTime();
 
             // Get clean author name and flair
             const cleanAuthor = this.parseNymFromDisplay(message.author);
@@ -13278,7 +13278,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             messageEl.dataset.messageId = message.id;
             messageEl.dataset.author = message.author;
             messageEl.dataset.pubkey = message.pubkey;
-            messageEl.dataset.timestamp = message.timestamp.getTime();
+            messageEl.dataset.timestamp = displayTimestamp.getTime();
 
             const authorClass = message.isOwn ? 'self' : '';
             const userColorClass = this.getUserColorClass(message.pubkey);
@@ -13500,8 +13500,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Always insert messages in correct timestamp order to prevent out-of-order display
         {
-            const existingMessages = Array.from(container.querySelectorAll('.message[data-timestamp]'));
-            const messageTimestamp = message.timestamp.getTime();
+            const existingMessages = Array.from(container.querySelectorAll('[data-timestamp]'));
+            const messageTimestamp = displayTimestamp.getTime();
 
             let insertBefore = null;
             for (const existing of existingMessages) {
@@ -13516,32 +13516,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 container.insertBefore(messageEl, insertBefore);
             } else {
                 container.appendChild(messageEl);
-            }
-        }
-
-        // Enforce hard cap of 100 messages in DOM — always prune oldest messages
-        // regardless of scroll position to keep memory usage low
-        {
-            const domMessages = container.querySelectorAll('.message[data-message-id]');
-            const maxInDOM = this.virtualScroll.windowSize;
-
-            if (domMessages.length > maxInDOM) {
-                const toRemove = domMessages.length - maxInDOM;
-                for (let i = 0; i < toRemove; i++) {
-                    domMessages[i].remove();
-                }
-                this.virtualScroll.currentStartIndex += toRemove;
-            }
-
-            // Keep virtual scroll end index in sync
-            const vsStorageKey = message.isPM ?
-                this.getPMConversationKey(this.currentPM) :
-                (message.geohash ? `#${message.geohash}` : message.channel);
-            const allMessages = message.isPM ?
-                this.getFilteredPMMessages(vsStorageKey) :
-                this.getFilteredMessages(vsStorageKey);
-            if (allMessages.length > 0) {
-                this.virtualScroll.currentEndIndex = allMessages.length - 1;
             }
         }
 
@@ -16373,11 +16347,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }).sort((a, b) => a.timestamp - b.timestamp);
     }
 
-    // Render initial messages with virtual scrolling
+    // Render all messages for a channel or PM conversation
     // isPM: if true, uses pmMessages with conversationKey instead of messages with storageKey
     renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false) {
         const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
-        const windowSize = this.virtualScroll.windowSize;
 
         // Store context for scroll handlers
         container.dataset.virtualScrollKey = storageKey;
@@ -16390,13 +16363,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        // For virtual scrolling, start from the end (most recent messages)
-        const startIndex = Math.max(0, messages.length - windowSize);
-        const endIndex = messages.length - 1;
-
-        this.virtualScroll.currentStartIndex = startIndex;
-        this.virtualScroll.currentEndIndex = endIndex;
-
         // If this channel has reached the message limit, show a notice at the top
         if (!isPM && messages.length >= this.channelMessageLimit) {
             const notice = document.createElement('div');
@@ -16405,16 +16371,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             container.appendChild(notice);
         }
 
-        // Render all visible messages synchronously
-        const messagesToRender = messages.slice(startIndex, endIndex + 1);
+        // Render all messages sorted by timestamp
         this.virtualScroll.suppressAutoScroll = true;
 
         // Suppress input-button hiding during initial render + scroll-to-bottom
         // so that the programmatic scroll doesn't trigger the hide logic
         this._suppressInputButtonHide = true;
 
-        for (let i = 0; i < messagesToRender.length; i++) {
-            this.displayMessage(messagesToRender[i]);
+        for (let i = 0; i < messages.length; i++) {
+            this.displayMessage(messages[i]);
         }
 
         this.virtualScroll.suppressAutoScroll = false;
@@ -18015,20 +17980,6 @@ function scrollToBottom() {
         nym._scrollRAF = null;
     }
 
-    // If virtual scroll has trimmed newer messages, re-render from the end
-    // so we actually reach the true bottom
-    const storageKey = container.dataset.virtualScrollKey;
-    const isPM = container.dataset.virtualScrollIsPM === 'true';
-    if (storageKey) {
-        const messages = isPM
-            ? nym.getFilteredPMMessages(storageKey)
-            : nym.getFilteredMessages(storageKey);
-        if (messages.length > 0 && nym.virtualScroll.currentEndIndex < messages.length - 1) {
-            nym.renderMessagesWithVirtualScroll(container, storageKey, true, isPM);
-            return;
-        }
-    }
-
     // Force scroll to bottom immediately, then again on next frame to handle
     // any pending layout changes (images loading, animations, etc.)
     container.scrollTop = container.scrollHeight;
@@ -18880,7 +18831,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.33.131 ═══<br/>
+═══ Nymchat v3.33.132 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
