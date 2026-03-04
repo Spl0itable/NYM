@@ -3626,15 +3626,12 @@ ${code}
             event.stopPropagation();
         }
 
-        // Strip any prefix
+        // Strip legacy g: prefix from old shared URLs
         let channelName = channelInput;
         if (channelInput.startsWith('g:')) {
             channelName = channelInput.substring(2);
-        } else if (channelInput.startsWith('e:') || channelInput.startsWith('c:')) {
-            channelName = channelInput.substring(2);
         }
 
-        // Only handle geohash channels
         if (this.isValidGeohash(channelName)) {
             if (!this.channels.has(channelName)) {
                 this.addChannel(channelName, channelName);
@@ -4414,14 +4411,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     shareChannel() {
-        // Generate the share URL
+        // Generate the share URL with geohash channel
         const baseUrl = window.location.origin + window.location.pathname;
-        let channelPart;
-
-        // For geohash channels, use 'g:' prefix
-        channelPart = `g:${this.currentGeohash || 'nym'}`;
-
-        const shareUrl = `${baseUrl}#${channelPart}`;
+        const channel = this.currentChannel || 'nym';
+        const shareUrl = `${baseUrl}#${channel}`;
 
         // Set the URL in the input
         document.getElementById('shareUrlInput').value = shareUrl;
@@ -6158,6 +6151,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Reset current channel so switchChannel doesn't skip via isSameChannel check,
             // which would prevent geohash coordinates from being displayed on the landing channel
             setTimeout(() => {
+                // Skip if a URL channel is pending or was already routed
+                if (window.pendingChannel || window.urlChannelRouted) return;
+
                 const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
                 this.currentChannel = '';
                 this.currentGeohash = '';
@@ -8577,19 +8573,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Add user-joined channels
         this.userJoinedChannels.forEach(channelKey => {
-            // Determine if it's a geohash or ephemeral channel
-            const isGeohash = this.geohashRegex.test(channelKey);
             channelsToLoad.push({
                 key: channelKey,
-                type: isGeohash ? 'geohash' : 'ephemeral'
+                type: 'geohash'
             });
-        });
-
-        // Add common channels that user might visit
-        this.commonChannels.forEach(channel => {
-            if (!this.channelLoadedFromRelays.has(channel)) {
-                channelsToLoad.push({ key: channel, type: 'ephemeral' });
-            }
         });
 
         // Add common geohashes
@@ -8601,10 +8588,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Also load current channel if not loaded
         if (this.currentChannel && !this.channelLoadedFromRelays.has(this.currentChannel)) {
-            const isGeohash = this.currentGeohash && this.currentGeohash === this.currentChannel;
             channelsToLoad.push({
                 key: this.currentChannel,
-                type: isGeohash ? 'geohash' : 'ephemeral'
+                type: 'geohash'
             });
         }
 
@@ -18907,7 +18893,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.34.135 ═══<br/>
+═══ Nymchat v3.34.136 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -19530,18 +19516,15 @@ function parseUrlChannel() {
 // Handle channel routing after initialization
 async function routeToUrlChannel() {
     if (window.pendingChannel) {
+        window.urlChannelRouted = true;
         const channelInput = window.pendingChannel;
         delete window.pendingChannel;
 
-        // Strip any prefix
+        // Strip legacy g: prefix from old shared URLs
         let channelName = channelInput;
         if (channelInput.startsWith('g:')) {
             channelName = channelInput.substring(2);
-        } else if (channelInput.startsWith('e:') || channelInput.startsWith('c:')) {
-            channelName = channelInput.substring(2);
         }
-
-        // Only handle geohash channels
         if (nym.isValidGeohash(channelName)) {
             nym.addChannel(channelName, channelName);
             nym.switchChannel(channelName, channelName);
