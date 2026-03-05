@@ -130,7 +130,6 @@ Nymchat is also available as an open source Flutter app for iOS and Android. The
 
 The Flutter app is a native shell wrapper around the Nymchat PWA, providing:
 - **Push Notifications** - Native push notifications for new messages
-- **Seamless External Browsing** - Links open in the system browser
 - **Native Performance** - Smooth, native-feeling experience on both platforms
 
 ### Building the Flutter App
