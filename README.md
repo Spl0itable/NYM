@@ -99,6 +99,7 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - `/brb <message>` - Set away message
 - `/back` - Clear away message
 - `/invite <nym>` - Invite user to current channel
+- `/poll` - Create a poll
 
 **Formatting Commands:**
 - `/bold <text>` or `/b` - Send bold text
