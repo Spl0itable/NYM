@@ -447,6 +447,7 @@
 class NYM {
     constructor() {
         this.relayPool = new Map();
+        this.useRelayProxy = this._detectCloudflareHost();
         this.blacklistedRelays = new Set();
         this.relayKinds = new Map();
         this.relayStats = {
@@ -6605,6 +6606,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.failedRelays.delete(relayUrl);
     }
 
+    _detectCloudflareHost() {
+        try {
+            const host = window.location.hostname;
+            if (host.endsWith('.pages.dev') || host.endsWith('.workers.dev')) return true;
+            // Known Cloudflare Pages custom domains for this app
+            if (host === 'web.nymchat.app' || host === 'nymchat.app') return true;
+        } catch {
+            // Not in a browser context
+        }
+        return false;
+    }
+
+    _getProxiedRelayUrl(relayUrl) {
+        if (!this.useRelayProxy) return relayUrl;
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${proto}//${window.location.host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
+    }
+
     async connectToRelay(relayUrl, type = 'read') {
         return new Promise((resolve, reject) => {
             try {
@@ -6632,7 +6651,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 }
 
-                const ws = new WebSocket(relayUrl);
+                const wsTarget = this._getProxiedRelayUrl(relayUrl);
+                const ws = new WebSocket(wsTarget);
                 const wsCreatedAt = Date.now();
                 let verificationTimeout;
                 let connectionTimeout;
@@ -8121,7 +8141,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     async fetchRelaysFromMonitor(monitorUrl) {
         return new Promise((resolve, reject) => {
-            const ws = new WebSocket(monitorUrl);
+            const wsTarget = this._getProxiedRelayUrl(monitorUrl);
+            const ws = new WebSocket(wsTarget);
             const timeout = setTimeout(() => {
                 ws.close();
                 reject(new Error('Timeout fetching relay list'));
@@ -19376,7 +19397,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.35.137 ═══<br/>
+═══ Nymchat v3.36.137 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
