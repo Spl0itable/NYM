@@ -1124,10 +1124,11 @@ class NYM {
         ];
         this.P2P_SIGNALING_KIND = 25051;
         this.P2P_FILE_STATUS_KIND = 25052;
-        this.PRESENCE_KIND = 20001;
-        this.POLL_KIND = 20088;
-        this.POLL_VOTE_KIND = 20089;
+        this.PRESENCE_KIND = 30078;
+        this.POLL_KIND = 30078;
+        this.POLL_VOTE_KIND = 30078;
         this.polls = new Map();
+        this.pendingPollVotes = new Map();
         this.processedPollVoteIds = new Set();
         this.P2P_CHUNK_SIZE = 16384;
         this.p2pUnseededOffers = new Set();
@@ -6332,16 +6333,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 since: since1h,
                 limit: 100,
             },
-            // Polls and poll votes
+            // Polls and poll votes (kind 30078 with t-tag)
             {
-                kinds: [this.POLL_KIND, this.POLL_VOTE_KIND],
+                kinds: [30078],
+                "#t": ["nym-poll", "nym-poll-vote"],
                 since: since1h,
                 limit: 100,
             },
-            // Presence broadcasts (away/online status)
+            // Presence broadcasts (away/online status, kind 30078 with d-tag)
             {
-                kinds: [this.PRESENCE_KIND],
-                since: since1h,
+                kinds: [30078],
+                "#t": ["nym-presence"],
                 limit: 100,
             },
             // Reactions for geohash channels
@@ -6440,7 +6442,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 limit: this.channelMessageLimit
             },
             {
-                kinds: [this.POLL_KIND, this.POLL_VOTE_KIND],
+                kinds: [30078],
+                "#t": ["nym-poll", "nym-poll-vote"],
                 "#g": [channelKey],
                 since: since1h,
                 limit: 50
@@ -6499,7 +6502,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 limit: this.channelMessageLimit * geohashChannels.length
             });
             filters.push({
-                kinds: [this.POLL_KIND, this.POLL_VOTE_KIND],
+                kinds: [30078],
+                "#t": ["nym-poll", "nym-poll-vote"],
                 "#g": geohashChannels,
                 since: since1h,
                 limit: 50 * geohashChannels.length
@@ -8545,7 +8549,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         } catch (_) { }
 
-        const wideFanout = evt && (evt.kind === 0 || evt.kind === 7 || evt.kind === 20000 || evt.kind === this.PRESENCE_KIND || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || evt.kind === this.POLL_KIND || evt.kind === this.POLL_VOTE_KIND);
+        const is30078Fanout = evt && evt.kind === 30078 && evt.tags && evt.tags.some(t => t[0] === 't' && ['nym-poll', 'nym-poll-vote', 'nym-presence'].includes(t[1]));
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
 
         if (wideFanout) {
             // Send to every connected relay for maximum propagation
@@ -8775,8 +8780,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         kinds.has(20000) || // geohash channels
                         kinds.has(7) ||     // reactions (already filtered for our k tags)
                         kinds.has(1059) ||  // PMs
-                        kinds.has(this.POLL_KIND) || // polls
-                        kinds.has(this.POLL_VOTE_KIND); // poll votes
+                        kinds.has(30078);   // polls, presence, shop (NIP-78)
 
                     if (!hasRequiredKinds) {
                         relay.ws.close();
@@ -9178,6 +9182,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (dTag[1]?.startsWith('nym-settings-transfer-') && event.pubkey !== this.pubkey) {
                 this.handleSettingsTransferEvent(event);
             }
+
+            // Presence/away status
+            const tTag = event.tags?.find(t => t[0] === 't');
+            if (tTag && tTag[1] === 'nym-presence') {
+                this.handlePresenceEvent(event);
+            } else if (tTag && tTag[1] === 'nym-poll') {
+                this.handlePollEvent(event);
+            } else if (tTag && tTag[1] === 'nym-poll-vote') {
+                this.handlePollVoteEvent(event);
+            } else if (dTag[1] === 'nym-settings') {
+                this.handleSyncedSettings(event);
+            }
         } else if (event.kind === 7) {
             // Handle reactions (NIP-25)
             this.handleReaction(event);
@@ -9224,9 +9240,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } else if (event.kind === 10000) {
             // Handle mute list of users/keywords
             this.handleMuteList(event);
-        } else if (event.kind === 30078) {
-            // Handle synced settings
-            this.handleSyncedSettings(event);
         } else if (event.kind === 0) {
             // Handle profile events (kind 0) for lightning addresses and avatars
             try {
@@ -9283,13 +9296,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } else if (event.kind === this.P2P_FILE_STATUS_KIND) {
             // Handle P2P file status events (unseeded notifications)
             this.handleP2PFileStatusEvent(event);
-        } else if (event.kind === this.PRESENCE_KIND) {
-            // Handle presence broadcasts (away/online status)
-            this.handlePresenceEvent(event);
-        } else if (event.kind === this.POLL_KIND) {
-            this.handlePollEvent(event);
-        } else if (event.kind === this.POLL_VOTE_KIND) {
-            this.handlePollVoteEvent(event);
         }
     }
 
@@ -12044,6 +12050,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!this.connected) return;
 
             const tags = [
+                ['d', 'nym-presence'],
+                ['t', 'nym-presence'],
                 ['n', this.nym],
                 ['status', status]
             ];
@@ -12052,7 +12060,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             let event = {
-                kind: this.PRESENCE_KIND,
+                kind: 30078,
                 created_at: Math.floor(Date.now() / 1000),
                 tags: tags,
                 content: '',
@@ -12071,13 +12079,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!this.connected) return;
 
             const tags = [
+                ['d', 'nym-presence'],
+                ['t', 'nym-presence'],
                 ['n', this.nym],
                 ['status', 'online'],
                 ['avatar-update', avatarUrl]
             ];
 
             let event = {
-                kind: this.PRESENCE_KIND,
+                kind: 30078,
                 created_at: Math.floor(Date.now() / 1000),
                 tags: tags,
                 content: '',
@@ -16125,7 +16135,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         const now = Math.floor(Date.now() / 1000);
+        const pollUniqueId = Math.random().toString(36).substring(2, 10);
         const tags = [
+            ['d', `nym-poll-${pollUniqueId}`],
+            ['t', 'nym-poll'],
             ['n', this.nym],
             ['g', this.currentGeohash],
             ['expiration', String(now + 3600)],
@@ -16136,7 +16149,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         });
 
         let event = {
-            kind: this.POLL_KIND,
+            kind: 30078,
             created_at: now,
             tags: tags,
             content: question,
@@ -16178,6 +16191,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const now = Math.floor(Date.now() / 1000);
         const tags = [
+            ['d', `nym-poll-vote-${pollId}`],
+            ['t', 'nym-poll-vote'],
             ['e', pollId],
             ['n', this.nym],
             ['g', poll.geohash],
@@ -16186,7 +16201,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         ];
 
         let event = {
-            kind: this.POLL_VOTE_KIND,
+            kind: 30078,
             created_at: now,
             tags: tags,
             content: '',
@@ -16215,7 +16230,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const geohash = geohashTag ? geohashTag[1] : '';
 
         if (!this.polls.has(event.id)) {
-            this.polls.set(event.id, {
+            const poll = {
                 question,
                 options,
                 votes: new Map(),
@@ -16223,11 +16238,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 nym,
                 geohash,
                 created_at: event.created_at
-            });
+            };
+            this.polls.set(event.id, poll);
+
+            // Replay any buffered votes that arrived before this poll
+            if (this.pendingPollVotes.has(event.id)) {
+                for (const vote of this.pendingPollVotes.get(event.id)) {
+                    if (!poll.votes.has(vote.pubkey)) {
+                        poll.votes.set(vote.pubkey, vote.optionIndex);
+                    }
+                }
+                this.pendingPollVotes.delete(event.id);
+            }
 
             // Only display if it's for the current channel
             if (geohash === this.currentGeohash) {
-                this.displayPollMessage(event.id, nym, event.pubkey, question, options, new Map(), event.created_at, event.pubkey === this.pubkey);
+                this.displayPollMessage(event.id, nym, event.pubkey, question, options, poll.votes, event.created_at, event.pubkey === this.pubkey);
             }
         }
     }
@@ -16250,7 +16276,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const optionIndex = parseInt(responseTag[1]);
 
         const poll = this.polls.get(pollId);
-        if (!poll) return;
+        if (!poll) {
+            // Poll hasn't arrived yet — buffer the vote for when it does
+            if (!this.pendingPollVotes.has(pollId)) {
+                this.pendingPollVotes.set(pollId, []);
+            }
+            this.pendingPollVotes.get(pollId).push({ pubkey: event.pubkey, optionIndex });
+            return;
+        }
 
         // Don't allow double-voting
         if (poll.votes.has(event.pubkey)) return;
@@ -16366,6 +16399,32 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }).join('');
 
         container.querySelector('.poll-footer').textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
+    }
+
+    renderChannelPolls() {
+        const geohash = this.currentGeohash;
+        if (!geohash) return;
+
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+
+        // Collect polls for this channel, sorted by created_at
+        const channelPolls = [];
+        for (const [pollId, poll] of this.polls) {
+            if (poll.geohash === geohash && !container.querySelector(`[data-poll-id="${pollId}"]`)) {
+                channelPolls.push([pollId, poll]);
+            }
+        }
+
+        if (channelPolls.length === 0) return;
+
+        channelPolls.sort((a, b) => a[1].created_at - b[1].created_at);
+
+        for (const [pollId, poll] of channelPolls) {
+            const nym = poll.nym || 'anon';
+            const isOwn = poll.pubkey === this.pubkey;
+            this.displayPollMessage(pollId, nym, poll.pubkey, poll.question, poll.options, poll.votes, poll.created_at, isOwn);
+        }
     }
 
     loadBlockedChannels() {
@@ -16715,11 +16774,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         if (channelMessages.length === 0) {
             this.displaySystemMessage(`Joined ${displayName}`);
+            this.renderChannelPolls();
             return;
         }
 
         // Use virtual scrolling for efficient rendering (batched to prevent freeze)
         this.renderMessagesWithVirtualScroll(container, storageKey, true);
+
+        // Re-render any polls for this channel
+        this.renderChannelPolls();
     }
 
     displayAllChannelMessages(storageKey) {
@@ -20017,10 +20080,14 @@ function closeRelayStatsModal() {
 })();
 
 let _rsInterval = null;
-let _rsAnimFrame = null;
 
 function startRelayStatsLoop() {
     stopRelayStatsLoop();
+
+    // Reset accumulated events counter so first sample isn't a huge spike
+    if (typeof nym !== 'undefined') {
+        nym.relayStats.eventsThisSecond = 0;
+    }
 
     // Throughput sampling: once per second, push eventsThisSecond into history
     _rsInterval = setInterval(() => {
@@ -20029,19 +20096,17 @@ function startRelayStatsLoop() {
         s.throughputHistory.push(s.eventsThisSecond);
         if (s.throughputHistory.length > 60) s.throughputHistory.shift();
         s.eventsThisSecond = 0;
+
+        // Render on each data update instead of every animation frame
+        renderRelayStats();
     }, 1000);
 
-    // Render loop
-    function tick() {
-        renderRelayStats();
-        _rsAnimFrame = requestAnimationFrame(tick);
-    }
-    _rsAnimFrame = requestAnimationFrame(tick);
+    // Initial render
+    renderRelayStats();
 }
 
 function stopRelayStatsLoop() {
     if (_rsInterval) { clearInterval(_rsInterval); _rsInterval = null; }
-    if (_rsAnimFrame) { cancelAnimationFrame(_rsAnimFrame); _rsAnimFrame = null; }
 }
 
 function formatBytes(b) {
