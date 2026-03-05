@@ -1125,6 +1125,10 @@ class NYM {
         this.P2P_SIGNALING_KIND = 25051;
         this.P2P_FILE_STATUS_KIND = 25052;
         this.PRESENCE_KIND = 20001;
+        this.POLL_KIND = 20088;
+        this.POLL_VOTE_KIND = 20089;
+        this.polls = new Map();
+        this.processedPollVoteIds = new Set();
         this.P2P_CHUNK_SIZE = 16384;
         this.p2pUnseededOffers = new Set();
         this.torrentClient = null;
@@ -6328,6 +6332,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 since: since1h,
                 limit: 100,
             },
+            // Polls and poll votes
+            {
+                kinds: [this.POLL_KIND, this.POLL_VOTE_KIND],
+                since: since1h,
+                limit: 100,
+            },
             // Presence broadcasts (away/online status)
             {
                 kinds: [this.PRESENCE_KIND],
@@ -6430,6 +6440,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 limit: this.channelMessageLimit
             },
             {
+                kinds: [this.POLL_KIND, this.POLL_VOTE_KIND],
+                "#g": [channelKey],
+                since: since1h,
+                limit: 50
+            },
+            {
                 kinds: [7],
                 "#k": ["20000"],
                 since: since1h,
@@ -6481,6 +6497,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 "#g": geohashChannels,
                 since: since1h,
                 limit: this.channelMessageLimit * geohashChannels.length
+            });
+            filters.push({
+                kinds: [this.POLL_KIND, this.POLL_VOTE_KIND],
+                "#g": geohashChannels,
+                since: since1h,
+                limit: 50 * geohashChannels.length
             });
             // Mark as loaded
             geohashChannels.forEach(ch => this.channelLoadedFromRelays.add(ch));
@@ -8523,7 +8545,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         } catch (_) { }
 
-        const wideFanout = evt && (evt.kind === 0 || evt.kind === 7 || evt.kind === 20000 || evt.kind === this.PRESENCE_KIND || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052);
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 7 || evt.kind === 20000 || evt.kind === this.PRESENCE_KIND || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || evt.kind === this.POLL_KIND || evt.kind === this.POLL_VOTE_KIND);
 
         if (wideFanout) {
             // Send to every connected relay for maximum propagation
@@ -8752,7 +8774,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const hasRequiredKinds =
                         kinds.has(20000) || // geohash channels
                         kinds.has(7) ||     // reactions (already filtered for our k tags)
-                        kinds.has(1059);    // PMs
+                        kinds.has(1059) ||  // PMs
+                        kinds.has(this.POLL_KIND) || // polls
+                        kinds.has(this.POLL_VOTE_KIND); // poll votes
 
                     if (!hasRequiredKinds) {
                         relay.ws.close();
@@ -9262,6 +9286,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } else if (event.kind === this.PRESENCE_KIND) {
             // Handle presence broadcasts (away/online status)
             this.handlePresenceEvent(event);
+        } else if (event.kind === this.POLL_KIND) {
+            this.handlePollEvent(event);
+        } else if (event.kind === this.POLL_VOTE_KIND) {
+            this.handlePollVoteEvent(event);
         }
     }
 
@@ -12064,11 +12092,21 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     async uploadImage(file) {
+        const isVideo = file.type.startsWith('video/');
+        const MAX_VIDEO_SIZE = 50 * 1024 * 1024; // 50MB
+
+        if (isVideo && file.size > MAX_VIDEO_SIZE) {
+            this.displaySystemMessage('Video files must be under 50MB. Your file is ' + (file.size / (1024 * 1024)).toFixed(1) + 'MB.');
+            return;
+        }
+
         const progress = document.getElementById('uploadProgress');
         const progressFill = document.getElementById('progressFill');
+        const progressLabel = document.getElementById('uploadProgressLabel');
 
         try {
             progress.classList.add('active');
+            progressLabel.textContent = isVideo ? 'Uploading video...' : 'Uploading image...';
             progressFill.style.width = '20%';
 
             // Compute SHA-256 hash
@@ -12118,9 +12156,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (response.ok) {
                 const data = await response.json();
                 if (data.url) {
-                    const imageUrl = data.url;
+                    const mediaUrl = data.url;
                     const input = document.getElementById('messageInput');
-                    input.value += imageUrl + ' ';
+                    input.value += mediaUrl + ' ';
                     input.focus();
                 } else {
                     throw new Error('No URL in response');
@@ -12129,7 +12167,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 throw new Error(`Upload failed: ${response.status}`);
             }
         } catch (error) {
-            this.displaySystemMessage('Failed to upload image: ' + error.message);
+            this.displaySystemMessage('Failed to upload ' + (isVideo ? 'video' : 'image') + ': ' + error.message);
         } finally {
             setTimeout(() => {
                 progress.classList.remove('active');
@@ -13795,11 +13833,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         formatted = formatted.replace(/^## (.+)$/gm, '<h2>$1</h2>');
         formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
 
+        // Convert video URLs to video players
+        formatted = formatted.replace(
+            /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
+            (match, url) => {
+                return `<video src="${url}" controls playsinline preload="metadata" class="message-video" onclick="event.stopPropagation(); nym.expandVideo(this.src)"></video>`;
+            }
+        );
+
         // Convert image URLs to images
         formatted = formatted.replace(
             /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
             (match, url) => {
-                return `<img src="${url}" alt="Image" onclick="nym.expandImage('${url}')" />`;
+                return `<img src="${url}" alt="Image" onclick="nym.expandImage(this.src)" />`;
             }
         );
 
@@ -13896,7 +13942,23 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     expandImage(src) {
-        document.getElementById('modalImage').src = src;
+        const modalImg = document.getElementById('modalImage');
+        const modalVid = document.getElementById('modalVideo');
+        modalImg.src = src;
+        modalImg.style.display = '';
+        modalVid.style.display = 'none';
+        modalVid.pause();
+        modalVid.src = '';
+        document.getElementById('imageModal').classList.add('active');
+    }
+
+    expandVideo(src) {
+        const modalImg = document.getElementById('modalImage');
+        const modalVid = document.getElementById('modalVideo');
+        modalImg.style.display = 'none';
+        modalImg.src = '';
+        modalVid.src = src;
+        modalVid.style.display = '';
         document.getElementById('imageModal').classList.add('active');
     }
 
@@ -14609,7 +14671,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '/invite': { desc: 'Invite a user to current channel', fn: (args) => this.cmdInvite(args) },
             '/share': { desc: 'Share current channel URL', fn: () => this.cmdShare() },
             '/leave': { desc: 'Leave current channel', fn: () => this.cmdLeave() },
-            '/quit': { desc: 'Disconnect from Nymchat', fn: () => this.cmdQuit() }
+            '/quit': { desc: 'Disconnect from Nymchat', fn: () => this.cmdQuit() },
+            '/poll': { desc: 'Create a poll', fn: () => this.cmdPoll() }
         };
     }
 
@@ -16033,6 +16096,276 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         setTimeout(() => {
             location.reload();
         }, 1000);
+    }
+
+    cmdPoll() {
+        if (this.inPMMode) {
+            this.displaySystemMessage('Polls can only be created in channels, not in private messages.');
+            return;
+        }
+        document.getElementById('pollQuestion').value = '';
+        const container = document.getElementById('pollOptionsContainer');
+        container.innerHTML = `
+            <label class="form-label">Options</label>
+            <div class="poll-option-input-row">
+                <input type="text" class="form-input" placeholder="Option 1" maxlength="100" data-poll-option>
+            </div>
+            <div class="poll-option-input-row">
+                <input type="text" class="form-input" placeholder="Option 2" maxlength="100" data-poll-option>
+            </div>
+        `;
+        document.getElementById('pollAddOptionBtn').style.display = '';
+        document.getElementById('pollModal').classList.add('active');
+    }
+
+    async publishPoll(question, options) {
+        if (!this.connected || !this.currentGeohash) {
+            this.displaySystemMessage('Not connected or no channel selected.');
+            return;
+        }
+
+        const now = Math.floor(Date.now() / 1000);
+        const tags = [
+            ['n', this.nym],
+            ['g', this.currentGeohash],
+            ['expiration', String(now + 3600)],
+            ['poll_question', question],
+        ];
+        options.forEach((opt, i) => {
+            tags.push(['poll_option', String(i), opt]);
+        });
+
+        let event = {
+            kind: this.POLL_KIND,
+            created_at: now,
+            tags: tags,
+            content: question,
+            pubkey: this.pubkey
+        };
+
+        const signedEvent = await this.signEvent(event);
+        this.sendToRelay(["EVENT", signedEvent]);
+
+        // Store poll locally
+        this.polls.set(signedEvent.id, {
+            question,
+            options: options.map((text, i) => ({ index: i, text })),
+            votes: new Map(), // pubkey -> optionIndex
+            pubkey: this.pubkey,
+            nym: this.nym,
+            geohash: this.currentGeohash,
+            created_at: now
+        });
+
+        // Display poll as a message
+        this.displayPollMessage(signedEvent.id, this.nym, this.pubkey, question, options.map((text, i) => ({ index: i, text })), new Map(), now, true);
+    }
+
+    async votePoll(pollId, optionIndex) {
+        if (!this.connected) {
+            this.displaySystemMessage('Not connected to relay.');
+            return;
+        }
+
+        const poll = this.polls.get(pollId);
+        if (!poll) return;
+
+        // Check if user already voted
+        if (poll.votes.has(this.pubkey)) {
+            this.displaySystemMessage('You have already voted on this poll.');
+            return;
+        }
+
+        const now = Math.floor(Date.now() / 1000);
+        const tags = [
+            ['e', pollId],
+            ['n', this.nym],
+            ['g', poll.geohash],
+            ['expiration', String(now + 3600)],
+            ['response', String(optionIndex)]
+        ];
+
+        let event = {
+            kind: this.POLL_VOTE_KIND,
+            created_at: now,
+            tags: tags,
+            content: '',
+            pubkey: this.pubkey
+        };
+
+        const signedEvent = await this.signEvent(event);
+        this.sendToRelay(["EVENT", signedEvent]);
+
+        // Update local state
+        poll.votes.set(this.pubkey, optionIndex);
+        this.updatePollDisplay(pollId);
+    }
+
+    handlePollEvent(event) {
+        const questionTag = event.tags.find(t => t[0] === 'poll_question');
+        const optionTags = event.tags.filter(t => t[0] === 'poll_option');
+        const nymTag = event.tags.find(t => t[0] === 'n');
+        const geohashTag = event.tags.find(t => t[0] === 'g');
+
+        if (!questionTag || optionTags.length < 2) return;
+
+        const question = questionTag[1];
+        const options = optionTags.map(t => ({ index: parseInt(t[1]), text: t[2] }));
+        const nym = nymTag ? nymTag[1].split('#')[0] : 'anon';
+        const geohash = geohashTag ? geohashTag[1] : '';
+
+        if (!this.polls.has(event.id)) {
+            this.polls.set(event.id, {
+                question,
+                options,
+                votes: new Map(),
+                pubkey: event.pubkey,
+                nym,
+                geohash,
+                created_at: event.created_at
+            });
+
+            // Only display if it's for the current channel
+            if (geohash === this.currentGeohash) {
+                this.displayPollMessage(event.id, nym, event.pubkey, question, options, new Map(), event.created_at, event.pubkey === this.pubkey);
+            }
+        }
+    }
+
+    handlePollVoteEvent(event) {
+        if (this.processedPollVoteIds.has(event.id)) return;
+        this.processedPollVoteIds.add(event.id);
+
+        // Prune if too large
+        if (this.processedPollVoteIds.size > 3000) {
+            const arr = Array.from(this.processedPollVoteIds);
+            this.processedPollVoteIds = new Set(arr.slice(-2000));
+        }
+
+        const eTag = event.tags.find(t => t[0] === 'e');
+        const responseTag = event.tags.find(t => t[0] === 'response');
+        if (!eTag || !responseTag) return;
+
+        const pollId = eTag[1];
+        const optionIndex = parseInt(responseTag[1]);
+
+        const poll = this.polls.get(pollId);
+        if (!poll) return;
+
+        // Don't allow double-voting
+        if (poll.votes.has(event.pubkey)) return;
+
+        poll.votes.set(event.pubkey, optionIndex);
+        this.updatePollDisplay(pollId);
+    }
+
+    displayPollMessage(pollId, nym, pubkey, question, options, votes, created_at, isOwn) {
+        const container = document.getElementById('messagesContainer');
+        const messageEl = document.createElement('div');
+        messageEl.className = 'message poll-message';
+        messageEl.dataset.messageId = pollId;
+        messageEl.dataset.pollId = pollId;
+
+        const avatarSrc = this.getAvatarUrl(pubkey);
+        const suffix = this.getPubkeySuffix(pubkey);
+        const baseNym = nym.split('#')[0] || nym;
+
+        const timestamp = new Date(created_at * 1000);
+        const timeStr = timestamp.toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: this.settings?.timeFormat === '12hr'
+        });
+
+        const totalVotes = votes.size;
+        const hasVoted = votes.has(this.pubkey);
+
+        let optionsHtml = options.map(opt => {
+            const optVotes = Array.from(votes.entries()).filter(([, idx]) => idx === opt.index);
+            const count = optVotes.length;
+            const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+
+            // Voter avatars
+            const voterAvatars = optVotes.slice(0, 8).map(([vpk]) => {
+                const vAvatar = this.getAvatarUrl(vpk);
+                const vNym = this.getNymFromPubkey(vpk);
+                const vSuffix = this.getPubkeySuffix(vpk);
+                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" title="${this.escapeHtml(vNym)}" alt="" onerror="this.onerror=null;this.src='https://robohash.org/${vpk}.png?set=set1&size=80x80'">`;
+            }).join('');
+            const extraCount = count > 8 ? `<span class="poll-voter-extra">+${count - 8}</span>` : '';
+
+            const selectedClass = hasVoted && votes.get(this.pubkey) === opt.index ? ' poll-option-selected' : '';
+
+            return `
+                <div class="poll-option${selectedClass}" data-poll-id="${pollId}" data-option-index="${opt.index}" onclick="nym.votePoll('${pollId}', ${opt.index})">
+                    <div class="poll-option-bar" style="width: ${pct}%"></div>
+                    <div class="poll-option-content">
+                        <span class="poll-option-text">${this.escapeHtml(opt.text)}</span>
+                        <span class="poll-option-pct">${totalVotes > 0 ? pct + '%' : ''}</span>
+                    </div>
+                    <div class="poll-voters">${voterAvatars}${extraCount}</div>
+                </div>
+            `;
+        }).join('');
+
+        messageEl.innerHTML = `
+            <span class="message-time" title="${timestamp.toLocaleString()}">${timeStr}</span>
+            <div class="message-author ${isOwn ? 'self' : ''}">
+                <img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>&gt;
+            </div>
+            <div class="message-content">
+                <div class="poll-container" data-poll-id="${pollId}">
+                    <div class="poll-header">📊 Poll</div>
+                    <div class="poll-question">${this.escapeHtml(question)}</div>
+                    <div class="poll-options">${optionsHtml}</div>
+                    <div class="poll-footer">${totalVotes} vote${totalVotes !== 1 ? 's' : ''}</div>
+                </div>
+            </div>
+        `;
+
+        container.appendChild(messageEl);
+        this._scheduleScrollToBottom();
+    }
+
+    updatePollDisplay(pollId) {
+        const poll = this.polls.get(pollId);
+        if (!poll) return;
+
+        const container = document.querySelector(`.poll-container[data-poll-id="${pollId}"]`);
+        if (!container) return;
+
+        const totalVotes = poll.votes.size;
+        const hasVoted = poll.votes.has(this.pubkey);
+
+        const optionsEl = container.querySelector('.poll-options');
+        optionsEl.innerHTML = poll.options.map(opt => {
+            const optVotes = Array.from(poll.votes.entries()).filter(([, idx]) => idx === opt.index);
+            const count = optVotes.length;
+            const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+
+            const voterAvatars = optVotes.slice(0, 8).map(([vpk]) => {
+                const vAvatar = this.getAvatarUrl(vpk);
+                const vNym = this.getNymFromPubkey(vpk);
+                const vSuffix = this.getPubkeySuffix(vpk);
+                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" title="${this.escapeHtml(vNym)}" alt="" onerror="this.onerror=null;this.src='https://robohash.org/${vpk}.png?set=set1&size=80x80'">`;
+            }).join('');
+            const extraCount = count > 8 ? `<span class="poll-voter-extra">+${count - 8}</span>` : '';
+
+            const selectedClass = hasVoted && poll.votes.get(this.pubkey) === opt.index ? ' poll-option-selected' : '';
+
+            return `
+                <div class="poll-option${selectedClass}" data-poll-id="${pollId}" data-option-index="${opt.index}" onclick="nym.votePoll('${pollId}', ${opt.index})">
+                    <div class="poll-option-bar" style="width: ${pct}%"></div>
+                    <div class="poll-option-content">
+                        <span class="poll-option-text">${this.escapeHtml(opt.text)}</span>
+                        <span class="poll-option-pct">${totalVotes > 0 ? pct + '%' : ''}</span>
+                    </div>
+                    <div class="poll-voters">${voterAvatars}${extraCount}</div>
+                </div>
+            `;
+        }).join('');
+
+        container.querySelector('.poll-footer').textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
     }
 
     loadBlockedChannels() {
@@ -18114,6 +18447,48 @@ function closeModal(id) {
 
 function closeImageModal() {
     document.getElementById('imageModal').classList.remove('active');
+    const modalVid = document.getElementById('modalVideo');
+    modalVid.pause();
+    modalVid.src = '';
+}
+
+function addPollOption() {
+    const container = document.getElementById('pollOptionsContainer');
+    const existing = container.querySelectorAll('[data-poll-option]');
+    if (existing.length >= 6) {
+        document.getElementById('pollAddOptionBtn').style.display = 'none';
+        return;
+    }
+    const row = document.createElement('div');
+    row.className = 'poll-option-input-row';
+    row.innerHTML = `
+        <input type="text" class="form-input" placeholder="Option ${existing.length + 1}" maxlength="100" data-poll-option>
+        <button class="poll-remove-option-btn" onclick="this.parentElement.remove()" title="Remove">✕</button>
+    `;
+    container.appendChild(row);
+    if (existing.length + 1 >= 6) {
+        document.getElementById('pollAddOptionBtn').style.display = 'none';
+    }
+}
+
+function submitPoll() {
+    const question = document.getElementById('pollQuestion').value.trim();
+    if (!question) {
+        alert('Please enter a question.');
+        return;
+    }
+    const optionInputs = document.querySelectorAll('[data-poll-option]');
+    const options = [];
+    optionInputs.forEach(input => {
+        const val = input.value.trim();
+        if (val) options.push(val);
+    });
+    if (options.length < 2) {
+        alert('Please add at least 2 options.');
+        return;
+    }
+    nym.publishPoll(question, options);
+    closeModal('pollModal');
 }
 
 function editNick() {
@@ -18938,7 +19313,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.34.137 ═══<br/>
+═══ Nymchat v3.35.137 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

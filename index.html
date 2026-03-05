@@ -347,7 +347,7 @@
                     <div class="emoji-autocomplete" id="emojiAutocomplete"></div>
                     <div class="command-palette" id="commandPalette"></div>
                     <div class="upload-progress" id="uploadProgress">
-                        <div>Uploading image...</div>
+                        <div id="uploadProgressLabel">Uploading...</div>
                         <div class="progress-bar">
                             <div class="progress-fill" id="progressFill"></div>
                         </div>
@@ -356,8 +356,8 @@
                         rows="1" disabled></textarea>
                 </div>
                 <div class="input-buttons">
-                    <input type="file" class="file-input" id="fileInput" accept="image/*">
-                    <button class="icon-btn input-btn" onclick="selectImage()" title="Upload Image">
+                    <input type="file" class="file-input" id="fileInput" accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime">
+                    <button class="icon-btn input-btn" onclick="selectImage()" title="Upload Image/Video">
                         <svg viewBox="0 0 24 24">
                             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                             <circle cx="8.5" cy="8.5" r="1.5"></circle>
@@ -425,10 +425,39 @@
         </div>
     </div>
 
-    <!-- Image Modal -->
+    <!-- Image/Video Modal -->
     <div class="image-modal" id="imageModal" onclick="closeImageModal()">
         <span class="image-modal-close" onclick="closeImageModal()">×</span>
         <img id="modalImage" src="" alt="Expanded image">
+        <video id="modalVideo" src="" controls style="display:none; max-width:90%; max-height:90%; border:1px solid var(--glass-border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg);"></video>
+    </div>
+
+    <!-- Poll Modal -->
+    <div class="modal" id="pollModal">
+        <div class="modal-content" style="max-width: 480px;">
+            <button class="modal-close" onclick="closeModal('pollModal')">✕</button>
+            <div class="modal-header">Create Poll</div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Question</label>
+                    <input type="text" class="form-input" id="pollQuestion" placeholder="Ask a question..." maxlength="280">
+                </div>
+                <div id="pollOptionsContainer">
+                    <label class="form-label">Options</label>
+                    <div class="poll-option-input-row">
+                        <input type="text" class="form-input" placeholder="Option 1" maxlength="100" data-poll-option>
+                    </div>
+                    <div class="poll-option-input-row">
+                        <input type="text" class="form-input" placeholder="Option 2" maxlength="100" data-poll-option>
+                    </div>
+                </div>
+                <button class="poll-add-option-btn" id="pollAddOptionBtn" onclick="addPollOption()">+ Add option</button>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" onclick="closeModal('pollModal')">Cancel</button>
+                <button class="send-btn" onclick="submitPoll()">Create Poll</button>
+            </div>
+        </div>
     </div>
 
     <!-- P2P File Transfers Modal -->
