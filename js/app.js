@@ -20589,7 +20589,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cb) cb.checked = true;
     }
 
-    // Restore Nostr login state from localStorage
+    // Restore Nostr login state from localStorage and fully re-apply
     if (isNostrLoggedIn()) {
         const method = localStorage.getItem('nym_nostr_login_method');
         const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
@@ -20600,9 +20600,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (nsec) secretKey = nym.decodeNsec(nsec);
             } catch (_) {}
         }
-        nym.nostrLoginPubkey = pubkey;
-        nym.nostrLoginSecretKey = secretKey;
-        nym.nostrLoginMethod = method;
+        if (method === 'extension' && window.nostr?.getPublicKey) {
+            // Re-verify extension is still available and get fresh pubkey
+            window.nostr.getPublicKey().then(extPubkey => {
+                applyNostrLogin(extPubkey, null, 'extension');
+            }).catch(() => {
+                // Extension no longer available, fall back to stored pubkey (read-only)
+                applyNostrLogin(pubkey, null, 'extension');
+            });
+        } else if (pubkey) {
+            applyNostrLogin(pubkey, secretKey, method);
+        }
     }
 
     // Scale logo-ascii to fit inside sidebar at any resolution
