@@ -41,6 +41,15 @@ export async function onRequest(context) {
   let dmRelays = [];
   let serverOpen = true;
 
+  // Track failed relays and non-responsive relays to avoid wasting cycles
+  const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
+  const FAILED_COOLDOWN = 120000;      // 2 minutes before retrying a failed relay
+  const MAX_BACKOFF = 300000;          // 5 minute max backoff
+  const noEventRelays = new Map();     // relayUrl -> { markedAt } — relays that returned no matching events
+  const NO_EVENT_COOLDOWN = 300000;    // 5 minutes before retrying a relay that returned no events
+  const VERIFICATION_TIMEOUT = 15000;  // 15s to check if relay sends useful events
+  const verificationTimers = new Map(); // relayUrl -> timer
+
   // Debounce pool status updates to avoid flooding client during startup
   let statusTimer = null;
   function schedulePoolStatus() {
@@ -81,9 +90,11 @@ export async function onRequest(context) {
     const failed = [];
     const latency = {};
     const events = {};
+    const relayTypes = {};
     upstreams.forEach((info, url) => {
       if (info.status === 'connected') connected.push(url);
       else if (info.status === 'failed') failed.push(url);
+      relayTypes[url] = info.type;
     });
     relayLatency.forEach((ms, url) => { latency[url] = ms; });
     relayEvents.forEach((count, url) => { events[url] = count; });
@@ -92,8 +103,44 @@ export async function onRequest(context) {
       failed,
       count: connected.length,
       latency,
-      events
+      events,
+      relayTypes,
+      skippedFailed: failedRelays.size,
+      skippedNoEvents: noEventRelays.size
     }]));
+  }
+
+  function shouldSkipRelay(relayUrl) {
+    // Check if relay is in failed cooldown with exponential backoff
+    const failure = failedRelays.get(relayUrl);
+    if (failure) {
+      const backoff = Math.min(FAILED_COOLDOWN * Math.pow(2, failure.attempts - 1), MAX_BACKOFF);
+      if (Date.now() - failure.failedAt < backoff) return true;
+      // Cooldown expired, allow retry
+      failedRelays.delete(relayUrl);
+    }
+    // Check if relay returned no matching events recently
+    const noEvt = noEventRelays.get(relayUrl);
+    if (noEvt) {
+      if (Date.now() - noEvt.markedAt < NO_EVENT_COOLDOWN) return true;
+      noEventRelays.delete(relayUrl);
+    }
+    return false;
+  }
+
+  function trackRelayFailure(relayUrl) {
+    const existing = failedRelays.get(relayUrl);
+    const attempts = existing ? existing.attempts + 1 : 1;
+    failedRelays.set(relayUrl, { failedAt: Date.now(), attempts });
+  }
+
+  function trackNoEvents(relayUrl) {
+    noEventRelays.set(relayUrl, { markedAt: Date.now() });
+  }
+
+  function clearRelayFailure(relayUrl) {
+    failedRelays.delete(relayUrl);
+    noEventRelays.delete(relayUrl);
   }
 
   function validateRelayUrl(url) {
@@ -116,6 +163,8 @@ export async function onRequest(context) {
   function connectUpstream(relayUrl, type) {
     if (upstreams.has(relayUrl)) return;
     if (!validateRelayUrl(relayUrl)) return;
+    // Skip relays in cooldown (failed or returned no matching events)
+    if (shouldSkipRelay(relayUrl)) return;
 
     const info = { ws: null, type, status: 'connecting' };
     upstreams.set(relayUrl, info);
@@ -130,7 +179,9 @@ export async function onRequest(context) {
       const timeout = setTimeout(() => {
         if (info.status === 'connecting') {
           info.status = 'failed';
+          trackRelayFailure(relayUrl);
           try { ws.close(); } catch { /* noop */ }
+          upstreams.delete(relayUrl);
           schedulePoolStatus();
         }
       }, 5000);
@@ -138,10 +189,29 @@ export async function onRequest(context) {
       ws.addEventListener('open', () => {
         clearTimeout(timeout);
         info.status = 'connected';
+        clearRelayFailure(relayUrl);
         relayLatency.set(relayUrl, Date.now() - connectStartTime);
         // Replay active subscriptions so this relay starts sending events
         replaySubscriptions(relayUrl, ws);
         schedulePoolStatus();
+
+        // Start verification timer for read relays — if no events arrive
+        // within VERIFICATION_TIMEOUT, mark as non-responsive
+        if (type !== 'write') {
+          const prevCount = relayEvents.get(relayUrl) || 0;
+          const vTimer = setTimeout(() => {
+            verificationTimers.delete(relayUrl);
+            const currentCount = relayEvents.get(relayUrl) || 0;
+            if (currentCount <= prevCount && info.status === 'connected') {
+              // Relay sent zero new events — mark and disconnect
+              trackNoEvents(relayUrl);
+              try { ws.close(); } catch { /* noop */ }
+              upstreams.delete(relayUrl);
+              schedulePoolStatus();
+            }
+          }, VERIFICATION_TIMEOUT);
+          verificationTimers.set(relayUrl, vTimer);
+        }
       });
 
       ws.addEventListener('message', (event) => {
@@ -206,24 +276,44 @@ export async function onRequest(context) {
       });
 
       ws.addEventListener('close', () => {
+        // Clean up verification timer
+        const vt = verificationTimers.get(relayUrl);
+        if (vt) { clearTimeout(vt); verificationTimers.delete(relayUrl); }
+
+        const wasConnected = info.status === 'connected';
         info.status = 'closed';
+        upstreams.delete(relayUrl);
         schedulePoolStatus();
-        // Attempt reconnection after 5 seconds
-        setTimeout(() => {
-          if (serverOpen) {
-            upstreams.delete(relayUrl);
-            connectUpstream(relayUrl, type);
-          }
-        }, 5000);
+
+        // Only attempt reconnection if it was previously connected (not a fresh failure)
+        // and the relay isn't in cooldown
+        if (serverOpen && wasConnected && !shouldSkipRelay(relayUrl)) {
+          setTimeout(() => {
+            if (serverOpen) {
+              connectUpstream(relayUrl, type);
+            }
+          }, 5000);
+        } else if (serverOpen && !wasConnected) {
+          // Connection failed — track it; don't blindly retry
+          trackRelayFailure(relayUrl);
+        }
       });
 
       ws.addEventListener('error', () => {
         clearTimeout(timeout);
+        // Clean up verification timer
+        const vt = verificationTimers.get(relayUrl);
+        if (vt) { clearTimeout(vt); verificationTimers.delete(relayUrl); }
+
         info.status = 'failed';
+        trackRelayFailure(relayUrl);
+        upstreams.delete(relayUrl);
         schedulePoolStatus();
       });
     } catch {
       info.status = 'failed';
+      trackRelayFailure(relayUrl);
+      upstreams.delete(relayUrl);
       schedulePoolStatus();
     }
   }
@@ -352,6 +442,8 @@ export async function onRequest(context) {
   // Handle client disconnect
   server.addEventListener('close', () => {
     serverOpen = false;
+    verificationTimers.forEach(t => clearTimeout(t));
+    verificationTimers.clear();
     upstreams.forEach((info) => {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });
@@ -360,6 +452,8 @@ export async function onRequest(context) {
 
   server.addEventListener('error', () => {
     serverOpen = false;
+    verificationTimers.forEach(t => clearTimeout(t));
+    verificationTimers.clear();
     upstreams.forEach((info) => {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -11,6 +12,8 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
   final _payloadStreamController = StreamController<String>.broadcast();
   String? _initialPayload;
+  int _notificationIdCounter = 0;
+  final Random _random = Random();
 
   Stream<String> get payloadStream => _payloadStreamController.stream;
 
@@ -64,15 +67,32 @@ class NotificationService {
     if (kIsWeb) {
       return;
     }
+    // Generate unique notification ID to prevent notifications from replacing each other
+    final notificationId = _generateUniqueId();
+    
     const androidDetails = AndroidNotificationDetails(
       'nymchat_channel',
       'Nymchat Notifications',
       channelDescription: 'Notifications from Nymchat PWA',
       importance: Importance.high,
       priority: Priority.high,
+      enableVibration: true,
+      playSound: true,
     );
-    const iosDetails = DarwinNotificationDetails();
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
     const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
-    await _notifications.show(id: 0, title: title, body: body, notificationDetails: details, payload: payload);
+    
+    debugPrint('[NotificationService] Showing notification: id=$notificationId, title=$title, payload=$payload');
+    await _notifications.show(id: notificationId, title: title, body: body, notificationDetails: details, payload: payload);
+  }
+  
+  int _generateUniqueId() {
+    // Combine counter with random component to ensure uniqueness
+    _notificationIdCounter = (_notificationIdCounter + 1) % 100000;
+    return _notificationIdCounter + _random.nextInt(100000) * 100000;
   }
 }

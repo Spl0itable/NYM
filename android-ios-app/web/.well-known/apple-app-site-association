@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "KJ6U2Y9B2M.com.nym.bar",
+        "paths": ["*"]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": ["KJ6U2Y9B2M.com.nym.bar"]
+  }
+}

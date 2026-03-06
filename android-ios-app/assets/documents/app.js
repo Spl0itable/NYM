@@ -448,10 +448,6 @@ class NYM {
     constructor() {
         this.relayPool = new Map();
         this.useRelayProxy = this._detectCloudflareHost();
-        this.poolSocket = null;
-        this.poolConnectedRelays = [];
-        this.poolRelayTypes = {};
-        this.poolReady = false;
         this.blacklistedRelays = new Set();
         this.relayKinds = new Map();
         this.relayStats = {
@@ -4592,19 +4588,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
-        // Multiplexed pool mode: add geo relays to the pool config
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            const closestRelays = this.getClosestRelaysForGeohash(geohash, this.geoRelayCount);
-            if (closestRelays.length > 0) {
-                for (const r of closestRelays) {
-                    this.discoveredRelays.add(r.url);
-                }
-                // Update pool with new relay set
-                this._poolSendRelayConfig();
-            }
-            return;
-        }
-
         // Check if we already have cached geo relays for this geohash
         if (this.geoRelayConnections.has(geohash)) {
             const cachedRelays = this.geoRelayConnections.get(geohash);
@@ -4689,9 +4672,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Ensure the first 5 broadcast relays are always connected regardless of channel
     async ensureDefaultRelaysConnected() {
-        // Pool mode: proxy manages all connections
-        if (this.useRelayProxy) return;
-
         for (const relayUrl of this.defaultRelays) {
             const relay = this.relayPool.get(relayUrl);
             const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
@@ -5161,16 +5141,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async reconnectToBroadcastRelays() {
-        // Multiplexed pool mode: just reconnect the single pool socket
-        if (this.useRelayProxy) {
-            if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) return;
-            try {
-                await this._connectToRelayPool();
-                this._poolSubscribe();
-                this.updateConnectionStatus();
-            } catch { /* Will auto-retry via onclose */ }
-            return;
-        }
 
         let connectedCount = 0;
 
@@ -5226,19 +5196,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Force update connection status
             this.updateConnectionStatus('Reconnecting...');
-
-            // Multiplexed pool mode: just reconnect the pool
-            if (this.useRelayProxy) {
-                if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) {
-                    this._connectToRelayPool()
-                        .then(() => {
-                            this._poolSubscribe();
-                            this.retryPendingDMsOnReconnect();
-                        })
-                        .catch(() => {});
-                }
-                return;
-            }
 
             // Clear any existing reconnection interval
             if (this.reconnectionInterval) {
@@ -6102,58 +6059,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.initialConnectionInProgress = true;
             this.updateConnectionStatus('Connecting...');
 
-            // Use multiplexed relay pool when running on Cloudflare
-            if (this.useRelayProxy) {
-                await this._connectToRelayPool();
-                this.connected = true;
-                document.getElementById('messageInput').disabled = false;
-                document.getElementById('sendBtn').disabled = false;
-                this.updateConnectionStatus();
-
-                // Subscribe to events via the pool
-                this._poolSubscribe();
-
-                // Set initial channel label
-                const channelLabel = `#${this.currentChannel}`;
-                const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
-                document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
-
-                // Switch to pinned landing channel
-                setTimeout(() => {
-                    if (window.pendingChannel || window.urlChannelRouted) return;
-                    const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
-                    this.currentChannel = '';
-                    this.currentGeohash = '';
-                    if (pinned.type === 'geohash' && pinned.geohash) {
-                        this.switchChannel(pinned.geohash, pinned.geohash);
-                    } else {
-                        this.switchChannel('nym', 'nym');
-                    }
-                }, 100);
-
-                // Discover additional relays and add them to the pool
-                setTimeout(() => {
-                    this.discoverRelays().then(() => {
-                        this._poolSendRelayConfig();
-                    });
-                }, 100);
-
-                // Process any queued messages
-                if (this.messageQueue.length > 0) {
-                    const queuedMessages = [...this.messageQueue];
-                    this.messageQueue = [];
-                    queuedMessages.forEach(msg => {
-                        try {
-                            const parsed = JSON.parse(msg);
-                            this.sendToRelay(parsed);
-                        } catch (e) {}
-                    });
-                }
-
-                this.initialConnectionInProgress = false;
-                return;
-            }
-
             // Check if we're already connected to ANY broadcast relay from pre-connection
             let initialConnected = false;
             let connectedRelayUrl = null;
@@ -6346,21 +6251,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async quickConnect() {
-        // Pool mode: connect via pool
-        if (this.useRelayProxy) {
-            try {
-                await this._connectToRelayPool();
-                document.getElementById('messageInput').disabled = false;
-                document.getElementById('sendBtn').disabled = false;
-                this.connected = true;
-                this._poolSubscribe();
-                this.updateConnectionStatus();
-                return true;
-            } catch {
-                return false;
-            }
-        }
-
         // Try broadcast relays in order with very short timeout
         for (const relayUrl of this.broadcastRelays) {
             if (!this.shouldRetryRelay(relayUrl)) {
@@ -6389,12 +6279,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     resubscribeAllRelays() {
-        // Multiplexed pool mode: re-subscribe through proxy
-        if (this.useRelayProxy && this.poolSocket) {
-            this._poolSubscribe();
-            return;
-        }
-
         this.relayPool.forEach((relay, url) => {
             if (relay.type === 'nosflare') return; // write-only
             if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
@@ -6575,13 +6459,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         if (filters.length === 0) return;
 
-        // Multiplexed pool mode: send REQ through single socket
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            this._poolSend(["REQ", subId, ...filters]);
-            this.channelSubscriptions.set(channelKey, subId);
-            return;
-        }
-
         // Send to all readable relays except nosflare
         this.relayPool.forEach((relay, url) => {
             if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
@@ -6640,12 +6517,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const subId = "nym-batch-" + Math.random().toString(36).substring(7);
 
-        // Multiplexed pool mode
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            this._poolSend(["REQ", subId, ...filters]);
-            return;
-        }
-
         // Send to all readable relays
         this.relayPool.forEach((relay, url) => {
             if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
@@ -6689,10 +6560,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Close existing subscription if any
         const existingSubId = this.channelSubscriptions.get(channelKey);
         if (existingSubId) {
-            // Multiplexed pool mode
-            if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-                this._poolSend(["CLOSE", existingSubId]);
-            }
             this.relayPool.forEach((relay, url) => {
                 if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                     relay.ws.send(JSON.stringify(["CLOSE", existingSubId]));
@@ -6744,7 +6611,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const host = window.location.hostname;
             if (host.endsWith('.pages.dev') || host.endsWith('.workers.dev')) return true;
             // Known Cloudflare Pages custom domains for this app
-            if (host === 'web.nymchat.app' || host === 'app.nymchat.app' || host === 'nymchat.app') return true;
+            if (host === 'web.nymchat.app' || host === 'nymchat.app') return true;
         } catch {
             // Not in a browser context
         }
@@ -6756,216 +6623,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         return `${proto}//${window.location.host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
     }
-
-    // --- Multiplexed relay pool (single WebSocket to proxy) ---
-
-    _getRelayPoolUrl() {
-        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${proto}//${window.location.host}/api/relay-pool`;
-    }
-
-    _connectToRelayPool() {
-        return new Promise((resolve, reject) => {
-            const url = this._getRelayPoolUrl();
-            const ws = new WebSocket(url);
-            this.poolSocket = ws;
-
-            const timeout = setTimeout(() => {
-                if (ws.readyState !== WebSocket.OPEN) {
-                    ws.close();
-                    reject(new Error('Relay pool connection timeout'));
-                }
-            }, 10000);
-
-            ws.onopen = () => {
-                clearTimeout(timeout);
-                this.poolReady = false; // not ready until RELAYS sent
-
-                // Gather all relays to connect to
-                const writeOnly = ['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'];
-                const allRelays = [...new Set([
-                    ...this.broadcastRelays,
-                    ...Array.from(this.discoveredRelays || [])
-                ])].filter(r => !writeOnly.includes(r));
-
-                // Send RELAYS config to proxy
-                ws.send(JSON.stringify(['RELAYS', {
-                    relays: allRelays,
-                    writeOnly: writeOnly,
-                    dmRelays: this.bitchatDMRelays || []
-                }]));
-
-                this.poolReady = true;
-                this.connected = true;
-                resolve();
-            };
-
-            ws.onmessage = (event) => {
-                try {
-                    // Track total bytes received
-                    const dataLen = typeof event.data === 'string' ? event.data.length : (event.data.byteLength || 0);
-                    this.relayStats.bytesReceived += dataLen;
-
-                    const msg = JSON.parse(event.data);
-                    if (!Array.isArray(msg)) return;
-
-                    const msgType = msg[0];
-
-                    if (msgType === 'POOL:STATUS') {
-                        const status = msg[1];
-                        this.poolConnectedRelays = status.connected || [];
-
-                        // Update per-relay latency from proxy
-                        if (status.latency) {
-                            for (const [url, ms] of Object.entries(status.latency)) {
-                                this.relayStats.latencyPerRelay.set(url, ms);
-                            }
-                        }
-
-                        // Update per-relay event counts from proxy
-                        if (status.events) {
-                            for (const [url, count] of Object.entries(status.events)) {
-                                this.relayStats.eventsPerRelay.set(url, count);
-                            }
-                        }
-
-                        // Store per-relay type info from proxy
-                        if (status.relayTypes) {
-                            if (!this.poolRelayTypes) this.poolRelayTypes = {};
-                            Object.assign(this.poolRelayTypes, status.relayTypes);
-                        }
-
-                        // Sync relayPool map for UI status tracking
-                        this.relayPool.clear();
-                        for (const url of this.poolConnectedRelays) {
-                            // Determine correct type from proxy info, falling back to heuristic
-                            let relayType = (this.poolRelayTypes && this.poolRelayTypes[url]) || 'read';
-                            // Map proxy types to client display types
-                            if (relayType === 'write') {
-                                relayType = 'nosflare';
-                            } else if (relayType === 'read') {
-                                // Distinguish broadcast vs discovered read relays
-                                if (this.broadcastRelays.includes(url)) {
-                                    relayType = 'broadcast';
-                                } else if (this.geoRelays && this.geoRelays.some(g => g.url === url)) {
-                                    relayType = 'geo';
-                                } else {
-                                    relayType = 'read';
-                                }
-                            }
-                            this.relayPool.set(url, {
-                                ws: this.poolSocket,
-                                type: relayType,
-                                status: 'connected',
-                                connectedAt: Date.now()
-                            });
-                        }
-                        this.updateConnectionStatus();
-                    } else if (msgType === 'EVENT') {
-                        // Track event stats (throughput + total)
-                        this.relayStats.totalEvents++;
-                        this.relayStats.eventsThisSecond++;
-
-                        // The proxy appends sourceRelay as 4th element for stats
-                        const sourceRelay = msg[3] || 'relay-pool';
-
-                        // Per-relay counts come from POOL:STATUS (authoritative),
-                        // don't double-count here
-
-                        // Strip the sourceRelay before passing to handler
-                        // handleRelayMessage expects ["EVENT", subId, eventObj]
-                        this.handleRelayMessage(msg.slice(0, 3), sourceRelay);
-                    } else {
-                        // OK, EOSE, NOTICE — handle as if from a relay
-                        this.handleRelayMessage(msg, 'relay-pool');
-                    }
-                } catch {
-                    // Parse error
-                }
-            };
-
-            ws.onclose = () => {
-                clearTimeout(timeout);
-                this.poolSocket = null;
-                this.poolReady = false;
-                this.poolConnectedRelays = [];
-                this.poolRelayTypes = {};
-                this.relayPool.clear();
-                this.connected = false;
-                this.updateConnectionStatus('Disconnected');
-
-                // Reconnect after 3 seconds
-                setTimeout(() => {
-                    if (navigator.onLine) {
-                        this._connectToRelayPool()
-                            .then(() => {
-                                this._poolSubscribe();
-                            })
-                            .catch(() => {});
-                    }
-                }, 3000);
-            };
-
-            ws.onerror = () => {
-                clearTimeout(timeout);
-                reject(new Error('Relay pool connection error'));
-            };
-        });
-    }
-
-    _poolSend(data) {
-        if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            this.poolSocket.send(typeof data === 'string' ? data : JSON.stringify(data));
-        }
-    }
-
-    _poolSubscribe() {
-        if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) return;
-
-        const subId = "nym-" + Math.random().toString(36).substring(7);
-        const since1h = Math.floor(Date.now() / 1000) - 3600;
-
-        const filters = [
-            { kinds: [20000], since: since1h, limit: 100 },
-            { kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 },
-            { kinds: [30078], "#t": ["nym-presence"], limit: 100 },
-            { kinds: [7], "#k": ["20000"], since: since1h, limit: 100 },
-            { kinds: [7], "#k": ["1059"], limit: 100 },
-            { kinds: [30078], "#d": ["nym-shop-active"], limit: 100 },
-            { kinds: [9735], limit: 100 }
-        ];
-
-        if (this.pubkey) {
-            filters.push(
-                { kinds: [1059], "#p": [this.pubkey], limit: 100 },
-                { kinds: [7], "#p": [this.pubkey], limit: 100 },
-                { kinds: [30078], authors: [this.pubkey], "#d": ["nym-shop-purchases", "nym-shop-active"], limit: 100 },
-                { kinds: [30078], "#p": [this.pubkey], limit: 50 },
-                { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
-                { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 }
-            );
-        }
-
-        this._poolSend(["REQ", subId, ...filters]);
-    }
-
-    _poolSendRelayConfig() {
-        if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) return;
-        const writeOnly = ['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'];
-        const allRelays = [
-            ...this.broadcastRelays,
-            ...Array.from(this.discoveredRelays)
-        ].filter(r => !writeOnly.includes(r));
-        // Deduplicate
-        const unique = [...new Set(allRelays)];
-        this._poolSend(['RELAYS', {
-            relays: unique,
-            writeOnly: writeOnly,
-            dmRelays: this.bitchatDMRelays || []
-        }]);
-    }
-
-    // --- End multiplexed relay pool ---
 
     async connectToRelay(relayUrl, type = 'read') {
         return new Promise((resolve, reject) => {
@@ -7237,11 +6894,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async retryDiscoveredRelays() {
-        // Pool mode: just update the pool config with any new discovered relays
-        if (this.useRelayProxy) {
-            this._poolSendRelayConfig();
-            return;
-        }
 
         // Clean expired blacklist entries first
         for (const relayUrl of this.blacklistedRelays) {
@@ -8497,12 +8149,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }, 10000);
 
             ws.onopen = () => {
-                const subId = "relay-list-" + Math.random().toString(36).substring(7);
-                // Request NIP-66 relay discovery (kind 30166)
+                // Request relay metadata events (NIP-66 kind 30066)
                 const subscription = [
                     "REQ",
-                    subId,
-                    { kinds: [30166], limit: 500 }
+                    "relay-list-" + Math.random().toString(36).substring(7),
+                    {
+                        kinds: [30066], // NIP-66 relay metadata
+                        limit: 500
+                    }
                 ];
                 ws.send(JSON.stringify(subscription));
             };
@@ -8512,7 +8166,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const msg = JSON.parse(event.data);
                     if (Array.isArray(msg) && msg[0] === 'EVENT') {
                         const relayEvent = msg[2];
-                        if (relayEvent && relayEvent.kind === 30166) {
+                        if (relayEvent && relayEvent.kind === 30066) {
                             this.parseRelayMetadata(relayEvent);
                         }
                     } else if (Array.isArray(msg) && msg[0] === 'EOSE') {
@@ -8717,12 +8371,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     sendToRelay(message) {
-        // Multiplexed pool mode: send everything through the single socket
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            this._poolSend(message);
-            return;
-        }
-
         const msg = JSON.stringify(message);
 
         if (Array.isArray(message) && message[0] === 'EVENT') {
@@ -8745,13 +8393,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Ensures cross-app PM delivery by always hitting bitchat's relay set,
     // similar to how geohash channels prioritize geo-located relays
     sendDMToRelays(message) {
-        // Multiplexed pool mode: proxy handles DM relay prioritization
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            const eventObj = Array.isArray(message) && message[0] === 'EVENT' ? message[1] : message;
-            this._poolSend(['DM_EVENT', eventObj]);
-            return this.poolConnectedRelays.length;
-        }
-
         const msg = JSON.stringify(message);
         const sent = new Set();
 
@@ -8909,12 +8550,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     sendRequestToAllRelaysExceptNosflare(message) {
-        // Multiplexed pool mode: proxy already excludes write-only relays from REQ
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            this._poolSend(message);
-            return;
-        }
-
         const msg = JSON.stringify(message);
 
         // Send REQ to all connected relays EXCEPT sendit.nosflare.com
@@ -8926,12 +8561,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     broadcastEvent(message) {
-        // Multiplexed pool mode: proxy handles fan-out to all relays
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            this._poolSend(message);
-            return;
-        }
-
         const msg = JSON.stringify(message);
 
         let evt = null;
@@ -8969,12 +8598,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     sendRequestToAllRelays(message) {
-        // Multiplexed pool mode
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            this._poolSend(message);
-            return;
-        }
-
         const msg = JSON.stringify(message);
 
         // Send REQ to all connected relays EXCEPT nosflare
@@ -8986,16 +8609,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     subscribeToAllRelays() {
-        // Multiplexed pool mode: single subscription through proxy
-        if (this.useRelayProxy && this.poolSocket) {
-            this._poolSubscribe();
-            this.discoverChannels();
-            setTimeout(() => {
-                this.loadJoinedChannelsFromRelays();
-            }, 2000);
-            return;
-        }
-
         // Get all relays except nosflare
         const readableRelays = Array.from(this.relayPool.entries())
             .filter(([url, relay]) => relay.type !== 'nosflare' && relay.ws && relay.ws.readyState === WebSocket.OPEN);
@@ -9176,9 +8789,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     cleanupNonResponsiveRelays() {
-        // Pool mode: proxy handles relay health
-        if (this.useRelayProxy) return;
-
         const now = Date.now();
 
         this.relayPool.forEach((relay, url) => {
@@ -14121,42 +13731,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     }
                 });
             }
-
-            // iOS Safari: explicitly load videos inserted via innerHTML and handle scroll.
-            // Safari requires Range request support (206) to play videos. If the server
-            // doesn't support it, fall back to fetching as a blob URL.
-            const videos = messageEl.querySelectorAll('video.message-video');
-            if (videos.length > 0) {
-                videos.forEach(vid => {
-                    const source = vid.querySelector('source');
-                    if (source) {
-                        const blobFallback = async () => {
-                            if (vid.dataset.blobLoaded) return;
-                            vid.dataset.blobLoaded = 'true';
-                            try {
-                                const resp = await fetch(source.src);
-                                const blob = await resp.blob();
-                                const blobUrl = URL.createObjectURL(blob);
-                                vid.dataset.blobSrc = blobUrl;
-                                vid.removeAttribute('src');
-                                source.src = blobUrl;
-                                source.type = 'video/mp4';
-                                vid.load();
-                            } catch (e) {
-                                console.warn('Video blob fallback failed:', e);
-                            }
-                        };
-                        source.addEventListener('error', blobFallback, { once: true });
-                        vid.addEventListener('error', blobFallback, { once: true });
-                    }
-                    vid.load();
-                    vid.addEventListener('loadedmetadata', () => {
-                        if (!this.userScrolledUp) {
-                            this._scheduleScrollToBottom();
-                        }
-                    }, { once: true });
-                });
-            }
         }
 
         // Play notification sound for mentions and PMs (but not for historical messages or own messages)
@@ -14291,17 +13865,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
 
         // Convert video URLs to video players
-        // Use __VID_n__ placeholders to prevent the general URL-to-link regex from
-        // matching URLs that are already embedded inside video HTML attributes.
-        const videoPlaceholders = [];
         formatted = formatted.replace(
             /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
-            (match, url, ext) => {
-                const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
-                const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
-                const idx = videoPlaceholders.length;
-                videoPlaceholders.push(`<span class="video-container" onclick="event.stopPropagation()"><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${url}" type="${type}"></video><button class="video-expand-btn" data-video-src="${url.replace(/"/g, '&quot;')}" onclick="event.stopPropagation(); var v=this.previousElementSibling; nym.expandVideo(v.dataset.blobSrc||this.dataset.videoSrc)">⛶</button></span>`);
-                return `__VID_${idx}__`;
+            (match, url) => {
+                return `<video src="${url}" controls playsinline preload="metadata" class="message-video" onclick="event.stopPropagation(); nym.expandVideo(this.src)"></video>`;
             }
         );
 
@@ -14326,9 +13893,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
             '<a href="$1" target="_blank" rel="noopener">$1</a>'
         );
-
-        // Restore video placeholders
-        formatted = formatted.replace(/__VID_(\d+)__/g, (m, idx) => videoPlaceholders[idx]);
 
         // Process mentions and geohash channel references in one pass
         formatted = formatted.replace(
@@ -14415,8 +13979,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         modalImg.style.display = '';
         modalVid.style.display = 'none';
         modalVid.pause();
-        modalVid.removeAttribute('src');
-        while (modalVid.firstChild) modalVid.firstChild.remove();
+        modalVid.src = '';
         document.getElementById('imageModal').classList.add('active');
     }
 
@@ -14425,43 +13988,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const modalVid = document.getElementById('modalVideo');
         modalImg.style.display = 'none';
         modalImg.src = '';
-        // Clear existing sources
-        modalVid.removeAttribute('src');
-        while (modalVid.firstChild) modalVid.firstChild.remove();
-
-        const ext = src.split('.').pop().split('?')[0].toLowerCase();
-        const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
-        const mimeType = mimeTypes[ext] || 'video/mp4';
-
-        // If src is already a blob URL (from inline player fallback), use directly
-        if (src.startsWith('blob:')) {
-            modalVid.src = src;
-        } else {
-            // Try direct source first, fall back to blob URL for Safari compatibility
-            const source = document.createElement('source');
-            source.src = src;
-            source.type = mimeType;
-            modalVid.appendChild(source);
-
-            const blobFallback = async () => {
-                if (modalVid.dataset.blobLoaded === src) return;
-                modalVid.dataset.blobLoaded = src;
-                try {
-                    const resp = await fetch(src);
-                    const blob = await resp.blob();
-                    modalVid.removeAttribute('src');
-                    while (modalVid.firstChild) modalVid.firstChild.remove();
-                    modalVid.src = URL.createObjectURL(blob);
-                    modalVid.load();
-                } catch (e) {
-                    console.warn('Modal video blob fallback failed:', e);
-                }
-            };
-            source.addEventListener('error', blobFallback, { once: true });
-            modalVid.addEventListener('error', blobFallback, { once: true });
-        }
-
-        modalVid.load();
+        modalVid.src = src;
         modalVid.style.display = '';
         document.getElementById('imageModal').classList.add('active');
     }
@@ -18020,20 +17547,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 dot.style.background = 'var(--danger)';
             }
         } else {
-            // Multiplexed pool mode: use pool-reported count
-            if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-                const count = this.poolConnectedRelays.length;
-                if (count > 0) {
-                    statusEl.textContent = `Connected (${count} relays)`;
-                    dot.style.background = 'var(--primary)';
-                    this.connected = true;
-                } else {
-                    statusEl.textContent = 'Connecting...';
-                    dot.style.background = 'var(--warning)';
-                }
-                return;
-            }
-
             // Check actual WebSocket connection states, not just pool size
             let actuallyConnected = 0;
             let geoRelaysConnected = 0;
@@ -19020,9 +18533,7 @@ function closeImageModal() {
     document.getElementById('imageModal').classList.remove('active');
     const modalVid = document.getElementById('modalVideo');
     modalVid.pause();
-    modalVid.removeAttribute('src');
-    while (modalVid.firstChild) modalVid.firstChild.remove();
-    modalVid.load();
+    modalVid.src = '';
 }
 
 function addPollOption() {
@@ -19886,7 +19397,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.36.141 ═══<br/>
+═══ Nymchat v3.36.137 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -20631,20 +20142,16 @@ function renderRelayStats() {
     const s = nym.relayStats;
     const pool = nym.relayPool;
 
-    // Count connected — pool mode uses poolConnectedRelays count
+    // Count connected
     let connected = 0;
-    if (nym.useRelayProxy && nym.poolSocket) {
-        connected = nym.poolConnectedRelays.length;
-    } else {
-        pool.forEach((relay) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN) connected++;
-        });
-    }
+    pool.forEach((relay) => {
+        if (relay.ws && relay.ws.readyState === WebSocket.OPEN) connected++;
+    });
 
     // Average latency
     let latSum = 0, latCount = 0;
     s.latencyPerRelay.forEach((ms, url) => {
-        if (nym.useRelayProxy || pool.has(url)) { latSum += ms; latCount++; }
+        if (pool.has(url)) { latSum += ms; latCount++; }
     });
     const avgLat = latCount > 0 ? Math.round(latSum / latCount) : null;
 
@@ -20754,38 +20261,16 @@ function renderRelayList(pool, stats) {
 
     // Build sorted relay entries
     const entries = [];
-
-    if (typeof nym !== 'undefined' && nym.useRelayProxy && nym.poolSocket) {
-        // Pool mode: build entries from poolConnectedRelays + stats
-        const connectedSet = new Set(nym.poolConnectedRelays);
-
-        // Include all relays we have stats for, plus connected ones
-        const allUrls = new Set([...connectedSet, ...stats.eventsPerRelay.keys(), ...stats.latencyPerRelay.keys()]);
-        allUrls.forEach(url => {
-            if (url === 'relay-pool') return;
-            // Use the correct type from the relay pool map
-            const poolEntry = nym.relayPool.get(url);
-            const relayType = (poolEntry && poolEntry.type) || 'read';
-            entries.push({
-                url,
-                type: relayType,
-                open: connectedSet.has(url),
-                events: stats.eventsPerRelay.get(url) || 0,
-                latency: stats.latencyPerRelay.get(url) || null
-            });
+    pool.forEach((relay, url) => {
+        const isOpen = relay.ws && relay.ws.readyState === WebSocket.OPEN;
+        entries.push({
+            url,
+            type: relay.type || 'read',
+            open: isOpen,
+            events: stats.eventsPerRelay.get(url) || 0,
+            latency: stats.latencyPerRelay.get(url) || null
         });
-    } else {
-        pool.forEach((relay, url) => {
-            const isOpen = relay.ws && relay.ws.readyState === WebSocket.OPEN;
-            entries.push({
-                url,
-                type: relay.type || 'read',
-                open: isOpen,
-                events: stats.eventsPerRelay.get(url) || 0,
-                latency: stats.latencyPerRelay.get(url) || null
-            });
-        });
-    }
+    });
 
     // Sort: connected first, then by events descending
     entries.sort((a, b) => {

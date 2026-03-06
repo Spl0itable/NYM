@@ -429,7 +429,7 @@
     <div class="image-modal" id="imageModal" onclick="closeImageModal()">
         <span class="image-modal-close" onclick="closeImageModal()">×</span>
         <img id="modalImage" src="" alt="Expanded image">
-        <video id="modalVideo" controls playsinline webkit-playsinline style="display:none; max-width:90%; max-height:90%; border:1px solid var(--glass-border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg);"></video>
+        <video id="modalVideo" src="" controls style="display:none; max-width:90%; max-height:90%; border:1px solid var(--glass-border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg);"></video>
     </div>
 
     <!-- Poll Modal -->
@@ -754,6 +754,19 @@
                     <div class="form-hint">Choose a background pattern or upload your own image (min 1920x1080)</div>
                 </div>
 
+                <div class="form-group">
+                    <label class="form-label">Connected Relays</label>
+                    <div id="connectedRelaysList"
+                        style="max-height: 200px; overflow-y: auto; border: 1px solid var(--glass-border, var(--border)); border-radius: 12px; padding: 10px; background: rgba(255,255,255,0.03);">
+                        <div style="color: var(--text-dim); font-size: 12px;">Loading relay list...</div>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-top: 10px;">
+                        <button class="icon-btn" onclick="nym.refreshRelays()"
+                            style="flex: 1;">Refresh List</button>
+                        <button class="icon-btn" onclick="closeModal('settingsModal'); openRelayStats();"
+                            style="flex: 1; color: var(--secondary);">Network Stats</button>
+                    </div>
+                </div>
 
                 <div class="form-group">
                     <label class="form-label">Sort Geohash Channels by Proximity</label>
