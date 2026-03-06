@@ -163,6 +163,8 @@ export async function onRequest(context) {
   function connectUpstream(relayUrl, type) {
     if (upstreams.has(relayUrl)) return;
     if (!validateRelayUrl(relayUrl)) return;
+    // Block relay.nosflare.com entirely
+    if (relayUrl === 'wss://relay.nosflare.com') return;
     // Skip relays in cooldown (failed or returned no matching events)
     if (shouldSkipRelay(relayUrl)) return;
 

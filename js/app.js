@@ -473,7 +473,6 @@ class NYM {
             'wss://relay.primal.net',
             'wss://nos.lol',
             'wss://nostr21.com',
-            'wss://sendit.nosflare.com',
             'wss://a.nos.lol',
             'wss://adre.su',
             'wss://alien.macneilmediagroup.com',
@@ -5141,7 +5140,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const missingDiscovered = Array.from(this.discoveredRelays).filter(url =>
                 !this.relayPool.has(url) &&
                 !this.broadcastRelays.includes(url) &&
-                url !== this.nosflareRelay
+                url !== 'wss://sendit.nosflare.com'
             );
 
             if (missingDiscovered.length > 0) {
@@ -6296,16 +6295,35 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             });
 
-            // Connect to nosflare for sending only (no subscriptions)
-            if (this.shouldRetryRelay(this.nosflareRelay)) {
-                this.connectToRelay(this.nosflareRelay, 'nosflare')
+            // Connect to sendit.nosflare.com for write-only (no subscriptions)
+            const senditRelay = 'wss://sendit.nosflare.com';
+            if (this.shouldRetryRelay(senditRelay)) {
+                this.connectToRelay(senditRelay, 'nosflare')
                     .then(() => {
                         this.updateConnectionStatus();
                     })
                     .catch(err => {
-                        this.trackRelayFailure(this.nosflareRelay);
+                        this.trackRelayFailure(senditRelay);
                     });
             }
+
+            // Connect to ALL geo relays at startup in the background (staggered)
+            // They'll be ready when the user switches to any geohash channel
+            this.geoRelays.forEach((relay, index) => {
+                const relayUrl = relay.url;
+                if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
+                    setTimeout(() => {
+                        this.connectToRelayWithTimeout(relayUrl, 'geo', 3000)
+                            .then(() => {
+                                this.subscribeToSingleRelay(relayUrl);
+                                this.updateConnectionStatus();
+                            })
+                            .catch(err => {
+                                this.trackRelayFailure(relayUrl);
+                            });
+                    }, index * 50); // 50ms stagger to avoid overwhelming browser
+                }
+            });
 
             // Discover additional relays in the background
             setTimeout(() => {
@@ -6409,8 +6427,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const relay = this.relayPool.get(relayUrl);
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
-        // Never send to nosflare
-        if (['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(relayUrl)) return;
+        // Never send subscriptions to nosflare (write-only)
+        if (relay.type === 'nosflare') return;
 
         // Close all active subscriptions for this relay
         if (relay.subscriptions) {
@@ -6428,8 +6446,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const relay = this.relayPool.get(relayUrl);
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
-        // Never send REQ to nosflare
-        if (['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(relayUrl)) return;
+        // Never send REQ to nosflare (write-only)
+        if (relay.type === 'nosflare') return;
 
         const ws = relay.ws;
 
@@ -6582,10 +6600,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
-        // Send to all readable relays except nosflare
+        // Send to all readable relays except nosflare (write-only)
         this.relayPool.forEach((relay, url) => {
             if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                !['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(url)) {
+                relay.type !== 'nosflare') {
 
                 // Track subscription
                 if (!relay.subscriptions) {
@@ -6646,10 +6664,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
-        // Send to all readable relays
+        // Send to all readable relays (exclude nosflare write-only)
         this.relayPool.forEach((relay, url) => {
             if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                !['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(url)) {
+                relay.type !== 'nosflare') {
 
                 if (!relay.subscriptions) {
                     relay.subscriptions = new Set();
@@ -6782,11 +6800,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.poolReady = false; // not ready until RELAYS sent
 
                 // Gather all relays to connect to
-                const writeOnly = ['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'];
+                const blocked = ['wss://relay.nosflare.com'];
+                const writeOnly = ['wss://sendit.nosflare.com'];
+                const geoRelayUrls = this.geoRelays ? this.geoRelays.map(r => r.url) : [];
                 const allRelays = [...new Set([
                     ...this.broadcastRelays,
-                    ...Array.from(this.discoveredRelays || [])
-                ])].filter(r => !writeOnly.includes(r));
+                    ...Array.from(this.discoveredRelays || []),
+                    ...geoRelayUrls
+                ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
 
                 // Send RELAYS config to proxy
                 ws.send(JSON.stringify(['RELAYS', {
@@ -6951,11 +6972,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     _poolSendRelayConfig() {
         if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) return;
-        const writeOnly = ['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'];
+        const blocked = ['wss://relay.nosflare.com'];
+        const writeOnly = ['wss://sendit.nosflare.com'];
+        const geoRelayUrls = this.geoRelays.map(r => r.url);
         const allRelays = [
             ...this.broadcastRelays,
-            ...Array.from(this.discoveredRelays)
-        ].filter(r => !writeOnly.includes(r));
+            ...Array.from(this.discoveredRelays),
+            ...geoRelayUrls
+        ].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
         // Deduplicate
         const unique = [...new Set(allRelays)];
         this._poolSend(['RELAYS', {
@@ -6970,6 +6994,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async connectToRelay(relayUrl, type = 'read') {
         return new Promise((resolve, reject) => {
             try {
+                // Block relay.nosflare.com entirely - never connect
+                if (relayUrl === 'wss://relay.nosflare.com') {
+                    reject(new Error('relay.nosflare.com is blocked'));
+                    return;
+                }
+
                 // Check if blacklisted but also check if expired
                 if (this.blacklistedRelays.has(relayUrl)) {
                     if (!this.isBlacklistExpired(relayUrl)) {
@@ -7256,7 +7286,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (!this.relayPool.has(relay) &&
                 !this.blacklistedRelays.has(relay) &&
                 !this.broadcastRelays.includes(relay) &&
-                relay !== this.nosflareRelay &&
+                relay !== 'wss://sendit.nosflare.com' &&
                 !relaysToTry.includes(relay) &&
                 this.shouldRetryRelay(relay)) {
                 relaysToTry.push(relay);
@@ -7288,7 +7318,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     .filter(url => !this.relayPool.has(url) &&
                         !this.blacklistedRelays.has(url) &&
                         !this.broadcastRelays.includes(url) &&
-                        url !== this.nosflareRelay &&
+                        url !== 'wss://sendit.nosflare.com' &&
                         this.shouldRetryRelay(url))
                     .slice(0, 10);
 
@@ -8917,9 +8947,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const msg = JSON.stringify(message);
 
-        // Send REQ to all connected relays EXCEPT sendit.nosflare.com
+        // Send REQ to all connected relays EXCEPT nosflare (write-only)
         this.relayPool.forEach((relay, url) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && !['wss://sendit.nosflare.com', 'wss://relay.nosflare.com'].includes(url)) {
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
                 relay.ws.send(msg);
             }
         });
@@ -19886,7 +19916,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.36.141 ═══<br/>
+═══ Nymchat v3.36.142 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
