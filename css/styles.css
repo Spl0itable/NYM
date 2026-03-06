@@ -1816,6 +1816,10 @@ body.light-mode .pubkey-slideout-copy:hover {
     display: flex;
 }
 
+#nostrLoginModal {
+    z-index: 10002;
+}
+
 #devNsecModal {
     z-index: 10002;
 }
