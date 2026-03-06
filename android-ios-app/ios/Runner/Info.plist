@@ -69,19 +69,6 @@
 	<array>
 		<string>lightning</string>
 	</array>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLName</key>
-			<string>app.nymchat</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>nymchat</string>
-			</array>
-		</dict>
-	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
