@@ -6775,8 +6775,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return `${proto}//${window.location.host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
     }
 
-    // --- Multiplexed relay pool (single WebSocket to proxy) ---
-
+    // Multiplexed relay pool (single WebSocket to proxy)
     _getRelayPoolUrl() {
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         return `${proto}//${window.location.host}/api/relay-pool`;
@@ -6988,8 +6987,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             dmRelays: this.bitchatDMRelays || []
         }]);
     }
-
-    // --- End multiplexed relay pool ---
 
     async connectToRelay(relayUrl, type = 'read') {
         return new Promise((resolve, reject) => {
@@ -7577,6 +7574,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Skip kind 0 updates for the verified developer - they have their own profile data
         if (this.isVerifiedDeveloper(this.pubkey)) return;
+
+        // Skip kind 0 updates when logged in with a persistent Nostr identity
+        // to avoid overwriting the user's real profile with ephemeral session data
+        if (isNostrLoggedIn()) return;
 
         try {
             // Ephemeral mode - minimal profile
@@ -19773,6 +19774,9 @@ async function saveSettings() {
 
     nym.displaySystemMessage('Settings saved');
 
+    // Sync settings to Nostr relays if logged in
+    nostrSettingsSave();
+
     closeModal('settingsModal');
 }
 
@@ -19794,7 +19798,8 @@ function clearLocalStorageCache() {
             key === 'nym_active_flair' ||
             key === 'nym_shop_active_cache' ||
             key === 'nym_purchases_cache' ||
-            key.startsWith('nym_shop_recovery_')
+            key.startsWith('nym_shop_recovery_') ||
+            key.startsWith('nym_nostr_login_')
         )) {
             preserveKeys[key] = localStorage.getItem(key);
         }
@@ -19916,7 +19921,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.36.142 ═══<br/>
+═══ Nymchat v3.37.142 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -20160,6 +20165,11 @@ async function initializeNym() {
         // Close setup modal
         closeModal('setupModal');
 
+        // Load synced settings from Nostr relays if logged in
+        if (isNostrLoggedIn()) {
+            setTimeout(() => nostrSettingsLoad(), 2000);
+        }
+
         // Route to channel from URL if present
         await routeToUrlChannel();
 
@@ -20174,8 +20184,6 @@ async function initializeNym() {
     }
 }
 
-
-
 // Disconnect/logout function
 function disconnectNym() {
     // Disconnect from relay
@@ -20185,6 +20193,366 @@ function disconnectNym() {
 
     // Reload page to start fresh
     window.location.reload();
+}
+
+// Nostr Login
+function isNymchatApp() {
+    return /NymchatApp\//i.test(navigator.userAgent);
+}
+
+function isNostrLoggedIn() {
+    return localStorage.getItem('nym_nostr_login_method') !== null;
+}
+
+function openNostrLogin() {
+    if (isNostrLoggedIn()) {
+        const method = localStorage.getItem('nym_nostr_login_method');
+        const npub = localStorage.getItem('nym_nostr_login_npub') || '';
+        if (confirm(`Already logged in via ${method}${npub ? ' (' + npub + ')' : ''}.\n\nWould you like to log out of your Nostr identity?`)) {
+            nostrLogout();
+        }
+        return;
+    }
+    // Hide extension option when inside the NymchatApp webview shell
+    const extOption = document.getElementById('nostrLoginExtensionOption');
+    const divider = document.getElementById('nostrLoginDivider');
+    if (isNymchatApp()) {
+        extOption.style.display = 'none';
+        divider.style.display = 'none';
+    } else {
+        extOption.style.display = '';
+        divider.style.display = '';
+    }
+    // Reset state
+    document.getElementById('nostrLoginNsecInput').value = '';
+    document.getElementById('nostrLoginError').style.display = 'none';
+    document.getElementById('nostrLoginModal').classList.add('active');
+}
+
+async function nostrLoginWithExtension() {
+    const errorEl = document.getElementById('nostrLoginError');
+    errorEl.style.display = 'none';
+    const btn = document.getElementById('nostrLoginExtensionBtn');
+    btn.disabled = true;
+    btn.textContent = 'Connecting...';
+    try {
+        if (!window.nostr) {
+            throw new Error('No NIP-07 extension detected. Install Alby, nos2x, or another Nostr signer.');
+        }
+        const pubkey = await window.nostr.getPublicKey();
+        if (!pubkey || typeof pubkey !== 'string' || pubkey.length !== 64) {
+            throw new Error('Extension returned an invalid public key.');
+        }
+        // Store login state
+        localStorage.setItem('nym_nostr_login_method', 'extension');
+        localStorage.setItem('nym_nostr_login_pubkey', pubkey);
+        try {
+            const npub = window.NostrTools.nip19.npubEncode(pubkey);
+            localStorage.setItem('nym_nostr_login_npub', npub);
+        } catch (_) {}
+
+        // Apply identity to current session
+        applyNostrLogin(pubkey, null, 'extension');
+
+        closeModal('nostrLoginModal');
+        nym.displaySystemMessage('Logged in with Nostr extension.');
+    } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.style.display = 'block';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Login with Browser Extension (NIP-07)';
+    }
+}
+
+function nostrLoginWithNsec() {
+    const errorEl = document.getElementById('nostrLoginError');
+    errorEl.style.display = 'none';
+    const nsecInput = document.getElementById('nostrLoginNsecInput').value.trim();
+    if (!nsecInput) {
+        errorEl.textContent = 'Please enter your nsec.';
+        errorEl.style.display = 'block';
+        return;
+    }
+    try {
+        const secretKey = nym.decodeNsec(nsecInput);
+        const pubkey = window.NostrTools.getPublicKey(secretKey);
+
+        // Store login state (nsec stored so we can sign events and sync settings)
+        localStorage.setItem('nym_nostr_login_method', 'nsec');
+        localStorage.setItem('nym_nostr_login_pubkey', pubkey);
+        localStorage.setItem('nym_nostr_login_nsec', nsecInput);
+        try {
+            const npub = window.NostrTools.nip19.npubEncode(pubkey);
+            localStorage.setItem('nym_nostr_login_npub', npub);
+        } catch (_) {}
+
+        applyNostrLogin(pubkey, secretKey, 'nsec');
+
+        closeModal('nostrLoginModal');
+        nym.displaySystemMessage('Logged in with Nostr identity.');
+    } catch (err) {
+        errorEl.textContent = 'Invalid nsec key. Please check and try again.';
+        errorEl.style.display = 'block';
+    }
+}
+
+function applyNostrLogin(pubkey, secretKey, method) {
+    // Store on the nym instance for settings sync
+    nym.nostrLoginPubkey = pubkey;
+    nym.nostrLoginSecretKey = secretKey; // null for extension
+    nym.nostrLoginMethod = method;
+
+    // Clear ephemeral profile data so it doesn't overwrite the persistent identity
+    localStorage.removeItem('nym_avatar_url');
+
+    // Switch the active keypair to the persistent identity
+    if (secretKey) {
+        nym.privkey = secretKey;
+    }
+    nym.pubkey = pubkey;
+
+    // Fetch the persistent identity's kind 0 profile from relays,
+    // then update sidebar with the profile name/avatar
+    nym.fetchProfileDirect(pubkey).then(() => {
+        const user = nym.users.get(pubkey);
+        if (user && user.nym) {
+            nym.nym = user.nym;
+        }
+        document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+        nym.updateSidebarAvatar();
+    }).catch(() => {
+        document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+        nym.updateSidebarAvatar();
+    });
+
+    // Load settings from relays for this identity
+    nostrSettingsLoad();
+}
+
+function nostrLogout() {
+    localStorage.removeItem('nym_nostr_login_method');
+    localStorage.removeItem('nym_nostr_login_pubkey');
+    localStorage.removeItem('nym_nostr_login_nsec');
+    localStorage.removeItem('nym_nostr_login_npub');
+    nym.nostrLoginPubkey = null;
+    nym.nostrLoginSecretKey = null;
+    nym.nostrLoginMethod = null;
+    nym.displaySystemMessage('Nostr identity logged out. Settings will no longer sync.');
+}
+
+
+// Nostr Settings Sync (kind 30078)
+async function nostrSettingsSign(event) {
+    if (nym.nostrLoginMethod === 'extension' && window.nostr?.signEvent) {
+        return await window.nostr.signEvent(event);
+    } else if (nym.nostrLoginSecretKey) {
+        return window.NostrTools.finalizeEvent(event, nym.nostrLoginSecretKey);
+    }
+    throw new Error('No signing method available for Nostr login.');
+}
+
+async function nostrSettingsSave() {
+    if (!isNostrLoggedIn()) return;
+    const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
+    if (!pubkey) return;
+
+    try {
+        const settingsPayload = {
+            v: 1,
+            theme: nym.settings.theme,
+            sound: nym.settings.sound,
+            autoscroll: nym.settings.autoscroll,
+            showTimestamps: nym.settings.showTimestamps,
+            timeFormat: nym.settings.timeFormat || '12hr',
+            sortByProximity: nym.settings.sortByProximity,
+            dmForwardSecrecyEnabled: !!nym.settings.dmForwardSecrecyEnabled,
+            dmTTLSeconds: nym.settings.dmTTLSeconds || 86400,
+            readReceiptsEnabled: nym.settings.readReceiptsEnabled !== false,
+            nickStyle: nym.settings.nickStyle || 'fancy',
+            colorMode: localStorage.getItem('nym_color_mode') || 'auto',
+            wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'none',
+            wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
+            lightningAddress: localStorage.getItem('nym_lightning_address_global') || '',
+            powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
+            hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
+            blurOthersImages: nym.blurOthersImages !== false,
+            pinnedLandingChannel: nym.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' }
+        };
+
+        const event = {
+            kind: 30078,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [['d', 'nymchat-settings']],
+            content: JSON.stringify(settingsPayload),
+            pubkey: pubkey
+        };
+
+        const signedEvent = await nostrSettingsSign(event);
+        nym.sendToRelay(['EVENT', signedEvent]);
+    } catch (err) {
+        console.warn('[NostrSync] Failed to save settings to relays:', err.message);
+    }
+}
+
+function nostrSettingsLoad() {
+    if (!isNostrLoggedIn()) return;
+    const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
+    if (!pubkey) return;
+
+    const subId = 'nymchat-settings-load-' + Math.random().toString(36).slice(2, 8);
+    const filter = {
+        kinds: [30078],
+        authors: [pubkey],
+        '#d': ['nymchat-settings'],
+        limit: 1
+    };
+
+    let received = false;
+
+    // Try to load from any connected relay
+    nym.relayPool.forEach((relay, url) => {
+        if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+
+        const handler = (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
+                    if (received) return;
+                    received = true;
+                    try {
+                        const s = JSON.parse(msg[2].content);
+                        applyNostrSettings(s);
+                    } catch (_) {}
+                }
+                if (msg[0] === 'EOSE' && msg[1] === subId) {
+                    relay.ws.removeEventListener('message', handler);
+                    try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) {}
+                }
+            } catch (_) {}
+        };
+        relay.ws.addEventListener('message', handler);
+        relay.ws.send(JSON.stringify(['REQ', subId, filter]));
+
+        // Cleanup after 10s
+        setTimeout(() => {
+            relay.ws.removeEventListener('message', handler);
+            try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) {}
+        }, 10000);
+    });
+}
+
+function applyNostrSettings(s) {
+    if (!s || typeof s !== 'object' || !s.v) return;
+
+    // Theme
+    if (s.theme && typeof s.theme === 'string') {
+        nym.settings.theme = s.theme;
+        nym.applyTheme(s.theme);
+        localStorage.setItem('nym_theme', s.theme);
+    }
+
+    // Color mode
+    if (s.colorMode) {
+        localStorage.setItem('nym_color_mode', s.colorMode);
+        nym.applyColorMode();
+    }
+
+    // Sound
+    if (s.sound) {
+        nym.settings.sound = s.sound;
+        localStorage.setItem('nym_sound', s.sound);
+    }
+
+    // Autoscroll
+    if (typeof s.autoscroll === 'boolean') {
+        nym.settings.autoscroll = s.autoscroll;
+        localStorage.setItem('nym_autoscroll', String(s.autoscroll));
+    }
+
+    // Timestamps
+    if (typeof s.showTimestamps === 'boolean') {
+        nym.settings.showTimestamps = s.showTimestamps;
+        localStorage.setItem('nym_timestamps', String(s.showTimestamps));
+    }
+
+    // Time format
+    if (s.timeFormat) {
+        nym.settings.timeFormat = s.timeFormat;
+        localStorage.setItem('nym_time_format', s.timeFormat);
+    }
+
+    // Sort by proximity
+    if (typeof s.sortByProximity === 'boolean') {
+        nym.settings.sortByProximity = s.sortByProximity;
+        localStorage.setItem('nym_sort_proximity', String(s.sortByProximity));
+    }
+
+    // DM forward secrecy
+    if (typeof s.dmForwardSecrecyEnabled === 'boolean') {
+        nym.settings.dmForwardSecrecyEnabled = s.dmForwardSecrecyEnabled;
+        localStorage.setItem('nym_dm_fwdsec_enabled', String(s.dmForwardSecrecyEnabled));
+    }
+    if (s.dmTTLSeconds) {
+        nym.settings.dmTTLSeconds = s.dmTTLSeconds;
+        localStorage.setItem('nym_dm_ttl_seconds', String(s.dmTTLSeconds));
+    }
+
+    // Read receipts
+    if (typeof s.readReceiptsEnabled === 'boolean') {
+        nym.settings.readReceiptsEnabled = s.readReceiptsEnabled;
+        localStorage.setItem('nym_read_receipts_enabled', String(s.readReceiptsEnabled));
+    }
+
+    // Nick style
+    if (s.nickStyle) {
+        nym.settings.nickStyle = s.nickStyle;
+        localStorage.setItem('nym_nick_style', s.nickStyle);
+    }
+
+    // Wallpaper
+    if (s.wallpaperType) {
+        localStorage.setItem('nym_wallpaper_type', s.wallpaperType);
+        if (typeof selectWallpaper === 'function') {
+            selectWallpaper(s.wallpaperType);
+        }
+    }
+    if (s.wallpaperCustomUrl) {
+        localStorage.setItem('nym_wallpaper_custom_url', s.wallpaperCustomUrl);
+    }
+
+    // Lightning address
+    if (s.lightningAddress) {
+        localStorage.setItem('nym_lightning_address_global', s.lightningAddress);
+        nym.lightningAddress = s.lightningAddress;
+    }
+
+    // PoW difficulty
+    if (typeof s.powDifficulty === 'number') {
+        nym.powDifficulty = s.powDifficulty;
+        nym.enablePow = s.powDifficulty > 0;
+        localStorage.setItem('nym_pow_difficulty', String(s.powDifficulty));
+    }
+
+    // Hide non-pinned
+    if (typeof s.hideNonPinned === 'boolean') {
+        nym.hideNonPinned = s.hideNonPinned;
+        localStorage.setItem('nym_hide_non_pinned', String(s.hideNonPinned));
+    }
+
+    // Blur images
+    if (typeof s.blurOthersImages === 'boolean') {
+        nym.blurOthersImages = s.blurOthersImages;
+    }
+
+    // Pinned landing channel
+    if (s.pinnedLandingChannel && typeof s.pinnedLandingChannel === 'object') {
+        nym.pinnedLandingChannel = s.pinnedLandingChannel;
+        nym.settings.pinnedLandingChannel = s.pinnedLandingChannel;
+        localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(s.pinnedLandingChannel));
+    }
+
+    nym.displaySystemMessage('Settings synced from Nostr relays.');
 }
 
 // Sign-out button
@@ -20199,6 +20567,11 @@ function signOut() {
         localStorage.removeItem('nym_purchases_cache');
         localStorage.removeItem('nym_active_style');
         localStorage.removeItem('nym_active_flair');
+        // Clear Nostr login state
+        localStorage.removeItem('nym_nostr_login_method');
+        localStorage.removeItem('nym_nostr_login_pubkey');
+        localStorage.removeItem('nym_nostr_login_nsec');
+        localStorage.removeItem('nym_nostr_login_npub');
         nym.cmdQuit();
     }
 }
@@ -20214,6 +20587,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
         const cb = document.getElementById('autoEphemeralCheckbox');
         if (cb) cb.checked = true;
+    }
+
+    // Restore Nostr login state from localStorage
+    if (isNostrLoggedIn()) {
+        const method = localStorage.getItem('nym_nostr_login_method');
+        const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
+        let secretKey = null;
+        if (method === 'nsec') {
+            try {
+                const nsec = localStorage.getItem('nym_nostr_login_nsec');
+                if (nsec) secretKey = nym.decodeNsec(nsec);
+            } catch (_) {}
+        }
+        nym.nostrLoginPubkey = pubkey;
+        nym.nostrLoginSecretKey = secretKey;
+        nym.nostrLoginMethod = method;
     }
 
     // Scale logo-ascii to fit inside sidebar at any resolution
@@ -20563,8 +20952,7 @@ async function routeToUrlChannel() {
     }
 }
 
-// ── Relay Stats Modal ──
-
+// Relay Stats Modal
 function openRelayStats() {
     const modal = document.getElementById('relayStatsModal');
     if (!modal) return;

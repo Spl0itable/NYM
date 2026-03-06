@@ -200,17 +200,17 @@
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <pre class="logo-ascii">
-                                            ##\                  ##\     
-                                            ## |                 ## |    
-#######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\   
-##  __##\ ## |  ## |##  _##  _##\ ##  _____|##  __##\  \____##\\_##  _|  
-## |  ## |## |  ## |## / ## / ## |## /      ## |  ## | ####### | ## |    
-## |  ## |## |  ## |## | ## | ## |## |      ## |  ## |##  __## | ## |##\ 
+                                            ##\                  ##\
+                                            ## |                 ## |
+#######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\
+##  __##\ ## |  ## |##  _##  _##\ ##  _____|##  __##\  \____##\\_##  _|
+## |  ## |## |  ## |## / ## / ## |## /      ## |  ## | ####### | ## |
+## |  ## |## |  ## |## | ## | ## |## |      ## |  ## |##  __## | ## |##\
 ## |  ## |\####### |## | ## | ## |\#######\ ## |  ## |\####### | \####  |
-\__|  \__| \____## |\__| \__| \__| \_______|\__|  \__| \_______|  \____/ 
-          ##\   ## |                                                     
-          \######  |                                                     
-           \______/                                                      
+\__|  \__| \____## |\__| \__| \__| \_______|\__|  \__| \_______|  \____/
+          ##\   ## |
+          \######  |
+           \______/
 </pre>
                 <div class="nym-display" onclick="editNick()">
                     <div class="nym-label">Your Nym (click to edit)</div>
@@ -499,6 +499,43 @@
         </div>
     </div>
 
+    <!-- Nostr Login Modal (easter egg via ASCII art click) -->
+    <div class="modal" id="nostrLoginModal">
+        <div class="modal-content" style="max-width: 440px;">
+            <button class="modal-close" onclick="closeModal('nostrLoginModal')">&#x2715;</button>
+            <div class="modal-header">Login with Nostr</div>
+            <div class="modal-body">
+                <div style="color: var(--text-dim); font-size: 13px; margin-bottom: 18px;">
+                    Login with your Nostr identity to sync settings across devices.
+                </div>
+
+                <!-- Browser Extension Option (hidden for NymchatApp shell) -->
+                <div id="nostrLoginExtensionOption" style="margin-bottom: 14px;">
+                    <button class="send-btn" id="nostrLoginExtensionBtn" onclick="nostrLoginWithExtension()" style="width: 100%; padding: 12px;">
+                        Login with Browser Extension (NIP-07)
+                    </button>
+                    <div class="form-hint" style="margin-top: 6px;">Use Alby, nos2x, or another NIP-07 extension</div>
+                </div>
+
+                <div id="nostrLoginDivider" style="text-align: center; margin: 16px 0; color: var(--text-dim); font-size: 12px;">
+                    or
+                </div>
+
+                <!-- Paste nsec Option -->
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label class="form-label">Paste your nsec</label>
+                    <input type="password" class="form-input" id="nostrLoginNsecInput" placeholder="nsec1..." autocomplete="off">
+                    <div id="nostrLoginError" style="color: var(--danger); font-size: 12px; margin-top: 5px; display: none;"></div>
+                    <div class="form-hint">Your private key stays local and is never sent to any server</div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" onclick="closeModal('nostrLoginModal')">Cancel</button>
+                <button class="send-btn" id="nostrLoginSubmitBtn" onclick="nostrLoginWithNsec()">Login</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Relay Stats Modal -->
     <div class="modal" id="relayStatsModal">
         <div class="modal-content relay-stats-content">
@@ -598,7 +635,7 @@
     <div class="modal active" id="setupModal">
         <div class="modal-content setup-modal-content">
             <div class="modal-header setup-modal-header">
-                <pre class="logo-ascii setup-logo">
+                <pre class="logo-ascii setup-logo" onclick="openNostrLogin()" title="Login with Nostr" style="cursor: pointer;">
                                             ##\                  ##\
                                             ## |                 ## |
 #######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\
