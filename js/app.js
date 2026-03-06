@@ -6743,7 +6743,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const host = window.location.hostname;
             if (host.endsWith('.pages.dev') || host.endsWith('.workers.dev')) return true;
             // Known Cloudflare Pages custom domains for this app
-            if (host === 'web.nymchat.app' || host === 'nymchat.app') return true;
+            if (host === 'web.nymchat.app' || host === 'app.nymchat.app' || host === 'nymchat.app') return true;
             // Detect NymchatApp native wrapper (e.g. WebView user agent)
             if (navigator.userAgent && navigator.userAgent.includes('NymchatApp/')) return true;
         } catch {
