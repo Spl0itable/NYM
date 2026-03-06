@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.nym.bar",
+      "sha256_cert_fingerprints": [
+        "YOUR_DEBUG_SHA256_FINGERPRINT",
+        "YOUR_RELEASE_SHA256_FINGERPRINT"
+      ]
+    }
+  }
+]
