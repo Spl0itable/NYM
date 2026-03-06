@@ -6743,7 +6743,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const host = window.location.hostname;
             if (host.endsWith('.pages.dev') || host.endsWith('.workers.dev')) return true;
             // Known Cloudflare Pages custom domains for this app
-            if (host === 'web.nymchat.app' || host === 'nymchat.app') return true;
+            if (host === 'web.nymchat.app' || host === 'app.nymchat.app' || host === 'nymchat.app') return true;
             // Detect NymchatApp native wrapper (e.g. WebView user agent)
             if (navigator.userAgent && navigator.userAgent.includes('NymchatApp/')) return true;
         } catch {
@@ -6752,17 +6752,25 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return false;
     }
 
+    _getProxyHost() {
+        try {
+            const h = window.location.host;
+            if (h && h !== '' && !h.startsWith('localhost') && !h.startsWith('127.') && !h.startsWith('0.0.0.0')) return h;
+        } catch {}
+        return 'web.nymchat.app';
+    }
+
     _getProxiedRelayUrl(relayUrl) {
         if (!this.useRelayProxy) return relayUrl;
-        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${proto}//${window.location.host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
+        const host = this._getProxyHost();
+        return `wss://${host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
     }
 
     // --- Multiplexed relay pool (single WebSocket to proxy) ---
 
     _getRelayPoolUrl() {
-        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${proto}//${window.location.host}/api/relay-pool`;
+        const host = this._getProxyHost();
+        return `wss://${host}/api/relay-pool`;
     }
 
     _connectToRelayPool() {
@@ -19865,7 +19873,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.36.141 ═══<br/>
+═══ Nymchat v3.36.142 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
