@@ -14234,8 +14234,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Convert video URLs to video players
         formatted = formatted.replace(
             /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
-            (match, url) => {
-                return `<video src="${url}" controls playsinline preload="metadata" class="message-video" onclick="event.stopPropagation(); nym.expandVideo(this.src)"></video>`;
+            (match, url, ext) => {
+                const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
+                const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
+                return `<video controls playsinline webkit-playsinline preload="metadata" class="message-video" onclick="event.stopPropagation(); nym.expandVideo(this.querySelector('source').src)"><source src="${url}" type="${type}"></video>`;
             }
         );
 
@@ -14346,7 +14348,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         modalImg.style.display = '';
         modalVid.style.display = 'none';
         modalVid.pause();
-        modalVid.src = '';
+        modalVid.removeAttribute('src');
+        while (modalVid.firstChild) modalVid.firstChild.remove();
         document.getElementById('imageModal').classList.add('active');
     }
 
@@ -14355,7 +14358,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const modalVid = document.getElementById('modalVideo');
         modalImg.style.display = 'none';
         modalImg.src = '';
-        modalVid.src = src;
+        // Clear existing sources and use a <source> element for iOS Safari compatibility
+        modalVid.removeAttribute('src');
+        while (modalVid.firstChild) modalVid.firstChild.remove();
+        const source = document.createElement('source');
+        source.src = src;
+        const ext = src.split('.').pop().split('?')[0].toLowerCase();
+        const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
+        source.type = mimeTypes[ext] || 'video/mp4';
+        modalVid.appendChild(source);
+        modalVid.load();
         modalVid.style.display = '';
         document.getElementById('imageModal').classList.add('active');
     }
@@ -18914,7 +18926,9 @@ function closeImageModal() {
     document.getElementById('imageModal').classList.remove('active');
     const modalVid = document.getElementById('modalVideo');
     modalVid.pause();
-    modalVid.src = '';
+    modalVid.removeAttribute('src');
+    while (modalVid.firstChild) modalVid.firstChild.remove();
+    modalVid.load();
 }
 
 function addPollOption() {
@@ -19778,7 +19792,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.36.138 ═══<br/>
+═══ Nymchat v3.36.139 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

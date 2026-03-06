@@ -1548,12 +1548,16 @@ body.light-mode .pubkey-slideout-copy:hover {
 .message-content video.message-video {
     max-width: 300px;
     max-height: 300px;
+    min-height: 80px;
+    width: 100%;
     display: block;
     margin: 10px 0;
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: all var(--transition);
+    background: var(--bg-tertiary);
+    -webkit-transform: translateZ(0);
 }
 
 .message-content video.message-video:hover {
