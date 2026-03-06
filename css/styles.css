@@ -1545,25 +1545,64 @@ body.light-mode .pubkey-slideout-copy:hover {
     border-color: rgba(255, 255, 255, 0.15);
 }
 
+.message-content .video-container {
+    position: relative;
+    display: inline-block;
+    max-width: 300px;
+    margin: 10px 0;
+}
+
 .message-content video.message-video {
     max-width: 300px;
     max-height: 300px;
     min-height: 80px;
     width: 100%;
     display: block;
-    margin: 10px 0;
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm);
-    cursor: pointer;
     transition: all var(--transition);
     background: var(--bg-tertiary);
     -webkit-transform: translateZ(0);
 }
 
-.message-content video.message-video:hover {
+.message-content .video-container:hover video.message-video {
     transform: scale(1.02);
     box-shadow: var(--shadow-md);
     border-color: rgba(255, 255, 255, 0.15);
+}
+
+.video-expand-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 30px;
+    height: 30px;
+    background: rgba(0, 0, 0, 0.6);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity var(--transition);
+    z-index: 2;
+    padding: 0;
+    line-height: 1;
+}
+
+.video-container:hover .video-expand-btn {
+    opacity: 1;
+}
+
+@media (hover: none) {
+    .video-expand-btn {
+        opacity: 1;
+    }
 }
 
 .message-content strong {
@@ -3209,6 +3248,10 @@ body.light-mode .verified-badge::before {
     }
 
     .message-content img {
+        max-width: 100%;
+    }
+
+    .message-content .video-container {
         max-width: 100%;
     }
 

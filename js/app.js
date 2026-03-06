@@ -14098,6 +14098,42 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     }
                 });
             }
+
+            // iOS Safari: explicitly load videos inserted via innerHTML and handle scroll.
+            // Safari requires Range request support (206) to play videos. If the server
+            // doesn't support it, fall back to fetching as a blob URL.
+            const videos = messageEl.querySelectorAll('video.message-video');
+            if (videos.length > 0) {
+                videos.forEach(vid => {
+                    const source = vid.querySelector('source');
+                    if (source) {
+                        const blobFallback = async () => {
+                            if (vid.dataset.blobLoaded) return;
+                            vid.dataset.blobLoaded = 'true';
+                            try {
+                                const resp = await fetch(source.src);
+                                const blob = await resp.blob();
+                                const blobUrl = URL.createObjectURL(blob);
+                                vid.dataset.blobSrc = blobUrl;
+                                vid.removeAttribute('src');
+                                source.src = blobUrl;
+                                source.type = 'video/mp4';
+                                vid.load();
+                            } catch (e) {
+                                console.warn('Video blob fallback failed:', e);
+                            }
+                        };
+                        source.addEventListener('error', blobFallback, { once: true });
+                        vid.addEventListener('error', blobFallback, { once: true });
+                    }
+                    vid.load();
+                    vid.addEventListener('loadedmetadata', () => {
+                        if (!this.userScrolledUp) {
+                            this._scheduleScrollToBottom();
+                        }
+                    }, { once: true });
+                });
+            }
         }
 
         // Play notification sound for mentions and PMs (but not for historical messages or own messages)
@@ -14232,12 +14268,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
 
         // Convert video URLs to video players
+        // Use __VID_n__ placeholders to prevent the general URL-to-link regex from
+        // matching URLs that are already embedded inside video HTML attributes.
+        const videoPlaceholders = [];
         formatted = formatted.replace(
             /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
             (match, url, ext) => {
                 const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
                 const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
-                return `<video controls playsinline webkit-playsinline preload="metadata" class="message-video" onclick="event.stopPropagation(); nym.expandVideo(this.querySelector('source').src)"><source src="${url}" type="${type}"></video>`;
+                const idx = videoPlaceholders.length;
+                videoPlaceholders.push(`<span class="video-container" onclick="event.stopPropagation()"><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${url}" type="${type}"></video><button class="video-expand-btn" data-video-src="${url.replace(/"/g, '&quot;')}" onclick="event.stopPropagation(); var v=this.previousElementSibling; nym.expandVideo(v.dataset.blobSrc||this.dataset.videoSrc)">⛶</button></span>`);
+                return `__VID_${idx}__`;
             }
         );
 
@@ -14262,6 +14303,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
             '<a href="$1" target="_blank" rel="noopener">$1</a>'
         );
+
+        // Restore video placeholders
+        formatted = formatted.replace(/__VID_(\d+)__/g, (m, idx) => videoPlaceholders[idx]);
 
         // Process mentions and geohash channel references in one pass
         formatted = formatted.replace(
@@ -14358,15 +14402,42 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const modalVid = document.getElementById('modalVideo');
         modalImg.style.display = 'none';
         modalImg.src = '';
-        // Clear existing sources and use a <source> element for iOS Safari compatibility
+        // Clear existing sources
         modalVid.removeAttribute('src');
         while (modalVid.firstChild) modalVid.firstChild.remove();
-        const source = document.createElement('source');
-        source.src = src;
+
         const ext = src.split('.').pop().split('?')[0].toLowerCase();
         const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
-        source.type = mimeTypes[ext] || 'video/mp4';
-        modalVid.appendChild(source);
+        const mimeType = mimeTypes[ext] || 'video/mp4';
+
+        // If src is already a blob URL (from inline player fallback), use directly
+        if (src.startsWith('blob:')) {
+            modalVid.src = src;
+        } else {
+            // Try direct source first, fall back to blob URL for Safari compatibility
+            const source = document.createElement('source');
+            source.src = src;
+            source.type = mimeType;
+            modalVid.appendChild(source);
+
+            const blobFallback = async () => {
+                if (modalVid.dataset.blobLoaded === src) return;
+                modalVid.dataset.blobLoaded = src;
+                try {
+                    const resp = await fetch(src);
+                    const blob = await resp.blob();
+                    modalVid.removeAttribute('src');
+                    while (modalVid.firstChild) modalVid.firstChild.remove();
+                    modalVid.src = URL.createObjectURL(blob);
+                    modalVid.load();
+                } catch (e) {
+                    console.warn('Modal video blob fallback failed:', e);
+                }
+            };
+            source.addEventListener('error', blobFallback, { once: true });
+            modalVid.addEventListener('error', blobFallback, { once: true });
+        }
+
         modalVid.load();
         modalVid.style.display = '';
         document.getElementById('imageModal').classList.add('active');
@@ -19792,7 +19863,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.36.139 ═══<br/>
+═══ Nymchat v3.36.140 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
