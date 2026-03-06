@@ -20255,7 +20255,13 @@ async function nostrLoginWithExtension() {
         applyNostrLogin(pubkey, null, 'extension');
 
         closeModal('nostrLoginModal');
-        nym.displaySystemMessage('Logged in with Nostr extension.');
+
+        // If the setup modal is still showing, bypass it and connect
+        if (document.getElementById('setupModal')?.classList.contains('active')) {
+            await nostrLoginBypassSetup();
+        } else {
+            nym.displaySystemMessage('Logged in with Nostr extension.');
+        }
     } catch (err) {
         errorEl.textContent = err.message;
         errorEl.style.display = 'block';
@@ -20265,7 +20271,7 @@ async function nostrLoginWithExtension() {
     }
 }
 
-function nostrLoginWithNsec() {
+async function nostrLoginWithNsec() {
     const errorEl = document.getElementById('nostrLoginError');
     errorEl.style.display = 'none';
     const nsecInput = document.getElementById('nostrLoginNsecInput').value.trim();
@@ -20290,11 +20296,48 @@ function nostrLoginWithNsec() {
         applyNostrLogin(pubkey, secretKey, 'nsec');
 
         closeModal('nostrLoginModal');
-        nym.displaySystemMessage('Logged in with Nostr identity.');
+
+        // If the setup modal is still showing, bypass it and connect
+        if (document.getElementById('setupModal')?.classList.contains('active')) {
+            await nostrLoginBypassSetup();
+        } else {
+            nym.displaySystemMessage('Logged in with Nostr identity.');
+        }
     } catch (err) {
         errorEl.textContent = 'Invalid nsec key. Please check and try again.';
         errorEl.style.display = 'block';
     }
+}
+
+async function nostrLoginBypassSetup() {
+    // Nostr login from the setup/welcome modal — connect to relays and enter the app
+    // applyNostrLogin() already set nym.pubkey/privkey to the Nostr identity
+    document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+    nym.updateSidebarAvatar();
+
+    await nym.connectToRelays();
+    nym.applyCachedShopItemsToNewIdentity();
+
+    // Restore lightning address if saved
+    const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
+    if (globalLnAddress) {
+        nym.lightningAddress = globalLnAddress;
+        localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
+        nym.updateLightningAddressDisplay();
+    }
+
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
+
+    closeModal('setupModal');
+
+    setTimeout(() => nostrSettingsLoad(), 2000);
+
+    await routeToUrlChannel();
+    window.maybeStartTutorial(false);
+
+    nym.displaySystemMessage('Logged in with Nostr identity.');
 }
 
 function applyNostrLogin(pubkey, secretKey, method) {
