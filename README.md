@@ -40,7 +40,7 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - **Rich Text** - Markdown support for bold, italic, strikethrough, code blocks, and quotes
 - **Message Reactions** - React to messages with emojis (NIP-25)
 - **Auto-Reply** - Set away messages with `/brb` command
-- **Image Sharing** - Upload and share images via blossom.band
+- **Image/Video Sharing** - Upload and share images or video
 
 ### Lightning Integration
 - **Lightning Zaps** - Send Lightning payments to messages and user profiles (NIP-57)
