@@ -6743,7 +6743,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const host = window.location.hostname;
             if (host.endsWith('.pages.dev') || host.endsWith('.workers.dev')) return true;
             // Known Cloudflare Pages custom domains for this app
-            if (host === 'web.nymchat.app' || host === 'app.nymchat.app' || host === 'nymchat.app') return true;
+            if (host === 'web.nymchat.app' || host === 'nymchat.app') return true;
+            // Detect NymchatApp native wrapper (e.g. WebView user agent)
+            if (navigator.userAgent && navigator.userAgent.includes('NymchatApp/')) return true;
         } catch {
             // Not in a browser context
         }
@@ -19863,7 +19865,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.36.140 ═══<br/>
+═══ Nymchat v3.36.141 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
