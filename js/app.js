@@ -19965,7 +19965,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.38.143 ═══<br/>
+═══ Nymchat v3.38.144 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -19986,6 +19986,83 @@ async function checkSavedConnection() {
     localStorage.removeItem('nym_nsec');
     localStorage.removeItem('nym_bunker_uri');
     localStorage.removeItem('nym_relay_url');
+
+    // Nostr login takes priority — auto-connect with stored persistent identity
+    // so the user doesn't have to go through the setup modal again.
+    if (isNostrLoggedIn()) {
+        try {
+            const method = localStorage.getItem('nym_nostr_login_method');
+            const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
+            if (!pubkey) throw new Error('No stored pubkey');
+
+            let secretKey = null;
+            if (method === 'nsec') {
+                const nsec = localStorage.getItem('nym_nostr_login_nsec');
+                if (nsec) secretKey = nym.decodeNsec(nsec);
+            }
+
+            // For extension login, wait for NIP-07 extension to inject window.nostr
+            if (method === 'extension') {
+                for (let attempt = 0; attempt < 10; attempt++) {
+                    if (window.nostr?.getPublicKey) break;
+                    await new Promise(r => setTimeout(r, 300));
+                }
+            }
+
+            // Hide setup modal
+            const setupModal = document.getElementById('setupModal');
+            setupModal.classList.remove('active');
+
+            // Generate base ephemeral keypair (needed for internal crypto ops),
+            // then immediately override with the nostr identity BEFORE connecting
+            await nym.generateKeypair();
+            nym.pubkey = pubkey;
+            if (secretKey) nym.privkey = secretKey;
+            nym.nostrLoginPubkey = pubkey;
+            nym.nostrLoginSecretKey = secretKey;
+            nym.nostrLoginMethod = method;
+            nym.nym = 'anon'; // placeholder until kind 0 profile is fetched
+
+            document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+            nym.updateSidebarAvatar();
+
+            // Connect to relays using the nostr identity (correct pubkey for DM subs)
+            await nym.connectToRelays();
+
+            // Apply cached shop items
+            nym.applyCachedShopItemsToNewIdentity();
+
+            // Fetch kind 0 profile and settings now that relays are connected
+            applyNostrLogin(pubkey, secretKey, method);
+
+            // Request notification permission
+            if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+                Notification.requestPermission();
+            }
+
+            // Start tutorial if not seen
+            window.maybeStartTutorial(false);
+
+            // Resume to last channel from previous session
+            const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
+            if (savedChannel) {
+                try {
+                    const { channel, geohash } = JSON.parse(savedChannel);
+                    if (channel && channel !== nym.currentChannel) {
+                        if (geohash) nym.addChannel(channel, geohash);
+                        nym.switchChannel(channel, geohash || '');
+                    }
+                } catch (e) { }
+            }
+
+            // Route to channel from URL if present (overrides saved channel)
+            await routeToUrlChannel();
+
+            return; // Exit early — nostr login handled
+        } catch (error) {
+            // Nostr login restoration failed, fall through to auto-ephemeral or setup modal
+        }
+    }
 
     // Auto-ephemeral preference
     const autoEphemeral = localStorage.getItem('nym_auto_ephemeral');
@@ -20153,6 +20230,28 @@ async function initializeNym() {
             }
         }
 
+        // If nostr logged in, apply identity keys BEFORE connecting to relays
+        // so that relay subscriptions (especially DMs) use the correct pubkey.
+        const nostrLoginActive = isNostrLoggedIn();
+        let nostrPubkey = null, nostrSecretKey = null, nostrMethod = null;
+        if (nostrLoginActive) {
+            nostrMethod = localStorage.getItem('nym_nostr_login_method');
+            nostrPubkey = localStorage.getItem('nym_nostr_login_pubkey');
+            if (nostrMethod === 'nsec') {
+                try {
+                    const nsec = localStorage.getItem('nym_nostr_login_nsec');
+                    if (nsec) nostrSecretKey = nym.decodeNsec(nsec);
+                } catch (_) {}
+            }
+            if (nostrPubkey) {
+                nym.pubkey = nostrPubkey;
+                if (nostrSecretKey) nym.privkey = nostrSecretKey;
+                nym.nostrLoginPubkey = nostrPubkey;
+                nym.nostrLoginSecretKey = nostrSecretKey;
+                nym.nostrLoginMethod = nostrMethod;
+            }
+        }
+
         // Connect to relays
         await nym.connectToRelays();
 
@@ -20162,7 +20261,7 @@ async function initializeNym() {
         if (isDeveloperLogin) {
             // Developer login - load lightning address from their kind 0 profile
             await nym.loadLightningAddress();
-        } else {
+        } else if (!nostrLoginActive) {
             // Restore lightning address from global localStorage to new session
             const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
             if (globalLnAddress) {
@@ -20209,9 +20308,9 @@ async function initializeNym() {
         // Close setup modal
         closeModal('setupModal');
 
-        // Load synced settings from Nostr relays if logged in
-        if (isNostrLoggedIn()) {
-            setTimeout(() => nostrSettingsLoad(), 2000);
+        // Now that relays are connected, fetch kind 0 profile and load settings
+        if (nostrLoginActive && nostrPubkey) {
+            applyNostrLogin(nostrPubkey, nostrSecretKey, nostrMethod);
         }
 
         // Route to channel from URL if present
@@ -20356,17 +20455,7 @@ async function nostrLoginWithNsec() {
 }
 
 async function nostrLoginBypassSetup() {
-    // Nostr login from the setup/welcome modal — initialize the app, then re-apply identity
-    // Save the Nostr identity that applyNostrLogin() just set
-    const nostrPubkey = nym.nostrLoginPubkey;
-    const nostrSecretKey = nym.nostrLoginSecretKey;
-    const nostrMethod = nym.nostrLoginMethod;
-
-    // Use initializeNym to do the full setup (generate ephemeral keys, connect relays, close modal)
     await initializeNym();
-
-    // Re-apply the Nostr identity on top of the ephemeral session
-    applyNostrLogin(nostrPubkey, nostrSecretKey, nostrMethod);
 }
 
 function applyNostrLogin(pubkey, secretKey, method) {
@@ -20384,9 +20473,8 @@ function applyNostrLogin(pubkey, secretKey, method) {
     }
     nym.pubkey = pubkey;
 
-    // Fetch the persistent identity's kind 0 profile from relays,
-    // then update sidebar with the profile name/avatar
-    nym.fetchProfileDirect(pubkey).then(() => {
+    // Helper to update sidebar with profile name/avatar
+    function updateSidebarFromProfile() {
         const user = nym.users.get(pubkey);
         if (user && user.nym) {
             nym.nym = user.nym;
@@ -20395,11 +20483,30 @@ function applyNostrLogin(pubkey, secretKey, method) {
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
         }
         nym.updateSidebarAvatar();
-    }).catch(() => {
-        if (nym.nym) {
-            document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+    }
+
+    nym.fetchProfileDirect(pubkey).then(() => {
+        updateSidebarFromProfile();
+        // If profile wasn't found on first try, retry after more relays have connected
+        if (!nym.users.has(pubkey) || !nym.users.get(pubkey).nym) {
+            setTimeout(() => {
+                nym.fetchProfileDirect(pubkey).then(() => {
+                    updateSidebarFromProfile();
+                }).catch(() => {
+                    updateSidebarFromProfile();
+                });
+            }, 3000);
         }
-        nym.updateSidebarAvatar();
+    }).catch(() => {
+        updateSidebarFromProfile();
+        // Retry after delay on failure
+        setTimeout(() => {
+            nym.fetchProfileDirect(pubkey).then(() => {
+                updateSidebarFromProfile();
+            }).catch(() => {
+                updateSidebarFromProfile();
+            });
+        }, 3000);
     });
 
     // Load settings from relays for this identity
@@ -20416,7 +20523,6 @@ function nostrLogout() {
     nym.nostrLoginMethod = null;
     nym.displaySystemMessage('Nostr identity logged out. Settings will no longer sync.');
 }
-
 
 // Nostr Settings Sync (kind 30078)
 async function nostrSettingsSign(event) {
@@ -20673,30 +20779,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
         const cb = document.getElementById('autoEphemeralCheckbox');
         if (cb) cb.checked = true;
-    }
-
-    // Restore Nostr login state from localStorage and fully re-apply
-    if (isNostrLoggedIn()) {
-        const method = localStorage.getItem('nym_nostr_login_method');
-        const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
-        let secretKey = null;
-        if (method === 'nsec') {
-            try {
-                const nsec = localStorage.getItem('nym_nostr_login_nsec');
-                if (nsec) secretKey = nym.decodeNsec(nsec);
-            } catch (_) {}
-        }
-        if (method === 'extension' && window.nostr?.getPublicKey) {
-            // Re-verify extension is still available and get fresh pubkey
-            window.nostr.getPublicKey().then(extPubkey => {
-                applyNostrLogin(extPubkey, null, 'extension');
-            }).catch(() => {
-                // Extension no longer available, fall back to stored pubkey (read-only)
-                applyNostrLogin(pubkey, null, 'extension');
-            });
-        } else if (pubkey) {
-            applyNostrLogin(pubkey, secretKey, method);
-        }
     }
 
     // Scale logo-ascii to fit inside sidebar at any resolution
