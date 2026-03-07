@@ -1647,6 +1647,8 @@ body.light-mode .pubkey-slideout-copy:hover {
     border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
 }
 
+
+
 .message-content h1,
 .message-content h2,
 .message-content h3 {

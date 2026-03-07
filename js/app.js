@@ -13952,6 +13952,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             messageEl.dataset.messageId = message.id;
             messageEl.dataset.author = message.author;
             messageEl.dataset.pubkey = message.pubkey;
+            messageEl.dataset.rawContent = message.content;
             messageEl.dataset.timestamp = displayTimestamp.getTime();
 
             const authorClass = message.isOwn ? 'self' : '';
@@ -14289,71 +14290,77 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
 
     formatMessageWithQuotes(content) {
-        // Check if content contains a quote pattern
-        const quotePattern = /^>(.+?)$/gm;
-        const quotes = content.match(quotePattern);
-
-        if (!quotes) {
-            return this.formatMessage(content);
-        }
-
-        // Process each quote to extract and lookup the author
+        // Split content into lines and group consecutive > lines into quote blocks
+        const lines = content.split('\n');
         let html = '';
-        let lastIndex = 0;
-        let match;
+        let i = 0;
 
-        quotePattern.lastIndex = 0;
-        while ((match = quotePattern.exec(content)) !== null) {
-            // Add any content before this quote (strip trailing newlines adjacent to blockquote)
-            if (match.index > lastIndex) {
-                const beforeQuote = content.substring(lastIndex, match.index).replace(/^\n+/, '').replace(/\n+$/, '');
-                if (beforeQuote) {
-                    html += this.formatMessage(beforeQuote);
+        while (i < lines.length) {
+            if (lines[i].startsWith('>')) {
+                // Collect all consecutive > lines into one quote block
+                const quoteLines = [];
+                while (i < lines.length && lines[i].startsWith('>')) {
+                    quoteLines.push(lines[i].substring(1).trim());
+                    i++;
+                }
+
+                // First line may have author attribution
+                const firstLine = quoteLines[0];
+                const authorMatch = firstLine.match(/^@([^:]+):\s*(.*)/);
+
+                if (authorMatch) {
+                    const quotedAuthor = authorMatch[1].trim();
+                    // Remaining text after author on first line, plus all continuation lines
+                    const messageParts = [];
+                    if (authorMatch[2]) messageParts.push(authorMatch[2]);
+                    for (let j = 1; j < quoteLines.length; j++) {
+                        messageParts.push(quoteLines[j]);
+                    }
+                    const quotedMessage = messageParts.join('\n');
+
+                    // Clean the author name of HTML, entities, and deduplicate suffixes for comparison
+                    let cleanAuthor = quotedAuthor.replace(/<[^>]*>/g, '').replace(/&lt;/g, '').replace(/&gt;/g, '').trim();
+                    cleanAuthor = cleanAuthor.replace(/^([^#]+)#([0-9a-f]{4})#\2$/i, '$1#$2');
+
+                    // Look up the author's pubkey
+                    let authorPubkey = null;
+                    this.users.forEach((user, pubkey) => {
+                        const userNym = this.parseNymFromDisplay(user.nym);
+                        const fullNym = `${userNym}#${this.getPubkeySuffix(pubkey)}`;
+                        if (fullNym === cleanAuthor || userNym === cleanAuthor) {
+                            authorPubkey = pubkey;
+                        }
+                    });
+
+                    // Get author's flair if found
+                    const flairHtml = authorPubkey ? this.getFlairForUser(authorPubkey) : '';
+                    const displayAuthor = `${this.escapeHtml(cleanAuthor)}${flairHtml}`;
+
+                    html += `<blockquote><span class="quote-author">@${displayAuthor}:</span> ${this.formatMessageWithQuotes(quotedMessage)}</blockquote>`;
+                } else {
+                    // Regular quote without author
+                    const quotedMessage = quoteLines.join('\n');
+                    html += `<blockquote>${this.formatMessageWithQuotes(quotedMessage)}</blockquote>`;
+                }
+            } else if (lines[i].trim() === '') {
+                // Skip empty lines adjacent to quotes
+                i++;
+            } else {
+                // Collect consecutive non-quote, non-empty lines
+                const textLines = [];
+                while (i < lines.length && !lines[i].startsWith('>')) {
+                    textLines.push(lines[i]);
+                    i++;
+                }
+                const text = textLines.join('\n').replace(/^\n+/, '').replace(/\n+$/, '');
+                if (text) {
+                    html += this.formatMessage(text);
                 }
             }
-
-            const quotedText = match[1].trim();
-
-            // Extract author from quote if it follows pattern "> @author: message"
-            const authorMatch = quotedText.match(/^@([^:]+):\s*(.+)/);
-
-            if (authorMatch) {
-                const quotedAuthor = authorMatch[1].trim();
-                const quotedMessage = authorMatch[2];
-
-                // Clean the author name of HTML, entities, and deduplicate suffixes for comparison
-                let cleanAuthor = quotedAuthor.replace(/<[^>]*>/g, '').replace(/&lt;/g, '').replace(/&gt;/g, '').trim();
-                cleanAuthor = cleanAuthor.replace(/^([^#]+)#([0-9a-f]{4})#\2$/i, '$1#$2');
-
-                // Look up the author's pubkey
-                let authorPubkey = null;
-                this.users.forEach((user, pubkey) => {
-                    const userNym = this.parseNymFromDisplay(user.nym);
-                    const fullNym = `${userNym}#${this.getPubkeySuffix(pubkey)}`;
-                    if (fullNym === cleanAuthor || userNym === cleanAuthor) {
-                        authorPubkey = pubkey;
-                    }
-                });
-
-                // Get author's flair if found
-                const flairHtml = authorPubkey ? this.getFlairForUser(authorPubkey) : '';
-                const displayAuthor = `${this.escapeHtml(cleanAuthor)}${flairHtml}`;
-
-                html += `<blockquote><span class="quote-author">@${displayAuthor}:</span> ${this.formatMessage(quotedMessage)}</blockquote>`;
-            } else {
-                // Regular quote without author
-                html += `<blockquote>${this.formatMessage(quotedText)}</blockquote>`;
-            }
-
-            lastIndex = match.index + match[0].length;
         }
 
-        // Add any remaining content (strip leading newlines after blockquote to avoid extra <br>)
-        if (lastIndex < content.length) {
-            const remainingContent = content.substring(lastIndex).replace(/^\n+/, '');
-            if (remainingContent) {
-                html += this.formatMessage(remainingContent);
-            }
+        if (!html) {
+            return this.formatMessage(content);
         }
 
         return html;
@@ -15759,13 +15766,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const authorSpan = msgEl.querySelector('.message-author');
                 const contentSpan = msgEl.querySelector('.message-content');
 
-                if (authorSpan && contentSpan) {
-                    // Extract author nym and pubkey from the message element's context menu data
+                if (authorSpan) {
+                    // Extract author nym from the displayed text
                     const authorText = authorSpan.textContent.replace(/[>]/g, '').trim();
-                    // Get the raw text content (strip HTML)
-                    const rawContent = contentSpan.textContent.trim();
-                    // Remove bubble time from the end if present
-                    const cleanContent = rawContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
+                    // Use raw content stored on the element to preserve quote structure
+                    const cleanContent = msgEl.dataset.rawContent || contentSpan.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
 
                     if (cleanContent) {
                         this.setQuoteReply(authorText, cleanContent);
@@ -15805,7 +15810,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Prepend quote if there's a pending quote reply
         if (this.pendingQuote) {
-            const quoteLine = `> @${this.pendingQuote.author}: ${this.pendingQuote.text}`;
+            const textLines = this.pendingQuote.text.split('\n');
+            const quoteLine = `> @${this.pendingQuote.author}: ${textLines[0]}` +
+                (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
             content = content ? `${quoteLine}\n\n${content}` : quoteLine;
             this.clearQuoteReply();
         }
@@ -20191,7 +20198,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.38.148 ═══<br/>
+═══ Nymchat v3.38.149 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
