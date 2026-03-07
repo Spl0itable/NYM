@@ -3341,6 +3341,7 @@ ${code}
                     pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
                     wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'geometric',
                     wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
+                    chatLayout: this.settings.chatLayout || 'irc',
                     colorMode: this.getColorMode(),
                     nickStyle: this.settings.nickStyle || 'fancy'
                 }
@@ -3487,6 +3488,11 @@ ${code}
                 this.saveWallpaper(s.wallpaperType, s.wallpaperCustomUrl || '');
                 this.applyWallpaper(s.wallpaperType, s.wallpaperCustomUrl || '');
             }
+            if (s.chatLayout) {
+                this.settings.chatLayout = s.chatLayout;
+                localStorage.setItem('nym_chat_layout', s.chatLayout);
+                applyMessageLayout(s.chatLayout);
+            }
             if (s.colorMode) {
                 localStorage.setItem('nym_color_mode', s.colorMode);
                 this.applyColorMode();
@@ -3562,6 +3568,11 @@ ${code}
                 if (s.wallpaperType !== undefined) {
                     document.querySelectorAll('.wallpaper-option').forEach(opt => {
                         opt.classList.toggle('selected', opt.dataset.wallpaper === s.wallpaperType);
+                    });
+                }
+                if (s.chatLayout) {
+                    document.querySelectorAll('.layout-option').forEach(opt => {
+                        opt.classList.toggle('selected', opt.dataset.layout === s.chatLayout);
                     });
                 }
             }
@@ -4977,6 +4988,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.loadPinnedChannels();
             this.loadHiddenChannels();
             this.loadWallpaper();
+            applyMessageLayout(this.settings.chatLayout);
 
             // Load lightning address
             await this.loadLightningAddress();
@@ -8692,7 +8704,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
                 dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
                 readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,  // Default true
-                pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' }
+                pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
+                chatLayout: this.settings.chatLayout || 'irc'
             };
 
             const settingsEvent = {
@@ -9940,6 +9953,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.pinnedLandingChannel = settings.pinnedLandingChannel;
                 this.settings.pinnedLandingChannel = settings.pinnedLandingChannel;
                 localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(settings.pinnedLandingChannel));
+            }
+
+            // Restore chat layout
+            if (settings.chatLayout) {
+                this.settings.chatLayout = settings.chatLayout;
+                localStorage.setItem('nym_chat_layout', settings.chatLayout);
+                applyMessageLayout(settings.chatLayout);
             }
 
             // Update UI elements if settings modal is open
@@ -14006,10 +14026,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Detect emoji-only messages (1-6 emoji with optional whitespace, no other text)
             const emojiOnlyClass = !message.isFileOffer && this.isEmojiOnly(message.content) ? ' emoji-only' : '';
 
+            const bubbleTime = time || displayTimestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: this.settings.timeFormat === '12hr' });
+
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}">${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
-    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}</span>
+    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time">${bubbleTime}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
+    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner">${bubbleTime}</span></span>
     ${reactionButton}
     ${deliveryCheckmark}
 `;
@@ -18675,7 +18697,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
             readReceiptsEnabled: localStorage.getItem('nym_read_receipts_enabled') !== 'false',  // Enabled by default
             pinnedLandingChannel: pinnedLandingChannel,
-            nickStyle: localStorage.getItem('nym_nick_style') || 'fancy'
+            nickStyle: localStorage.getItem('nym_nick_style') || 'fancy',
+            chatLayout: localStorage.getItem('nym_chat_layout') || 'irc'
         };
     }
 
@@ -19630,6 +19653,12 @@ async function showSettings() {
     // Initialize wallpaper UI selection
     initWallpaperUI();
 
+    // Initialize message layout selection
+    const currentLayout = nym.settings.chatLayout || 'irc';
+    document.querySelectorAll('.layout-option').forEach(opt => {
+        opt.classList.toggle('selected', opt.dataset.layout === currentLayout);
+    });
+
     // Render pending settings transfers
     nym.renderPendingSettingsTransfers();
 
@@ -19834,11 +19863,26 @@ function clearLocalStorageCache() {
     // Re-apply defaults visually
     nym.applyColorMode();
     nym.applyWallpaper('none');
+    applyMessageLayout('irc');
     nym.updateChannelPins();
     nym.applyHiddenChannels();
 
     nym.displaySystemMessage('Local storage cache cleared. Settings reset to defaults.');
     closeModal('settingsModal');
+}
+
+// Message Layout Functions
+function selectMessageLayout(layout) {
+    document.querySelectorAll('.layout-option').forEach(opt => {
+        opt.classList.toggle('selected', opt.dataset.layout === layout);
+    });
+    nym.settings.chatLayout = layout;
+    localStorage.setItem('nym_chat_layout', layout);
+    applyMessageLayout(layout);
+}
+
+function applyMessageLayout(layout) {
+    document.body.classList.toggle('chat-bubbles', layout === 'bubbles');
 }
 
 // Wallpaper Functions
@@ -19921,7 +19965,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.37.143 ═══<br/>
+═══ Nymchat v3.38.143 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -20405,6 +20449,7 @@ async function nostrSettingsSave() {
             colorMode: localStorage.getItem('nym_color_mode') || 'auto',
             wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'none',
             wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
+            chatLayout: nym.settings.chatLayout || 'irc',
             lightningAddress: localStorage.getItem('nym_lightning_address_global') || '',
             powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
             hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
@@ -20551,6 +20596,15 @@ function applyNostrSettings(s) {
     }
     if (s.wallpaperCustomUrl) {
         localStorage.setItem('nym_wallpaper_custom_url', s.wallpaperCustomUrl);
+    }
+
+    // Chat layout
+    if (s.chatLayout) {
+        nym.settings.chatLayout = s.chatLayout;
+        localStorage.setItem('nym_chat_layout', s.chatLayout);
+        if (typeof applyMessageLayout === 'function') {
+            applyMessageLayout(s.chatLayout);
+        }
     }
 
     // Lightning address

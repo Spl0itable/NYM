@@ -791,6 +791,28 @@
                     <div class="form-hint">Choose a background pattern or upload your own image (min 1920x1080)</div>
                 </div>
 
+                <div class="form-group">
+                    <label class="form-label">Message Layout</label>
+                    <div class="layout-grid" id="layoutGrid">
+                        <div class="layout-option selected" data-layout="irc" onclick="selectMessageLayout('irc')">
+                            <div class="layout-preview layout-preview-irc">
+                                <div class="layout-line"><span class="lp-time">12:01</span> <span class="lp-nick">&lt;alice&gt;</span> <span class="lp-msg">hey there!</span></div>
+                                <div class="layout-line"><span class="lp-time">12:02</span> <span class="lp-nick lp-self">&lt;you&gt;</span> <span class="lp-msg">hello!</span></div>
+                                <div class="layout-line"><span class="lp-time">12:03</span> <span class="lp-nick">&lt;bob&gt;</span> <span class="lp-msg">what's up?</span></div>
+                            </div>
+                            <span class="layout-label">IRC (Default)</span>
+                        </div>
+                        <div class="layout-option" data-layout="bubbles" onclick="selectMessageLayout('bubbles')">
+                            <div class="layout-preview layout-preview-bubbles">
+                                <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">alice</span><span class="lp-bubble-text">hey there!</span></div>
+                                <div class="lp-bubble lp-bubble-self"><span class="lp-bubble-text">hello!</span></div>
+                                <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">bob</span><span class="lp-bubble-text">what's up?</span></div>
+                            </div>
+                            <span class="layout-label">Bubbles</span>
+                        </div>
+                    </div>
+                    <div class="form-hint">Choose between classic IRC-style or modern chat bubbles</div>
+                </div>
 
                 <div class="form-group">
                     <label class="form-label">Sort Geohash Channels by Proximity</label>
