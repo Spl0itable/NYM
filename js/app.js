@@ -1953,11 +1953,10 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
             pubkey: this.pubkey
         };
 
-        let signed;
-        if (this.privkey) {
-            signed = window.NostrTools.finalizeEvent(evt, this.privkey);
-        }
-        if (signed) this.sendToRelay(['EVENT', signed]);
+        try {
+            const signed = await this.signEvent(evt);
+            if (signed) this.sendToRelay(['EVENT', signed]);
+        } catch (_) {}
     }
 
     loadCachedShopItems() {
@@ -8681,10 +8680,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     pubkey: this.pubkey
                 };
 
-                if (this.privkey) {
-                    const signedSettingsEvent = window.NostrTools.finalizeEvent(settingsEvent, this.privkey);
-                    this.sendToRelay(["EVENT", signedSettingsEvent]);
-                }
+                try {
+                    const signedSettingsEvent = await this.signEvent(settingsEvent);
+                    if (signedSettingsEvent) this.sendToRelay(["EVENT", signedSettingsEvent]);
+                } catch (_) {}
                 return; // Don't sync anything else for ephemeral users
             }
 
@@ -8721,14 +8720,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             };
 
             // Sign and send settings event
-            let signedSettingsEvent;
-            if (this.privkey) {
-                signedSettingsEvent = window.NostrTools.finalizeEvent(settingsEvent, this.privkey);
-            }
-
-            if (signedSettingsEvent) {
-                this.sendToRelay(["EVENT", signedSettingsEvent]);
-            }
+            try {
+                const signedSettingsEvent = await this.signEvent(settingsEvent);
+                if (signedSettingsEvent) this.sendToRelay(["EVENT", signedSettingsEvent]);
+            } catch (_) {}
 
         } catch (error) {
         }
@@ -12253,6 +12248,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     async signEvent(event) {
+        // NIP-07 extension signing (e.g. nos2x, Alby)
+        if (this.nostrLoginMethod === 'extension' && window.nostr?.signEvent) {
+            // Extension expects an unsigned event object and returns the signed event
+            const unsigned = {
+                kind: event.kind,
+                created_at: event.created_at,
+                tags: event.tags,
+                content: event.content,
+            };
+            const signed = await window.nostr.signEvent(unsigned);
+            return signed;
+        }
         if (this.privkey) {
             return window.NostrTools.finalizeEvent(event, this.privkey);
         } else {
@@ -19965,7 +19972,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.38.144 ═══<br/>
+═══ Nymchat v3.38.145 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -20017,7 +20024,12 @@ async function checkSavedConnection() {
             // then immediately override with the nostr identity BEFORE connecting
             await nym.generateKeypair();
             nym.pubkey = pubkey;
-            if (secretKey) nym.privkey = secretKey;
+            if (secretKey) {
+                nym.privkey = secretKey;
+            } else {
+                // Extension login — clear ephemeral privkey so signEvent() uses the extension
+                nym.privkey = null;
+            }
             nym.nostrLoginPubkey = pubkey;
             nym.nostrLoginSecretKey = secretKey;
             nym.nostrLoginMethod = method;
@@ -20245,7 +20257,12 @@ async function initializeNym() {
             }
             if (nostrPubkey) {
                 nym.pubkey = nostrPubkey;
-                if (nostrSecretKey) nym.privkey = nostrSecretKey;
+                if (nostrSecretKey) {
+                    nym.privkey = nostrSecretKey;
+                } else {
+                    // Extension login — clear ephemeral privkey so signEvent() uses the extension
+                    nym.privkey = null;
+                }
                 nym.nostrLoginPubkey = nostrPubkey;
                 nym.nostrLoginSecretKey = nostrSecretKey;
                 nym.nostrLoginMethod = nostrMethod;
@@ -20470,10 +20487,13 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Switch the active keypair to the persistent identity
     if (secretKey) {
         nym.privkey = secretKey;
+    } else {
+        // Extension login — clear ephemeral privkey so signEvent() uses the extension
+        nym.privkey = null;
     }
     nym.pubkey = pubkey;
 
-    // Helper to update sidebar with profile name/avatar
+    // Helper to update sidebar with profile name/avatar and load lightning address
     function updateSidebarFromProfile() {
         const user = nym.users.get(pubkey);
         if (user && user.nym) {
@@ -20483,6 +20503,8 @@ function applyNostrLogin(pubkey, secretKey, method) {
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
         }
         nym.updateSidebarAvatar();
+        // Pull lightning address from the kind 0 profile into settings
+        nym.loadLightningAddress();
     }
 
     nym.fetchProfileDirect(pubkey).then(() => {
