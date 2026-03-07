@@ -4773,6 +4773,19 @@ body.light-mode .message.self::before {
     text-shadow: 0 0 10px rgba(82, 255, 157, 0.6);
 }
 
+.message[class*="style-"] .message-content img,
+.message[class*="style-"] .message-content video,
+.message[class*="style-"] .message-content .video-container,
+.message[class*="style-"] .message-content .file-offer {
+    -webkit-text-fill-color: initial;
+    -webkit-background-clip: initial;
+    background: none;
+    color: inherit;
+    text-shadow: none;
+    animation: none;
+    filter: none;
+}
+
 .message.supporter-style {
     background: linear-gradient(135deg, rgba(255, 215, 0, 0.08), rgba(255, 215, 0, 0.03));
     border-left: 3px solid #ffd700;
@@ -6205,6 +6218,10 @@ body.chat-bubbles .message.self .message-content {
     border-radius: 16px;
     border-top-right-radius: 4px;
     text-align: left;
+}
+
+body.chat-bubbles .message.self .reactions-row {
+    justify-content: flex-end;
 }
 
 body.chat-bubbles .message.pm .message-content {

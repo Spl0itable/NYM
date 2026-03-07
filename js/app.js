@@ -1994,6 +1994,8 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
             localStorage.setItem('nym_purchases_cache', JSON.stringify({
                 purchases: data,
                 activeCosmetics: cosmeticsArr,
+                activeStyle: this.activeMessageStyle || null,
+                activeFlair: this.activeFlair || null,
                 ts: Date.now()
             }));
         } catch (e) { /* ignore */ }
@@ -2013,6 +2015,17 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
                 });
                 if (cache.activeCosmetics) {
                     this.activeCosmetics = new Set(cache.activeCosmetics);
+                }
+                // Restore flair and style from cache if not already set
+                if (cache.activeFlair && !this.activeFlair) {
+                    this.activeFlair = cache.activeFlair;
+                    this.localActiveFlair = cache.activeFlair;
+                    localStorage.setItem('nym_active_flair', cache.activeFlair);
+                }
+                if (cache.activeStyle && !this.activeMessageStyle) {
+                    this.activeMessageStyle = cache.activeStyle;
+                    this.localActiveStyle = cache.activeStyle;
+                    localStorage.setItem('nym_active_style', cache.activeStyle);
                 }
             }
         } catch (e) { /* ignore */ }
@@ -2468,6 +2481,18 @@ TRANSFER TO PUBKEY
             return;
         }
 
+        // Clear any stale payment state from a previous invoice
+        if (this.shopPaymentCheckInterval) {
+            clearInterval(this.shopPaymentCheckInterval);
+            this.shopPaymentCheckInterval = null;
+        }
+        if (this.shopZapReceiptSubId) {
+            this.sendToRelay(["CLOSE", this.shopZapReceiptSubId]);
+            this.shopZapReceiptSubId = null;
+        }
+        this.currentShopInvoice = null;
+        this.currentZapInvoice = null;
+
         const { itemId, item, amount } = this.currentPurchaseContext;
 
         // Show loading state
@@ -2629,6 +2654,11 @@ TRANSFER TO PUBKEY
     listenForShopZapReceipt(zapRequest) {
         if (!zapRequest) return;
 
+        // Close any existing shop zap receipt subscription to prevent stale matching
+        if (this.shopZapReceiptSubId) {
+            this.sendToRelay(["CLOSE", this.shopZapReceiptSubId]);
+        }
+
         // Store the subscription ID for later cleanup
         this.shopZapReceiptSubId = "shop-zap-" + Math.random().toString(36).substring(7);
 
@@ -2662,6 +2692,12 @@ TRANSFER TO PUBKEY
             return;
         }
 
+        // Clear any existing payment check interval to prevent stale invoice polling
+        if (this.shopPaymentCheckInterval) {
+            clearInterval(this.shopPaymentCheckInterval);
+            this.shopPaymentCheckInterval = null;
+        }
+
         let checkCount = 0;
         const maxChecks = 120; // Check for up to 2 minutes for shop purchases
 
@@ -2681,35 +2717,16 @@ TRANSFER TO PUBKEY
                     // Timeout
                     clearInterval(this.shopPaymentCheckInterval);
                     this.shopPaymentCheckInterval = null;
-                    document.getElementById('zapStatus').style.display = 'block';
-                    document.getElementById('zapStatus').className = 'zap-status';
-                    document.getElementById('zapStatus').innerHTML = '⏱️ Payment timeout - please check your wallet';
+                    const zapStatusEl = document.getElementById('zapStatus');
+                    if (zapStatusEl) {
+                        zapStatusEl.style.display = 'block';
+                        zapStatusEl.className = 'zap-status';
+                        zapStatusEl.innerHTML = '⏱️ Payment timeout - please check your wallet';
+                    }
                 }
             } catch (error) {
             }
         }, 1000); // Check every second
-    }
-
-    // Listen for zap receipt events
-    listenForShopZapReceipt() {
-        // Subscribe to zap receipt events (kind 9735) for this specific event
-        const subscription = [
-            "REQ",
-            "zap-receipt-" + Math.random().toString(36).substring(7),
-            {
-                kinds: [9735],
-                "#e": [this.currentZapTarget.messageId],
-                since: Math.floor(Date.now() / 1000) - 300, // Last 5 minutes
-                limit: 10
-            }
-        ];
-
-        this.sendToRelay(subscription);
-
-        // Also close the subscription after 60 seconds
-        setTimeout(() => {
-            this.sendToRelay(["CLOSE", subscription[1]]);
-        }, 60000);
     }
 
     async handleShopPaymentSuccess() {
@@ -8015,6 +8032,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async generateZapInvoice() {
         if (!this.currentZapTarget) return;
 
+        // Clear any stale payment state from a previous invoice
+        if (this.zapCheckInterval) {
+            clearInterval(this.zapCheckInterval);
+            this.zapCheckInterval = null;
+        }
+        if (this.zapReceiptSubId) {
+            this.sendToRelay(["CLOSE", this.zapReceiptSubId]);
+            this.zapReceiptSubId = null;
+        }
+        this.currentZapInvoice = null;
+
         // Get amount
         const selectedBtn = document.querySelector('.zap-amount-btn.selected');
         const customAmount = document.getElementById('zapCustomAmount').value;
@@ -8118,6 +8146,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
+        // Clear any existing payment check interval to prevent stale invoice polling
+        if (this.zapCheckInterval) {
+            clearInterval(this.zapCheckInterval);
+            this.zapCheckInterval = null;
+        }
+
         let checkCount = 0;
         const maxChecks = 60; // Check for up to 60 seconds
 
@@ -8135,9 +8169,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 } else if (checkCount >= maxChecks) {
                     // Timeout
                     clearInterval(this.zapCheckInterval);
-                    document.getElementById('zapStatus').style.display = 'block';
-                    document.getElementById('zapStatus').className = 'zap-status';
-                    document.getElementById('zapStatus').innerHTML = 'Payment timeout - please check your wallet';
+                    const zapStatusEl = document.getElementById('zapStatus');
+                    if (zapStatusEl) {
+                        zapStatusEl.style.display = 'block';
+                        zapStatusEl.className = 'zap-status';
+                        zapStatusEl.innerHTML = 'Payment timeout - please check your wallet';
+                    }
                 }
             } catch (error) {
             }
@@ -8146,10 +8183,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Listen for zap receipt events
     listenForZapReceipt() {
+        // Close any existing zap receipt subscription to prevent stale matching
+        if (this.zapReceiptSubId) {
+            this.sendToRelay(["CLOSE", this.zapReceiptSubId]);
+            this.zapReceiptSubId = null;
+        }
+
         // Subscribe to zap receipt events (kind 9735) for this specific event
+        const subId = "zap-receipt-" + Math.random().toString(36).substring(7);
+        this.zapReceiptSubId = subId;
         const subscription = [
             "REQ",
-            "zap-receipt-" + Math.random().toString(36).substring(7),
+            subId,
             {
                 kinds: [9735],
                 "#e": [this.currentZapTarget.messageId],
@@ -8162,7 +8207,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Also close the subscription after 60 seconds
         setTimeout(() => {
-            this.sendToRelay(["CLOSE", subscription[1]]);
+            if (this.zapReceiptSubId === subId) {
+                this.sendToRelay(["CLOSE", subId]);
+                this.zapReceiptSubId = null;
+            }
         }, 60000);
     }
 
@@ -8403,10 +8451,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.shopPaymentCheckInterval = null;
         }
 
-        // Close any shop zap subscriptions
+        // Close any zap receipt subscriptions
         if (this.shopZapReceiptSubId) {
             this.sendToRelay(["CLOSE", this.shopZapReceiptSubId]);
             this.shopZapReceiptSubId = null;
+        }
+        if (this.zapReceiptSubId) {
+            this.sendToRelay(["CLOSE", this.zapReceiptSubId]);
+            this.zapReceiptSubId = null;
         }
 
         // Reset modal state for regular zaps
@@ -9577,17 +9629,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     (data.purchases || []).forEach(p => this.userPurchases.set(p.id, p));
 
                     // Update active items and cache them
-                    if (data.activeStyle !== undefined) {
-                        this.activeMessageStyle = data.activeStyle || null;
-                        this.localActiveStyle = this.activeMessageStyle;
-                        localStorage.setItem('nym_active_style', this.activeMessageStyle || '');
-                    }
+                    // Always sync style/flair from relay purchases (handles cross-device sync)
+                    this.activeMessageStyle = data.activeStyle || null;
+                    this.localActiveStyle = this.activeMessageStyle;
+                    localStorage.setItem('nym_active_style', this.activeMessageStyle || '');
 
-                    if (data.activeFlair !== undefined) {
-                        this.activeFlair = data.activeFlair || null;
-                        this.localActiveFlair = this.activeFlair;
-                        localStorage.setItem('nym_active_flair', this.activeFlair || '');
-                    }
+                    this.activeFlair = data.activeFlair || null;
+                    this.localActiveFlair = this.activeFlair;
+                    localStorage.setItem('nym_active_flair', this.activeFlair || '');
 
                     if (data.activeCosmetics !== undefined) {
                         this.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
@@ -11853,7 +11902,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const searchInput = document.getElementById('pmSearch');
             if (searchInput && searchInput.value.trim().length > 0) {
                 const term = searchInput.value.toLowerCase();
-                const pmName = pmItem.querySelector('.pm-name').textContent.toLowerCase();
+                const pmNameEl = pmItem.querySelector('.pm-name');
+                const pmName = pmNameEl ? pmNameEl.textContent.toLowerCase() : '';
                 if (!pmName.includes(term)) {
                     pmItem.style.display = 'none';
                     pmItem.classList.add('search-hidden');
@@ -12003,7 +12053,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const searchInput = document.getElementById('pmSearch');
             if (searchInput && searchInput.value.trim().length > 0) {
                 const term = searchInput.value.toLowerCase();
-                const pmName = item.querySelector('.pm-name').textContent.toLowerCase();
+                const pmNameEl = item.querySelector('.pm-name');
+                const pmName = pmNameEl ? pmNameEl.textContent.toLowerCase() : '';
                 if (!pmName.includes(term)) {
                     item.style.display = 'none';
                     item.classList.add('search-hidden');
@@ -14829,7 +14880,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         items.forEach(item => {
-            const channelName = item.querySelector('.channel-name').textContent.toLowerCase();
+            const channelNameEl = item.querySelector('.channel-name');
+            const channelName = channelNameEl ? channelNameEl.textContent.toLowerCase() : '';
             if (term.length === 0 || channelName.includes(term)) {
                 item.style.display = 'flex';
                 item.classList.remove('search-hidden');
@@ -14858,7 +14910,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         items.forEach(item => {
-            const pmName = item.querySelector('.pm-name').textContent.toLowerCase();
+            const pmNameEl = item.querySelector('.pm-name');
+            const pmName = pmNameEl ? pmNameEl.textContent.toLowerCase() : '';
             if (term.length === 0 || pmName.includes(term)) {
                 item.style.display = 'flex';
                 item.classList.remove('search-hidden');
@@ -16771,6 +16824,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     handlePollEvent(event) {
+        // Check expiration tag - skip expired polls
+        const expirationTag = event.tags.find(t => t[0] === 'expiration');
+        if (expirationTag) {
+            const expiresAt = parseInt(expirationTag[1]);
+            if (expiresAt && expiresAt < Math.floor(Date.now() / 1000)) {
+                return; // Poll has expired
+            }
+        }
+
         const questionTag = event.tags.find(t => t[0] === 'poll_question');
         const optionTags = event.tags.filter(t => t[0] === 'poll_option');
         const nymTag = event.tags.find(t => t[0] === 'n');
@@ -16815,6 +16877,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     handlePollVoteEvent(event) {
         if (this.processedPollVoteIds.has(event.id)) return;
         this.processedPollVoteIds.add(event.id);
+
+        // Check expiration tag - skip expired poll votes
+        const expirationTag = event.tags.find(t => t[0] === 'expiration');
+        if (expirationTag) {
+            const expiresAt = parseInt(expirationTag[1]);
+            if (expiresAt && expiresAt < Math.floor(Date.now() / 1000)) {
+                return;
+            }
+        }
 
         // Prune if too large
         if (this.processedPollVoteIds.size > 3000) {
@@ -16952,7 +17023,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             `;
         }).join('');
 
-        container.querySelector('.poll-footer').textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
+        const pollFooter = container.querySelector('.poll-footer');
+        if (pollFooter) pollFooter.textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
     }
 
     renderChannelPolls() {
@@ -17561,7 +17633,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const searchInput = document.getElementById('channelSearch');
             if (searchInput && searchInput.value.trim().length > 0) {
                 const term = searchInput.value.toLowerCase();
-                const channelName = item.querySelector('.channel-name').textContent.toLowerCase();
+                const channelNameEl = item.querySelector('.channel-name');
+                const channelName = channelNameEl ? channelNameEl.textContent.toLowerCase() : '';
                 if (!channelName.includes(term)) {
                     item.style.display = 'none';
                     item.classList.add('search-hidden');
@@ -19972,7 +20045,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.38.145 ═══<br/>
+═══ Nymchat v3.38.146 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
