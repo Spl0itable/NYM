@@ -41,14 +41,15 @@ export async function onRequest(context) {
   let dmRelays = [];
   let serverOpen = true;
 
-  // Track failed relays and non-responsive relays to avoid wasting cycles
+  // Track failed relays to avoid wasting cycles
   const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
-  const FAILED_COOLDOWN = 120000;      // 2 minutes before retrying a failed relay
-  const MAX_BACKOFF = 300000;          // 5 minute max backoff
-  const noEventRelays = new Map();     // relayUrl -> { markedAt } — relays that returned no matching events
-  const NO_EVENT_COOLDOWN = 300000;    // 5 minutes before retrying a relay that returned no events
-  const VERIFICATION_TIMEOUT = 15000;  // 15s to check if relay sends useful events
-  const verificationTimers = new Map(); // relayUrl -> timer
+  const FAILED_COOLDOWN = 60000;       // 1 minute before retrying a failed relay
+  const MAX_BACKOFF = 180000;          // 3 minute max backoff
+  // Connection staggering for large relay sets
+  let connectionQueue = [];
+  let connectionTimer = null;
+  const CONNECTION_STAGGER_MS = 100;   // 100ms between relay connections
+  const MAX_CONCURRENT = 20;           // Max simultaneous connecting relays
 
   // Debounce pool status updates to avoid flooding client during startup
   let statusTimer = null;
@@ -105,8 +106,7 @@ export async function onRequest(context) {
       latency,
       events,
       relayTypes,
-      skippedFailed: failedRelays.size,
-      skippedNoEvents: noEventRelays.size
+      skippedFailed: failedRelays.size
     }]));
   }
 
@@ -119,12 +119,6 @@ export async function onRequest(context) {
       // Cooldown expired, allow retry
       failedRelays.delete(relayUrl);
     }
-    // Check if relay returned no matching events recently
-    const noEvt = noEventRelays.get(relayUrl);
-    if (noEvt) {
-      if (Date.now() - noEvt.markedAt < NO_EVENT_COOLDOWN) return true;
-      noEventRelays.delete(relayUrl);
-    }
     return false;
   }
 
@@ -134,13 +128,8 @@ export async function onRequest(context) {
     failedRelays.set(relayUrl, { failedAt: Date.now(), attempts });
   }
 
-  function trackNoEvents(relayUrl) {
-    noEventRelays.set(relayUrl, { markedAt: Date.now() });
-  }
-
   function clearRelayFailure(relayUrl) {
     failedRelays.delete(relayUrl);
-    noEventRelays.delete(relayUrl);
   }
 
   function validateRelayUrl(url) {
@@ -149,6 +138,36 @@ export async function onRequest(context) {
       return parsed.protocol === 'wss:' || parsed.protocol === 'ws:';
     } catch {
       return false;
+    }
+  }
+
+  // Stagger relay connections to avoid overwhelming the worker
+  function queueConnection(relayUrl, type) {
+    if (upstreams.has(relayUrl)) return;
+    connectionQueue.push({ url: relayUrl, type });
+    drainConnectionQueue();
+  }
+
+  function drainConnectionQueue() {
+    if (connectionTimer) return;
+    if (connectionQueue.length === 0) return;
+
+    // Count currently connecting relays
+    let connecting = 0;
+    upstreams.forEach(info => { if (info.status === 'connecting') connecting++; });
+    if (connecting >= MAX_CONCURRENT) {
+      // Wait and retry
+      connectionTimer = setTimeout(() => { connectionTimer = null; drainConnectionQueue(); }, CONNECTION_STAGGER_MS);
+      return;
+    }
+
+    const next = connectionQueue.shift();
+    if (next) {
+      connectUpstream(next.url, next.type);
+    }
+
+    if (connectionQueue.length > 0) {
+      connectionTimer = setTimeout(() => { connectionTimer = null; drainConnectionQueue(); }, CONNECTION_STAGGER_MS);
     }
   }
 
@@ -165,7 +184,7 @@ export async function onRequest(context) {
     if (!validateRelayUrl(relayUrl)) return;
     // Block relay.nosflare.com entirely
     if (relayUrl === 'wss://relay.nosflare.com') return;
-    // Skip relays in cooldown (failed or returned no matching events)
+    // Skip relays in failed cooldown
     if (shouldSkipRelay(relayUrl)) return;
 
     const info = { ws: null, type, status: 'connecting' };
@@ -177,7 +196,7 @@ export async function onRequest(context) {
       const ws = new WebSocket(relayUrl);
       info.ws = ws;
 
-      // Connection timeout
+      // Connection timeout — 8s to accommodate slower geo relays
       const timeout = setTimeout(() => {
         if (info.status === 'connecting') {
           info.status = 'failed';
@@ -186,7 +205,7 @@ export async function onRequest(context) {
           upstreams.delete(relayUrl);
           schedulePoolStatus();
         }
-      }, 5000);
+      }, 8000);
 
       ws.addEventListener('open', () => {
         clearTimeout(timeout);
@@ -196,24 +215,6 @@ export async function onRequest(context) {
         // Replay active subscriptions so this relay starts sending events
         replaySubscriptions(relayUrl, ws);
         schedulePoolStatus();
-
-        // Start verification timer for read relays — if no events arrive
-        // within VERIFICATION_TIMEOUT, mark as non-responsive
-        if (type !== 'write') {
-          const prevCount = relayEvents.get(relayUrl) || 0;
-          const vTimer = setTimeout(() => {
-            verificationTimers.delete(relayUrl);
-            const currentCount = relayEvents.get(relayUrl) || 0;
-            if (currentCount <= prevCount && info.status === 'connected') {
-              // Relay sent zero new events — mark and disconnect
-              trackNoEvents(relayUrl);
-              try { ws.close(); } catch { /* noop */ }
-              upstreams.delete(relayUrl);
-              schedulePoolStatus();
-            }
-          }, VERIFICATION_TIMEOUT);
-          verificationTimers.set(relayUrl, vTimer);
-        }
       });
 
       ws.addEventListener('message', (event) => {
@@ -278,10 +279,6 @@ export async function onRequest(context) {
       });
 
       ws.addEventListener('close', () => {
-        // Clean up verification timer
-        const vt = verificationTimers.get(relayUrl);
-        if (vt) { clearTimeout(vt); verificationTimers.delete(relayUrl); }
-
         const wasConnected = info.status === 'connected';
         info.status = 'closed';
         upstreams.delete(relayUrl);
@@ -303,10 +300,6 @@ export async function onRequest(context) {
 
       ws.addEventListener('error', () => {
         clearTimeout(timeout);
-        // Clean up verification timer
-        const vt = verificationTimers.get(relayUrl);
-        if (vt) { clearTimeout(vt); verificationTimers.delete(relayUrl); }
-
         info.status = 'failed';
         trackRelayFailure(relayUrl);
         upstreams.delete(relayUrl);
@@ -361,15 +354,19 @@ export async function onRequest(context) {
               }
             }
 
-            // Connect new relays
+            // Clear any pending connection queue from previous config
+            connectionQueue = [];
+            if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
+
+            // Connect new relays with staggering to avoid overwhelming the worker
             for (const url of relays) {
               if (!upstreams.has(url)) {
-                connectUpstream(url, writeOnlyRelays.has(url) ? 'write' : 'read');
+                queueConnection(url, writeOnlyRelays.has(url) ? 'write' : 'read');
               }
             }
             for (const url of writeOnly) {
               if (!upstreams.has(url)) {
-                connectUpstream(url, 'write');
+                queueConnection(url, 'write');
               }
             }
           } else if (msgType === 'EVENT') {
@@ -444,8 +441,8 @@ export async function onRequest(context) {
   // Handle client disconnect
   server.addEventListener('close', () => {
     serverOpen = false;
-    verificationTimers.forEach(t => clearTimeout(t));
-    verificationTimers.clear();
+    if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
+    connectionQueue = [];
     upstreams.forEach((info) => {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });
@@ -454,8 +451,8 @@ export async function onRequest(context) {
 
   server.addEventListener('error', () => {
     serverOpen = false;
-    verificationTimers.forEach(t => clearTimeout(t));
-    verificationTimers.clear();
+    if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
+    connectionQueue = [];
     upstreams.forEach((info) => {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });
