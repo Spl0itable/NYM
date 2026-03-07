@@ -20280,64 +20280,49 @@ async function nostrLoginWithNsec() {
         errorEl.style.display = 'block';
         return;
     }
+    let secretKey, pubkey;
     try {
-        const secretKey = nym.decodeNsec(nsecInput);
-        const pubkey = window.NostrTools.getPublicKey(secretKey);
-
-        // Store login state (nsec stored so we can sign events and sync settings)
-        localStorage.setItem('nym_nostr_login_method', 'nsec');
-        localStorage.setItem('nym_nostr_login_pubkey', pubkey);
-        localStorage.setItem('nym_nostr_login_nsec', nsecInput);
-        try {
-            const npub = window.NostrTools.nip19.npubEncode(pubkey);
-            localStorage.setItem('nym_nostr_login_npub', npub);
-        } catch (_) {}
-
-        applyNostrLogin(pubkey, secretKey, 'nsec');
-
-        closeModal('nostrLoginModal');
-
-        // If the setup modal is still showing, bypass it and connect
-        if (document.getElementById('setupModal')?.classList.contains('active')) {
-            await nostrLoginBypassSetup();
-        } else {
-            nym.displaySystemMessage('Logged in with Nostr identity.');
-        }
+        secretKey = nym.decodeNsec(nsecInput);
+        pubkey = window.NostrTools.getPublicKey(secretKey);
     } catch (err) {
         errorEl.textContent = 'Invalid nsec key. Please check and try again.';
         errorEl.style.display = 'block';
+        return;
+    }
+
+    // Store login state (nsec stored so we can sign events and sync settings)
+    localStorage.setItem('nym_nostr_login_method', 'nsec');
+    localStorage.setItem('nym_nostr_login_pubkey', pubkey);
+    localStorage.setItem('nym_nostr_login_nsec', nsecInput);
+    try {
+        const npub = window.NostrTools.nip19.npubEncode(pubkey);
+        localStorage.setItem('nym_nostr_login_npub', npub);
+    } catch (_) {}
+
+    applyNostrLogin(pubkey, secretKey, 'nsec');
+
+    closeModal('nostrLoginModal');
+
+    // If the setup modal is still showing, bypass it and connect
+    if (document.getElementById('setupModal')?.classList.contains('active')) {
+        await nostrLoginBypassSetup();
+    } else {
+        nym.displaySystemMessage('Logged in with Nostr identity.');
     }
 }
 
 async function nostrLoginBypassSetup() {
-    // Nostr login from the setup/welcome modal — connect to relays and enter the app
-    // applyNostrLogin() already set nym.pubkey/privkey to the Nostr identity
-    document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
-    nym.updateSidebarAvatar();
+    // Nostr login from the setup/welcome modal — initialize the app, then re-apply identity
+    // Save the Nostr identity that applyNostrLogin() just set
+    const nostrPubkey = nym.nostrLoginPubkey;
+    const nostrSecretKey = nym.nostrLoginSecretKey;
+    const nostrMethod = nym.nostrLoginMethod;
 
-    await nym.connectToRelays();
-    nym.applyCachedShopItemsToNewIdentity();
+    // Use initializeNym to do the full setup (generate ephemeral keys, connect relays, close modal)
+    await initializeNym();
 
-    // Restore lightning address if saved
-    const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
-    if (globalLnAddress) {
-        nym.lightningAddress = globalLnAddress;
-        localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, globalLnAddress);
-        nym.updateLightningAddressDisplay();
-    }
-
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-        Notification.requestPermission();
-    }
-
-    closeModal('setupModal');
-
-    setTimeout(() => nostrSettingsLoad(), 2000);
-
-    await routeToUrlChannel();
-    window.maybeStartTutorial(false);
-
-    nym.displaySystemMessage('Logged in with Nostr identity.');
+    // Re-apply the Nostr identity on top of the ephemeral session
+    applyNostrLogin(nostrPubkey, nostrSecretKey, nostrMethod);
 }
 
 function applyNostrLogin(pubkey, secretKey, method) {
@@ -20362,10 +20347,14 @@ function applyNostrLogin(pubkey, secretKey, method) {
         if (user && user.nym) {
             nym.nym = user.nym;
         }
-        document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+        if (nym.nym) {
+            document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+        }
         nym.updateSidebarAvatar();
     }).catch(() => {
-        document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+        if (nym.nym) {
+            document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+        }
         nym.updateSidebarAvatar();
     });
 
