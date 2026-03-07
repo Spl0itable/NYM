@@ -1087,6 +1087,7 @@ class NYM {
         }
         this.commandHistory = [];
         this.historyIndex = -1;
+        this.pendingQuote = null;
         this.connected = false;
         this.initialConnectionInProgress = false;
         this.messageQueue = [];
@@ -5668,12 +5669,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         document.getElementById('ctxQuote').addEventListener('click', () => {
             if (this.contextMenuData && this.contextMenuData.content) {
-                const input = document.getElementById('messageInput');
                 const baseNym = this.contextMenuData.nym;
                 const suffix = this.getPubkeySuffix(this.contextMenuData.pubkey);
                 const fullNym = `${baseNym}#${suffix}`;
-                input.value = `> @${fullNym}: ${this.contextMenuData.content}\n\n`;
-                input.focus();
+                this.setQuoteReply(fullNym, this.contextMenuData.content);
             }
             document.getElementById('contextMenu').classList.remove('active');
         });
@@ -14305,10 +14304,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         quotePattern.lastIndex = 0;
         while ((match = quotePattern.exec(content)) !== null) {
-            // Add any content before this quote
+            // Add any content before this quote (strip trailing newlines adjacent to blockquote)
             if (match.index > lastIndex) {
-                const beforeQuote = content.substring(lastIndex, match.index);
-                html += this.formatMessage(beforeQuote);
+                const beforeQuote = content.substring(lastIndex, match.index).replace(/^\n+/, '').replace(/\n+$/, '');
+                if (beforeQuote) {
+                    html += this.formatMessage(beforeQuote);
+                }
             }
 
             const quotedText = match[1].trim();
@@ -14347,10 +14348,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             lastIndex = match.index + match[0].length;
         }
 
-        // Add any remaining content
+        // Add any remaining content (strip leading newlines after blockquote to avoid extra <br>)
         if (lastIndex < content.length) {
-            const remainingContent = content.substring(lastIndex);
-            html += this.formatMessage(remainingContent);
+            const remainingContent = content.substring(lastIndex).replace(/^\n+/, '');
+            if (remainingContent) {
+                html += this.formatMessage(remainingContent);
+            }
         }
 
         return html;
@@ -15101,6 +15104,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             });
         }
 
+        // Quote preview close button
+        document.getElementById('quotePreviewClose').addEventListener('click', () => {
+            this.clearQuoteReply();
+        });
+
+        // Swipe-to-reply on mobile
+        this.setupSwipeToReply();
+
         const input = document.getElementById('messageInput');
 
         input.addEventListener('keydown', (e) => {
@@ -15154,6 +15165,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     this.sendMessage();
+                } else if (e.key === 'Escape' && this.pendingQuote) {
+                    e.preventDefault();
+                    this.clearQuoteReply();
                 } else if (e.key === 'ArrowUp' && input.value === '') {
                     e.preventDefault();
                     this.navigateHistory(-1);
@@ -15664,15 +15678,136 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
+    setQuoteReply(author, text) {
+        this.pendingQuote = { author, text };
+        const preview = document.getElementById('quotePreview');
+        const authorEl = document.getElementById('quotePreviewAuthor');
+        const textEl = document.getElementById('quotePreviewText');
+        authorEl.textContent = `@${author}`;
+        // Strip markdown/HTML and truncate for preview
+        const cleanText = text.replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
+        textEl.textContent = cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText;
+        preview.style.display = 'flex';
+        const input = document.getElementById('messageInput');
+        input.focus();
+    }
+
+    clearQuoteReply() {
+        this.pendingQuote = null;
+        const preview = document.getElementById('quotePreview');
+        if (preview) preview.style.display = 'none';
+    }
+
+    setupSwipeToReply() {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+
+        let startX = 0;
+        let startY = 0;
+        let currentEl = null;
+        let isSwiping = false;
+        let swipeDistance = 0;
+        const SWIPE_THRESHOLD = 60;
+
+        container.addEventListener('touchstart', (e) => {
+            const msgEl = e.target.closest('.message');
+            if (!msgEl || !msgEl.dataset.messageId) return;
+
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            currentEl = msgEl;
+            isSwiping = false;
+            swipeDistance = 0;
+        }, { passive: true });
+
+        container.addEventListener('touchmove', (e) => {
+            if (!currentEl) return;
+
+            const deltaX = startX - e.touches[0].clientX;
+            const deltaY = Math.abs(e.touches[0].clientY - startY);
+
+            // Only swipe left (deltaX > 0), and must be more horizontal than vertical
+            if (!isSwiping && deltaX > 10 && deltaX > deltaY) {
+                isSwiping = true;
+            }
+
+            if (!isSwiping) return;
+
+            e.preventDefault();
+            // Cap the swipe distance
+            swipeDistance = Math.min(Math.max(deltaX, 0), 100);
+            currentEl.style.transform = `translateX(-${swipeDistance}px)`;
+            currentEl.style.transition = 'none';
+
+            // Show reply indicator when past threshold
+            let indicator = currentEl.querySelector('.swipe-reply-indicator');
+            if (!indicator) {
+                indicator = document.createElement('div');
+                indicator.className = 'swipe-reply-indicator';
+                indicator.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="9 14 4 9 9 4"></polyline><path d="M20 20v-7a4 4 0 0 0-4-4H4"></path></svg>';
+                currentEl.appendChild(indicator);
+            }
+            indicator.classList.toggle('visible', swipeDistance >= SWIPE_THRESHOLD);
+        }, { passive: false });
+
+        const handleTouchEnd = () => {
+            if (!currentEl) return;
+
+            if (isSwiping && swipeDistance >= SWIPE_THRESHOLD) {
+                // Trigger quote reply
+                const msgEl = currentEl;
+                const authorSpan = msgEl.querySelector('.message-author');
+                const contentSpan = msgEl.querySelector('.message-content');
+
+                if (authorSpan && contentSpan) {
+                    // Extract author nym and pubkey from the message element's context menu data
+                    const authorText = authorSpan.textContent.replace(/[>]/g, '').trim();
+                    // Get the raw text content (strip HTML)
+                    const rawContent = contentSpan.textContent.trim();
+                    // Remove bubble time from the end if present
+                    const cleanContent = rawContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
+
+                    if (cleanContent) {
+                        this.setQuoteReply(authorText, cleanContent);
+                    }
+                }
+            }
+
+            // Snap back
+            currentEl.style.transition = 'transform 0.25s ease-out';
+            currentEl.style.transform = '';
+
+            // Remove indicator after animation
+            const indicator = currentEl.querySelector('.swipe-reply-indicator');
+            if (indicator) {
+                setTimeout(() => indicator.remove(), 250);
+            }
+
+            currentEl = null;
+            isSwiping = false;
+            swipeDistance = 0;
+        };
+
+        container.addEventListener('touchend', handleTouchEnd, { passive: true });
+        container.addEventListener('touchcancel', handleTouchEnd, { passive: true });
+    }
+
     async sendMessage() {
         const input = document.getElementById('messageInput');
-        const content = input.value.trim();
+        let content = input.value.trim();
 
-        if (!content) return;
+        if (!content && !this.pendingQuote) return;
 
         if (!this.connected) {
             this.displaySystemMessage('Not connected to relay. Please wait...');
             return;
+        }
+
+        // Prepend quote if there's a pending quote reply
+        if (this.pendingQuote) {
+            const quoteLine = `> @${this.pendingQuote.author}: ${this.pendingQuote.text}`;
+            content = content ? `${quoteLine}\n\n${content}` : quoteLine;
+            this.clearQuoteReply();
         }
 
         // Add to history
@@ -17217,6 +17352,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentChannel = channel;
         this.currentGeohash = geohash;
         this.userScrolledUp = false;
+        this.clearQuoteReply();
 
         // Handle geo-relay connections for Bitchat compatibility
         // Clean up previous geo relays if switching away from a geohash channel
@@ -20055,7 +20191,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.38.147 ═══<br/>
+═══ Nymchat v3.38.148 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

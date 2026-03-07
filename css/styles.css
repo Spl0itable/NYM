@@ -805,6 +805,7 @@ body::after {
 .messages-container {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     overflow-anchor: none;
     padding: 8px 20px 16px;
     display: flex;
@@ -1711,7 +1712,132 @@ body.light-mode .pubkey-slideout-copy:hover {
     flex: 1;
     position: relative;
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+}
+
+/* Quote preview bar */
+.quote-preview {
+    display: flex;
     align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    border: 1px solid var(--glass-border);
+    border-bottom: none;
+    animation: quoteSlideIn 0.2s ease-out;
+}
+
+@keyframes quoteSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.quote-preview-bar {
+    width: 3px;
+    min-height: 28px;
+    align-self: stretch;
+    background: var(--primary);
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.quote-preview-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.quote-preview-author {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.quote-preview-text {
+    font-size: 12px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.quote-preview-close {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius-xs);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition);
+}
+
+.quote-preview-close:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.quote-preview + .message-input {
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    border-top: 1px solid var(--glass-border);
+}
+
+/* Swipe-to-reply styles */
+.message {
+    overflow: visible;
+}
+
+.message-swipe-wrapper {
+    display: flex;
+    width: 100%;
+    position: relative;
+    transition: transform 0.1s ease-out;
+    align-items: flex-start;
+}
+
+.message-swipe-wrapper.snapping {
+    transition: transform 0.25s ease-out;
+}
+
+.swipe-reply-indicator {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgb(from var(--primary) r g b / 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+
+.swipe-reply-indicator svg {
+    width: 16px;
+    height: 16px;
+    stroke: var(--primary);
+    fill: none;
+    stroke-width: 2;
+}
+
+.swipe-reply-indicator.visible {
+    opacity: 1;
 }
 
 .message-input {
@@ -4016,6 +4142,15 @@ body.light-mode .message-input,
 body.light-mode .emoji-search-input,
 body.light-mode .gif-search-input {
     color: var(--text) !important;
+}
+
+body.light-mode .quote-preview {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+body.light-mode .quote-preview-close:hover {
+    color: var(--text);
+    background: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .search-input:focus,
