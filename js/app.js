@@ -2437,10 +2437,13 @@ TRANSFER TO PUBKEY
         const zapModal = document.getElementById('zapModal');
 
         // Update zap modal for shop purchase
-        document.getElementById('zapRecipientInfo').innerHTML = `
+        const recipientInfo = document.getElementById('zapRecipientInfo');
+        if (recipientInfo) {
+            recipientInfo.innerHTML = `
 <div>Purchasing: <strong>${item.name}</strong></div>
 <div style="font-size: 12px; margin-top: 5px; color: var(--warning);">Price: ${amount} sats</div>
 `;
+        }
 
         // Hide preset amounts for shop purchases
         const zapAmountsContainer = document.querySelector('.zap-amounts');
@@ -2467,10 +2470,12 @@ TRANSFER TO PUBKEY
 
         // Update send button to use existing invoice generation
         const sendBtn = document.getElementById('zapSendBtn');
-        sendBtn.textContent = 'Generate Invoice';
-        sendBtn.onclick = () => {
-            this.generateShopPaymentInvoice();
-        };
+        if (sendBtn) {
+            sendBtn.textContent = 'Generate Invoice';
+            sendBtn.onclick = () => {
+                this.generateShopPaymentInvoice();
+            };
+        }
 
         // Open zap modal (will be above shop modal due to z-index fix)
         zapModal.classList.add('active');
@@ -2751,10 +2756,14 @@ TRANSFER TO PUBKEY
         }
 
         // Show success message
-        document.getElementById('zapInvoiceDisplay').style.display = 'none';
-        document.getElementById('zapStatus').style.display = 'block';
-        document.getElementById('zapStatus').className = 'zap-status paid';
-        document.getElementById('zapStatus').innerHTML = `
+        const zapInvoiceDisplay = document.getElementById('zapInvoiceDisplay');
+        const zapStatus = document.getElementById('zapStatus');
+        if (zapInvoiceDisplay) zapInvoiceDisplay.style.display = 'none';
+        if (zapStatus) {
+            zapStatus.style.display = 'block';
+            zapStatus.className = 'zap-status paid';
+        }
+        if (zapStatus) zapStatus.innerHTML = `
 <div style="font-size: 24px; margin-bottom: 10px;">✅</div>
 <div>Purchase successful!</div>
 <div style="font-size: 16px; margin-top: 10px;">${item.name}</div>
@@ -2787,8 +2796,8 @@ TRANSFER TO PUBKEY
         const recoveryCode = this.handlePurchaseStrategy();
 
         // **NEW: If ephemeral, show the recovery code in the success message**
-        if (this.connectionMode === 'ephemeral' && recoveryCode) {
-            document.getElementById('zapStatus').innerHTML = `
+        if (this.connectionMode === 'ephemeral' && recoveryCode && zapStatus) {
+            zapStatus.innerHTML = `
     <div style="font-size: 24px; margin-bottom: 10px;">✅</div>
     <div>Purchase successful!</div>
     <div style="font-size: 16px; margin-top: 10px;">${item.name}</div>
@@ -2825,14 +2834,10 @@ TRANSFER TO PUBKEY
             this._shopSuccessAutoClose = null;
         }
         this.closeZapModal();
-        this.closeShop();
 
-        // Refresh shop display
+        // Re-render the current shop tab so purchased item shows as owned
         if (this.activeShopTab) {
-            setTimeout(() => {
-                this.openShop();
-                this.switchShopTab('inventory');
-            }, 500);
+            this.switchShopTab(this.activeShopTab);
         }
     }
 
@@ -3078,7 +3083,7 @@ TRANSFER TO PUBKEY
             localStorage.setItem('nym_shop_recovery_' + code, JSON.stringify(payload));
 
             this.displaySystemMessage(`
-⚠️ EPHEMERAL PURCHASE RECOVERY CODE ⚠️
+⚠️ PURCHASE RECOVERY CODE ⚠️
 Save this code to restore this purchase in a new session across device:
 ${code}
 `);
@@ -8439,7 +8444,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Close zap modal
     closeZapModal() {
         const modal = document.getElementById('zapModal');
-        modal.classList.remove('active');
+        if (modal) modal.classList.remove('active');
 
         // Clear any payment check intervals
         if (this.zapCheckInterval) {
@@ -8468,10 +8473,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         const customAmountInput = document.getElementById('zapCustomAmount');
-        customAmountInput.value = '';
-        customAmountInput.readOnly = false;
-        customAmountInput.style.background = '';
-        customAmountInput.style.cursor = '';
+        if (customAmountInput) {
+            customAmountInput.value = '';
+            customAmountInput.readOnly = false;
+            customAmountInput.style.background = '';
+            customAmountInput.style.cursor = '';
+        }
 
         const commentSection = document.querySelector('.zap-comment');
         if (commentSection) {
@@ -8480,15 +8487,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const amountSection = document.getElementById('zapAmountSection');
         const invoiceSection = document.getElementById('zapInvoiceSection');
-        const sendBtn = document.getElementById('zapSendBtn');
 
-        amountSection.style.display = 'block';
-        invoiceSection.style.display = 'none';
-        sendBtn.style.display = 'block';
-        sendBtn.textContent = 'Generate Invoice';
+        if (amountSection) amountSection.style.display = 'block';
+        if (invoiceSection) invoiceSection.style.display = 'none';
 
-        // Reset button onclick to default
-        sendBtn.onclick = () => this.generateZapInvoice();
+        // Restore modal actions (may have been replaced by shop success screen)
+        const modalActions = document.querySelector('#zapModal .modal-actions');
+        if (modalActions) {
+            modalActions.innerHTML = `
+                <button class="icon-btn" onclick="nym.closeZapModal()">Cancel</button>
+                <button class="send-btn" id="zapSendBtn" onclick="nym.generateZapInvoice()">Generate Invoice</button>
+            `;
+        }
 
         // Clear contexts
         this.currentZapTarget = null;
@@ -20045,7 +20055,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.38.146 ═══<br/>
+═══ Nymchat v3.38.147 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
