@@ -345,6 +345,26 @@ onMessageReceived: (message) {
 _handleThemeChange(message.message);
 },
 )
+..addJavaScriptChannel(
+'FlutterClipboard',
+onMessageReceived: (message) async {
+debugPrint('[NYM Bridge] FlutterClipboard received: ${message.message}');
+try {
+final data = jsonDecode(message.message) as Map<String, dynamic>;
+final action = data['action'] as String?;
+final text = data['text'] as String?;
+
+if (action == 'copy' && text != null) {
+await Clipboard.setData(ClipboardData(text: text));
+debugPrint('[NYM Bridge] Copied to clipboard: ${text.length} chars');
+}
+} catch (e) {
+// Fallback: treat the message as plain text to copy
+await Clipboard.setData(ClipboardData(text: message.message));
+debugPrint('[NYM Bridge] Copied plain text to clipboard');
+}
+},
+)
 ..setOnJavaScriptAlertDialog((request) async {
 await _showDialog(
 title: 'Alert',
@@ -429,6 +449,34 @@ void _injectNotificationBridge() {
 if (kIsWeb) {
 return;
 }
+
+// Inject CSS to disable text selection (prevents long-press text highlighting)
+// while still allowing clipboard operations via JavaScript
+_controller.runJavaScript('''
+(function() {
+if (window.nymTextSelectionDisabled) return;
+window.nymTextSelectionDisabled = true;
+
+const style = document.createElement('style');
+style.textContent = \`
+* {
+-webkit-user-select: none !important;
+-moz-user-select: none !important;
+-ms-user-select: none !important;
+user-select: none !important;
+-webkit-touch-callout: none !important;
+}
+input, textarea, [contenteditable="true"] {
+-webkit-user-select: text !important;
+-moz-user-select: text !important;
+-ms-user-select: text !important;
+user-select: text !important;
+}
+\`;
+document.head.appendChild(style);
+console.log('[NYM Bridge] Text selection disabled');
+})();
+''');
 
 _controller.runJavaScript('''
 (function() {
@@ -615,6 +663,50 @@ console.error('[NYM Bridge] FlutterLauncher not available!');
 return false;
 }
 };
+
+// Create clipboard helper for copying text to system clipboard
+window.nymCopyToClipboard = function(text) {
+console.log('[NYM Bridge] nymCopyToClipboard called');
+if (window.FlutterClipboard && window.FlutterClipboard.postMessage) {
+window.FlutterClipboard.postMessage(JSON.stringify({ action: 'copy', text: text }));
+return true;
+} else {
+console.error('[NYM Bridge] FlutterClipboard not available!');
+return false;
+}
+};
+
+// Override navigator.clipboard.writeText to use Flutter clipboard
+if (navigator.clipboard) {
+const originalWriteText = navigator.clipboard.writeText ? navigator.clipboard.writeText.bind(navigator.clipboard) : null;
+navigator.clipboard.writeText = function(text) {
+console.log('[NYM Bridge] navigator.clipboard.writeText intercepted');
+if (window.FlutterClipboard && window.FlutterClipboard.postMessage) {
+window.FlutterClipboard.postMessage(JSON.stringify({ action: 'copy', text: text }));
+return Promise.resolve();
+} else if (originalWriteText) {
+return originalWriteText(text);
+}
+return Promise.resolve();
+};
+}
+
+// Override document.execCommand for copy operations
+const originalExecCommand = document.execCommand.bind(document);
+document.execCommand = function(command, showUI, value) {
+if (command === 'copy') {
+console.log('[NYM Bridge] document.execCommand(copy) intercepted');
+const selection = window.getSelection();
+const text = selection ? selection.toString() : '';
+if (text && window.FlutterClipboard && window.FlutterClipboard.postMessage) {
+window.FlutterClipboard.postMessage(JSON.stringify({ action: 'copy', text: text }));
+return true;
+}
+}
+return originalExecCommand(command, showUI, value);
+};
+
+console.log('[NYM Bridge] Clipboard bridge installed');
 
 // Intercept window.open for lightning: URIs and popup windows
 window.originalOpen = window.open;
@@ -2391,7 +2483,7 @@ r'''                                            ##\                  ##\
 ## |  ## |## |  ## |## / ## / ## |## /      ## |  ## | ####### | ## |    
 ## |  ## |## |  ## |## | ## | ## |## |      ## |  ## |##  __## | ## |##\ 
 ## |  ## |\####### |## | ## | ## |\#######\ ## |  ## |\####### | \####  |
-\__|  \__| \____## |\__| \__| \__| \_______|\__|  \__|  \_______|  \____/ 
+\__|  \__| \____## |\__| \__| \__| \_______|\__|  \__| \_______|  \____/ 
           ##\   ## |                                                     
           \######  |                                                     
            \______/                                                      ''',
