@@ -399,7 +399,7 @@
                             <text x="12" y="16" text-anchor="middle" font-size="12" fill="currentColor">GIF</text>
                         </svg>
                     </button>
-                    <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>SEND</button>
+                    <button class="send-btn" id="sendBtn" disabled>SEND</button>
                 </div>
                 <div class="emoji-picker" id="emojiPicker"></div>
                 <div class="gif-picker" id="gifPicker"></div>
@@ -828,6 +828,20 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Text Size</label>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <span style="font-size: 11px; color: var(--text-dim);">A</span>
+                        <input type="range" class="form-range" id="textSizeSlider" min="12" max="22" value="15" step="1"
+                            style="flex: 1; accent-color: var(--primary);"
+                            oninput="previewTextSize(this.value)">
+                        <span style="font-size: 18px; color: var(--text-dim);">A</span>
+                        <span id="textSizeValue" style="font-size: 12px; color: var(--text-dim); min-width: 32px; text-align: center;">15px</span>
+                        <button class="btn-small" onclick="resetTextSize()" style="font-size: 11px; padding: 4px 10px; border: 1px solid var(--glass-border); background: rgba(255,255,255,0.05); color: var(--text-dim); border-radius: var(--radius-xs); cursor: pointer;">Reset</button>
+                    </div>
+                    <div class="form-hint">Adjust the size of all text across the app</div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Sort Geohash Channels by Proximity</label>
                     <select class="form-select" id="proximitySelect">
                         <option value="false">Disabled</option>
@@ -1005,6 +1019,15 @@
                     <div class="blocked-list" id="blockedList">
                         <div style="color: var(--text-dim); font-size: 12px;">No blocked users</div>
                     </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Low Data Mode</label>
+                    <select class="form-select" id="lowDataModeSelect">
+                        <option value="false">Disabled</option>
+                        <option value="true">Enabled</option>
+                    </select>
+                    <div class="form-hint">Reduces bandwidth by connecting to only 5 default relays and loading geo relays on-demand when entering channels</div>
                 </div>
 
                 <div class="form-group"

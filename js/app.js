@@ -1077,6 +1077,10 @@ class NYM {
         this.channelSubscriptionBatchSize = 10;
         this.channelMessageLimit = 100;
         this.settings = this.loadSettings();
+        // Apply text size on startup
+        if (this.settings.textSize && this.settings.textSize !== 15) {
+            document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
+        }
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
         if (this.pinnedLandingChannel.type === 'geohash' && this.pinnedLandingChannel.geohash) {
             this.currentChannel = this.pinnedLandingChannel.geohash;
@@ -4740,6 +4744,76 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
+    applyLowDataMode(enabled) {
+        if (enabled) {
+            if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+                // Pool mode: send only default relays + active geo relays to the proxy
+                const writeOnly = ['wss://sendit.nosflare.com'];
+                const blocked = ['wss://relay.nosflare.com'];
+                const relays = this.defaultRelays.filter(r => !writeOnly.includes(r) && !blocked.includes(r));
+                for (const url of this.currentGeoRelays) {
+                    if (!relays.includes(url)) relays.push(url);
+                }
+                this._poolSend(['RELAYS', {
+                    relays: relays,
+                    writeOnly: writeOnly,
+                    dmRelays: this.bitchatDMRelays || []
+                }]);
+            } else {
+                // Direct mode: disconnect all relays except the 5 defaults,
+                // active geo relays for the current channel, and write-only relays
+                const keepRelays = new Set(this.defaultRelays);
+                for (const url of this.currentGeoRelays) {
+                    keepRelays.add(url);
+                }
+                keepRelays.add('wss://sendit.nosflare.com');
+                // Add DM relays so PMs still work
+                if (this.bitchatDMRelays) {
+                    for (const url of this.bitchatDMRelays) {
+                        keepRelays.add(url);
+                    }
+                }
+                for (const [url, relay] of this.relayPool) {
+                    if (!keepRelays.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                        relay.ws.close();
+                        this.relayPool.delete(url);
+                    }
+                }
+                this.updateConnectionStatus();
+            }
+        } else {
+            if (this.useRelayProxy) {
+                // Pool mode: restore full relay config
+                this._poolSendRelayConfig();
+            } else {
+                // Direct mode: reconnect to all broadcast and geo relays
+                this.broadcastRelays.forEach(relayUrl => {
+                    if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
+                        this.connectToRelay(relayUrl, 'broadcast')
+                            .then(() => {
+                                this.subscribeToSingleRelay(relayUrl);
+                                this.updateConnectionStatus();
+                            })
+                            .catch(err => this.trackRelayFailure(relayUrl));
+                    }
+                });
+                this.geoRelays.forEach((relay, index) => {
+                    const relayUrl = relay.url;
+                    if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
+                        setTimeout(() => {
+                            this.connectToRelayWithTimeout(relayUrl, 'geo', 3000)
+                                .then(() => {
+                                    this.subscribeToSingleRelay(relayUrl);
+                                    this.updateConnectionStatus();
+                                })
+                                .catch(err => this.trackRelayFailure(relayUrl));
+                        }, index * 50);
+                    }
+                });
+            }
+        }
+    }
+
     // Disconnect from geo-specific relays that are no longer needed
     cleanupGeoRelays(previousGeohash) {
         if (!previousGeohash) return;
@@ -6163,11 +6237,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }, 100);
 
                 // Discover additional relays and add them to the pool
-                setTimeout(() => {
-                    this.discoverRelays().then(() => {
-                        this._poolSendRelayConfig();
-                    });
-                }, 100);
+                // In low data mode, skip discovery to stay on default relays only
+                if (!this.settings.lowDataMode) {
+                    setTimeout(() => {
+                        this.discoverRelays().then(() => {
+                            this._poolSendRelayConfig();
+                        });
+                    }, 100);
+                }
 
                 // Process any queued messages
                 if (this.messageQueue.length > 0) {
@@ -6314,7 +6391,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }, 100);
 
             // Now connect to remaining broadcast relays in background
-            this.broadcastRelays.forEach(relayUrl => {
+            // In low data mode, only connect to the 5 default relays
+            const broadcastRelaysToConnect = this.settings.lowDataMode
+                ? this.defaultRelays
+                : this.broadcastRelays;
+            broadcastRelaysToConnect.forEach(relayUrl => {
                 if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                     this.connectToRelay(relayUrl, 'broadcast')
                         .then(() => {
@@ -6339,26 +6420,30 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     });
             }
 
-            // Connect to ALL geo relays at startup in the background (staggered)
-            // They'll be ready when the user switches to any geohash channel
-            this.geoRelays.forEach((relay, index) => {
-                const relayUrl = relay.url;
-                if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                    setTimeout(() => {
-                        this.connectToRelayWithTimeout(relayUrl, 'geo', 3000)
-                            .then(() => {
-                                this.subscribeToSingleRelay(relayUrl);
-                                this.updateConnectionStatus();
-                            })
-                            .catch(err => {
-                                this.trackRelayFailure(relayUrl);
-                            });
-                    }, index * 50); // 50ms stagger to avoid overwhelming browser
-                }
-            });
+            // Connect to geo relays at startup in the background (staggered)
+            // In low data mode, skip this - geo relays connect on-demand when entering channels
+            if (!this.settings.lowDataMode) {
+                this.geoRelays.forEach((relay, index) => {
+                    const relayUrl = relay.url;
+                    if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
+                        setTimeout(() => {
+                            this.connectToRelayWithTimeout(relayUrl, 'geo', 3000)
+                                .then(() => {
+                                    this.subscribeToSingleRelay(relayUrl);
+                                    this.updateConnectionStatus();
+                                })
+                                .catch(err => {
+                                    this.trackRelayFailure(relayUrl);
+                                });
+                        }, index * 50); // 50ms stagger to avoid overwhelming browser
+                    }
+                });
+            }
 
             // Discover additional relays in the background
-            setTimeout(() => {
+            // In low data mode, skip relay discovery to save bandwidth
+            if (!this.settings.lowDataMode) {
+                setTimeout(() => {
                 this.discoverRelays().then(() => {
                     // Connect to discovered relays for additional reading sources
                     const relaysToConnect = Array.from(this.discoveredRelays)
@@ -6382,6 +6467,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 });
             }, 100);
+            }
 
         } catch (error) {
             this.updateConnectionStatus('Connection Failed');
@@ -7005,6 +7091,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) return;
         const blocked = ['wss://relay.nosflare.com'];
         const writeOnly = ['wss://sendit.nosflare.com'];
+
+        // Low data mode: only send default relays + active geo relays
+        if (this.settings && this.settings.lowDataMode) {
+            const relays = [...this.defaultRelays];
+            for (const url of this.currentGeoRelays) {
+                if (!relays.includes(url)) relays.push(url);
+            }
+            const filtered = relays.filter(r => !writeOnly.includes(r) && !blocked.includes(r));
+            this._poolSend(['RELAYS', {
+                relays: filtered,
+                writeOnly: writeOnly,
+                dmRelays: this.bitchatDMRelays || []
+            }]);
+            return;
+        }
+
         const geoRelayUrls = this.geoRelays.map(r => r.url);
         const allRelays = [
             ...this.broadcastRelays,
@@ -12574,6 +12676,95 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
 
+    async publishMessageAnonymous(content, channel = this.currentChannel, geohash = this.currentGeohash) {
+        try {
+            if (!this.connected) {
+                throw new Error('Not connected to relay');
+            }
+
+            // Generate a fresh ephemeral keypair for this message
+            const ephSk = window.NostrTools.generateSecretKey();
+            const ephPk = window.NostrTools.getPublicKey(ephSk);
+
+            // Generate a random nym for the ephemeral identity
+            const ephSuffix = ephPk.slice(-4);
+            const style = localStorage.getItem('nym_nick_style') || 'fancy';
+            let anonNym;
+            if (style === 'simple') {
+                const randomNum = Math.floor(1000 + Math.random() * 9000);
+                anonNym = `nym${randomNum}`;
+            } else {
+                const adjectives = [
+                    'quantum', 'neon', 'cyber', 'shadow', 'plasma',
+                    'echo', 'nexus', 'void', 'flux', 'ghost',
+                    'phantom', 'stealth', 'cryptic', 'dark', 'neural',
+                    'binary', 'matrix', 'digital', 'virtual', 'zero',
+                    'null', 'anon', 'masked', 'hidden', 'cipher',
+                    'enigma', 'spectral', 'rogue', 'omega', 'alpha'
+                ];
+                const nouns = [
+                    'ghost', 'nomad', 'drift', 'pulse', 'wave',
+                    'spark', 'node', 'byte', 'mesh', 'link',
+                    'runner', 'hacker', 'coder', 'agent', 'proxy',
+                    'daemon', 'virus', 'worm', 'bot', 'droid',
+                    'reaper', 'shadow', 'wraith', 'specter', 'shade'
+                ];
+                const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+                const noun = nouns[Math.floor(Math.random() * nouns.length)];
+                anonNym = `${adj}_${noun}`;
+            }
+
+            const now = Math.floor(Date.now() / 1000);
+            const tags = [
+                ['n', anonNym]
+            ];
+
+            const kind = 20000;
+            tags.push(['g', geohash || 'nym']);
+            tags.push(['expiration', String(now + 3600)]);
+
+            let event = {
+                kind: kind,
+                created_at: now,
+                tags: tags,
+                content: content,
+                pubkey: ephPk
+            };
+
+            // Mine PoW if enabled (NIP-13)
+            if (this.enablePow && this.powDifficulty > 0) {
+                event = NostrTools.nip13.minePow(event, this.powDifficulty);
+            }
+
+            // Sign with the ephemeral key (bypasses Nostr login signing)
+            const signedEvent = window.NostrTools.finalizeEvent(event, ephSk);
+
+            const optimisticMessage = {
+                id: signedEvent.id,
+                content: content,
+                author: anonNym,
+                pubkey: ephPk,
+                timestamp: new Date(signedEvent.created_at * 1000),
+                channel: channel,
+                geohash: geohash,
+                isOwn: true,
+                isHistorical: false,
+                isPM: false,
+            };
+
+            // Display immediately (optimistic)
+            this.displayMessage(optimisticMessage);
+
+            // Send to relay
+            this.sendToRelay(["EVENT", signedEvent]);
+
+            return true;
+        } catch (error) {
+            this.displaySystemMessage('Failed to send anonymous message: ' + error.message);
+            return false;
+        }
+    }
+
     async publishPresence(status, awayMessage = '') {
         try {
             if (!this.connected) return;
@@ -15285,6 +15476,118 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         });
 
+        // Long-press Send button (3s) for anonymous send (Nostr login users only)
+        const sendBtn = document.getElementById('sendBtn');
+        let sendLongPressTimer = null;
+        let sendLongPressFired = false;
+
+        const startSendLongPress = (e) => {
+            sendLongPressFired = false;
+            sendLongPressTimer = setTimeout(() => {
+                if (this.nostrLoginMethod) {
+                    sendLongPressFired = true;
+                    sendBtn.style.boxShadow = '0 0 15px rgb(from var(--primary) r g b / 0.4)';
+                    sendBtn.textContent = 'ANON';
+                    this.sendMessageAnonymous();
+                    setTimeout(() => {
+                        sendBtn.textContent = 'SEND';
+                        sendBtn.style.boxShadow = '';
+                    }, 1000);
+                }
+            }, 3000);
+            // Visual feedback: after 1s start pulsing if Nostr logged in
+            if (this.nostrLoginMethod) {
+                setTimeout(() => {
+                    if (sendLongPressTimer) {
+                        sendBtn.style.transition = 'box-shadow 0.3s ease';
+                        sendBtn.style.boxShadow = '0 0 10px rgb(from var(--primary) r g b / 0.2)';
+                    }
+                }, 1000);
+            }
+        };
+
+        const cancelSendLongPress = (e) => {
+            if (sendLongPressTimer) {
+                clearTimeout(sendLongPressTimer);
+                sendLongPressTimer = null;
+                sendBtn.style.boxShadow = '';
+            }
+            if (sendLongPressFired) {
+                e.preventDefault();
+                e.stopPropagation();
+                sendLongPressFired = false;
+            }
+        };
+
+        sendBtn.addEventListener('click', (e) => {
+            if (!sendLongPressFired) {
+                sendMessage();
+            }
+        });
+        sendBtn.addEventListener('mousedown', startSendLongPress);
+        sendBtn.addEventListener('touchstart', startSendLongPress, { passive: true });
+        sendBtn.addEventListener('mouseup', cancelSendLongPress);
+        sendBtn.addEventListener('mouseleave', cancelSendLongPress);
+        sendBtn.addEventListener('touchend', cancelSendLongPress);
+        sendBtn.addEventListener('touchcancel', cancelSendLongPress);
+
+        // Long-press on messages to copy text
+        const messagesEl = document.getElementById('messagesContainer');
+        let msgLongPressTimer = null;
+        let msgLongPressFired = false;
+
+        messagesEl.addEventListener('mousedown', (e) => {
+            const msgEl = e.target.closest('.message[data-raw-content]');
+            if (!msgEl) return;
+            msgLongPressFired = false;
+            msgLongPressTimer = setTimeout(() => {
+                msgLongPressFired = true;
+                const rawContent = msgEl.dataset.rawContent;
+                if (rawContent) {
+                    navigator.clipboard.writeText(rawContent).then(() => {
+                        this.displaySystemMessage('Message copied to clipboard');
+                    }).catch(() => {
+                        this.displaySystemMessage('Failed to copy message');
+                    });
+                }
+            }, 500);
+        });
+
+        messagesEl.addEventListener('touchstart', (e) => {
+            const msgEl = e.target.closest('.message[data-raw-content]');
+            if (!msgEl) return;
+            msgLongPressFired = false;
+            msgLongPressTimer = setTimeout(() => {
+                msgLongPressFired = true;
+                const rawContent = msgEl.dataset.rawContent;
+                if (rawContent) {
+                    navigator.clipboard.writeText(rawContent).then(() => {
+                        this.displaySystemMessage('Message copied to clipboard');
+                    }).catch(() => {
+                        this.displaySystemMessage('Failed to copy message');
+                    });
+                }
+            }, 500);
+        }, { passive: true });
+
+        const cancelMsgLongPress = () => {
+            if (msgLongPressTimer) {
+                clearTimeout(msgLongPressTimer);
+                msgLongPressTimer = null;
+            }
+        };
+
+        messagesEl.addEventListener('mouseup', cancelMsgLongPress);
+        messagesEl.addEventListener('mouseleave', cancelMsgLongPress);
+        messagesEl.addEventListener('touchend', (e) => {
+            cancelMsgLongPress();
+            if (msgLongPressFired) {
+                e.preventDefault();
+                msgLongPressFired = false;
+            }
+        });
+        messagesEl.addEventListener('touchcancel', cancelMsgLongPress);
+
     }
 
     setupCommands() {
@@ -15830,6 +16133,48 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             } else if (this.currentGeohash) {
                 // Send to geohash channel (kind 20000)
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+            }
+        }
+
+        input.value = '';
+        this.autoResizeTextarea(input);
+        this.hideCommandPalette();
+        this.hideAutocomplete();
+        this.hideEmojiAutocomplete();
+    }
+
+    async sendMessageAnonymous() {
+        const input = document.getElementById('messageInput');
+        let content = input.value.trim();
+
+        if (!content && !this.pendingQuote) return;
+
+        if (!this.connected) {
+            this.displaySystemMessage('Not connected to relay. Please wait...');
+            return;
+        }
+
+        // Prepend quote if there's a pending quote reply
+        if (this.pendingQuote) {
+            const textLines = this.pendingQuote.text.split('\n');
+            const quoteLine = `> @${this.pendingQuote.author}: ${textLines[0]}` +
+                (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
+            content = content ? `${quoteLine}\n\n${content}` : quoteLine;
+            this.clearQuoteReply();
+        }
+
+        // Add to history
+        this.commandHistory.push(content);
+        this.historyIndex = this.commandHistory.length;
+
+        if (content.startsWith('/')) {
+            this.handleCommand(content);
+        } else {
+            if (this.inPMMode && this.currentPM) {
+                await this.sendPM(content, this.currentPM);
+            } else if (this.currentGeohash) {
+                // Send via ephemeral keypair (anonymous)
+                await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash);
             }
         }
 
@@ -18931,7 +19276,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             readReceiptsEnabled: localStorage.getItem('nym_read_receipts_enabled') !== 'false',  // Enabled by default
             pinnedLandingChannel: pinnedLandingChannel,
             nickStyle: localStorage.getItem('nym_nick_style') || 'fancy',
-            chatLayout: localStorage.getItem('nym_chat_layout') || 'irc'
+            chatLayout: localStorage.getItem('nym_chat_layout') || 'irc',
+            lowDataMode: localStorage.getItem('nym_low_data_mode') === 'true',
+            textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10)
         };
     }
 
@@ -19289,6 +19636,20 @@ function scrollToBottom() {
 
 function sendMessage() {
     nym.sendMessage();
+}
+
+function previewTextSize(value) {
+    const label = document.getElementById('textSizeValue');
+    if (label) label.textContent = value + 'px';
+    document.documentElement.style.setProperty('--user-text-size', value + 'px');
+}
+
+function resetTextSize() {
+    const slider = document.getElementById('textSizeSlider');
+    const label = document.getElementById('textSizeValue');
+    if (slider) slider.value = 15;
+    if (label) label.textContent = '15px';
+    document.documentElement.style.setProperty('--user-text-size', '15px');
 }
 
 function selectImage() {
@@ -19892,6 +20253,21 @@ async function showSettings() {
         opt.classList.toggle('selected', opt.dataset.layout === currentLayout);
     });
 
+    // Initialize text size slider
+    const textSizeSlider = document.getElementById('textSizeSlider');
+    const textSizeValue = document.getElementById('textSizeValue');
+    if (textSizeSlider) {
+        const currentSize = nym.settings.textSize || 15;
+        textSizeSlider.value = currentSize;
+        if (textSizeValue) textSizeValue.textContent = currentSize + 'px';
+    }
+
+    // Initialize low data mode select
+    const lowDataSelect = document.getElementById('lowDataModeSelect');
+    if (lowDataSelect) {
+        lowDataSelect.value = nym.settings.lowDataMode ? 'true' : 'false';
+    }
+
     // Render pending settings transfers
     nym.renderPendingSettingsTransfers();
 
@@ -20028,6 +20404,21 @@ async function saveSettings() {
 
     // Refresh messages to apply new time format
     nym.refreshMessageTimestamps();
+
+    // Save text size
+    const textSize = parseInt(document.getElementById('textSizeSlider').value || '15', 10);
+    nym.settings.textSize = textSize;
+    localStorage.setItem('nym_text_size', String(textSize));
+    document.documentElement.style.setProperty('--user-text-size', textSize + 'px');
+
+    // Save low data mode
+    const lowDataMode = document.getElementById('lowDataModeSelect').value === 'true';
+    const wasLowData = nym.settings.lowDataMode;
+    nym.settings.lowDataMode = lowDataMode;
+    localStorage.setItem('nym_low_data_mode', String(lowDataMode));
+    if (lowDataMode !== wasLowData) {
+        nym.applyLowDataMode(lowDataMode);
+    }
 
     // Save lightning address
     if (lightningAddress !== nym.lightningAddress) {

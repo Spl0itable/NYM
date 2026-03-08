@@ -91,6 +91,7 @@
     --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
     --shadow-glow: 0 0 20px rgb(from var(--primary) r g b / 0.1);
     --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    --user-text-size: 15px;
 }
 
 body {
@@ -432,6 +433,7 @@ body::after {
     pointer-events: auto;
     z-index: 1;
     min-height: 36px;
+    font-size: var(--user-text-size);
 }
 
 .channel-item.pinned {
@@ -630,7 +632,7 @@ body::after {
 
 .user-item {
     padding: 6px 10px;
-    font-size: 12px;
+    font-size: calc(var(--user-text-size) - 3px);
     color: var(--text-dim);
     display: flex;
     align-items: center;
@@ -762,7 +764,7 @@ body::after {
 }
 
 .channel-title {
-    font-size: 18px;
+    font-size: calc(var(--user-text-size) + 3px);
     color: var(--primary);
     font-weight: 700;
     letter-spacing: 0.3px;
@@ -865,6 +867,7 @@ body::after {
     position: relative;
     flex-wrap: wrap;
     align-items: flex-start;
+    font-size: var(--user-text-size);
 }
 
 .message.blocked {
@@ -1677,7 +1680,7 @@ body.light-mode .pubkey-slideout-copy:hover {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--glass-border);
     border-radius: 20px;
-    font-size: 12px;
+    font-size: calc(var(--user-text-size) - 3px);
     max-width: fit-content;
     font-weight: 450;
 }
@@ -1850,7 +1853,7 @@ body.light-mode .pubkey-slideout-copy:hover {
     color: #ffffff;
     padding: 10px 16px;
     font-family: var(--font-sans);
-    font-size: 15px;
+    font-size: var(--user-text-size);
     outline: none;
     resize: vertical;
     min-height: 42px;
@@ -2115,6 +2118,34 @@ body.light-mode .pubkey-slideout-copy:hover {
     font-size: 11px;
     color: var(--text-dim);
     margin-top: 5px;
+}
+
+.form-range {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: var(--glass-border);
+    border-radius: 2px;
+    outline: none;
+}
+
+.form-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--primary);
+    cursor: pointer;
+}
+
+.form-range::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--primary);
+    cursor: pointer;
+    border: none;
 }
 
 .modal-actions {
@@ -6160,6 +6191,8 @@ body.light-mode .wallpaper-preview.wallpaper-diamonds {
     padding: 8px;
     transition: all var(--transition);
     text-align: center;
+    display: flex;
+    flex-direction: column;
 }
 
 .layout-option:hover {
@@ -6263,7 +6296,8 @@ body.light-mode .lp-bubble-self {
 
 .layout-label {
     display: block;
-    margin-top: 6px;
+    margin-top: auto;
+    padding-top: 6px;
     font-size: 11px;
     color: var(--text-dim);
 }
