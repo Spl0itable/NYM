@@ -6196,15 +6196,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     parseNymFromDisplay(displayNym) {
         if (!displayNym) return 'anon';
 
-        // Strip all HTML tags first, including flair
-        let withoutHtml = displayNym.replace(/<[^>]*>/g, '').trim();
+        // Strip flair and everything after the nym-suffix span first
+        // Use [\s\S]* instead of .* to match across newlines (SVG flair icons contain newlines)
+        let cleaned = displayNym.replace(/<span class="nym-suffix">[\s\S]*$/, '').trim();
+
+        // Strip all remaining HTML tags (avatar img, formatting, etc.)
+        cleaned = cleaned.replace(/<[^>]*>/g, '').trim();
 
         // Decode HTML entities (e.g., &lt; &gt; from display formatting)
-        withoutHtml = withoutHtml.replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
+        cleaned = cleaned.replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
 
-        // Strip only the pubkey suffix (#xxxx where xxxx is 4 hex chars) from the end
-        // This preserves any # characters that are part of the actual nickname
-        return withoutHtml.replace(/#[0-9a-f]{4}$/i, '') || withoutHtml;
+        // Strip pubkey suffix if still present (#xxxx where xxxx is 4 hex chars)
+        return cleaned.replace(/#[0-9a-f]{4}$/i, '') || cleaned || 'anon';
     }
 
     async connectToRelays() {
@@ -20598,7 +20601,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.39.151 ═══<br/>
+═══ Nymchat v3.39.152 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
