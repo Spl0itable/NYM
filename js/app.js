@@ -15317,6 +15317,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Swipe-to-reply on mobile
         this.setupSwipeToReply();
+        // Double-click to reply on desktop
+        this.setupDoubleClickToReply();
 
         const input = document.getElementById('messageInput');
 
@@ -16110,6 +16112,34 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         container.addEventListener('touchend', handleTouchEnd, { passive: true });
         container.addEventListener('touchcancel', handleTouchEnd, { passive: true });
+    }
+
+    setupDoubleClickToReply() {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+
+        container.addEventListener('dblclick', (e) => {
+            // Skip if on mobile (swipe handles it)
+            if ('ontouchstart' in window) return;
+
+            const msgEl = e.target.closest('.message');
+            if (!msgEl || !msgEl.dataset.messageId) return;
+
+            // Don't trigger on author name clicks (context menu) or links
+            if (e.target.closest('a') || e.target.closest('.message-author')) return;
+
+            const authorSpan = msgEl.querySelector('.message-author');
+            if (!authorSpan) return;
+
+            const authorText = authorSpan.textContent.replace(/[>]/g, '').trim();
+            const cleanContent = msgEl.dataset.rawContent || msgEl.querySelector('.message-content')?.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
+
+            if (cleanContent) {
+                // Clear any text selection caused by the double-click
+                window.getSelection()?.removeAllRanges();
+                this.setQuoteReply(authorText, cleanContent);
+            }
+        });
     }
 
     async sendMessage() {
@@ -20655,7 +20685,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.39.153 ═══<br/>
+═══ Nymchat v3.39.154 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -21214,8 +21244,13 @@ function applyNostrLogin(pubkey, secretKey, method) {
         }, 3000);
     });
 
-    // Load settings from relays for this identity
+    // Refresh relay subscriptions with the new pubkey so purchase/flair
+    // events for this identity flow through the main event handler
+    nym.resubscribeAllRelays();
+
+    // Load settings and purchases from relays for this identity
     nostrSettingsLoad();
+    nostrPurchasesLoad();
 }
 
 function nostrLogout() {
@@ -21283,6 +21318,217 @@ async function nostrSettingsSave() {
     }
 }
 
+// Load shop purchases from Nostr relays on login
+function nostrPurchasesLoad() {
+    if (!isNostrLoggedIn()) return;
+    const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
+    if (!pubkey) return;
+
+    // Collect any pre-existing localStorage purchases (from ephemeral sessions)
+    // so we can merge them after loading from relays
+    let localPurchases = null;
+    try {
+        const raw = localStorage.getItem('nym_purchases_cache');
+        if (raw) {
+            const cache = JSON.parse(raw);
+            if (cache && cache.purchases && cache.purchases.length > 0) {
+                localPurchases = cache;
+            }
+        }
+    } catch (_) {}
+
+    const subId = 'nymchat-purchases-load-' + Math.random().toString(36).slice(2, 8);
+    const filter = {
+        kinds: [30078],
+        authors: [pubkey],
+        '#d': ['nym-shop-purchases'],
+        limit: 1
+    };
+
+    let received = false;
+
+    // Pool mode: send REQ through the multiplexed pool socket
+    if (nym.useRelayProxy && nym.poolSocket && nym.poolSocket.readyState === WebSocket.OPEN) {
+        const handler = (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
+                    if (received) return;
+                    received = true;
+                    try {
+                        const data = JSON.parse(msg[2].content);
+                        applyNostrPurchases(data, localPurchases);
+                    } catch (_) {}
+                }
+                if (msg[0] === 'EOSE' && msg[1] === subId) {
+                    nym.poolSocket.removeEventListener('message', handler);
+                    try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
+
+                    if (!received && localPurchases) {
+                        received = true;
+                        applyLocalPurchasesToNostr(localPurchases);
+                    }
+                }
+            } catch (_) {}
+        };
+        nym.poolSocket.addEventListener('message', handler);
+        nym._poolSend(['REQ', subId, filter]);
+
+        // Cleanup after 10s
+        setTimeout(() => {
+            nym.poolSocket.removeEventListener('message', handler);
+            try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
+        }, 10000);
+        return;
+    }
+
+    // Direct relay mode: send REQ to each relay individually
+    nym.relayPool.forEach((relay, url) => {
+        if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+
+        const handler = (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
+                    if (received) return;
+                    received = true;
+                    try {
+                        const data = JSON.parse(msg[2].content);
+                        applyNostrPurchases(data, localPurchases);
+                    } catch (_) {}
+                }
+                if (msg[0] === 'EOSE' && msg[1] === subId) {
+                    relay.ws.removeEventListener('message', handler);
+                    try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) {}
+
+                    // If no relay had purchases but we have local ones, push them up
+                    if (!received && localPurchases) {
+                        received = true;
+                        applyLocalPurchasesToNostr(localPurchases);
+                    }
+                }
+            } catch (_) {}
+        };
+        relay.ws.addEventListener('message', handler);
+        relay.ws.send(JSON.stringify(['REQ', subId, filter]));
+
+        // Cleanup after 10s
+        setTimeout(() => {
+            relay.ws.removeEventListener('message', handler);
+            try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) {}
+        }, 10000);
+    });
+}
+
+function applyNostrPurchases(data, localPurchases) {
+    if (!data || typeof data !== 'object') return;
+
+    const relayPurchaseIds = new Set();
+
+    // Apply purchases from relay
+    if (data.purchases && Array.isArray(data.purchases)) {
+        data.purchases.forEach(p => {
+            nym.userPurchases.set(p.id, p);
+            relayPurchaseIds.add(p.id);
+        });
+    }
+
+    // Merge local purchases that aren't already in relay data
+    let hasNewLocal = false;
+    if (localPurchases && localPurchases.purchases) {
+        localPurchases.purchases.forEach(([id, purchase]) => {
+            if (!relayPurchaseIds.has(id)) {
+                nym.userPurchases.set(id, purchase);
+                hasNewLocal = true;
+            }
+        });
+    }
+
+    // Apply active style/flair from relay (relay takes priority)
+    if (data.activeStyle) {
+        nym.activeMessageStyle = data.activeStyle;
+        nym.localActiveStyle = data.activeStyle;
+        localStorage.setItem('nym_active_style', data.activeStyle);
+    }
+
+    if (data.activeFlair) {
+        nym.activeFlair = data.activeFlair;
+        nym.localActiveFlair = data.activeFlair;
+        localStorage.setItem('nym_active_flair', data.activeFlair);
+    }
+
+    if (data.activeCosmetics !== undefined) {
+        nym.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
+    }
+
+    if (data.supporterActive !== undefined) {
+        nym.supporterBadgeActive = data.supporterActive;
+        localStorage.setItem('nym_supporter_active', data.supporterActive ? 'true' : 'false');
+    }
+
+    // Restore recovery codes from relay data
+    if (data.recoveryCodes && typeof data.recoveryCodes === 'object') {
+        Object.entries(data.recoveryCodes).forEach(([code, payload]) => {
+            const key = 'nym_shop_recovery_' + code;
+            if (!localStorage.getItem(key)) {
+                try {
+                    localStorage.setItem(key, JSON.stringify(payload));
+                } catch (_) {}
+            }
+        });
+    }
+
+    // Cache locally
+    nym._cachePurchases();
+
+    // If we merged new local purchases, push the combined set back to relays
+    if (hasNewLocal) {
+        nym.savePurchaseToNostr();
+    }
+
+    // Apply to messages and broadcast
+    nym.publishActiveShopItems();
+    nym.applyShopStylesToOwnMessages();
+
+    if (nym.userPurchases.size > 0) {
+        nym.displaySystemMessage('Shop purchases synced from Nostr relays.');
+    }
+}
+
+// Push local ephemeral purchases to Nostr relays when no relay data exists
+function applyLocalPurchasesToNostr(localCache) {
+    if (!localCache || !localCache.purchases || localCache.purchases.length === 0) return;
+
+    // Restore from local cache
+    localCache.purchases.forEach(([id, purchase]) => {
+        nym.userPurchases.set(id, purchase);
+    });
+
+    if (localCache.activeStyle) {
+        nym.activeMessageStyle = localCache.activeStyle;
+        nym.localActiveStyle = localCache.activeStyle;
+        localStorage.setItem('nym_active_style', localCache.activeStyle);
+    }
+
+    if (localCache.activeFlair) {
+        nym.activeFlair = localCache.activeFlair;
+        nym.localActiveFlair = localCache.activeFlair;
+        localStorage.setItem('nym_active_flair', localCache.activeFlair);
+    }
+
+    if (localCache.activeCosmetics) {
+        nym.activeCosmetics = new Set(localCache.activeCosmetics);
+    }
+
+    // Cache and push to relays under the Nostr login pubkey
+    nym._cachePurchases();
+    nym.savePurchaseToNostr();
+    nym.publishActiveShopItems();
+    nym.applyShopStylesToOwnMessages();
+
+    nym.displaySystemMessage('Local shop purchases saved to Nostr relays.');
+}
+
 function nostrSettingsLoad() {
     if (!isNostrLoggedIn()) return;
     const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
@@ -21298,7 +21544,37 @@ function nostrSettingsLoad() {
 
     let received = false;
 
-    // Try to load from any connected relay
+    // Pool mode: send REQ through the multiplexed pool socket
+    if (nym.useRelayProxy && nym.poolSocket && nym.poolSocket.readyState === WebSocket.OPEN) {
+        const handler = (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
+                    if (received) return;
+                    received = true;
+                    try {
+                        const s = JSON.parse(msg[2].content);
+                        applyNostrSettings(s);
+                    } catch (_) {}
+                }
+                if (msg[0] === 'EOSE' && msg[1] === subId) {
+                    nym.poolSocket.removeEventListener('message', handler);
+                    try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
+                }
+            } catch (_) {}
+        };
+        nym.poolSocket.addEventListener('message', handler);
+        nym._poolSend(['REQ', subId, filter]);
+
+        // Cleanup after 10s
+        setTimeout(() => {
+            nym.poolSocket.removeEventListener('message', handler);
+            try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
+        }, 10000);
+        return;
+    }
+
+    // Direct relay mode: try to load from any connected relay
     nym.relayPool.forEach((relay, url) => {
         if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
