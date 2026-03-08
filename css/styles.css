@@ -5852,6 +5852,107 @@ body.light-mode .message.self::before {
     letter-spacing: 0.5px;
 }
 
+.context-menu-copy-pubkey {
+    font-size: 11px;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 6px;
+    transition: background 0.15s, color 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.context-menu-copy-pubkey:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--primary);
+}
+
+/* Quick react emoji popup on long-press */
+.quick-react-popup {
+    display: flex;
+    gap: 4px;
+    padding: 6px 8px;
+    background: rgba(20, 20, 35, 0.92);
+    backdrop-filter: blur(20px) saturate(1.5);
+    -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
+    border-radius: 24px;
+    z-index: 10001;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    transform: scale(0.8) translateY(8px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.quick-react-popup.active {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+}
+
+.quick-react-emoji {
+    background: none;
+    border: none;
+    font-size: 22px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 8px;
+    transition: transform 0.12s ease, background 0.12s ease;
+    line-height: 1;
+}
+
+.quick-react-emoji:hover {
+    transform: scale(1.3);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.quick-react-emoji:active {
+    transform: scale(0.95);
+}
+
+.quick-react-expand {
+    background: none;
+    border: none;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    margin-left: 2px;
+    padding: 4px 6px;
+    cursor: pointer;
+    color: var(--text-dim);
+    border-radius: 0 8px 8px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.12s ease, background 0.12s ease;
+}
+
+.quick-react-expand:hover {
+    color: var(--primary);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+body.light-mode .quick-react-popup {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .quick-react-emoji:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .quick-react-expand {
+    border-left-color: rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode .quick-react-expand:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .context-menu-copy-pubkey:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
 .avatar-upload-section {
     display: flex;
     align-items: center;

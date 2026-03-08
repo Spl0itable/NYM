@@ -5773,6 +5773,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             document.getElementById('contextMenu').classList.remove('active');
         });
 
+        document.getElementById('ctxCopyMessage').addEventListener('click', async () => {
+            if (this.contextMenuData && this.contextMenuData.content) {
+                try {
+                    await navigator.clipboard.writeText(this.contextMenuData.content);
+                    this.displaySystemMessage('Message copied to clipboard');
+                } catch (err) {
+                    this.displaySystemMessage('Failed to copy message');
+                }
+            } else {
+                this.displaySystemMessage('No message content to copy');
+            }
+            document.getElementById('contextMenu').classList.remove('active');
+        });
+
         // Add delete message handler
         document.getElementById('ctxDeleteMessage').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.messageId && this.contextMenuData.pubkey === this.pubkey) {
@@ -5958,6 +5972,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Show/hide quote option
         document.getElementById('ctxQuote').style.display = content ? 'block' : 'none';
+
+        // Show/hide Copy Message option
+        document.getElementById('ctxCopyMessage').style.display = content ? 'block' : 'none';
 
         // Show/hide React option
         const reactOption = document.getElementById('ctxReact');
@@ -15541,44 +15558,154 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         sendBtn.addEventListener('touchend', cancelSendLongPress);
         sendBtn.addEventListener('touchcancel', cancelSendLongPress);
 
-        // Long-press on messages to copy text
+        // Long-press on messages to show quick emoji reaction popup
         const messagesEl = document.getElementById('messagesContainer');
         let msgLongPressTimer = null;
         let msgLongPressFired = false;
 
+        const showQuickReactPopup = (msgEl, e) => {
+            msgLongPressFired = true;
+            const messageId = msgEl.dataset.messageId;
+            if (!messageId) return;
+
+            // Build the 6 emojis to show: recently used + defaults
+            const defaultEmojis = ['👍', '❤️', '😂', '🔥', '👎', '😮'];
+            let quickEmojis = [];
+
+            if (this.recentEmojis.length >= 6) {
+                quickEmojis = this.recentEmojis.slice(0, 6);
+            } else if (this.recentEmojis.length > 0) {
+                quickEmojis = [...this.recentEmojis];
+                for (const emoji of defaultEmojis) {
+                    if (quickEmojis.length >= 6) break;
+                    if (!quickEmojis.includes(emoji)) {
+                        quickEmojis.push(emoji);
+                    }
+                }
+            } else {
+                quickEmojis = defaultEmojis.slice(0, 6);
+            }
+
+            // Remove any existing quick react popup
+            document.querySelectorAll('.quick-react-popup').forEach(el => el.remove());
+
+            const popup = document.createElement('div');
+            popup.className = 'quick-react-popup';
+
+            popup.innerHTML = quickEmojis.map(emoji =>
+                `<button class="quick-react-emoji" data-emoji="${emoji}">${emoji}</button>`
+            ).join('') +
+                `<button class="quick-react-expand" title="More reactions">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 6 L8 10 L12 6"/>
+                    </svg>
+                </button>`;
+
+            // Position near the long-press point
+            const msgRect = msgEl.getBoundingClientRect();
+            popup.style.position = 'fixed';
+
+            // Position above the message, centered on press point
+            const clientX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : msgRect.left + msgRect.width / 2);
+            const clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : msgRect.top);
+
+            const popupWidth = 270;
+            let left = clientX - popupWidth / 2;
+            left = Math.max(10, Math.min(left, window.innerWidth - popupWidth - 10));
+            let top = clientY - 55;
+            top = Math.max(10, top);
+
+            popup.style.left = left + 'px';
+            popup.style.top = top + 'px';
+
+            document.body.appendChild(popup);
+
+            // Trigger animation
+            requestAnimationFrame(() => popup.classList.add('active'));
+
+            // Handle expand button to open full reaction picker
+            const expandBtn = popup.querySelector('.quick-react-expand');
+            const openFullPicker = (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                popup.remove();
+                removeCloseListeners();
+
+                // Create a temporary button for positioning the full picker
+                const tempButton = document.createElement('button');
+                tempButton.style.position = 'fixed';
+                tempButton.style.left = popup.style.left;
+                tempButton.style.top = popup.style.top;
+                tempButton.style.opacity = '0';
+                tempButton.style.pointerEvents = 'none';
+                document.body.appendChild(tempButton);
+
+                this.showEnhancedReactionPicker(messageId, tempButton);
+                setTimeout(() => tempButton.remove(), 100);
+            };
+            expandBtn.addEventListener('click', openFullPicker);
+            expandBtn.addEventListener('touchend', openFullPicker);
+
+            // Handle emoji clicks via both click and touchend for reliability
+            popup.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                const btn = ev.target.closest('.quick-react-emoji');
+                if (!btn) return;
+                const emoji = btn.dataset.emoji;
+                popup.remove();
+                removeCloseListeners();
+                await this.sendReaction(messageId, emoji);
+                this.addToRecentEmojis(emoji);
+            });
+
+            // Also handle touch on emoji buttons directly for mobile
+            popup.querySelectorAll('.quick-react-emoji').forEach(btn => {
+                btn.addEventListener('touchend', async (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    const emoji = btn.dataset.emoji;
+                    popup.remove();
+                    removeCloseListeners();
+                    await this.sendReaction(messageId, emoji);
+                    this.addToRecentEmojis(emoji);
+                });
+            });
+
+            // Close on click/tap outside, but not from the same gesture that opened it
+            const closePopup = (ev) => {
+                if (!popup.contains(ev.target)) {
+                    popup.remove();
+                    removeCloseListeners();
+                }
+            };
+            const removeCloseListeners = () => {
+                document.removeEventListener('click', closePopup);
+                document.removeEventListener('touchend', closePopup);
+            };
+            // Delay adding close listeners to avoid the current gesture closing it
+            setTimeout(() => {
+                document.addEventListener('click', closePopup);
+                document.addEventListener('touchend', closePopup);
+            }, 300);
+        };
+
         messagesEl.addEventListener('mousedown', (e) => {
-            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn')) return;
-            const msgEl = e.target.closest('.message[data-raw-content]');
+            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup')) return;
+            const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
             msgLongPressFired = false;
             msgLongPressTimer = setTimeout(() => {
-                msgLongPressFired = true;
-                const rawContent = msgEl.dataset.rawContent;
-                if (rawContent) {
-                    navigator.clipboard.writeText(rawContent).then(() => {
-                        this.displaySystemMessage('Message copied to clipboard');
-                    }).catch(() => {
-                        this.displaySystemMessage('Failed to copy message');
-                    });
-                }
+                showQuickReactPopup(msgEl, e);
             }, 500);
         });
 
         messagesEl.addEventListener('touchstart', (e) => {
-            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn')) return;
-            const msgEl = e.target.closest('.message[data-raw-content]');
+            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup')) return;
+            const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
             msgLongPressFired = false;
             msgLongPressTimer = setTimeout(() => {
-                msgLongPressFired = true;
-                const rawContent = msgEl.dataset.rawContent;
-                if (rawContent) {
-                    navigator.clipboard.writeText(rawContent).then(() => {
-                        this.displaySystemMessage('Message copied to clipboard');
-                    }).catch(() => {
-                        this.displaySystemMessage('Failed to copy message');
-                    });
-                }
+                showQuickReactPopup(msgEl, e);
             }, 500);
         }, { passive: true });
 
@@ -15589,7 +15716,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         };
 
-        // Cancel long-press copy if a swipe gesture is detected
+        // Cancel long-press react if a swipe gesture is detected
         messagesEl.addEventListener('touchmove', cancelMsgLongPress, { passive: true });
         messagesEl.addEventListener('mouseup', cancelMsgLongPress);
         messagesEl.addEventListener('mouseleave', cancelMsgLongPress);
@@ -20688,7 +20815,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.39.154 ═══<br/>
+═══ Nymchat v3.40.154 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

@@ -58,7 +58,16 @@
             <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar" style="cursor: pointer;"
                 onclick="event.stopPropagation(); nym.expandImage(this.src); document.getElementById('contextMenu').classList.remove('active');">
             <div class="context-menu-avatar-nym" id="ctxAvatarNym"></div>
+            <div class="context-menu-copy-pubkey" id="ctxCopyPubkey">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                    style="vertical-align: middle; margin-right: 4px;">
+                    <rect x="5" y="5" width="8" height="9" rx="1" />
+                    <path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round" />
+                </svg>
+                Copy Pubkey
+            </div>
         </div>
+
         <div class="context-menu-item" id="ctxReact">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 style="vertical-align: middle; margin-right: 8px;">
@@ -105,13 +114,13 @@
             Quote Message
         </div>
 
-        <div class="context-menu-item" id="ctxCopyPubkey">
+        <div class="context-menu-item" id="ctxCopyMessage">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 style="vertical-align: middle; margin-right: 8px;">
                 <rect x="5" y="5" width="8" height="9" rx="1" />
                 <path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round" />
             </svg>
-            Copy Pubkey
+            Copy Message
         </div>
 
         <div class="context-menu-item report" id="ctxReport">
