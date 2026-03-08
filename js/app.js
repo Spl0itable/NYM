@@ -16080,14 +16080,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (isSwiping && swipeDistance >= SWIPE_THRESHOLD) {
                 // Trigger quote reply
                 const msgEl = currentEl;
-                const authorSpan = msgEl.querySelector('.message-author');
                 const contentSpan = msgEl.querySelector('.message-content');
 
-                if (authorSpan) {
-                    // Extract author nym from the displayed text
-                    const authorText = authorSpan.textContent.replace(/[>]/g, '').trim();
+                if (msgEl.dataset.pubkey) {
+                    // Build clean author from data attributes to avoid flair emoji leaking into quote text
+                    const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'anon');
+                    const suffix = this.getPubkeySuffix(msgEl.dataset.pubkey);
+                    const authorText = `${baseNym}#${suffix}`;
                     // Use raw content stored on the element to preserve quote structure
-                    const cleanContent = msgEl.dataset.rawContent || contentSpan.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
+                    const cleanContent = msgEl.dataset.rawContent || contentSpan?.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
 
                     if (cleanContent) {
                         this.setQuoteReply(authorText, cleanContent);
@@ -16128,10 +16129,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Don't trigger on author name clicks (context menu) or links
             if (e.target.closest('a') || e.target.closest('.message-author')) return;
 
-            const authorSpan = msgEl.querySelector('.message-author');
-            if (!authorSpan) return;
+            if (!msgEl.dataset.pubkey) return;
 
-            const authorText = authorSpan.textContent.replace(/[>]/g, '').trim();
+            // Build clean author from data attributes to avoid flair emoji leaking into quote text
+            const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'anon');
+            const suffix = this.getPubkeySuffix(msgEl.dataset.pubkey);
+            const authorText = `${baseNym}#${suffix}`;
             const cleanContent = msgEl.dataset.rawContent || msgEl.querySelector('.message-content')?.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
 
             if (cleanContent) {
