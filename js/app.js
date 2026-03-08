@@ -15577,6 +15577,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         };
 
+        // Cancel long-press copy if a swipe gesture is detected
+        messagesEl.addEventListener('touchmove', cancelMsgLongPress, { passive: true });
         messagesEl.addEventListener('mouseup', cancelMsgLongPress);
         messagesEl.addEventListener('mouseleave', cancelMsgLongPress);
         messagesEl.addEventListener('touchend', (e) => {
@@ -20589,7 +20591,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.39.149 ═══<br/>
+═══ Nymchat v3.39.150 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
