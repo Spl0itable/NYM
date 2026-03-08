@@ -17438,11 +17438,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const baseNym = this.stripPubkeySuffix(nym);
 
         const timestamp = new Date(created_at * 1000);
-        const timeStr = timestamp.toLocaleTimeString([], {
+        // Clamp timestamp to now so polls never appear in the future
+        const now = new Date();
+        const displayTimestamp = timestamp > now ? now : timestamp;
+        messageEl.dataset.timestamp = displayTimestamp.getTime();
+
+        const timeStr = displayTimestamp.toLocaleTimeString([], {
             hour: '2-digit',
             minute: '2-digit',
             hour12: this.settings?.timeFormat === '12hr'
         });
+
+        // Get user's shop items for styling (badges, flair, etc.)
+        const userShopItems = this.getUserShopItems(pubkey);
+        const flairHtml = this.getFlairForUser(pubkey);
+        const supporterBadge = userShopItems?.supporter ?
+            '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
+        const verifiedBadge = this.isVerifiedDeveloper(pubkey) ?
+            `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
+        const userColorClass = this.getUserColorClass(pubkey);
 
         const totalVotes = votes.size;
         const hasVoted = votes.has(this.pubkey);
@@ -17475,11 +17489,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             `;
         }).join('');
 
+        // Prepare full timestamp for tooltip
+        const fullTimestamp = displayTimestamp.toLocaleString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: this.settings?.timeFormat === '12hr'
+        });
+
+        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+
         messageEl.innerHTML = `
-            <span class="message-time" title="${timestamp.toLocaleString()}">${timeStr}</span>
-            <div class="message-author ${isOwn ? 'self' : ''}">
-                <img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>&gt;
-            </div>
+            <span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
+            <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time">${timeStr}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
             <div class="message-content">
                 <div class="poll-container" data-poll-id="${pollId}">
                     <div class="poll-header">📊 Poll</div>
@@ -17487,10 +17512,39 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     <div class="poll-options">${optionsHtml}</div>
                     <div class="poll-footer">${totalVotes} vote${totalVotes !== 1 ? 's' : ''}</div>
                 </div>
+                <span class="bubble-time-inner">${timeStr}</span>
             </div>
         `;
 
-        container.appendChild(messageEl);
+        // Add context menu to poll author (same as regular messages)
+        const authorSpan = messageEl.querySelector('.message-author');
+        if (authorSpan) {
+            authorSpan.style.cursor = 'pointer';
+            authorSpan.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.showContextMenu(e, displayAuthor, pubkey, `[Poll] ${question}`, pollId);
+                return false;
+            });
+        }
+
+        // Insert in correct chronological order using timestamp
+        const messageTimestamp = displayTimestamp.getTime();
+        const existingMessages = Array.from(container.querySelectorAll('[data-timestamp]'));
+        let insertBefore = null;
+        for (const existing of existingMessages) {
+            const existingTimestamp = parseInt(existing.dataset.timestamp);
+            if (messageTimestamp < existingTimestamp) {
+                insertBefore = existing;
+                break;
+            }
+        }
+
+        if (insertBefore) {
+            container.insertBefore(messageEl, insertBefore);
+        } else {
+            container.appendChild(messageEl);
+        }
         this._scheduleScrollToBottom();
     }
 
@@ -20601,7 +20655,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.39.152 ═══<br/>
+═══ Nymchat v3.39.153 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
