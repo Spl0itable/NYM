@@ -15671,22 +15671,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 });
             });
 
-            // Close on click/tap outside, but not from the same gesture that opened it
+            // Close on click/tap outside. Ignore any close events that fire
+            // within 400ms of opening — these come from the same long-press
+            // gesture (mouseup + click, or touchend) that triggered the popup.
+            const openedAt = Date.now();
             const closePopup = (ev) => {
-                if (!popup.contains(ev.target)) {
-                    popup.remove();
-                    removeCloseListeners();
-                }
+                if (popup.contains(ev.target)) return;
+                if (Date.now() - openedAt < 400) return;
+                popup.remove();
+                removeCloseListeners();
             };
             const removeCloseListeners = () => {
-                document.removeEventListener('click', closePopup);
-                document.removeEventListener('touchend', closePopup);
+                document.removeEventListener('mousedown', closePopup);
+                document.removeEventListener('touchstart', closePopup);
             };
-            // Delay adding close listeners to avoid the current gesture closing it
-            setTimeout(() => {
-                document.addEventListener('click', closePopup);
-                document.addEventListener('touchend', closePopup);
-            }, 300);
+            // Use mousedown/touchstart (not mouseup/click) so the popup
+            // closes on the start of a new gesture, not the end of the
+            // opening gesture.
+            document.addEventListener('mousedown', closePopup);
+            document.addEventListener('touchstart', closePopup);
         };
 
         messagesEl.addEventListener('mousedown', (e) => {
@@ -20815,7 +20818,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.40.154 ═══<br/>
+═══ Nymchat v3.40.155 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
