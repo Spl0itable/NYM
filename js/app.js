@@ -5870,7 +5870,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Parse base nym from display format - this removes HTML tags
         const parsedNym = this.parseNymFromDisplay(nym);
         // Get just the base nym without any suffix
-        const baseNym = parsedNym.split('#')[0] || parsedNym;
+        const baseNym = this.stripPubkeySuffix(parsedNym);
         const suffix = this.getPubkeySuffix(pubkey);
         const fullNym = `${baseNym}#${suffix}`;
 
@@ -6161,13 +6161,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return `${adj}_${noun}#${suffix}`;
     }
 
+    stripPubkeySuffix(nym) {
+        if (!nym) return nym;
+        // Only strip a trailing #xxxx where xxxx is exactly 4 hex chars (pubkey suffix)
+        return nym.replace(/#[0-9a-f]{4}$/i, '');
+    }
+
     formatNymWithPubkey(nym, pubkey) {
-        // If nym already has a # suffix, wrap the existing suffix with nym-suffix class
-        if (nym.includes('#')) {
-            const hashIndex = nym.lastIndexOf('#');
-            const baseName = nym.substring(0, hashIndex);
-            const existingSuffix = nym.substring(hashIndex + 1);
-            return `${baseName}<span class="nym-suffix">#${existingSuffix}</span>`;
+        // If nym already has a pubkey suffix (#xxxx where xxxx is 4 hex chars), wrap it
+        const suffixMatch = nym.match(/#([0-9a-f]{4})$/i);
+        if (suffixMatch) {
+            const baseName = nym.substring(0, nym.length - 5);
+            return `${baseName}<span class="nym-suffix">#${suffixMatch[1]}</span>`;
         }
 
         // Get last 4 characters of pubkey
@@ -6197,9 +6202,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Decode HTML entities (e.g., &lt; &gt; from display formatting)
         withoutHtml = withoutHtml.replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
 
-        // Then get base nym without suffix
-        const parts = withoutHtml.split('#');
-        return parts[0] || withoutHtml;
+        // Strip only the pubkey suffix (#xxxx where xxxx is 4 hex chars) from the end
+        // This preserves any # characters that are part of the actual nickname
+        return withoutHtml.replace(/#[0-9a-f]{4}$/i, '') || withoutHtml;
     }
 
     async connectToRelays() {
@@ -9472,7 +9477,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const geohashTag = event.tags.find(t => t[0] === 'g');
 
             // Strip any existing #suffix from n tag (bitchat includes it, Nymchat adds its own)
-            const rawNym = nymTag ? nymTag[1].split('#')[0] : null;
+            const rawNym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : null;
             const nym = rawNym || this.getNymFromPubkey(event.pubkey);
             const geohash = geohashTag ? geohashTag[1] : '';
 
@@ -12360,7 +12365,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Extract base nym if it has a suffix
-        const baseNym = nym.split('#')[0] || nym;
+        const baseNym = this.stripPubkeySuffix(nym);
 
         // Add to PM conversations if not exists
         this.addPMConversation(baseNym, pubkey);
@@ -14181,7 +14186,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 authorExtraClass = 'cosmetic-redacted';
             }
 
-            const escapedAuthorBase = this.escapeHtml(message.author).split('#')[0] || this.escapeHtml(message.author);
+            const escapedAuthorBase = this.escapeHtml(this.stripPubkeySuffix(message.author));
             const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
             // Prepare full timestamp for tooltip
@@ -14862,7 +14867,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const pubkey = event.pubkey;
         const status = statusTag[1];
-        const nym = nymTag ? nymTag[1].split('#')[0] : null;
+        const nym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : null;
         const eventTime = event.created_at || 0;
 
         // Ignore our own presence events
@@ -15537,6 +15542,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         let msgLongPressFired = false;
 
         messagesEl.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn')) return;
             const msgEl = e.target.closest('.message[data-raw-content]');
             if (!msgEl) return;
             msgLongPressFired = false;
@@ -15554,6 +15560,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         });
 
         messagesEl.addEventListener('touchstart', (e) => {
+            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn')) return;
             const msgEl = e.target.closest('.message[data-raw-content]');
             if (!msgEl) return;
             msgLongPressFired = false;
@@ -15790,7 +15797,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         this.users.forEach((user, pubkey) => {
             // Create formatted nym for matching
-            const baseNym = user.nym.split('#')[0] || user.nym;
+            const baseNym = this.stripPubkeySuffix(user.nym);
             const suffix = this.getPubkeySuffix(pubkey);
             const searchableNym = `${baseNym}#${suffix}`;
 
@@ -15933,7 +15940,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const lastAtIndex = value.lastIndexOf('@');
 
             // Use base nym with suffix
-            const baseNym = nym.split('#')[0] || nym;
+            const baseNym = this.stripPubkeySuffix(nym);
             const suffix = this.getPubkeySuffix(pubkey);
             input.value = value.substring(0, lastAtIndex) + '@' + baseNym + '#' + suffix + ' ';
             input.focus();
@@ -16293,7 +16300,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Find user by nym, considering suffix if provided
         const matches = [];
         this.users.forEach((user, pubkey) => {
-            const baseNym = user.nym.split('#')[0] || user.nym;
+            const baseNym = this.stripPubkeySuffix(user.nym);
             if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                 if (searchSuffix) {
                     // If suffix provided, only match exact pubkey suffix
@@ -16378,7 +16385,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             .filter(u => u && Date.now() - u.lastSeen < 300000)
             .filter(u => !this.blockedUsers.has(u.nym))
             .map(u => {
-                const baseNym = u.nym.split('#')[0] || u.nym;
+                const baseNym = this.stripPubkeySuffix(u.nym);
                 const suffix = this.getPubkeySuffix(u.pubkey);
                 return `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
             })
@@ -16431,7 +16438,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Find user by nym, considering suffix if provided
             const matches = [];
             this.users.forEach((user, pubkey) => {
-                const baseNym = user.nym.split('#')[0] || user.nym;
+                const baseNym = this.stripPubkeySuffix(user.nym);
                 if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                     if (searchSuffix) {
                         // If suffix provided, only match exact pubkey suffix
@@ -17144,7 +17151,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Find matching users
         const matches = [];
         this.users.forEach((user, pubkey) => {
-            const baseNym = user.nym.split('#')[0] || user.nym;
+            const baseNym = this.stripPubkeySuffix(user.nym);
             if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                 if (searchSuffix) {
                     if (pubkey.endsWith(searchSuffix)) {
@@ -17341,7 +17348,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const question = questionTag[1];
         const options = optionTags.map(t => ({ index: parseInt(t[1]), text: t[2] }));
-        const nym = nymTag ? nymTag[1].split('#')[0] : 'anon';
+        const nym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : 'anon';
         const geohash = geohashTag ? geohashTag[1] : '';
 
         if (!this.polls.has(event.id)) {
@@ -17425,7 +17432,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const avatarSrc = this.getAvatarUrl(pubkey);
         const suffix = this.getPubkeySuffix(pubkey);
-        const baseNym = nym.split('#')[0] || nym;
+        const baseNym = this.stripPubkeySuffix(nym);
 
         const timestamp = new Date(created_at * 1000);
         const timeStr = timestamp.toLocaleTimeString([], {
@@ -19487,7 +19494,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // First, search in active users
         this.users.forEach((user, pubkey) => {
-            const baseNym = user.nym.split('#')[0] || user.nym;
+            const baseNym = this.stripPubkeySuffix(user.nym);
             if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                 if (searchSuffix) {
                     if (pubkey.endsWith(searchSuffix)) {
@@ -19505,7 +19512,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.messages.forEach((channelMessages, channel) => {
                 channelMessages.forEach(msg => {
                     if (msg.pubkey && msg.author) {
-                        const baseNym = msg.author.split('#')[0] || msg.author;
+                        const baseNym = this.stripPubkeySuffix(msg.author);
                         if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                             if (searchSuffix) {
                                 if (msg.pubkey.endsWith(searchSuffix)) {
@@ -19529,7 +19536,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.pmMessages.forEach((conversationMessages, conversationKey) => {
                 conversationMessages.forEach(msg => {
                     if (msg.pubkey && msg.author) {
-                        const baseNym = msg.author.split('#')[0] || msg.author;
+                        const baseNym = this.stripPubkeySuffix(msg.author);
                         if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                             if (searchSuffix) {
                                 if (msg.pubkey.endsWith(searchSuffix)) {
@@ -19786,7 +19793,7 @@ async function changeNick() {
 function randomizeNick() {
     const generated = nym.generateRandomNym();
     // Extract base name without #suffix
-    const baseName = generated.split('#')[0];
+    const baseName = nym.stripPubkeySuffix(generated);
     document.getElementById('newNickInput').value = baseName;
 
     // Randomize the robohash avatar preview if no custom avatar is set
@@ -20591,7 +20598,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.39.150 ═══<br/>
+═══ Nymchat v3.39.151 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
