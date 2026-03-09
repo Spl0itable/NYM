@@ -54,6 +54,8 @@
 
     <!-- Context Menu -->
     <div class="context-menu" id="contextMenu">
+        <img id="ctxBannerImg" class="context-menu-banner" src="" alt="" style="display: none;"
+            onclick="event.stopPropagation(); nym.expandImage(this.src); document.getElementById('contextMenu').classList.remove('active');">
         <div class="context-menu-avatar-header" id="ctxAvatarHeader">
             <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar" style="cursor: pointer;"
                 onclick="event.stopPropagation(); nym.expandImage(this.src); document.getElementById('contextMenu').classList.remove('active');">
@@ -656,10 +658,10 @@
     <div class="modal nick-edit-modal" id="nickEditModal">
         <div class="modal-content">
             <button class="modal-close" onclick="closeModal('nickEditModal')">✕</button>
-            <div class="modal-header">Change Nickname & Avatar</div>
+            <div class="modal-header">Change Nym's Details</div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label class="form-label">New Nym nick</label>
+                    <label class="form-label">Nickname</label>
                     <div style="display: flex; align-items: center; gap: 0;">
                         <input type="text" class="form-input" id="newNickInput" placeholder="Enter new nym"
                             maxlength="20" style="flex: 1; border-radius: 12px 0 0 12px;">
@@ -692,6 +694,28 @@
                                     style="display: none;" onclick="removeNickEditAvatar()">Remove</button>
                             </div>
                             <div class="avatar-upload-status" id="nickEditAvatarStatus"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Banner</label>
+                    <div class="banner-upload-section">
+                        <div class="banner-preview-wrap" id="nickEditBannerPreviewWrap">
+                            <img id="nickEditBannerPreview" class="banner-preview" src="" alt="Banner"
+                                style="display: none;">
+                            <div class="banner-placeholder" id="nickEditBannerPlaceholder">No banner set</div>
+                            <div class="avatar-upload-spinner" id="nickEditBannerSpinner"></div>
+                        </div>
+                        <div class="avatar-upload-controls">
+                            <input type="file" id="nickEditBannerInput" accept="image/*" style="display: none"
+                                onchange="handleNickEditBannerSelect(event)">
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                <button type="button" class="avatar-upload-btn" id="nickEditBannerUploadBtn"
+                                    onclick="document.getElementById('nickEditBannerInput').click()">Choose banner</button>
+                                <button type="button" class="avatar-remove-btn" id="nickEditBannerRemoveBtn"
+                                    style="display: none;" onclick="removeNickEditBanner()">Remove</button>
+                            </div>
+                            <div class="avatar-upload-status" id="nickEditBannerStatus"></div>
                         </div>
                     </div>
                 </div>

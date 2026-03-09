@@ -1426,12 +1426,16 @@ class NYM {
         this.lightningAddress = null;
         this.userLightningAddresses = new Map();
         this.userAvatars = new Map();
+        this.userBanners = new Map();
         this.avatarBlobCache = new Map();
         this.avatarBlobInflight = new Map();
+        this.bannerBlobCache = new Map();
+        this.bannerBlobInflight = new Map();
         this.profileFetchedAt = new Map();
         this.profileFetchQueue = [];
         this.profileFetchTimer = null;
         this.profileFetchBatchDelay = 100;
+        this.pendingProfileResolvers = new Map();
         this.localActiveStyle = null;
         this.localActiveFlair = null;
         this.shopItemsLoaded = false;
@@ -5891,6 +5895,25 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         this.contextMenuData = { nym: baseNym, pubkey, content, messageId };
 
+        // Populate banner if available
+        const ctxBannerImg = document.getElementById('ctxBannerImg');
+        const bannerUrl = this.getBannerUrl(pubkey);
+        if (ctxBannerImg) {
+            if (bannerUrl) {
+                ctxBannerImg.src = bannerUrl;
+                ctxBannerImg.style.display = 'block';
+                ctxBannerImg.style.cursor = 'pointer';
+                ctxBannerImg.onerror = function () {
+                    this.style.display = 'none';
+                    menu.classList.remove('has-banner');
+                };
+                menu.classList.add('has-banner');
+            } else {
+                ctxBannerImg.style.display = 'none';
+                menu.classList.remove('has-banner');
+            }
+        }
+
         // Populate avatar header
         const ctxAvatarImg = document.getElementById('ctxAvatarImg');
         const ctxAvatarNym = document.getElementById('ctxAvatarNym');
@@ -7784,6 +7807,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 profileToSave.picture = avatarUrl;
             }
 
+            // Include banner if set
+            const bannerUrl = this.userBanners.get(this.pubkey);
+            if (bannerUrl) {
+                profileToSave.banner = bannerUrl;
+            }
+
             const profileEvent = {
                 kind: 0,
                 created_at: Math.floor(Date.now() / 1000),
@@ -7834,6 +7863,35 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             .finally(() => { this.avatarBlobInflight.delete(pubkey); });
         this.avatarBlobInflight.set(pubkey, p);
         return p;
+    }
+
+    // Fetch a banner image and cache it as a blob object URL.
+    cacheBannerImage(pubkey, url) {
+        if (this.bannerBlobCache.has(pubkey)) return Promise.resolve();
+        if (this.bannerBlobInflight.has(pubkey)) return this.bannerBlobInflight.get(pubkey);
+        const p = fetch(url, { mode: 'cors' })
+            .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+            .then(blob => {
+                const old = this.bannerBlobCache.get(pubkey);
+                if (old) URL.revokeObjectURL(old);
+                const objectUrl = URL.createObjectURL(blob);
+                this.bannerBlobCache.set(pubkey, objectUrl);
+                // Update context menu banner if open for this user
+                const ctxBanner = document.getElementById('ctxBannerImg');
+                if (ctxBanner && this.contextMenuData?.pubkey === pubkey) {
+                    ctxBanner.src = objectUrl;
+                }
+            })
+            .catch(() => {})
+            .finally(() => { this.bannerBlobInflight.delete(pubkey); });
+        this.bannerBlobInflight.set(pubkey, p);
+        return p;
+    }
+
+    getBannerUrl(pubkey) {
+        const blob = this.bannerBlobCache.get(pubkey);
+        if (blob) return blob;
+        return this.userBanners.get(pubkey) || null;
     }
 
     // Update already-rendered message avatars when a kind 0 profile picture arrives
@@ -7932,6 +7990,66 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.saveToNostrProfile();
         // Broadcast avatar removal so other users clear their cache
         this.publishAvatarUpdate('');
+    }
+
+    async uploadBanner(file) {
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+            const now = Math.floor(Date.now() / 1000);
+            const uploadEvent = {
+                kind: 24242,
+                created_at: now,
+                tags: [
+                    ['t', 'upload'],
+                    ['x', hashHex],
+                    ['expiration', String(now + 600)]
+                ],
+                content: 'Uploading blob with SHA-256 hash',
+                pubkey: this.pubkey
+            };
+
+            const signedEvent = await this.signEvent(uploadEvent);
+            const eventBase64 = btoa(JSON.stringify(signedEvent));
+
+            const response = await fetch('https://blossom.band/upload', {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Nostr ${eventBase64}`,
+                    'Content-Type': file.type || 'image/png'
+                },
+                body: file
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.url) {
+                    const oldBlob = this.bannerBlobCache.get(this.pubkey);
+                    if (oldBlob) URL.revokeObjectURL(oldBlob);
+                    this.bannerBlobCache.delete(this.pubkey);
+                    this.userBanners.set(this.pubkey, data.url);
+                    this.cacheBannerImage(this.pubkey, data.url);
+                    localStorage.setItem('nym_banner_url', data.url);
+                    await this.saveToNostrProfile();
+                    return data.url;
+                }
+            }
+            throw new Error(`Upload failed: ${response.status}`);
+        } catch (error) {
+            this.displaySystemMessage('Failed to upload banner: ' + error.message);
+            return null;
+        }
+    }
+
+    removeBanner() {
+        const oldBlob = this.bannerBlobCache.get(this.pubkey);
+        if (oldBlob) { URL.revokeObjectURL(oldBlob); this.bannerBlobCache.delete(this.pubkey); }
+        this.userBanners.delete(this.pubkey);
+        localStorage.removeItem('nym_banner_url');
+        this.saveToNostrProfile();
     }
 
     // Wallpaper Methods
@@ -9389,6 +9507,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             // If same URL and blob already cached, do nothing — avatars are fine
                         }
 
+                        // Extract banner image
+                        if (profile.banner) {
+                            const prevBanner = this.userBanners.get(pubkey);
+                            if (prevBanner !== profile.banner) {
+                                const oldBlob = this.bannerBlobCache.get(pubkey);
+                                if (oldBlob) { URL.revokeObjectURL(oldBlob); this.bannerBlobCache.delete(pubkey); }
+                                this.userBanners.set(pubkey, profile.banner);
+                                this.cacheBannerImage(pubkey, profile.banner);
+                            } else if (!this.bannerBlobCache.has(pubkey)) {
+                                this.userBanners.set(pubkey, profile.banner);
+                                this.cacheBannerImage(pubkey, profile.banner);
+                            }
+                        }
+
                         if (profile.name || profile.username || profile.display_name) {
                             const profileName = (profile.name || profile.username || profile.display_name).substring(0, 20);
                             if (!this.users.has(pubkey) || this.users.get(pubkey).nym.startsWith('anon-')) {
@@ -9411,6 +9543,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             // Refresh PM sidebar entry and any open PM header
                             this.updatePMNicknameFromProfile(pubkey, profileName);
                         }
+
+                        // Resolve any pending fetchProfileDirect calls for this pubkey
+                        this._resolveProfileCallbacks(pubkey);
                     } catch (e) { }
                 }
                 // Deduplicate events by ID
@@ -9613,14 +9748,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
 
             // Fetch kind 0 profile for channel message senders we haven't seen,
-            // or re-fetch if the cached profile is stale (older than 5 minutes)
-            // so avatar/name changes are picked up for active users.
+            // or re-fetch if the cached profile is stale (older than 5 minutes).
+            // Uses batched queue so rapid message bursts produce a single REQ.
+            // The kind 0 handler updates rendered avatars/names retroactively.
             if (event.pubkey !== this.pubkey) {
                 const lastFetch = this.profileFetchedAt.get(event.pubkey) || 0;
                 const stale = Date.now() - lastFetch > 5 * 60 * 1000;
                 if (!this.userAvatars.has(event.pubkey) || stale) {
                     this.profileFetchedAt.set(event.pubkey, Date.now());
-                    await this.fetchProfileDirect(event.pubkey);
+                    this.queueProfileFetch(event.pubkey);
                 }
             }
 
@@ -12904,17 +13040,78 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         } catch (_) { }
     }
 
-    // Direct profile fetch for PM senders - uses sendToRelay and existing kind 0 handler
+    // Direct profile fetch - sends REQ and resolves when the kind 0 handler
+    // processes the response (or after a timeout fallback).
     async fetchProfileDirect(pubkey) {
         const subId = 'pm-profile-' + Math.random().toString(36).slice(2);
         const req = ["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }];
 
         try { this.sendToRelay(req); } catch (_) { }
 
-        // Wait for the main handleRelayMessage kind 0 handler to process response
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise(resolve => {
+            const timer = setTimeout(() => {
+                this._removeProfileResolver(pubkey, entry);
+                resolve();
+            }, 4000);
+            const entry = { resolve, timer };
+            if (!this.pendingProfileResolvers.has(pubkey)) {
+                this.pendingProfileResolvers.set(pubkey, []);
+            }
+            this.pendingProfileResolvers.get(pubkey).push(entry);
+        });
 
         try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+    }
+
+    // Resolve all pending profile callbacks for a pubkey (called from kind 0 handler)
+    _resolveProfileCallbacks(pubkey) {
+        const entries = this.pendingProfileResolvers.get(pubkey);
+        if (!entries || entries.length === 0) return;
+        this.pendingProfileResolvers.delete(pubkey);
+        for (const entry of entries) {
+            clearTimeout(entry.timer);
+            entry.resolve();
+        }
+    }
+
+    _removeProfileResolver(pubkey, entry) {
+        const entries = this.pendingProfileResolvers.get(pubkey);
+        if (!entries) return;
+        const idx = entries.indexOf(entry);
+        if (idx !== -1) entries.splice(idx, 1);
+        if (entries.length === 0) this.pendingProfileResolvers.delete(pubkey);
+    }
+
+    // Queue a profile fetch that gets batched with others within 150ms.
+    // Returns immediately (fire-and-forget). The kind 0 handler updates
+    // rendered avatars/names retroactively when responses arrive.
+    queueProfileFetch(pubkey) {
+        if (this._profileBatchSet && this._profileBatchSet.has(pubkey)) return;
+        if (!this._profileBatchQueue) this._profileBatchQueue = [];
+        if (!this._profileBatchSet) this._profileBatchSet = new Set();
+        this._profileBatchQueue.push(pubkey);
+        this._profileBatchSet.add(pubkey);
+        if (this._profileBatchTimer) return;
+        this._profileBatchTimer = setTimeout(() => {
+            this._flushProfileBatch();
+        }, 150);
+    }
+
+    _flushProfileBatch() {
+        const pubkeys = this._profileBatchQueue;
+        this._profileBatchQueue = [];
+        this._profileBatchSet = new Set();
+        this._profileBatchTimer = null;
+        if (pubkeys.length === 0) return;
+
+        const subId = 'batch-profile-' + Math.random().toString(36).slice(2);
+        const req = ["REQ", subId, { kinds: [0], authors: pubkeys, limit: pubkeys.length }];
+        try { this.sendToRelay(req); } catch (_) { }
+
+        // Close subscription after responses arrive or timeout
+        setTimeout(() => {
+            try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+        }, 4000);
     }
 
     updatePMNicknameFromProfile(pubkey, profileName) {
@@ -16351,7 +16548,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         });
 
-        // Long-press Send button (3s) for anonymous send (Nostr login users only)
+        // Long-press Send button (2s) for anonymous send (Nostr login users only)
         const sendBtn = document.getElementById('sendBtn');
         let sendLongPressTimer = null;
         let sendLongPressFired = false;
@@ -16369,15 +16566,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         sendBtn.style.boxShadow = '';
                     }, 1000);
                 }
-            }, 3000);
-            // Visual feedback: after 1s start pulsing if Nostr logged in
+            }, 2000);
+            // Visual feedback: after 700ms start pulsing if Nostr logged in
             if (this.nostrLoginMethod) {
                 setTimeout(() => {
                     if (sendLongPressTimer) {
                         sendBtn.style.transition = 'box-shadow 0.3s ease';
                         sendBtn.style.boxShadow = '0 0 10px rgb(from var(--primary) r g b / 0.2)';
                     }
-                }, 1000);
+                }, 700);
             }
         };
 
@@ -21129,6 +21326,26 @@ function editNick() {
         btnText: 'Change photo', btnDisabled: false, showRemove: hasCustom
     });
 
+    // Show current banner in edit modal
+    const bannerPreview = document.getElementById('nickEditBannerPreview');
+    const bannerPlaceholder = document.getElementById('nickEditBannerPlaceholder');
+    const bannerUrl = nym.getBannerUrl(nym.pubkey);
+    if (bannerUrl) {
+        if (bannerPreview) { bannerPreview.src = bannerUrl; bannerPreview.style.display = 'block'; }
+        if (bannerPlaceholder) bannerPlaceholder.style.display = 'none';
+        setBannerUploadState({
+            spinning: false, statusText: '', statusType: '',
+            btnText: 'Change banner', btnDisabled: false, showRemove: true
+        });
+    } else {
+        if (bannerPreview) { bannerPreview.src = ''; bannerPreview.style.display = 'none'; }
+        if (bannerPlaceholder) bannerPlaceholder.style.display = 'flex';
+        setBannerUploadState({
+            spinning: false, statusText: '', statusType: '',
+            btnText: 'Choose banner', btnDisabled: false, showRemove: false
+        });
+    }
+
     document.getElementById('nickEditModal').classList.add('active');
 }
 
@@ -21339,6 +21556,97 @@ function removeNickEditAvatar() {
     setAvatarUploadState('nickEdit', {
         spinning: false, statusText: '', statusType: '',
         btnText: 'Change photo', btnDisabled: false, showRemove: false
+    });
+}
+
+// Banner upload handler for nick edit modal
+async function handleNickEditBannerSelect(event) {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+
+    if (file.type && !file.type.startsWith('image/')) {
+        setBannerUploadState({ statusText: 'Please select an image file', statusType: 'error' });
+        return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+        setBannerUploadState({ statusText: 'Image must be under 10MB', statusType: 'error' });
+        return;
+    }
+
+    const preview = document.getElementById('nickEditBannerPreview');
+    const placeholder = document.getElementById('nickEditBannerPlaceholder');
+
+    if (preview) {
+        preview.src = URL.createObjectURL(file);
+        preview.style.display = 'block';
+    }
+    if (placeholder) placeholder.style.display = 'none';
+
+    setBannerUploadState({
+        spinning: true,
+        statusText: 'Uploading banner...',
+        statusType: 'uploading',
+        btnText: 'Uploading...',
+        btnDisabled: true,
+        showRemove: false
+    });
+
+    const url = await nym.uploadBanner(file);
+
+    if (url) {
+        if (preview) preview.src = url;
+        setBannerUploadState({
+            spinning: false,
+            statusText: 'Banner uploaded successfully',
+            statusType: 'success',
+            btnText: 'Change banner',
+            btnDisabled: false,
+            showRemove: true
+        });
+    } else {
+        if (preview) { preview.style.display = 'none'; }
+        if (placeholder) placeholder.style.display = 'flex';
+        setBannerUploadState({
+            spinning: false,
+            statusText: 'Upload failed — try again',
+            statusType: 'error',
+            btnText: 'Choose banner',
+            btnDisabled: false,
+            showRemove: false
+        });
+    }
+
+    event.target.value = '';
+}
+
+function setBannerUploadState({ spinning, statusText, statusType, btnText, btnDisabled, showRemove }) {
+    const spinner = document.getElementById('nickEditBannerSpinner');
+    const status = document.getElementById('nickEditBannerStatus');
+    const uploadBtn = document.getElementById('nickEditBannerUploadBtn');
+    const removeBtn = document.getElementById('nickEditBannerRemoveBtn');
+    if (spinner) spinner.classList.toggle('active', !!spinning);
+    if (status) {
+        status.textContent = statusText || '';
+        status.className = 'avatar-upload-status' + (statusType ? ' ' + statusType : '');
+    }
+    if (uploadBtn && btnText !== undefined) {
+        uploadBtn.textContent = btnText;
+        uploadBtn.disabled = !!btnDisabled;
+    }
+    if (removeBtn && showRemove !== undefined) {
+        removeBtn.style.display = showRemove ? 'inline-flex' : 'none';
+    }
+}
+
+function removeNickEditBanner() {
+    nym.removeBanner();
+    const preview = document.getElementById('nickEditBannerPreview');
+    const placeholder = document.getElementById('nickEditBannerPlaceholder');
+    if (preview) { preview.src = ''; preview.style.display = 'none'; }
+    if (placeholder) placeholder.style.display = 'flex';
+    setBannerUploadState({
+        spinning: false, statusText: '', statusType: '',
+        btnText: 'Choose banner', btnDisabled: false, showRemove: false
     });
 }
 
@@ -21961,7 +22269,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.41.156 ═══<br/>
+═══ Nymchat v3.42.156 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -21990,6 +22298,10 @@ async function checkSavedConnection() {
             const method = localStorage.getItem('nym_nostr_login_method');
             const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
             if (!pubkey) throw new Error('No stored pubkey');
+
+            // Set login method early so UI features (e.g. long-press anon send)
+            // recognise the user as logged in even if later async steps fail
+            nym.nostrLoginMethod = method;
 
             let secretKey = null;
             if (method === 'nsec') {
@@ -22022,7 +22334,18 @@ async function checkSavedConnection() {
             nym.nostrLoginPubkey = pubkey;
             nym.nostrLoginSecretKey = secretKey;
             nym.nostrLoginMethod = method;
-            nym.nym = 'anon'; // placeholder until kind 0 profile is fetched
+
+            // Apply cached profile immediately for instant UI (name + avatar)
+            // before relays connect; fresh data will overwrite later
+            nym.nym = 'anon'; // fallback until kind 0 profile is fetched
+            try {
+                const cached = JSON.parse(localStorage.getItem('nym_nostr_login_profile') || '{}');
+                if (cached.name) nym.nym = cached.name;
+                if (cached.avatar) {
+                    nym.userAvatars.set(pubkey, cached.avatar);
+                    nym.cacheAvatarImage(pubkey, cached.avatar);
+                }
+            } catch (_) {}
 
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
             nym.updateSidebarAvatar();
@@ -22062,6 +22385,7 @@ async function checkSavedConnection() {
             return; // Exit early — nostr login handled
         } catch (error) {
             // Nostr login restoration failed, fall through to auto-ephemeral or setup modal
+            nym.nostrLoginMethod = null;
         }
     }
 
@@ -22131,6 +22455,12 @@ async function checkSavedConnection() {
                     nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
                     nym.cacheAvatarImage(nym.pubkey, savedAvatarUrl);
                     nym.updateSidebarAvatar();
+                }
+
+                // Restore banner from localStorage for ephemeral sessions
+                const savedBannerUrl = localStorage.getItem('nym_banner_url');
+                if (savedBannerUrl) {
+                    nym.userBanners.set(nym.pubkey, savedBannerUrl);
                 }
 
                 // Publish profile with restored avatar and lightning address
@@ -22293,6 +22623,12 @@ async function initializeNym() {
                     nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
                     nym.cacheAvatarImage(nym.pubkey, savedAvatarUrl);
                     nym.updateSidebarAvatar();
+                }
+
+                // Restore banner from localStorage
+                const savedBannerUrl2 = localStorage.getItem('nym_banner_url');
+                if (savedBannerUrl2) {
+                    nym.userBanners.set(nym.pubkey, savedBannerUrl2);
                 }
                 // Publish profile with restored avatar and/or lightning address
                 await nym.saveToNostrProfile();
@@ -22472,6 +22808,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
 
     // Clear ephemeral profile data so it doesn't overwrite the persistent identity
     localStorage.removeItem('nym_avatar_url');
+    localStorage.removeItem('nym_banner_url');
 
     // Switch the active keypair to the persistent identity
     if (secretKey) {
@@ -22494,6 +22831,17 @@ function applyNostrLogin(pubkey, secretKey, method) {
         nym.updateSidebarAvatar();
         // Pull lightning address from the kind 0 profile into settings
         nym.loadLightningAddress();
+
+        // Cache profile data for instant restore on next refresh
+        const avatarUrl = nym.userAvatars.get(pubkey);
+        if (nym.nym || avatarUrl) {
+            try {
+                localStorage.setItem('nym_nostr_login_profile', JSON.stringify({
+                    name: nym.nym || null,
+                    avatar: avatarUrl || null
+                }));
+            } catch (_) {}
+        }
     }
 
     nym.fetchProfileDirect(pubkey).then(() => {
@@ -22537,6 +22885,7 @@ function nostrLogout() {
     localStorage.removeItem('nym_nostr_login_pubkey');
     localStorage.removeItem('nym_nostr_login_nsec');
     localStorage.removeItem('nym_nostr_login_npub');
+    localStorage.removeItem('nym_nostr_login_profile');
     nym.nostrLoginPubkey = null;
     nym.nostrLoginSecretKey = null;
     nym.nostrLoginMethod = null;
