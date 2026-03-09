@@ -52,13 +52,17 @@
     <div class="mobile-overlay" id="mobileOverlay" onclick="nym.closeSidebar()"></div>
     <button class="mobile-menu-toggle" onclick="toggleSidebar()">☰</button>
 
-    <!-- Context Menu -->
+    <!-- Context Menu Overlay -->
+    <div class="context-menu-overlay" id="contextMenuOverlay"></div>
+
+    <!-- Context Menu Sidebar -->
     <div class="context-menu" id="contextMenu">
+        <button class="context-menu-close" id="ctxCloseBtn" title="Close">&#x2715;</button>
         <img id="ctxBannerImg" class="context-menu-banner" src="" alt="" style="display: none;"
-            onclick="event.stopPropagation(); nym.expandImage(this.src); document.getElementById('contextMenu').classList.remove('active');">
+            onclick="event.stopPropagation(); nym.expandImage(this.src); nym.closeContextMenu();">
         <div class="context-menu-avatar-header" id="ctxAvatarHeader">
             <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar" style="cursor: pointer;"
-                onclick="event.stopPropagation(); nym.expandImage(this.src); document.getElementById('contextMenu').classList.remove('active');">
+                onclick="event.stopPropagation(); nym.expandImage(this.src); nym.closeContextMenu();">
             <div class="context-menu-avatar-nym" id="ctxAvatarNym"></div>
             <div class="context-menu-copy-pubkey" id="ctxCopyPubkey">
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
@@ -70,6 +74,9 @@
             </div>
         </div>
 
+        <div class="context-menu-bio" id="ctxBio"></div>
+
+        <div class="context-menu-actions">
         <div class="context-menu-item" id="ctxReact">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 style="vertical-align: middle; margin-right: 8px;">
@@ -166,6 +173,7 @@
                 <line x1="3.75" y1="3.75" x2="12.25" y2="12.25" stroke-width="1.5" stroke-linecap="round" />
             </svg>
             Block User
+        </div>
         </div>
     </div>
 
@@ -718,6 +726,15 @@
                             <div class="avatar-upload-status" id="nickEditBannerStatus"></div>
                         </div>
                     </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Bio</label>
+                    <div class="bio-input-wrap">
+                        <textarea id="nickEditBioInput" placeholder="Tell people a bit about yourself..."
+                            maxlength="150" oninput="updateBioCharCount()"></textarea>
+                        <div class="bio-char-count" id="nickEditBioCharCount">0/150</div>
+                    </div>
+                    <div class="form-hint">Short bio shown on your profile (max 150 characters)</div>
                 </div>
             </div>
             <div class="modal-actions">

@@ -1427,6 +1427,7 @@ class NYM {
         this.userLightningAddresses = new Map();
         this.userAvatars = new Map();
         this.userBanners = new Map();
+        this.userBios = new Map();
         this.avatarBlobCache = new Map();
         this.avatarBlobInflight = new Map();
         this.bannerBlobCache = new Map();
@@ -5599,19 +5600,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     setupContextMenu() {
-        // Close context menu on click outside - using event delegation
-        document.addEventListener('click', (e) => {
-            const contextMenu = document.getElementById('contextMenu');
+        // Close context menu sidebar via overlay click
+        document.getElementById('contextMenuOverlay').addEventListener('click', () => {
+            this.closeContextMenu();
+        });
 
-            // Only proceed if context menu is actually active
-            if (!contextMenu.classList.contains('active')) {
-                return;
-            }
-
-            // If clicking outside the context menu and not on enhanced emoji modal
-            if (!e.target.closest('.context-menu') && !e.target.closest('.enhanced-emoji-modal')) {
-                contextMenu.classList.remove('active');
-            }
+        // Close context menu sidebar via close button
+        document.getElementById('ctxCloseBtn').addEventListener('click', () => {
+            this.closeContextMenu();
         });
 
         // Context menu actions
@@ -5623,7 +5619,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const fullNym = `${baseNym}#${suffix}`;
                 this.insertMention(fullNym);
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
 
         document.getElementById('ctxPM').addEventListener('click', () => {
@@ -5633,7 +5629,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const fullNym = `${baseNym}#${suffix}`;
                 this.openUserPM(fullNym, this.contextMenuData.pubkey);
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
 
         // Add zap handler
@@ -5642,7 +5638,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const { messageId, pubkey, nym } = this.contextMenuData;
 
                 // Close context menu immediately
-                document.getElementById('contextMenu').classList.remove('active');
+                this.closeContextMenu();
 
                 // Show loading message
                 this.displaySystemMessage(`Checking if @${nym} can receive zaps...`);
@@ -5703,7 +5699,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (this.contextMenuData) {
                 this.openReportModal();
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
 
         // Add the click handler for slap
@@ -5712,7 +5708,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // Pass the pubkey directly as the argument
                 this.cmdSlap(this.contextMenuData.pubkey);
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
 
         // Add the click handler for hug
@@ -5720,12 +5716,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (this.contextMenuData) {
                 this.cmdHug(this.contextMenuData.pubkey);
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
 
         document.getElementById('ctxReact').addEventListener('click', () => {
             if (this.contextMenuData && this.contextMenuData.messageId) {
-                document.getElementById('contextMenu').classList.remove('active');
+                this.closeContextMenu();
 
                 // Use a delay to ensure context menu closes first
                 setTimeout(() => {
@@ -5753,7 +5749,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const fullNym = `${baseNym}#${suffix}`;
                 this.setQuoteReply(fullNym, this.contextMenuData.content);
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
 
         document.getElementById('ctxBlock').addEventListener('click', () => {
@@ -5761,7 +5757,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // Pass the pubkey directly as the argument
                 this.cmdBlock(this.contextMenuData.pubkey);
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
 
         document.getElementById('ctxCopyPubkey').addEventListener('click', async () => {
@@ -5775,7 +5771,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } else {
                 this.displaySystemMessage('No pubkey available to copy');
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
 
         document.getElementById('ctxCopyMessage').addEventListener('click', async () => {
@@ -5789,7 +5785,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } else {
                 this.displaySystemMessage('No message content to copy');
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
 
         // Add delete message handler
@@ -5800,7 +5796,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.displaySystemMessage('Deletion request sent to relays');
                 }
             }
-            document.getElementById('contextMenu').classList.remove('active');
+            this.closeContextMenu();
         });
     }
 
@@ -6044,33 +6040,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (kickOption) kickOption.style.display = 'none';
         }
 
-        // Add active class first to make visible
+        // Populate bio
+        const ctxBio = document.getElementById('ctxBio');
+        if (ctxBio) {
+            const bio = this.getBio(pubkey);
+            ctxBio.textContent = bio;
+        }
+
+        // Scroll sidebar to top
+        menu.scrollTop = 0;
+
+        // Show overlay and sidebar
+        document.getElementById('contextMenuOverlay').classList.add('active');
         menu.classList.add('active');
-
-        // Get dimensions after making visible
-        const menuRect = menu.getBoundingClientRect();
-        const windowHeight = window.innerHeight;
-        const windowWidth = window.innerWidth;
-
-        let top = e.pageY;
-        let left = e.pageX;
-
-        // Check if menu would go off bottom of screen
-        if (top + menuRect.height > windowHeight) {
-            top = windowHeight - menuRect.height - 10;
-        }
-
-        // Check if menu would go off right of screen
-        if (left + menuRect.width > windowWidth) {
-            left = windowWidth - menuRect.width - 10;
-        }
-
-        // Ensure menu doesn't go off top or left
-        top = Math.max(10, top);
-        left = Math.max(10, left);
-
-        menu.style.left = left + 'px';
-        menu.style.top = top + 'px';
 
         // Prevent the click from immediately closing the menu
         e.stopImmediatePropagation();
@@ -7794,11 +7776,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         try {
             // Ephemeral mode - minimal profile
+            const bio = this.userBios.get(this.pubkey) || '';
             const profileToSave = {
                 name: this.nym,
                 display_name: this.nym,
                 lud16: this.lightningAddress,
-                about: `Nymchat user - ${this.nym}`
+                about: bio || `Nymchat user - ${this.nym}`
             };
 
             // Include avatar picture if set
@@ -7892,6 +7875,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const blob = this.bannerBlobCache.get(pubkey);
         if (blob) return blob;
         return this.userBanners.get(pubkey) || null;
+    }
+
+    getBio(pubkey) {
+        return this.userBios.get(pubkey) || '';
+    }
+
+    closeContextMenu() {
+        document.getElementById('contextMenu').classList.remove('active');
+        document.getElementById('contextMenuOverlay').classList.remove('active');
     }
 
     // Update already-rendered message avatars when a kind 0 profile picture arrives
@@ -9521,6 +9513,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             }
                         }
 
+                        // Extract bio/about
+                        if (profile.about) {
+                            const bio = profile.about.substring(0, 150);
+                            this.userBios.set(pubkey, bio);
+                            if (pubkey === this.pubkey) {
+                                localStorage.setItem('nym_bio', bio);
+                            }
+                        }
+
                         if (profile.name || profile.username || profile.display_name) {
                             const profileName = (profile.name || profile.username || profile.display_name).substring(0, 20);
                             if (!this.users.has(pubkey) || this.users.get(pubkey).nym.startsWith('anon-')) {
@@ -10094,6 +10095,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     } else if (!this.avatarBlobCache.has(pubkey)) {
                         this.userAvatars.set(pubkey, profile.picture);
                         this.cacheAvatarImage(pubkey, profile.picture);
+                    }
+                }
+
+                // Extract bio/about
+                if (profile.about) {
+                    const bio = profile.about.substring(0, 150);
+                    this.userBios.set(pubkey, bio);
+                    if (pubkey === this.pubkey) {
+                        localStorage.setItem('nym_bio', bio);
                     }
                 }
 
@@ -12742,7 +12752,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Sends a group-remove-member rumor to all current members including the
     // kicked user so they can clean up their local state, then updates locally.
     kickFromGroup(pubkey) {
-        document.getElementById('contextMenu')?.classList.remove('active');
+        this.closeContextMenu();
         const groupId = this.currentGroup;
         if (!groupId || !this.privkey) return;
         const group = this.groupConversations.get(groupId);
@@ -19847,7 +19857,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                 // Create a simple context menu for leaving channel
                 const menu = document.createElement('div');
-                menu.className = 'context-menu active';
+                menu.className = 'channel-context-menu active';
                 menu.style.left = e.pageX + 'px';
                 menu.style.top = e.pageY + 'px';
                 menu.innerHTML = `
@@ -19858,7 +19868,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                 // Remove any existing channel context menu
                 document.querySelectorAll('.channel-context-menu').forEach(m => m.remove());
-                menu.classList.add('channel-context-menu');
                 document.body.appendChild(menu);
 
                 // Close on click outside
@@ -21346,7 +21355,30 @@ function editNick() {
         });
     }
 
+    // Show current bio in edit modal
+    const bioInput = document.getElementById('nickEditBioInput');
+    if (bioInput) {
+        const currentBio = nym.getBio(nym.pubkey);
+        bioInput.value = currentBio;
+        updateBioCharCount();
+    }
+
     document.getElementById('nickEditModal').classList.add('active');
+}
+
+function updateBioCharCount() {
+    const bioInput = document.getElementById('nickEditBioInput');
+    const charCount = document.getElementById('nickEditBioCharCount');
+    if (!bioInput || !charCount) return;
+    const len = bioInput.value.length;
+    const max = 150;
+    charCount.textContent = `${len}/${max}`;
+    charCount.classList.remove('warning', 'limit');
+    if (len >= max) {
+        charCount.classList.add('limit');
+    } else if (len >= max * 0.8) {
+        charCount.classList.add('warning');
+    }
 }
 
 async function changeNick() {
@@ -21354,6 +21386,20 @@ async function changeNick() {
     // Strip any # suffix the user may have typed - the suffix is derived from pubkey
     const baseNick = nym.parseNymFromDisplay(newNick);
     const currentBase = nym.parseNymFromDisplay(nym.nym);
+
+    // Save bio regardless of nick change
+    const bioInput = document.getElementById('nickEditBioInput');
+    if (bioInput) {
+        const newBio = bioInput.value.trim().substring(0, 150);
+        const currentBio = nym.getBio(nym.pubkey);
+        if (newBio !== currentBio) {
+            nym.userBios.set(nym.pubkey, newBio);
+            localStorage.setItem('nym_bio', newBio);
+            // Publish updated profile with new bio
+            await nym.saveToNostrProfile();
+        }
+    }
+
     if (baseNick && baseNick !== currentBase) {
         closeModal('nickEditModal');
         const cmdResult = await nym.cmdNick(baseNick);
@@ -22269,7 +22315,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.42.156 ═══<br/>
+═══ Nymchat v3.43.156 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -22463,6 +22509,12 @@ async function checkSavedConnection() {
                     nym.userBanners.set(nym.pubkey, savedBannerUrl);
                 }
 
+                // Restore bio from localStorage for ephemeral sessions
+                const savedBio = localStorage.getItem('nym_bio');
+                if (savedBio) {
+                    nym.userBios.set(nym.pubkey, savedBio);
+                }
+
                 // Publish profile with restored avatar and lightning address
                 await nym.saveToNostrProfile();
 
@@ -22629,6 +22681,11 @@ async function initializeNym() {
                 const savedBannerUrl2 = localStorage.getItem('nym_banner_url');
                 if (savedBannerUrl2) {
                     nym.userBanners.set(nym.pubkey, savedBannerUrl2);
+                }
+                // Restore bio from localStorage
+                const savedBio2 = localStorage.getItem('nym_bio');
+                if (savedBio2) {
+                    nym.userBios.set(nym.pubkey, savedBio2);
                 }
                 // Publish profile with restored avatar and/or lightning address
                 await nym.saveToNostrProfile();
