@@ -36,14 +36,15 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - **Proximity Sorting** - Sort geohash channels by distance from your location
 
 ### Messaging
-- **Private Messages** - End-to-end encrypted PMs using NIP-17
+- **Private Messages** - End-to-end encrypted 1:1 PMs using [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) (kind 14 rumor format) wrapped in NIP-59 gift wraps
+- **Private Group Chats** - End-to-end encrypted multi-party group chats via [NIP-59](https://github.com/nostr-protocol/nips/blob/master/59.md); each message is individually gift-wrapped per member with an ephemeral sender key and a randomized envelope timestamp (±2 h) so relays cannot correlate group membership or timing
 - **Rich Text** - Markdown support for bold, italic, strikethrough, code blocks, and quotes
-- **Message Reactions** - React to messages with emojis (NIP-25)
+- **Message Reactions** - React to messages with emojis ([NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md))
 - **Auto-Reply** - Set away messages with `/brb` command
 - **Image/Video Sharing** - Upload and share images or video
 
 ### Lightning Integration
-- **Lightning Zaps** - Send Lightning payments to messages and user profiles (NIP-57)
+- **Lightning Zaps** - Send Lightning payments to messages and user profiles ([NIP-57](https://github.com/nostr-protocol/nips/blob/master/57.md))
 - **Lightning Addresses** - Set your Lightning address for receiving zaps
 - **QR Invoice Display** - Visual QR codes for Lightning invoices
 
@@ -65,9 +66,10 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - Geohash event `kind 20000` with `['g', geohash]` tag
 - Tags: `['n', nym]` for nickname, `['client', 'Nymchat']` for client identification
 
-### Private Messages
-- NIP-17 encrypted direct messages `kind 1059`
-- End-to-end encryption with recipient's public key
+### Private Messages & Group Chats
+- NIP-17 `kind 14` rumor (message content + metadata) sealed inside NIP-59 `kind 1059` gift wraps
+- Each gift wrap uses a one-time ephemeral sender key; the `created_at` timestamp is randomized ±2 hours so relays cannot correlate senders, recipients, or timing
+- Group chats send one gift wrap per member — each individually encrypted to that member's public key
 
 ### Reactions & Zaps
 - Reaction events `kind 7` (NIP-25) with `['k', originalKind]` tag for proper categorization
@@ -79,13 +81,17 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - `/help` - Show available commands
 - `/join <channel>` - Join a geohash channel (e.g., /join #9q5)
 - `/j` - Shortcut for /join
-- `/pm <nym>` - Send private message (e.g., /pm nym or /pm nym#xxxx)
+- `/pm <nym>` - Open a 1:1 private message (e.g., /pm nym or /pm nym#xxxx)
 - `/nick <nym>` - Change your nym
 - `/who` - List online nyms in current channel
 - `/w` - Shortcut for /who
 - `/clear` - Clear chat messages
-- `/leave` - Leave current channel
+- `/leave` - Leave current channel or group chat
 - `/quit` - Disconnect from Nymchat
+
+**Group Chat Commands:**
+- `/invite @nym` - In a channel: invite user to the channel. In a group chat: add a new member to the group
+- `/leave` - Leave and remove yourself from the current group chat
 
 **Moderation Commands:**
 - `/block [nym|#channel]` - Block a user or channel
@@ -98,7 +104,6 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - `/shrug` - Send a shrug ¯\_(ツ)_/¯
 - `/brb <message>` - Set away message
 - `/back` - Clear away message
-- `/invite <nym>` - Invite user to current channel
 - `/poll` - Create a poll
 
 **Formatting Commands:**

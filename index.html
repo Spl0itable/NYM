@@ -146,6 +146,17 @@
             Delete Message
         </div>
 
+        <div class="context-menu-item danger" id="ctxKickMember" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <path d="M 6 8 L 2 8" stroke-linecap="round" />
+                <path d="M 4 6 L 2 8 L 4 10" stroke-linecap="round" stroke-linejoin="round" />
+                <circle cx="10" cy="5.5" r="2.5" />
+                <path d="M 5.5 14 C 5.5 11.5 7.5 10 10 10 C 12.5 10 14.5 11.5 14.5 14" stroke-linecap="round" />
+            </svg>
+            Remove from Group
+        </div>
+
         <div class="context-menu-item danger" id="ctxBlock">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 style="vertical-align: middle; margin-right: 8px;">
@@ -153,6 +164,40 @@
                 <line x1="3.75" y1="3.75" x2="12.25" y2="12.25" stroke-width="1.5" stroke-linecap="round" />
             </svg>
             Block User
+        </div>
+    </div>
+
+    <!-- PM / Group Modal -->
+    <div class="modal" id="newPMModal">
+        <div class="modal-content" style="max-width: 440px;">
+            <button class="modal-close" onclick="closeModal('newPMModal')">&#x2715;</button>
+            <div class="modal-header">New Message</div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">To</label>
+                    <div class="pm-recipient-box" id="pmRecipientBox" onclick="document.getElementById('pmRecipientInput').focus()">
+                        <div class="pm-recipient-chips" id="pmRecipientChips"></div>
+                        <input type="text" class="pm-recipient-input" id="pmRecipientInput"
+                            placeholder="Search nym or paste pubkey..."
+                            oninput="nym.onNewPMRecipientInput(this.value)"
+                            onkeydown="nym.onNewPMRecipientKeydown(event)"
+                            autocomplete="off">
+                    </div>
+                    <div class="pm-suggestions" id="pmSuggestions"></div>
+                </div>
+                <div class="form-group" id="pmGroupNameGroup" style="display:none;">
+                    <label class="form-label">Group Name <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></label>
+                    <input type="text" class="form-input" id="pmGroupNameInput" placeholder="Enter a group name...">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Message <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></label>
+                    <textarea class="form-textarea" id="pmInitialMessage" placeholder="Start the conversation..." style="min-height:80px;resize:none;"></textarea>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" onclick="closeModal('newPMModal')">Cancel</button>
+                <button class="send-btn" id="pmStartBtn" onclick="nym.startNewPMFromModal()" disabled>Start</button>
+            </div>
         </div>
     </div>
 
@@ -282,7 +327,13 @@
             <div class="nav-section">
                 <div class="nav-title">
                     <span class="nav-title-text">Private Messages</span>
-                    <span class="search-icon" onclick="toggleSearch('pmSearch')">
+                    <span class="search-icon new-pm-btn" onclick="nym.openNewPMModal()" title="New message">
+                        <svg viewBox="0 0 24 24">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                    </span>
+                    <span class="search-icon" onclick="toggleSearch('pmSearch')" title="Search PMs">
                         <svg viewBox="0 0 24 24">
                             <circle cx="11" cy="11" r="8"></circle>
                             <path d="m21 21-4.35-4.35"></path>

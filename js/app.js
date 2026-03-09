@@ -1011,8 +1011,6 @@ class NYM {
         this.currentGeoRelays = new Set();
         this.geoRelayCount = 10;
         this.defaultRelays = this.broadcastRelays.slice(0, 5);
-        // Bitchat app's hardcoded DM relays - always ensure these are connected
-        // and used for DM EVENT/REQ to guarantee cross-app PM delivery
         this.bitchatDMRelays = [
             'wss://relay.damus.io',
             'wss://nos.lol',
@@ -1067,6 +1065,10 @@ class NYM {
         this.channelUsers = new Map();
         this.channels = new Map();
         this.pmConversations = new Map();
+        this.groupConversations = new Map();
+        this.currentGroup = null;
+        this._newPMRecipients = [];
+        this.groupMessageReaders = new Map();
         this.unreadCounts = new Map();
         this.blockedUsers = new Set();
         this.blockedKeywords = new Set();
@@ -1077,7 +1079,6 @@ class NYM {
         this.channelSubscriptionBatchSize = 10;
         this.channelMessageLimit = 100;
         this.settings = this.loadSettings();
-        // Apply text size on startup
         if (this.settings.textSize && this.settings.textSize !== 15) {
             document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
         }
@@ -5876,7 +5877,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
-    showContextMenu(e, nym, pubkey, content = null, messageId = null) {
+    showContextMenu(e, nym, pubkey, content = null, messageId = null, profileOnly = false) {
         e.preventDefault();
         e.stopPropagation();
 
@@ -5902,7 +5903,27 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (this.isVerifiedDeveloper(pubkey)) {
                 nymHtml += `<div class="context-menu-dev-label">Nymchat Developer</div>`;
             }
+            // Show "Group Owner" badge when this user is the creator of the current group
+            if (this.inPMMode && this.currentGroup) {
+                const grp = this.groupConversations.get(this.currentGroup);
+                if (grp && grp.createdBy === pubkey) {
+                    nymHtml += `<div class="context-menu-owner-label">Group Owner</div>`;
+                }
+            }
             ctxAvatarNym.innerHTML = nymHtml;
+        }
+
+        // Show "Remove from Group" only when the current user is the group owner
+        // and the target is a different member of the current group.
+        const kickOption = document.getElementById('ctxKickMember');
+        if (kickOption) {
+            let showKick = false;
+            if (this.inPMMode && this.currentGroup && pubkey !== this.pubkey) {
+                const grp = this.groupConversations.get(this.currentGroup);
+                showKick = !!(grp && grp.createdBy === this.pubkey && grp.members.includes(pubkey));
+            }
+            kickOption.style.display = showKick ? 'block' : 'none';
+            kickOption.onclick = showKick ? () => this.kickFromGroup(pubkey) : null;
         }
 
         // Add slap option if it doesn't exist
@@ -5990,6 +6011,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Hide report option for own messages
         document.getElementById('ctxReport').style.display = pubkey === this.pubkey ? 'none' : 'block';
+
+        // In profile-only mode (e.g. nyms sidebar) show only PM, Report, Block
+        if (profileOnly) {
+            const ctxMention = document.getElementById('ctxMention');
+            if (ctxMention) ctxMention.style.display = 'none';
+            if (slapOption) slapOption.style.display = 'none';
+            if (hugOption) hugOption.style.display = 'none';
+            if (kickOption) kickOption.style.display = 'none';
+        }
 
         // Add active class first to make visible
         menu.classList.add('active');
@@ -6656,7 +6686,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 {
                     kinds: [1059],
                     "#p": [this.pubkey],
-                    limit: 100,
+                    limit: 500,
                 },
                 // Any reactions with #p = my pubkey
                 {
@@ -7100,7 +7130,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         if (this.pubkey) {
             filters.push(
-                { kinds: [1059], "#p": [this.pubkey], limit: 100 },
+                { kinds: [1059], "#p": [this.pubkey], limit: 500 },
                 { kinds: [7], "#p": [this.pubkey], limit: 100 },
                 { kinds: [30078], authors: [this.pubkey], "#d": ["nym-shop-purchases", "nym-shop-active"], limit: 100 },
                 { kinds: [30078], "#p": [this.pubkey], limit: 50 },
@@ -9112,8 +9142,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.sendNIP17PM(msg.content, msg.conversationPubkey);
     }
 
-    // Called on relay reconnection to retry any pending DMs
+    // Called on relay reconnection to retry any pending DMs and catch missed gift wraps
     retryPendingDMsOnReconnect() {
+        // Re-request gift wraps since our last known PM to catch any missed during disconnect
+        if (this.pubkey && this.lastPMSyncTime) {
+            const since = Math.max(
+                this.lastPMSyncTime - 300, // 5-min buffer before last known event
+                Math.floor(Date.now() / 1000) - 604800 // at most 7 days back
+            );
+            const catchupReq = JSON.stringify(['REQ', 'nym-pm-catchup-' + Date.now(),
+                { kinds: [1059], '#p': [this.pubkey], since, limit: 200 }
+            ]);
+            this.relayPool.forEach(relay => {
+                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                    relay.ws.send(catchupReq);
+                }
+            });
+        }
+
         if (this.pendingDMs.size === 0) return;
 
         for (const [eventId, pending] of this.pendingDMs) {
@@ -10789,8 +10835,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Infer original kind from message context
             let originalKind = '20000'; // default to geohash channel
-            if (messageEl.classList.contains('pm')) {
-                originalKind = '1059'; // NIP-17 gift wrap
+            if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
+                originalKind = '1059'; // NIP-17 gift wrap (covers 1:1 PMs and group messages)
             }
 
             const event = {
@@ -10804,6 +10850,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 content: emoji,
                 pubkey: this.pubkey
             };
+
+            // For group messages: send reaction as gift wrap to all members so it stays private
+            const groupId = messageEl.dataset.groupId;
+            if (groupId && this.privkey) {
+                const group = this.groupConversations.get(groupId);
+                if (group) {
+                    const now = Math.floor(Date.now() / 1000);
+                    const reactionRumor = {
+                        kind: 7,
+                        created_at: now,
+                        tags: [['g', groupId], ['e', messageId], ['k', '14']],
+                        content: emoji,
+                        pubkey: this.pubkey
+                    };
+                    this._sendGiftWraps(group.members, reactionRumor, null);
+                    this.addToRecentEmojis(emoji);
+                    return;
+                }
+            }
 
             const signedEvent = await this.signEvent(event);
 
@@ -11756,8 +11821,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             // Validate rumor and identity
-            // Accept kind 14 (DM), kind 15 (file), and kind 69420 (Nymchat receipt)
-            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420)) {
+            // Accept kind 14 (DM), kind 15 (file), kind 69420 (Nymchat receipt),
+            // and kind 7 (group reaction gift-wrapped to the group)
+            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7)) {
                 return;
             }
             if (typeof rumor.content !== 'string') {
@@ -11787,6 +11853,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Fetch profile for any PM sender we don't have (await to get nickname)
             if (!isOwn && !this.users.has(senderPubkey)) {
                 await this.fetchProfileDirect(senderPubkey);
+            }
+
+            // Route group messages before 1:1 PM logic
+            const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && typeof t[1] === 'string');
+            if (groupTag) {
+                await this.handleGroupMessage(rumor, event, senderPubkey, isOwn);
+                return;
             }
 
             // Determine the peer for the conversation
@@ -11821,21 +11894,30 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             const statusOrder = { sent: 0, delivered: 1, read: 2 };
                             if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
                                 msg.deliveryStatus = receiptType;
-                                // Remove from pending retry queue since delivery confirmed
                                 this.pendingDMs.delete(msg.id);
-                                // Invalidate cached DOM for this conversation since status changed
                                 this.channelDOMCache.delete(convKey);
-                                // Update in-place without re-rendering to avoid flicker
-                                const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
-                                if (msgEl) {
-                                    let statusEl = msgEl.querySelector('.delivery-status');
-                                    if (!statusEl) {
-                                        statusEl = document.createElement('span');
-                                        msgEl.appendChild(statusEl);
+
+                                if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
+                                    // Group read receipt: store the reader's avatar instead of checkmarks
+                                    if (!this.groupMessageReaders.has(msg.nymMessageId)) {
+                                        this.groupMessageReaders.set(msg.nymMessageId, new Map());
                                     }
-                                    statusEl.className = `delivery-status ${receiptType}`;
-                                    statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
-                                    statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
+                                    const readerNym = this.getNymFromPubkey(senderPubkey);
+                                    this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
+                                    this.updateGroupReaderAvatars(msg.nymMessageId);
+                                } else {
+                                    // 1:1 PM: update checkmark in-place
+                                    const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
+                                    if (msgEl) {
+                                        let statusEl = msgEl.querySelector('.delivery-status');
+                                        if (!statusEl) {
+                                            statusEl = document.createElement('span');
+                                            msgEl.appendChild(statusEl);
+                                        }
+                                        statusEl.className = `delivery-status ${receiptType}`;
+                                        statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
+                                        statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
+                                    }
                                 }
                             }
                             break;
@@ -12044,6 +12126,730 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     pmItem.style.display = 'none';
                     pmItem.classList.add('search-hidden');
                 }
+            }
+        }
+    }
+
+    getGroupConversationKey(groupId) {
+        return `group-${groupId}`;
+    }
+
+    // Persist all known groups to localStorage so Nostr users see them after refresh
+    _saveGroupConversations() {
+        if (!this.pubkey) return;
+        try {
+            const data = {};
+            for (const [groupId, group] of this.groupConversations) {
+                data[groupId] = {
+                    name: group.name,
+                    members: group.members,
+                    lastMessageTime: group.lastMessageTime,
+                    createdBy: group.createdBy
+                };
+            }
+            localStorage.setItem(`nym_groups_${this.pubkey}`, JSON.stringify(data));
+        } catch (_) {}
+    }
+
+    // Restore groups saved by _saveGroupConversations (called after pubkey is known)
+    _loadGroupConversations() {
+        if (!this.pubkey) return;
+        try {
+            const raw = localStorage.getItem(`nym_groups_${this.pubkey}`);
+            if (!raw) return;
+            const data = JSON.parse(raw);
+            for (const [groupId, group] of Object.entries(data)) {
+                if (!this.groupConversations.has(groupId)) {
+                    this.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
+                    // Restore createdBy which addGroupConversation doesn't accept directly
+                    const g = this.groupConversations.get(groupId);
+                    if (g && group.createdBy) g.createdBy = group.createdBy;
+                }
+            }
+        } catch (_) {}
+    }
+
+    // Handle a group reaction (kind 7 gift-wrapped to the group)
+    handleGroupReaction(rumor, senderPubkey) {
+        const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
+        if (!eTag) return;
+        const messageId = eTag[1]; // nymMessageId of the target message
+        const emoji = rumor.content;
+        if (!emoji) return;
+
+        const reactorNym = this.getNymFromPubkey(senderPubkey);
+        if (!this.reactions.has(messageId)) this.reactions.set(messageId, new Map());
+        const messageReactions = this.reactions.get(messageId);
+        if (!messageReactions.has(emoji)) messageReactions.set(emoji, new Map());
+        messageReactions.get(emoji).set(senderPubkey, reactorNym);
+        this.updateMessageReactions(messageId);
+    }
+
+    // Handle incoming group message (rumor with 'g' tag)
+    async handleGroupMessage(rumor, event, senderPubkey, isOwn) {
+        const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && t[1]);
+        if (!groupTag) return;
+        const groupId = groupTag[1];
+        const groupConvKey = this.getGroupConversationKey(groupId);
+
+        // Drop all messages from blocked senders, including group invites.
+        if (!isOwn && (this.blockedUsers.has(senderPubkey) || this.isNymBlocked(this.getNymFromPubkey(senderPubkey)))) {
+            return;
+        }
+
+        // Route group reactions (kind 7) before regular message processing
+        if (rumor.kind === 7) {
+            this.handleGroupReaction(rumor, senderPubkey);
+            return;
+        }
+
+        // Handle group-leave: remove the member from local state and show system message
+        const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
+        if (typeTag && typeTag[1] === 'group-leave' && !isOwn) {
+            const group = this.groupConversations.get(groupId);
+            if (group) {
+                group.members = group.members.filter(pk => pk !== senderPubkey);
+                this.groupConversations.set(groupId, group);
+                this.updateGroupConversationUI(groupId);
+                this._saveGroupConversations();
+                if (this.inPMMode && this.currentGroup === groupId) {
+                    this.openGroup(groupId); // refresh header member count
+                    this.displaySystemMessage(rumor.content || `${this.getNymFromPubkey(senderPubkey)} left the group.`);
+                }
+            }
+            return;
+        }
+
+        // Extract group name from 'subject' tag
+        const subjectTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'subject' && t[1]);
+        const groupName = subjectTag ? subjectTag[1] : 'Group';
+
+        // group-invite: the rumor author is always the group creator — persist this so
+        // non-creating members know who owns the group without relying on local state.
+        if (typeTag && typeTag[1] === 'group-invite') {
+            const grp = this.groupConversations.get(groupId);
+            if (grp && !grp.createdBy) {
+                grp.createdBy = senderPubkey;
+                this._saveGroupConversations();
+            }
+            // Fall through to display the invite message inline
+        }
+
+        // group-add-member: show as system message, not a chat bubble.
+        if (typeTag && typeTag[1] === 'group-add-member') {
+            const memberPubkeys = (rumor.tags || [])
+                .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
+                .map(t => t[1]);
+            this.addGroupConversation(groupId, groupName, memberPubkeys, (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000);
+            this._saveGroupConversations();
+            if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
+                this.openGroup(groupId);
+                this.displaySystemMessage(rumor.content);
+            }
+            return;
+        }
+
+        // group-remove-member: update membership, notify if we were kicked.
+        if (typeTag && typeTag[1] === 'group-remove-member') {
+            const kickTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'kick' && t[1]);
+            if (!kickTag) return;
+            const removedPubkey = kickTag[1];
+            const removedName = this.getNymFromPubkey(removedPubkey);
+            const removerName = this.getNymFromPubkey(senderPubkey);
+            if (removedPubkey === this.pubkey) {
+                // We were removed — clean up the group locally
+                this.groupConversations.delete(groupId);
+                this._saveGroupConversations();
+                const gck = this.getGroupConversationKey(groupId);
+                this.pmMessages.delete(gck);
+                this.channelDOMCache.delete(gck);
+                document.getElementById('pmList')?.querySelector(`[data-group-id="${groupId}"]`)?.remove();
+                this.updateViewMoreButton('pmList');
+                if (this.currentGroup === groupId) {
+                    this.currentGroup = null;
+                    this.inPMMode = false;
+                    this.switchChannel(this.currentChannel || 'nym', this.currentChannel || 'nym');
+                    this.displaySystemMessage(`You were removed from "${groupName}" by ${removerName}.`);
+                }
+            } else {
+                // Another member was kicked — update local state and show system notice
+                const grp = this.groupConversations.get(groupId);
+                if (grp) {
+                    grp.members = grp.members.filter(pk => pk !== removedPubkey);
+                    this.groupConversations.set(groupId, grp);
+                    this._saveGroupConversations();
+                    this.updateGroupConversationUI(groupId);
+                    if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
+                        this.openGroup(groupId);
+                        this.displaySystemMessage(`${removedName} was removed by ${removerName}.`);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Extract all member pubkeys from 'p' tags
+        const memberPubkeys = (rumor.tags || [])
+            .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
+            .map(t => t[1]);
+
+        if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
+        let list = this.pmMessages.get(groupConvKey);
+
+        // Deduplicate by event ID
+        if (list.some(m => m.id === event.id)) return;
+
+        const messageContent = rumor.content;
+        const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
+
+        // Content dedup for dual-wrap scenarios
+        if (list.some(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5)) return;
+
+        const nymMsgId = this.getNymMessageId(rumor);
+        const senderName = this.getNymFromPubkey(senderPubkey);
+
+        // Fetch profile for unknown senders
+        if (!isOwn && !this.users.has(senderPubkey)) {
+            await this.fetchProfileDirect(senderPubkey);
+        }
+
+        const msg = {
+            id: event.id,
+            author: isOwn ? this.nym : senderName,
+            pubkey: senderPubkey,
+            content: messageContent,
+            timestamp: new Date(Math.min(tsSec * 1000, Date.now())),
+            isOwn,
+            isPM: true,
+            isGroup: true,
+            groupId,
+            conversationKey: groupConvKey,
+            conversationPubkey: null,
+            eventKind: 1059,
+            isHistorical: (Date.now() / 1000 - tsSec) > 10,
+            nymMessageId: nymMsgId,
+            deliveryStatus: isOwn ? 'sent' : undefined
+        };
+
+        list.push(msg);
+        list.sort((a, b) => a.timestamp - b.timestamp);
+        if (list.length > 100) list = list.slice(-100);
+        this.pmMessages.set(groupConvKey, list);
+
+        // Update or create group conversation entry
+        this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000);
+        this._saveGroupConversations();
+        this.moveGroupToTop(groupId);
+
+        const senderBlocked = this.blockedUsers.has(senderPubkey) || this.isNymBlocked(msg.author);
+        if (this.inPMMode && this.currentGroup === groupId) {
+            // displayMessage already filters blocked senders; no extra check needed here
+            this.displayMessage(msg);
+        } else {
+            // Always notify for non-own, non-historical, non-blocked messages
+            if (!msg.isHistorical && !isOwn && !senderBlocked) {
+                this.updateUnreadCount(groupConvKey);
+                this.showNotification(`${groupName}: ${msg.author}`, messageContent, {
+                    type: 'group',
+                    groupId,
+                    id: groupConvKey
+                });
+            }
+        }
+
+        // Send read receipt back to sender so they can show our avatar as "read"
+        if (!isOwn && !msg.isHistorical && this.privkey && nymMsgId) {
+            this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
+        }
+    }
+
+    // Create a new private group and send invites to all members
+    async createGroup(name, memberPubkeys) {
+        if (!this.privkey) {
+            this.displaySystemMessage('Creating groups requires a logged-in account (not anonymous mode)');
+            return null;
+        }
+        const groupId = this.generateUUID();
+        // Always include self as a member
+        const allMembers = [...new Set([...memberPubkeys, this.pubkey])];
+
+        const now = Math.floor(Date.now() / 1000);
+        const nymMessageId = this.generateUUID();
+        const inviteContent = `You've been added to group "${name}" (${allMembers.length} members).`;
+
+        const tags = allMembers.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', name]);
+        tags.push(['type', 'group-invite']);
+        tags.push(['x', nymMessageId]);
+
+        const rumor = { kind: 14, created_at: now, tags, content: inviteContent, pubkey: this.pubkey };
+        const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
+            ? now + this.settings.dmTTLSeconds : null;
+
+        this._sendGiftWraps(allMembers, rumor, expirationTs);
+
+        // addGroupConversation creates the sidebar item (existing is null at this point)
+        this.addGroupConversation(groupId, name, allMembers, Date.now());
+        // Mark this user as the group owner
+        const grp = this.groupConversations.get(groupId);
+        if (grp) grp.createdBy = this.pubkey;
+        this._saveGroupConversations();
+        this.openGroup(groupId);
+        return groupId;
+    }
+
+    // Add a new member to an existing group
+    async addMemberToGroup(groupId, newMemberPubkey) {
+        if (!this.privkey) {
+            this.displaySystemMessage('Adding members requires a logged-in account');
+            return false;
+        }
+        const group = this.groupConversations.get(groupId);
+        if (!group) {
+            this.displaySystemMessage('Group not found');
+            return false;
+        }
+        if (group.members.includes(newMemberPubkey)) {
+            this.displaySystemMessage('User is already in this group');
+            return false;
+        }
+
+        group.members = [...group.members, newMemberPubkey];
+        this.groupConversations.set(groupId, group);
+
+        const now = Math.floor(Date.now() / 1000);
+        const nymMessageId = this.generateUUID();
+        const newMemberName = this.getNymFromPubkey(newMemberPubkey);
+        const inviterName = this.getNymFromPubkey(this.pubkey);
+        const addContent = `${newMemberName} was added by ${inviterName}.`;
+
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'group-add-member']);
+        tags.push(['x', nymMessageId]);
+
+        const rumor = { kind: 14, created_at: now, tags, content: addContent, pubkey: this.pubkey };
+        const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
+            ? now + this.settings.dmTTLSeconds : null;
+
+        this._sendGiftWraps(group.members, rumor, expirationTs);
+
+        this.updateGroupConversationUI(groupId);
+        this._saveGroupConversations();
+        // Refresh header if currently viewing this group
+        if (this.inPMMode && this.currentGroup === groupId) {
+            this.openGroup(groupId);
+            this.displaySystemMessage(addContent);
+        }
+
+        return true;
+    }
+
+    // Wrap and send one NIP-59 gift wrap per group member.
+    _sendGiftWraps(members, rumor, expirationTs) {
+        for (const pubkey of members) {
+            const wrapped = this.nip59WrapEvent(rumor, this.privkey, pubkey, expirationTs);
+            this.sendDMToRelays(['EVENT', wrapped]);
+
+            if (this.activeCosmetics?.has('cosmetic-redacted')) {
+                setTimeout(() => { this.publishDeletionEvent(wrapped.id); }, 600000);
+            }
+        }
+    }
+
+    // Send a message to a group (one gift wrap per member)
+    async sendGroupMessage(content, groupId) {
+        if (!this.privkey) {
+            this.displaySystemMessage('Group messages require a logged-in account');
+            return false;
+        }
+
+        const group = this.groupConversations.get(groupId);
+        if (!group) return false;
+
+        const now = Math.floor(Date.now() / 1000);
+        const nymMessageId = this.generateUUID();
+
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['x', nymMessageId]);
+
+        const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
+        const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
+            ? now + this.settings.dmTTLSeconds : null;
+
+        // Always display optimistically — the relay send check (WebSocket.OPEN) is handled
+        // inside _sendGiftWraps → sendDMToRelays. Gating display on this.connected causes
+        // the message to silently disappear when the proxy relay is reachable but the
+        // app-level this.connected flag hasn't been set yet (e.g. right after group creation).
+        const groupConvKey = this.getGroupConversationKey(groupId);
+        if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
+        const msg = {
+            id: nymMessageId,
+            author: this.nym,
+            pubkey: this.pubkey,
+            content,
+            timestamp: new Date(),
+            isOwn: true,
+            isPM: true,
+            isGroup: true,
+            groupId,
+            conversationKey: groupConvKey,
+            conversationPubkey: null,
+            eventKind: 1059,
+            nymMessageId,
+            deliveryStatus: 'sent'
+        };
+
+        const groupList = this.pmMessages.get(groupConvKey);
+        groupList.push(msg);
+        if (groupList.length > 100) this.pmMessages.set(groupConvKey, groupList.slice(-100));
+        this.channelDOMCache.delete(groupConvKey);
+        this.moveGroupToTop(groupId);
+
+        if (this.inPMMode && this.currentGroup === groupId) {
+            this.displayMessage(msg);
+        }
+
+        this._sendGiftWraps(group.members, rumor, expirationTs);
+        return true;
+    }
+
+    // Resolve a nym or nym#suffix or pubkey string to a pubkey
+    resolvePubkeyFromNym(nymInput) {
+        if (/^[0-9a-f]{64}$/i.test(nymInput)) return nymInput.toLowerCase();
+        const hashIndex = nymInput.indexOf('#');
+        let searchNym = nymInput;
+        let searchSuffix = null;
+        if (hashIndex !== -1) {
+            searchNym = nymInput.substring(0, hashIndex);
+            searchSuffix = nymInput.substring(hashIndex + 1);
+        }
+        const matches = [];
+        this.users.forEach((user, pubkey) => {
+            const baseNym = this.stripPubkeySuffix(user.nym);
+            if (baseNym.toLowerCase() === searchNym.toLowerCase()) {
+                if (!searchSuffix || pubkey.endsWith(searchSuffix)) matches.push(pubkey);
+            }
+        });
+        if (matches.length === 1) return matches[0];
+        if (matches.length > 1) {
+            this.displaySystemMessage(`Multiple users named @${searchNym} — use @name#xxxx to disambiguate`);
+            return null;
+        }
+        return null;
+    }
+
+    // Send a leave notification to remaining group members, then clean up locally
+    async leaveGroup(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (group && this.privkey) {
+            const otherMembers = group.members.filter(pk => pk !== this.pubkey);
+            if (otherMembers.length > 0) {
+                const now = Math.floor(Date.now() / 1000);
+                const leaveContent = `${this.nym} left the group.`;
+                const tags = group.members.map(pk => ['p', pk]);
+                tags.push(['g', groupId]);
+                tags.push(['subject', group.name]);
+                tags.push(['type', 'group-leave']);
+                tags.push(['x', this.generateUUID()]);
+                const rumor = { kind: 14, created_at: now, tags, content: leaveContent, pubkey: this.pubkey };
+                // Send to remaining members only (not self)
+                this._sendGiftWraps(otherMembers, rumor, null);
+            }
+        }
+        // Remove persisted entry
+        try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) {}
+        this.groupConversations.delete(groupId);
+        this._saveGroupConversations();
+
+        const groupConvKey = this.getGroupConversationKey(groupId);
+        this.pmMessages.delete(groupConvKey);
+        this.channelDOMCache.delete(groupConvKey);
+        const pmList = document.getElementById('pmList');
+        const item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
+        if (item) item.remove();
+        if (this.currentGroup === groupId) {
+            this.currentGroup = null;
+            this.inPMMode = false;
+            const fallback = this.currentChannel || 'nym';
+            this.switchChannel(fallback, fallback);
+        }
+        this.updateViewMoreButton('pmList');
+    }
+
+    // Delete a group conversation locally
+    deleteGroup(groupId) {
+        if (!confirm('Leave and delete this group conversation?')) return;
+        this.leaveGroup(groupId);
+    }
+
+    // Remove a member from the current group (owner only).
+    // Sends a group-remove-member rumor to all current members including the
+    // kicked user so they can clean up their local state, then updates locally.
+    kickFromGroup(pubkey) {
+        document.getElementById('contextMenu')?.classList.remove('active');
+        const groupId = this.currentGroup;
+        if (!groupId || !this.privkey) return;
+        const group = this.groupConversations.get(groupId);
+        if (!group || group.createdBy !== this.pubkey) return;
+        if (!group.members.includes(pubkey)) return;
+
+        const now = Math.floor(Date.now() / 1000);
+        const kickedName = this.getNymFromPubkey(pubkey);
+        const kickerName = this.getNymFromPubkey(this.pubkey);
+        const content = `${kickedName} was removed by ${kickerName}.`;
+        const nymMessageId = this.generateUUID();
+
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'group-remove-member']);
+        tags.push(['kick', pubkey]);
+        tags.push(['x', nymMessageId]);
+        const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
+
+        // Send to everyone including the kicked member so they can remove themselves
+        this._sendGiftWraps(group.members, rumor, null);
+
+        // Update local state immediately
+        group.members = group.members.filter(pk => pk !== pubkey);
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        this.updateGroupConversationUI(groupId);
+        this.openGroup(groupId); // refresh header member count
+        this.displaySystemMessage(content);
+    }
+
+    // Add or update a group entry in the PM sidebar list
+    addGroupConversation(groupId, name, members, timestamp = Date.now()) {
+        const existing = this.groupConversations.get(groupId);
+        const allMembers = [...new Set(members)];
+
+        if (!existing) {
+            this.groupConversations.set(groupId, {
+                name, members: allMembers, lastMessageTime: timestamp, createdBy: null
+            });
+            const pmList = document.getElementById('pmList');
+            const item = document.createElement('div');
+            item.className = 'pm-item group-item list-item';
+            item.dataset.groupId = groupId;
+            item.dataset.lastMessageTime = timestamp;
+            item.innerHTML = this._buildGroupItemHTML(groupId, name, allMembers);
+            item.onclick = () => this.openGroup(groupId);
+            this.insertPMInOrder(item, pmList);
+
+            // Apply active search filter
+            const searchInput = document.getElementById('pmSearch');
+            if (searchInput?.value.trim().length > 0) {
+                const term = searchInput.value.toLowerCase();
+                if (!name.toLowerCase().includes(term)) {
+                    item.style.display = 'none';
+                    item.classList.add('search-hidden');
+                }
+            }
+            this.updateViewMoreButton('pmList');
+        } else {
+            // Merge members (new invitees may arrive with updated member list)
+            const merged = [...new Set([...existing.members, ...allMembers])];
+            this.groupConversations.set(groupId, {
+                ...existing,
+                name: name || existing.name,
+                members: merged,
+                lastMessageTime: Math.max(existing.lastMessageTime || 0, timestamp)
+            });
+            this.updateGroupConversationUI(groupId);
+        }
+    }
+
+    // Rebuild the inner HTML of a group PM list item
+    _buildGroupItemHTML(groupId, name, members) {
+        const otherMembers = members.filter(pk => pk !== this.pubkey);
+        const displayMembers = otherMembers.slice(0, 3);
+        const memberCount = members.length;
+
+        const groupSvg = `<svg class="group-chat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+
+        const avatarStackHtml = displayMembers.length > 0
+            ? `<div class="group-avatar-stack">${displayMembers.map((pk, i) =>
+                `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${pk}" style="z-index:${3 - i}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pk}.png?set=set1&size=80x80'">`
+            ).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
+            : `<div class="group-icon-wrap">${groupSvg}</div>`;
+
+        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${memberCount}</span></span><div class="channel-badges"><span class="delete-pm" onclick="event.stopPropagation(); nym.deleteGroup('${groupId}')">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
+    }
+
+    // Update the stacked reader avatars shown under an own group message
+    updateGroupReaderAvatars(nymMessageId) {
+        const el = document.querySelector(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
+        if (!el) return;
+        const html = this._buildGroupReadersHtml(nymMessageId);
+        if (!html) return;
+        el.innerHTML = html;
+        if (!el._readerLongPressBound) {
+            this._bindReaderLongPress(el, nymMessageId);
+            el._readerLongPressBound = true;
+        }
+    }
+
+    // Returns the inner HTML for a .group-readers span: up to 3 avatars + overflow badge
+    _buildGroupReadersHtml(nymMessageId) {
+        const MAX_VISIBLE = 3;
+        const readers = this.groupMessageReaders.get(nymMessageId);
+        if (!readers || readers.size === 0) return '';
+        const entries = Array.from(readers.entries());
+        const visible = entries.slice(0, MAX_VISIBLE);
+        const overflow = readers.size - MAX_VISIBLE;
+        const avatarHtml = visible.map(([pk, name]) =>
+            `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${pk}" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pk}.png?set=set1&size=80x80'">`
+        ).join('');
+        const overflowHtml = overflow > 0
+            ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
+            : '';
+        return avatarHtml + overflowHtml;
+    }
+
+    // Attach a 500ms long-press to a .group-readers element to open the readers modal
+    _bindReaderLongPress(el, nymMessageId) {
+        let timer = null;
+        const start = (e) => {
+            timer = setTimeout(() => {
+                timer = null;
+                this.showReadersModal(nymMessageId, el);
+            }, 500);
+        };
+        const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+        el.addEventListener('mousedown', start);
+        el.addEventListener('touchstart', start, { passive: true });
+        el.addEventListener('mouseup', cancel);
+        el.addEventListener('mouseleave', cancel);
+        el.addEventListener('touchend', cancel);
+        el.addEventListener('touchcancel', cancel);
+        el.style.cursor = 'pointer';
+    }
+
+    showReadersModal(nymMessageId, anchorEl) {
+        this.closeReadersModal();
+        const readers = this.groupMessageReaders.get(nymMessageId);
+        if (!readers || readers.size === 0) return;
+
+        const userItems = Array.from(readers.entries()).map(([pubkey, nym]) => {
+            const isYou = pubkey === this.pubkey;
+            const baseNym = this.stripPubkeySuffix(nym);
+            const suffix = this.getPubkeySuffix(pubkey);
+            const avatarSrc = this.escapeHtml(this.getAvatarUrl(pubkey));
+            return `<div class="reactors-modal-user readers-modal-user" data-pubkey="${pubkey}">
+                <img src="${avatarSrc}" class="readers-modal-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">
+                <span class="reactors-modal-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span></span>
+                ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
+            </div>`;
+        }).join('');
+
+        const modal = document.createElement('div');
+        modal.className = 'reactors-modal readers-modal';
+        modal.innerHTML = `
+            <div class="reactors-modal-header">Seen by <span class="reactors-modal-count">${this.abbreviateNumber(readers.size)}</span></div>
+            <div class="reactors-modal-list">${userItems}</div>
+        `;
+        document.body.appendChild(modal);
+        this.readersModal = modal;
+
+        // Position above/below the anchor
+        const rect = anchorEl.getBoundingClientRect();
+        modal.style.right = Math.max(4, window.innerWidth - rect.right) + 'px';
+        const approxHeight = Math.min(readers.size * 44 + 50, 300);
+        if (rect.top > approxHeight + 20) {
+            modal.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+        } else {
+            modal.style.top = (rect.bottom + 6) + 'px';
+        }
+    }
+
+    closeReadersModal() {
+        if (this.readersModal) {
+            this.readersModal.remove();
+            this.readersModal = null;
+        }
+    }
+
+    // Re-render a group item's inner HTML (e.g., after member list changes)
+    updateGroupConversationUI(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        const pmList = document.getElementById('pmList');
+        const item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
+        if (item) {
+            item.innerHTML = this._buildGroupItemHTML(groupId, group.name, group.members);
+            item.onclick = () => this.openGroup(groupId);
+        }
+    }
+
+    // Open a group conversation in the main chat area
+    openGroup(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+
+        this.inPMMode = true;
+        this.currentPM = null;
+        this.currentGroup = groupId;
+        this.currentChannel = null;
+        this.currentGeohash = null;
+        this.userScrolledUp = false;
+
+        // Build stacked avatar header
+        const otherMembers = group.members.filter(pk => pk !== this.pubkey);
+        const headerAvatars = otherMembers.slice(0, 4).map(pk => {
+            const src = this.getAvatarUrl(pk);
+            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${pk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pk}.png?set=set1&size=80x80'">`;
+        }).join('');
+
+        const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+        const memberLabel = `<span style="font-size:12px;color:var(--text-dim);margin-left:4px">(${group.members.length} members)</span>`;
+        const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span style="margin-left:${otherMembers.length > 0 ? '8' : '0'}px">${this.escapeHtml(group.name)}</span>${memberLabel}`;
+
+        document.getElementById('currentChannel').innerHTML = headerHtml;
+        document.getElementById('channelMeta').textContent = 'Private group · /invite @nym to add members';
+
+        const shareBtn = document.getElementById('shareChannelBtn');
+        if (shareBtn) shareBtn.style.display = 'none';
+
+        // Mark only the matching group item as active
+        document.querySelectorAll('.channel-item').forEach(i => i.classList.remove('active'));
+        document.querySelectorAll('.pm-item').forEach(i => {
+            i.classList.toggle('active', i.dataset.groupId === groupId);
+        });
+
+        const groupConvKey = this.getGroupConversationKey(groupId);
+        this.clearUnreadCount(groupConvKey);
+        this.loadPMMessages(groupConvKey);
+
+        if (window.innerWidth <= 768) this.closeSidebar();
+    }
+
+    // Bubble a group item to the top of the PM list
+    moveGroupToTop(groupId) {
+        const pmList = document.getElementById('pmList');
+        const groupItem = pmList?.querySelector(`[data-group-id="${groupId}"]`);
+        if (!groupItem) return;
+
+        const now = Date.now();
+        groupItem.dataset.lastMessageTime = now;
+        const group = this.groupConversations.get(groupId);
+        if (group) group.lastMessageTime = now;
+
+        groupItem.remove();
+        this.insertPMInOrder(groupItem, pmList);
+
+        const searchInput = document.getElementById('pmSearch');
+        if (searchInput?.value.trim().length > 0) {
+            const term = searchInput.value.toLowerCase();
+            const nameEl = groupItem.querySelector('.pm-name');
+            if (nameEl && !nameEl.textContent.toLowerCase().includes(term)) {
+                groupItem.style.display = 'none';
+                groupItem.classList.add('search-hidden');
             }
         }
     }
@@ -12258,6 +13064,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     openPM(nym, pubkey) {
         this.inPMMode = true;
         this.currentPM = pubkey;
+        this.currentGroup = null;
         this.currentChannel = null;
         this.currentGeohash = null;
         this.userScrolledUp = false;
@@ -14017,16 +14824,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Handle PM messages differently
         if (message.isPM) {
-            // Check if we should display this PM now
-            if (!this.inPMMode || this.currentPM !== message.conversationPubkey) {
-                // Not viewing this PM conversation right now, but message is already stored
-                return;
-            }
-
-            // Don't display if it's not part of the current conversation
-            const currentConversationKey = this.getPMConversationKey(this.currentPM);
-            if (message.conversationKey !== currentConversationKey) {
-                return;
+            if (message.isGroup) {
+                // Group message: only display when viewing the correct group
+                if (!this.inPMMode || this.currentGroup !== message.groupId) return;
+                if (message.conversationKey !== this.getGroupConversationKey(this.currentGroup)) return;
+            } else {
+                // 1:1 PM: only display when viewing the correct conversation
+                if (!this.inPMMode || this.currentPM !== message.conversationPubkey) return;
+                const currentConversationKey = this.getPMConversationKey(this.currentPM);
+                if (message.conversationKey !== currentConversationKey) return;
             }
         } else {
             // Regular geohash channel message
@@ -14070,7 +14876,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Don't re-add if already displayed in DOM
-        if (document.querySelector(`[data-message-id="${message.id}"]`)) {
+        // For group messages use the shared nymMessageId so duplicates from multiple relays are caught
+        const _dedupeId = (message.isGroup && message.nymMessageId) ? message.nymMessageId : message.id;
+        if (document.querySelector(`[data-message-id="${_dedupeId}"]`)) {
             return;
         }
 
@@ -14165,11 +14973,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             messageEl.className = classes.join(' ');
-            messageEl.dataset.messageId = message.id;
+            // For group messages use nymMessageId as the stable shared key (gift wrap IDs differ per recipient)
+            messageEl.dataset.messageId = (message.isGroup && message.nymMessageId) ? message.nymMessageId : message.id;
             messageEl.dataset.author = message.author;
             messageEl.dataset.pubkey = message.pubkey;
             messageEl.dataset.rawContent = message.content;
             messageEl.dataset.timestamp = displayTimestamp.getTime();
+            if (message.isPM) messageEl.dataset.isPM = '1';
+            if (message.isGroup && message.groupId) messageEl.dataset.groupId = message.groupId;
 
             const authorClass = message.isOwn ? 'self' : '';
             const userColorClass = this.getUserColorClass(message.pubkey);
@@ -14179,12 +14990,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
 
             // Check if this is a valid event ID (not temporary PM ID)
-            const isValidEventId = message.id && /^[0-9a-f]{64}$/i.test(message.id);
+            // Group messages use nymMessageId (UUID) as the shared reaction key, so accept those too
+            const isValidEventId = (message.isGroup && message.nymMessageId)
+                || (message.id && /^[0-9a-f]{64}$/i.test(message.id));
+            const reactionMsgId = (message.isGroup && message.nymMessageId) ? message.nymMessageId : message.id;
             const isMobile = window.innerWidth <= 768;
 
             // Show reaction button for all messages with valid IDs (including PMs)
             const reactionButton = isValidEventId && !isMobile ? `
-    <button class="reaction-btn" onclick="nym.showReactionPicker('${message.id}', this)">
+    <button class="reaction-btn" onclick="nym.showReactionPicker('${reactionMsgId}', this)">
         <svg viewBox="0 0 24 24">
             <circle cx="12" cy="12" r="10"></circle>
             <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
@@ -14220,17 +15034,23 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 hour12: this.settings.timeFormat === '12hr'
             });
 
-            // Delivery status checkmarks for own PM messages
+            // Delivery status for own PM messages
             let deliveryCheckmark = '';
-            if (message.isOwn && message.isPM && message.deliveryStatus) {
-                if (message.deliveryStatus === 'read') {
-                    deliveryCheckmark = '<span class="delivery-status read" title="Read">✓✓</span>';
-                } else if (message.deliveryStatus === 'delivered') {
-                    deliveryCheckmark = '<span class="delivery-status delivered" title="Delivered">✓</span>';
-                } else if (message.deliveryStatus === 'failed') {
-                    deliveryCheckmark = `<span class="delivery-status failed" title="Failed to deliver - click to retry" style="cursor:pointer" data-retry-event-id="${message.id}">!</span>`;
-                } else if (message.deliveryStatus === 'sent') {
-                    deliveryCheckmark = '<span class="delivery-status sent" title="Sent">○</span>';
+            if (message.isOwn && message.isPM) {
+                if (message.isGroup && message.nymMessageId) {
+                    // Group messages: show stacked reader avatars instead of checkmarks
+                    const avatarHtml = this._buildGroupReadersHtml(message.nymMessageId);
+                    deliveryCheckmark = `<span class="group-readers" data-nym-msg-id="${message.nymMessageId}">${avatarHtml}</span>`;
+                } else if (message.deliveryStatus) {
+                    if (message.deliveryStatus === 'read') {
+                        deliveryCheckmark = '<span class="delivery-status read" title="Read">✓✓</span>';
+                    } else if (message.deliveryStatus === 'delivered') {
+                        deliveryCheckmark = '<span class="delivery-status delivered" title="Delivered">✓</span>';
+                    } else if (message.deliveryStatus === 'failed') {
+                        deliveryCheckmark = `<span class="delivery-status failed" title="Failed to deliver - click to retry" style="cursor:pointer" data-retry-event-id="${message.id}">!</span>`;
+                    } else if (message.deliveryStatus === 'sent') {
+                        deliveryCheckmark = '<span class="delivery-status sent" title="Sent">○</span>';
+                    }
                 }
             }
 
@@ -14412,6 +15232,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             } else {
                 container.appendChild(messageEl);
             }
+        }
+
+        // Bind long-press on group-readers span so users can see all viewers
+        if (message.isOwn && message.isGroup && message.nymMessageId) {
+            const readersEl = messageEl.querySelector('.group-readers');
+            if (readersEl) this._bindReaderLongPress(readersEl, message.nymMessageId);
         }
 
         // Prune oldest messages from DOM to stay at the 100 message cap
@@ -15068,8 +15894,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Create new element for a user not previously in the list
                 const wrapper = document.createElement('div');
                 wrapper.innerHTML = `<div class="user-item list-item ${userColorClass}"
-                        onclick="nym.openUserPM('${this.escapeHtml(baseNym)}', '${user.pubkey}')"
-                        oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}')"
+                        onclick="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}', null, null, true)"
+                        oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}', null, null, true)"
                         data-pubkey="${user.pubkey}"
                         data-nym="${this.escapeHtml(baseNym)}">
                     <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" data-avatar-pubkey="${user.pubkey}" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">
@@ -15471,10 +16297,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.closeGifPicker();
             }
 
-            // Close reactors modal if clicking outside
+            // Close reactors/readers modal if clicking outside
             if (!e.target.closest('.reactors-modal') &&
                 !e.target.closest('.reaction-badge')) {
                 this.closeReactorsModal();
+            }
+            if (!e.target.closest('.readers-modal') &&
+                !e.target.closest('.group-readers')) {
+                this.closeReadersModal();
             }
 
             // Handle command palette item click
@@ -15763,7 +16593,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '/brb': { desc: 'Set away message', fn: (args) => this.cmdBRB(args) },
             '/back': { desc: 'Clear away message', fn: () => this.cmdBack() },
             '/zap': { desc: 'Zap a user profile', fn: (args) => this.cmdZap(args) },
-            '/invite': { desc: 'Invite a user to current channel', fn: (args) => this.cmdInvite(args) },
+            '/invite': { desc: 'Invite a user to channel, or add to group when in a group chat', fn: (args) => this.cmdInvite(args) },
+            '/group': { desc: 'Create a private group: /group @user1 @user2 [GroupName]', fn: (args) => this.cmdGroup(args) },
+            '/addmember': { desc: 'Add a member to the current group chat', fn: (args) => this.cmdAddMember(args) },
+            '/groupinfo': { desc: 'Show members of the current group', fn: () => this.cmdGroupInfo() },
             '/share': { desc: 'Share current channel URL', fn: () => this.cmdShare() },
             '/leave': { desc: 'Leave current channel', fn: () => this.cmdLeave() },
             '/quit': { desc: 'Disconnect from Nymchat', fn: () => this.cmdQuit() },
@@ -16302,8 +17135,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (content.startsWith('/')) {
             this.handleCommand(content);
         } else {
-            if (this.inPMMode && this.currentPM) {
-                // Send PM
+            if (this.inPMMode && this.currentGroup) {
+                // Send to private group
+                await this.sendGroupMessage(content, this.currentGroup);
+            } else if (this.inPMMode && this.currentPM) {
+                // Send 1:1 PM
                 await this.sendPM(content, this.currentPM);
             } else if (this.currentGeohash) {
                 // Send to geohash channel (kind 20000)
@@ -16345,7 +17181,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (content.startsWith('/')) {
             this.handleCommand(content);
         } else {
-            if (this.inPMMode && this.currentPM) {
+            if (this.inPMMode && this.currentGroup) {
+                // Group messages always use the logged-in key
+                await this.sendGroupMessage(content, this.currentGroup);
+            } else if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM);
             } else if (this.currentGeohash) {
                 // Send via ephemeral keypair (anonymous)
@@ -16567,12 +17406,32 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     async cmdInvite(args) {
         if (!args) {
-            this.displaySystemMessage('Usage: /invite nym, /invite nym#xxxx, or /invite [pubkey]');
+            if (this.inPMMode && this.currentGroup) {
+                this.displaySystemMessage('Usage: /invite @nym — adds a user to this group');
+            } else {
+                this.displaySystemMessage('Usage: /invite @nym, /invite nym#xxxx, or /invite [pubkey]');
+            }
+            return;
+        }
+
+        // When viewing a group, /invite adds the user to that group
+        if (this.inPMMode && this.currentGroup) {
+            const targetInput = args.trim().replace(/^@/, '');
+            const targetPubkey = this.resolvePubkeyFromNym(targetInput);
+            if (!targetPubkey) {
+                this.displaySystemMessage(`User @${targetInput} not found. They need to be visible in a channel first.`);
+                return;
+            }
+            if (targetPubkey === this.pubkey) {
+                this.displaySystemMessage("You're already in this group");
+                return;
+            }
+            await this.addMemberToGroup(this.currentGroup, targetPubkey);
             return;
         }
 
         if (this.inPMMode) {
-            this.displaySystemMessage('Cannot invite users while in PM mode');
+            this.displaySystemMessage('Use /group @nym to create a group with this person, or switch to a channel first');
             return;
         }
 
@@ -16665,6 +17524,247 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
+    // /group @alice @bob [GroupName] — create a new private group
+    async cmdGroup(args) {
+        if (!this.privkey) {
+            this.displaySystemMessage('Creating groups requires a logged-in account (not anonymous mode)');
+            return;
+        }
+        if (!args) {
+            this.displaySystemMessage('Usage: /group @user1 @user2 [GroupName]  — creates a private encrypted group');
+            return;
+        }
+
+        const parts = args.trim().split(/\s+/);
+        const memberNyms = [];
+        const nameWords = [];
+        for (const part of parts) {
+            if (part.startsWith('@')) {
+                // @nym or @nym#suffix
+                memberNyms.push(part.slice(1));
+            } else if (/^[0-9a-f]{64}$/i.test(part)) {
+                // raw pubkey
+                memberNyms.push(part);
+            } else if (part.includes('#') && !part.startsWith('#')) {
+                // nym#suffix disambiguation without @ (e.g. anon_pulse#35b5)
+                memberNyms.push(part);
+            } else {
+                nameWords.push(part);
+            }
+        }
+
+        if (memberNyms.length === 0) {
+            this.displaySystemMessage('Usage: /group @user1 @user2 [GroupName]  — at least one user required (@user, user#xxxx, or pubkey)');
+            return;
+        }
+
+        const resolvedMembers = [];
+        for (const memberNym of memberNyms) {
+            const pubkey = this.resolvePubkeyFromNym(memberNym);
+            if (!pubkey) {
+                this.displaySystemMessage(`User @${memberNym} not found. They need to be visible in the current channel first.`);
+                return;
+            }
+            if (pubkey === this.pubkey) continue; // self is always included
+            if (!resolvedMembers.includes(pubkey)) resolvedMembers.push(pubkey);
+        }
+
+        if (resolvedMembers.length === 0) {
+            this.displaySystemMessage('No valid users found to create a group with.');
+            return;
+        }
+
+        const groupName = nameWords.join(' ').trim() ||
+            [this.getNymFromPubkey(this.pubkey), ...resolvedMembers.slice(0, 2).map(pk => this.getNymFromPubkey(pk))].join(', ');
+
+        this.displaySystemMessage(`Creating group "${groupName}"...`);
+        const groupId = await this.createGroup(groupName, resolvedMembers);
+        if (groupId) {
+            this.displaySystemMessage(`Group "${groupName}" created with ${resolvedMembers.length + 1} members`);
+        }
+    }
+
+    // /addmember @nym — add a member to the currently viewed group
+    async cmdAddMember(args) {
+        if (!this.inPMMode || !this.currentGroup) {
+            this.displaySystemMessage('You must be in a group conversation to use /addmember');
+            return;
+        }
+        if (!args) {
+            this.displaySystemMessage('Usage: /addmember @nym');
+            return;
+        }
+        const targetInput = args.trim().replace(/^@/, '');
+        const targetPubkey = this.resolvePubkeyFromNym(targetInput);
+        if (!targetPubkey) {
+            this.displaySystemMessage(`User @${targetInput} not found`);
+            return;
+        }
+        if (targetPubkey === this.pubkey) {
+            this.displaySystemMessage("You're already in this group");
+            return;
+        }
+        await this.addMemberToGroup(this.currentGroup, targetPubkey);
+    }
+
+    // /groupinfo — list members of the current group
+    cmdGroupInfo() {
+        if (!this.inPMMode || !this.currentGroup) {
+            this.displaySystemMessage('You must be in a group conversation to use /groupinfo');
+            return;
+        }
+        const group = this.groupConversations.get(this.currentGroup);
+        if (!group) return;
+        const memberList = group.members.map(pk => {
+            const name = this.getNymFromPubkey(pk);
+            const suffix = this.getPubkeySuffix(pk);
+            const isYou = pk === this.pubkey ? ' (you)' : '';
+            return `  @${name}#${suffix}${isYou}`;
+        }).join('\n');
+        this.displaySystemMessage(`Group: "${group.name}"\nMembers (${group.members.length}):\n${memberList}`);
+    }
+
+    openNewPMModal() {
+        this._newPMRecipients = [];
+        document.getElementById('pmRecipientChips').innerHTML = '';
+        document.getElementById('pmRecipientInput').value = '';
+        document.getElementById('pmSuggestions').style.display = 'none';
+        document.getElementById('pmGroupNameGroup').style.display = 'none';
+        document.getElementById('pmGroupNameInput').value = '';
+        document.getElementById('pmInitialMessage').value = '';
+        document.getElementById('pmStartBtn').disabled = true;
+        document.getElementById('newPMModal').classList.add('active');
+        setTimeout(() => document.getElementById('pmRecipientInput').focus(), 80);
+        if (window.innerWidth <= 768) this.closeSidebar();
+    }
+
+    onNewPMRecipientInput(value) {
+        const suggestions = document.getElementById('pmSuggestions');
+        const query = value.trim().replace(/^@/, '').toLowerCase();
+        if (!query) { suggestions.style.display = 'none'; return; }
+
+        // Direct pubkey paste
+        if (/^[0-9a-f]{64}$/i.test(query)) {
+            const pk = query;
+            if (!this._newPMRecipients.some(r => r.pubkey === pk) && pk !== this.pubkey) {
+                const renderPubkeySuggestion = () => {
+                    const nym = this.stripPubkeySuffix(this.getNymFromPubkey(pk));
+                    const suffix = this.getPubkeySuffix(pk);
+                    const avatarSrc = this.escapeHtml(this.getAvatarUrl(pk));
+                    suggestions.innerHTML = `<div class="pm-suggestion-item" onclick="nym.addNewPMRecipient('${pk}','${this.escapeHtml(nym).replace(/'/g,"\\'")}')"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pk}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span></div>`;
+                    suggestions.style.display = 'block';
+                };
+                renderPubkeySuggestion();
+                // If profile isn't cached yet, fetch kind:0 and refresh the suggestion
+                if (!this.users.has(pk)) {
+                    this.fetchProfileDirect(pk).then(() => {
+                        // Only refresh if the input still shows this pubkey
+                        const currentInput = document.getElementById('pmRecipientInput')?.value.trim().replace(/^@/, '').toLowerCase();
+                        if (currentInput === pk) renderPubkeySuggestion();
+                    }).catch(() => {});
+                }
+            } else {
+                suggestions.style.display = 'none';
+            }
+            return;
+        }
+
+        const matches = [];
+        this.users.forEach((user, pubkey) => {
+            if (pubkey === this.pubkey) return;
+            if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
+            const baseNym = this.stripPubkeySuffix(user.nym).toLowerCase();
+            if (baseNym.includes(query)) matches.push({ nym: this.stripPubkeySuffix(user.nym), pubkey });
+        });
+
+        if (matches.length === 0) { suggestions.style.display = 'none'; return; }
+
+        suggestions.innerHTML = matches.slice(0, 8).map(m => {
+            const suffix = this.getPubkeySuffix(m.pubkey);
+            const safeNym = m.nym.replace(/'/g, "\\'");
+            const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
+            return `<div class="pm-suggestion-item" onclick="nym.addNewPMRecipient('${m.pubkey}','${safeNym}')"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span></div>`;
+        }).join('');
+        suggestions.style.display = 'block';
+    }
+
+    onNewPMRecipientKeydown(event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            const val = event.target.value.trim().replace(/^@/, '');
+            if (!val) return;
+            const pubkey = this.resolvePubkeyFromNym(val);
+            if (pubkey && pubkey !== this.pubkey) {
+                this.addNewPMRecipient(pubkey, this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)));
+            }
+        } else if (event.key === 'Backspace' && !event.target.value && this._newPMRecipients.length > 0) {
+            this.removeNewPMRecipient(this._newPMRecipients[this._newPMRecipients.length - 1].pubkey);
+        }
+    }
+
+    addNewPMRecipient(pubkey, nym) {
+        if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
+        this._newPMRecipients.push({ pubkey, nym });
+        this._renderNewPMRecipientChips();
+        document.getElementById('pmRecipientInput').value = '';
+        document.getElementById('pmSuggestions').style.display = 'none';
+        document.getElementById('pmGroupNameGroup').style.display =
+            this._newPMRecipients.length >= 2 ? 'block' : 'none';
+        document.getElementById('pmStartBtn').disabled = false;
+        document.getElementById('pmRecipientInput').focus();
+
+        // If this user's kind:0 profile isn't cached yet, fetch it and refresh the
+        // chip once it arrives so the real display name and avatar appear.
+        if (!this.users.has(pubkey)) {
+            this.fetchProfileDirect(pubkey).then(() => {
+                const r = this._newPMRecipients.find(x => x.pubkey === pubkey);
+                if (r && this.users.has(pubkey)) {
+                    const u = this.users.get(pubkey);
+                    r.nym = u ? this.stripPubkeySuffix(u.nym) : r.nym;
+                    this._renderNewPMRecipientChips();
+                }
+            }).catch(() => {});
+        }
+    }
+
+    removeNewPMRecipient(pubkey) {
+        this._newPMRecipients = this._newPMRecipients.filter(r => r.pubkey !== pubkey);
+        this._renderNewPMRecipientChips();
+        document.getElementById('pmGroupNameGroup').style.display =
+            this._newPMRecipients.length >= 2 ? 'block' : 'none';
+        document.getElementById('pmStartBtn').disabled = this._newPMRecipients.length === 0;
+    }
+
+    _renderNewPMRecipientChips() {
+        document.getElementById('pmRecipientChips').innerHTML = this._newPMRecipients.map(r => {
+            const suffix = this.getPubkeySuffix(r.pubkey);
+            const baseNym = this.stripPubkeySuffix(this.parseNymFromDisplay(r.nym));
+            return `<span class="pm-recipient-chip">${this.escapeHtml(baseNym)}<span class="pm-chip-suffix">#${suffix}</span><button class="pm-chip-remove" onclick="nym.removeNewPMRecipient('${r.pubkey}')" type="button">×</button></span>`;
+        }).join('');
+    }
+
+    async startNewPMFromModal() {
+        if (this._newPMRecipients.length === 0) return;
+        const initialMsg = document.getElementById('pmInitialMessage').value.trim();
+        closeModal('newPMModal');
+
+        if (this._newPMRecipients.length === 1) {
+            const { nym, pubkey } = this._newPMRecipients[0];
+            this.openUserPM(nym, pubkey);
+            if (initialMsg) {
+                setTimeout(() => this.sendPM(initialMsg, pubkey), 400);
+            }
+        } else {
+            const groupName = document.getElementById('pmGroupNameInput').value.trim() ||
+                [this.getNymFromPubkey(this.pubkey), ...this._newPMRecipients.slice(0, 2).map(r => r.nym)].join(', ');
+            const memberPubkeys = this._newPMRecipients.map(r => r.pubkey);
+            this.displaySystemMessage(`Creating group "${groupName}"...`);
+            const groupId = await this.createGroup(groupName, memberPubkeys);
+            if (groupId && initialMsg) {
+                this.sendGroupMessage(initialMsg, groupId);
+            }
+        }
+    }
 
     async cmdBlock(args) {
         if (!args) {
@@ -18199,9 +19299,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.blockedUsers.has(msg.pubkey) || msg.blocked) return false;
             // Check if message content is spam
             if (this.isSpamMessage(msg.content)) return false;
-            // Ensure the message is between the current user and the PM recipient only
             if (msg.conversationKey !== conversationKey) return false;
-            if (msg.pubkey !== this.pubkey && msg.pubkey !== this.currentPM) return false;
+            // For 1:1 PMs, restrict to the two participants. Group messages have
+            // multiple senders so skip this check for them.
+            if (!msg.isGroup && msg.pubkey !== this.pubkey && msg.pubkey !== this.currentPM) return false;
             return true;
         }).sort((a, b) => a.timestamp - b.timestamp);
     }
@@ -18678,6 +19779,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     badge.style.display = count > 0 ? 'block' : 'none';
                 }
             }
+        } else if (channel.startsWith('group-')) {
+            // Group chat unread counts
+            const groupId = channel.substring(6);
+            const badge = document.querySelector(`[data-group-id="${groupId}"] .unread-badge`);
+            if (badge) {
+                badge.textContent = count > 99 ? '99+' : count;
+                badge.style.display = count > 0 ? 'block' : 'none';
+            }
         } else {
             // Regular channel unread counts
             let selector;
@@ -18817,6 +19926,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (badge) {
                     badge.style.display = 'none';
                 }
+            }
+        } else if (storageKey.startsWith('group-')) {
+            // Group chat unread counts
+            const groupId = storageKey.substring(6);
+            const badge = document.querySelector(`[data-group-id="${groupId}"] .unread-badge`);
+            if (badge) {
+                badge.style.display = 'none';
             }
         } else {
             // Regular channel unread counts
@@ -19184,6 +20300,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                         if (channelInfo.type === 'pm') {
                             this.openUserPM(baseTitle, channelInfo.pubkey);
+                        } else if (channelInfo.type === 'group') {
+                            this.openGroup(channelInfo.groupId);
                         } else if (channelInfo.type === 'geohash') {
                             this.switchChannel(channelInfo.channel, channelInfo.geohash);
                         }
@@ -19212,6 +20330,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             notifEl.onclick = () => {
                 if (channelInfo.type === 'pm') {
                     this.openUserPM(baseTitle, channelInfo.pubkey);
+                } else if (channelInfo.type === 'group') {
+                    this.openGroup(channelInfo.groupId);
                 } else if (channelInfo.type === 'geohash') {
                     this.switchChannel(channelInfo.channel, channelInfo.geohash);
                 }
@@ -20818,7 +21938,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.40.155 ═══<br/>
+═══ Nymchat v3.41.155 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -21376,6 +22496,9 @@ function applyNostrLogin(pubkey, secretKey, method) {
             });
         }, 3000);
     });
+
+    // Restore persisted groups for this identity before relay history arrives
+    nym._loadGroupConversations();
 
     // Refresh relay subscriptions with the new pubkey so purchase/flair
     // events for this identity flow through the main event handler
