@@ -700,7 +700,7 @@ body::after {
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.05);
-    z-index: 1000;
+    z-index: 10100;
     display: none;
     min-width: 180px;
     padding: 6px;
@@ -745,6 +745,8 @@ body::after {
     display: flex;
     flex-direction: column;
     position: relative;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .chat-header {
@@ -1761,6 +1763,8 @@ body.light-mode .pubkey-slideout-copy:hover {
     display: flex;
     flex-direction: column;
     align-items: stretch;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .quote-preview {

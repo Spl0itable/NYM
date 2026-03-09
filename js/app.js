@@ -6231,6 +6231,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const el = document.getElementById('sidebarAvatar');
         if (el && this.pubkey) {
             const pubkey = this.pubkey;
+            el.setAttribute('data-avatar-pubkey', pubkey);
             el.src = this.getAvatarUrl(pubkey);
             el.onerror = function () { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
         }
@@ -9700,6 +9701,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             // Apply to our messages
                             this.applyShopStylesToOwnMessages();
 
+                            // Refresh shop UI if open
+                            if (document.getElementById('shopModal').classList.contains('active') && this.activeShopTab) {
+                                this.switchShopTab(this.activeShopTab);
+                            }
                         }
                         return;
                     }
@@ -9801,12 +9806,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const data = JSON.parse(event.content || '{}');
 
                     // Check timestamp to prevent overwriting with older data
-                    const currentTimestamp = this.shopPurchasesTimestamp || 0;
+                    // Use shared timestamp tracker so nostrPurchasesLoad and this handler don't race
+                    const currentTimestamp = Math.max(this.shopPurchasesTimestamp || 0, this._lastPurchaseSyncTimestamp || 0);
                     if (event.created_at < currentTimestamp) {
                         return;
                     }
 
                     this.shopPurchasesTimestamp = event.created_at;
+                    this._lastPurchaseSyncTimestamp = event.created_at;
                     this.userPurchases.clear();
                     (data.purchases || []).forEach(p => this.userPurchases.set(p.id, p));
 
@@ -9849,6 +9856,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                     // Apply to our messages immediately
                     this.applyShopStylesToOwnMessages();
+
+                    // Refresh shop UI if open
+                    if (document.getElementById('shopModal').classList.contains('active') && this.activeShopTab) {
+                        this.switchShopTab(this.activeShopTab);
+                    }
 
                 } catch (error) {
                 }
@@ -12029,7 +12041,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Use sender's profile name for conversation
             const peerName = this.getNymFromPubkey(peerPubkey);
             this.addPMConversation(peerName, peerPubkey, tsSec * 1000);
-            this.movePMToTop(peerPubkey);
+            this.movePMToTop(peerPubkey, tsSec * 1000);
 
             if (this.inPMMode && this.currentPM === peerPubkey) {
                 this.displayMessage(msg);
@@ -12097,19 +12109,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    movePMToTop(pubkey) {
+    movePMToTop(pubkey, messageTimestamp) {
         const pmList = document.getElementById('pmList');
         const pmItem = pmList.querySelector(`[data-pubkey="${pubkey}"]`);
 
         if (pmItem) {
-            // Update the timestamp
-            const now = Date.now();
-            pmItem.dataset.lastMessageTime = now;
+            // Use the message timestamp if provided, otherwise use current time
+            const ts = messageTimestamp || Date.now();
+            const currentTs = parseInt(pmItem.dataset.lastMessageTime || '0');
+            // Only update if the new timestamp is newer
+            const newTs = Math.max(ts, currentTs);
+            pmItem.dataset.lastMessageTime = newTs;
 
             // Update in memory
             const conversation = this.pmConversations.get(pubkey);
             if (conversation) {
-                conversation.lastMessageTime = now;
+                conversation.lastMessageTime = newTs;
             }
 
             // Remove and re-insert in correct order
@@ -12339,7 +12354,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Update or create group conversation entry
         this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000);
         this._saveGroupConversations();
-        this.moveGroupToTop(groupId);
+        this.moveGroupToTop(groupId, tsSec * 1000);
 
         const senderBlocked = this.blockedUsers.has(senderPubkey) || this.isNymBlocked(msg.author);
         if (this.inPMMode && this.currentGroup === groupId) {
@@ -12679,7 +12694,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             ).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
             : `<div class="group-icon-wrap">${groupSvg}</div>`;
 
-        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${memberCount}</span></span><div class="channel-badges"><span class="delete-pm" onclick="event.stopPropagation(); nym.deleteGroup('${groupId}')">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
+        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="delete-pm" onclick="event.stopPropagation(); nym.deleteGroup('${groupId}')">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
     }
 
     // Update the stacked reader avatars shown under an own group message
@@ -12716,14 +12731,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     _bindReaderLongPress(el, nymMessageId) {
         let timer = null;
         const start = (e) => {
+            e.stopPropagation();
             timer = setTimeout(() => {
                 timer = null;
                 this.showReadersModal(nymMessageId, el);
             }, 500);
         };
-        const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+        const cancel = (e) => { if (e) e.stopPropagation(); if (timer) { clearTimeout(timer); timer = null; } };
         el.addEventListener('mousedown', start);
-        el.addEventListener('touchstart', start, { passive: true });
+        el.addEventListener('touchstart', start, { passive: false });
         el.addEventListener('mouseup', cancel);
         el.addEventListener('mouseleave', cancel);
         el.addEventListener('touchend', cancel);
@@ -12807,7 +12823,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }).join('');
 
         const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-        const memberLabel = `<span style="font-size:12px;color:var(--text-dim);margin-left:4px">(${group.members.length} members)</span>`;
+        const memberLabel = `<span style="font-size:12px;color:var(--text-dim);margin-left:4px">(${this.abbreviateNumber(group.members.length)} members)</span>`;
         const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span style="margin-left:${otherMembers.length > 0 ? '8' : '0'}px">${this.escapeHtml(group.name)}</span>${memberLabel}`;
 
         document.getElementById('currentChannel').innerHTML = headerHtml;
@@ -12830,15 +12846,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     // Bubble a group item to the top of the PM list
-    moveGroupToTop(groupId) {
+    moveGroupToTop(groupId, messageTimestamp) {
         const pmList = document.getElementById('pmList');
         const groupItem = pmList?.querySelector(`[data-group-id="${groupId}"]`);
         if (!groupItem) return;
 
-        const now = Date.now();
-        groupItem.dataset.lastMessageTime = now;
+        const ts = messageTimestamp || Date.now();
+        const currentTs = parseInt(groupItem.dataset.lastMessageTime || '0');
+        const newTs = Math.max(ts, currentTs);
+        groupItem.dataset.lastMessageTime = newTs;
         const group = this.groupConversations.get(groupId);
-        if (group) group.lastMessageTime = now;
+        if (group) group.lastMessageTime = newTs;
 
         groupItem.remove();
         this.insertPMInOrder(groupItem, pmList);
@@ -16523,7 +16541,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         };
 
         messagesEl.addEventListener('mousedown', (e) => {
-            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup')) return;
+            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
             msgLongPressFired = false;
@@ -16533,7 +16551,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         });
 
         messagesEl.addEventListener('touchstart', (e) => {
-            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup')) return;
+            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
             msgLongPressFired = false;
@@ -20347,6 +20365,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     playSound(type) {
+        // Deduplicate: don't replay within 2 seconds
+        const now = Date.now();
+        if (this._lastSoundPlayedAt && now - this._lastSoundPlayedAt < 2000) return;
+        this._lastSoundPlayedAt = now;
+
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const oscillator = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
@@ -21938,7 +21961,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.41.155 ═══<br/>
+═══ Nymchat v3.41.156 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -22613,7 +22636,7 @@ function nostrPurchasesLoad() {
                     received = true;
                     try {
                         const data = JSON.parse(msg[2].content);
-                        applyNostrPurchases(data, localPurchases);
+                        applyNostrPurchases(data, localPurchases, msg[2].created_at);
                     } catch (_) {}
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
@@ -22650,7 +22673,7 @@ function nostrPurchasesLoad() {
                     received = true;
                     try {
                         const data = JSON.parse(msg[2].content);
-                        applyNostrPurchases(data, localPurchases);
+                        applyNostrPurchases(data, localPurchases, msg[2].created_at);
                     } catch (_) {}
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
@@ -22676,8 +22699,13 @@ function nostrPurchasesLoad() {
     });
 }
 
-function applyNostrPurchases(data, localPurchases) {
+function applyNostrPurchases(data, localPurchases, eventCreatedAt) {
     if (!data || typeof data !== 'object') return;
+
+    // Use created_at to only apply if this is newer than our current state
+    const lastPurchaseSync = nym._lastPurchaseSyncTimestamp || 0;
+    if (eventCreatedAt && eventCreatedAt <= lastPurchaseSync) return;
+    if (eventCreatedAt) nym._lastPurchaseSyncTimestamp = eventCreatedAt;
 
     const relayPurchaseIds = new Set();
 
@@ -22745,6 +22773,11 @@ function applyNostrPurchases(data, localPurchases) {
     // Apply to messages and broadcast
     nym.publishActiveShopItems();
     nym.applyShopStylesToOwnMessages();
+
+    // Refresh the shop UI if it's currently open
+    if (document.getElementById('shopModal').classList.contains('active') && nym.activeShopTab) {
+        nym.switchShopTab(nym.activeShopTab);
+    }
 
     if (nym.userPurchases.size > 0) {
         nym.displaySystemMessage('Shop purchases synced from Nostr relays.');
