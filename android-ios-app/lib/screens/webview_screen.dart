@@ -43,17 +43,32 @@ String? _localNostrPubkey;
 Color _themeBackgroundColor = const Color(0xFF0A0A0F);
 bool _isLightMode = false;
 
+// ASCII logo loaded from asset file (protected from accidental modifications)
+String _asciiLogo = '';
+
 @override
 void initState() {
-super.initState();
-_requestLocationPermission();
-_requestCameraPermission();
-_initializeWebView();
-if (!kIsWeb) {
-_scheduleCacheClear();
-_initializeAppLinks();
+  super.initState();
+  _loadAsciiLogo();
+  _requestLocationPermission();
+  _requestCameraPermission();
+  _initializeWebView();
+  if (!kIsWeb) {
+    _scheduleCacheClear();
+    _initializeAppLinks();
+  }
+  _notificationSubscription = NotificationService().payloadStream.listen(_handleDeepLink);
 }
-_notificationSubscription = NotificationService().payloadStream.listen(_handleDeepLink);
+
+Future<void> _loadAsciiLogo() async {
+  try {
+    final logo = await rootBundle.loadString('assets/text/nymchat_logo.txt');
+    if (mounted) {
+      setState(() => _asciiLogo = logo);
+    }
+  } catch (e) {
+    debugPrint('[ASCII Logo] Failed to load: $e');
+  }
 }
 
 Future<void> _initializeAppLinks() async {
@@ -980,7 +995,9 @@ return hasImage && !hasVideo;
 const getInputType = (input) => {
 const id = input.id || '';
 if (id === 'setupAvatarInput') return 'welcome-avatar';
+if (id === 'setupBannerInput') return 'welcome-banner';
 if (id === 'nickEditAvatarInput') return 'edit-nick-avatar';
+if (id === 'nickEditBannerInput') return 'edit-nick-banner';
 if (id === 'wallpaperFileInput') return 'wallpaper';
 if (id === 'fileInput') return 'channel-message';
 if (id === 'p2pFileInput') return 'p2p-file';
@@ -1040,14 +1057,18 @@ window._nymPickerTriggered = false;
 // Map of button IDs to their corresponding file input IDs
 const buttonToInputMap = {
 'setupAvatarUploadBtn': 'setupAvatarInput',
+'setupBannerUploadBtn': 'setupBannerInput',
 'nickEditAvatarUploadBtn': 'nickEditAvatarInput',
+'nickEditBannerUploadBtn': 'nickEditBannerInput',
 'customWallpaperOption': 'wallpaperFileInput'
 };
 
 // Map of onclick function names to input IDs
 const onclickToInputMap = {
 'triggerSetupAvatarUpload': 'setupAvatarInput',
+'triggerSetupBannerUpload': 'setupBannerInput',
 'triggerNickEditAvatarUpload': 'nickEditAvatarInput',
+'triggerNickEditBannerUpload': 'nickEditBannerInput',
 'triggerWallpaperUpload': 'wallpaperFileInput'
 };
 
@@ -1099,7 +1120,9 @@ console.log('[NYM Bridge] Overwrote existing', funcName);
 
 defineUploadTrigger('triggerWallpaperUpload', 'wallpaperFileInput', 'wallpaper');
 defineUploadTrigger('triggerSetupAvatarUpload', 'setupAvatarInput', 'setup-avatar');
+defineUploadTrigger('triggerSetupBannerUpload', 'setupBannerInput', 'setup-banner');
 defineUploadTrigger('triggerNickEditAvatarUpload', 'nickEditAvatarInput', 'nick-avatar');
+defineUploadTrigger('triggerNickEditBannerUpload', 'nickEditBannerInput', 'nick-banner');
 
 // ALSO intercept buttons directly as a backup
 const interceptUploadButton = (btn) => {
@@ -1692,15 +1715,21 @@ input.dispatchEvent(event);
 
 console.log('[NYM Bridge] File injected successfully into:', input.id || 'unnamed input', 'file:', file.name, file.size);
 
-// Direct handler call with File object as fallback for avatar inputs
+// Direct handler call with File object as fallback for avatar/banner inputs
 // where change event may not work in WebView environments.
 // The handler accepts File directly via instanceof check.
 if (activeId === 'setupAvatarInput' && typeof handleSetupAvatarSelect === 'function') {
 console.log('[NYM Bridge] Direct call: handleSetupAvatarSelect with File');
 handleSetupAvatarSelect(file);
+} else if (activeId === 'setupBannerInput' && typeof handleSetupBannerSelect === 'function') {
+console.log('[NYM Bridge] Direct call: handleSetupBannerSelect with File');
+handleSetupBannerSelect(file);
 } else if (activeId === 'nickEditAvatarInput' && typeof handleNickEditAvatarSelect === 'function') {
 console.log('[NYM Bridge] Direct call: handleNickEditAvatarSelect with File');
 handleNickEditAvatarSelect(file);
+} else if (activeId === 'nickEditBannerInput' && typeof handleNickEditBannerSelect === 'function') {
+console.log('[NYM Bridge] Direct call: handleNickEditBannerSelect with File');
+handleNickEditBannerSelect(file);
 }
 
 // Clear the active input reference
@@ -1897,15 +1926,21 @@ input.dispatchEvent(event);
 
 console.log('[NYM Bridge] iOS file injected successfully into:', input.id || 'unnamed input', 'file:', file.name, file.size);
 
-// Direct handler call with File object as fallback for avatar inputs
+// Direct handler call with File object as fallback for avatar/banner inputs
 // where change event may not work in WebView environments.
 // The handler accepts File directly via instanceof check.
 if (activeId === 'setupAvatarInput' && typeof handleSetupAvatarSelect === 'function') {
 console.log('[NYM Bridge] Direct call: handleSetupAvatarSelect with File');
 handleSetupAvatarSelect(file);
+} else if (activeId === 'setupBannerInput' && typeof handleSetupBannerSelect === 'function') {
+console.log('[NYM Bridge] Direct call: handleSetupBannerSelect with File');
+handleSetupBannerSelect(file);
 } else if (activeId === 'nickEditAvatarInput' && typeof handleNickEditAvatarSelect === 'function') {
 console.log('[NYM Bridge] Direct call: handleNickEditAvatarSelect with File');
 handleNickEditAvatarSelect(file);
+} else if (activeId === 'nickEditBannerInput' && typeof handleNickEditBannerSelect === 'function') {
+console.log('[NYM Bridge] Direct call: handleNickEditBannerSelect with File');
+handleNickEditBannerSelect(file);
 }
 
 // Clear the active input reference
@@ -2476,17 +2511,7 @@ opacity: const AlwaysStoppedAnimation(0.95),
 ),
 const SizedBox(height: 32),
 Text(
-r'''                                            ##\                  ##\     
-                                            ## |                 ## |    
-#######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\   
-##  __##\ ## |  ## |##  _##  _##\ ##  _____|##  __##\  \____##\\_##  _|  
-## |  ## |## |  ## |## / ## / ## |## /      ## |  ## | ####### | ## |    
-## |  ## |## |  ## |## | ## | ## |## |      ## |  ## |##  __## | ## |##\ 
-## |  ## |\####### |## | ## | ## |\#######\ ## |  ## |\####### | \####  |
-\__|  \__| \____## |\__| \__| \__| \_______|\__|  \__| \_______|  \____/ 
-          ##\   ## |                                                     
-          \######  |                                                     
-           \______/                                                      ''',
+_asciiLogo,
 style: const TextStyle(
 fontFamily: 'Courier New',
 fontSize: 4.0,
