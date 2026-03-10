@@ -6010,6 +6010,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Hide PM option if it's yourself
         document.getElementById('ctxPM').style.display = pubkey === this.pubkey ? 'none' : 'block';
 
+        // Show "Edit Profile" only for own messages
+        const editProfileOption = document.getElementById('ctxEditProfile');
+        if (editProfileOption) {
+            editProfileOption.style.display = pubkey === this.pubkey ? 'block' : 'none';
+            editProfileOption.onclick = () => {
+                this.closeContextMenu();
+                editNick();
+            };
+        }
+
         // Show/hide quote option
         document.getElementById('ctxQuote').style.display = content ? 'block' : 'none';
 
@@ -21363,6 +21373,19 @@ function editNick() {
         updateBioCharCount();
     }
 
+    // Reset private key reveal state
+    const privkeySlideout = document.getElementById('privkeySlideout');
+    if (privkeySlideout) privkeySlideout.style.display = 'none';
+    const privkeyArrow = document.getElementById('revealPrivkeyArrow');
+    if (privkeyArrow) privkeyArrow.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle;"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
+    const nsecInput = document.getElementById('revealedNsecValue');
+    if (nsecInput) { nsecInput.value = ''; nsecInput.type = 'password'; }
+    // Hide reveal privkey option for extension login (no local privkey)
+    const revealGroup = document.getElementById('revealPrivkeyGroup');
+    if (revealGroup) {
+        revealGroup.style.display = (nym.nostrLoginMethod === 'extension') ? 'none' : 'block';
+    }
+
     document.getElementById('nickEditModal').classList.add('active');
 }
 
@@ -21435,6 +21458,8 @@ function randomizeNick() {
 let setupKeypair = null;
 // Uploaded avatar URL from setup modal (applied to profile in initializeNym)
 let setupAvatarUrl = null;
+// Uploaded banner URL from setup modal
+let setupBannerUrl = null;
 
 function setAvatarUploadState(prefix, { spinning, statusText, statusType, btnText, btnDisabled, showRemove }) {
     const spinner = document.getElementById(prefix + 'AvatarSpinner');
@@ -21532,6 +21557,157 @@ function removeSetupAvatar() {
     setAvatarUploadState('setup', {
         spinning: false, statusText: '', statusType: '',
         btnText: 'Choose photo', btnDisabled: false, showRemove: false
+    });
+}
+
+// Banner upload handler for setup modal
+async function handleSetupBannerSelect(event) {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+
+    if (file.type && !file.type.startsWith('image/')) {
+        setSetupBannerUploadState({ statusText: 'Please select an image file', statusType: 'error' });
+        return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+        setSetupBannerUploadState({ statusText: 'Image must be under 10MB', statusType: 'error' });
+        return;
+    }
+
+    const preview = document.getElementById('setupBannerPreview');
+    const placeholder = document.getElementById('setupBannerPlaceholder');
+
+    if (preview) {
+        preview.src = URL.createObjectURL(file);
+        preview.style.display = 'block';
+    }
+    if (placeholder) placeholder.style.display = 'none';
+
+    setSetupBannerUploadState({
+        spinning: true,
+        statusText: 'Uploading banner...',
+        statusType: 'uploading',
+        btnText: 'Uploading...',
+        btnDisabled: true,
+        showRemove: false
+    });
+
+    // Generate keypair in background if not already done
+    if (!setupKeypair) {
+        setupKeypair = await nym.generateKeypair();
+    }
+
+    const url = await nym.uploadBanner(file);
+
+    if (url) {
+        setupBannerUrl = url;
+        if (preview) preview.src = url;
+        setSetupBannerUploadState({
+            spinning: false,
+            statusText: 'Banner uploaded successfully',
+            statusType: 'success',
+            btnText: 'Change banner',
+            btnDisabled: false,
+            showRemove: true
+        });
+    } else {
+        if (preview) { preview.style.display = 'none'; }
+        if (placeholder) placeholder.style.display = 'flex';
+        setSetupBannerUploadState({
+            spinning: false,
+            statusText: 'Upload failed — try again',
+            statusType: 'error',
+            btnText: 'Choose banner',
+            btnDisabled: false,
+            showRemove: false
+        });
+    }
+
+    event.target.value = '';
+}
+
+function setSetupBannerUploadState({ spinning, statusText, statusType, btnText, btnDisabled, showRemove }) {
+    const spinner = document.getElementById('setupBannerSpinner');
+    const status = document.getElementById('setupBannerStatus');
+    const uploadBtn = document.getElementById('setupBannerUploadBtn');
+    const removeBtn = document.getElementById('setupBannerRemoveBtn');
+    if (spinner) spinner.classList.toggle('active', !!spinning);
+    if (status) {
+        status.textContent = statusText || '';
+        status.className = 'avatar-upload-status' + (statusType ? ' ' + statusType : '');
+    }
+    if (uploadBtn && btnText !== undefined) {
+        uploadBtn.textContent = btnText;
+        uploadBtn.disabled = !!btnDisabled;
+    }
+    if (removeBtn && showRemove !== undefined) {
+        removeBtn.style.display = showRemove ? 'inline-flex' : 'none';
+    }
+}
+
+function removeSetupBanner() {
+    setupBannerUrl = null;
+    const preview = document.getElementById('setupBannerPreview');
+    const placeholder = document.getElementById('setupBannerPlaceholder');
+    if (preview) { preview.src = ''; preview.style.display = 'none'; }
+    if (placeholder) placeholder.style.display = 'flex';
+    localStorage.removeItem('nym_banner_url');
+    setSetupBannerUploadState({
+        spinning: false, statusText: '', statusType: '',
+        btnText: 'Choose banner', btnDisabled: false, showRemove: false
+    });
+}
+
+function updateSetupBioCharCount() {
+    const input = document.getElementById('setupBioInput');
+    const counter = document.getElementById('setupBioCharCount');
+    if (input && counter) {
+        counter.textContent = input.value.length + '/150';
+    }
+}
+
+// Reveal private key functions for nick edit modal
+function toggleRevealPrivkey() {
+    const slideout = document.getElementById('privkeySlideout');
+    const arrow = document.getElementById('revealPrivkeyArrow');
+    if (!slideout) return;
+
+    const isHidden = slideout.style.display === 'none';
+    slideout.style.display = isHidden ? 'block' : 'none';
+    if (arrow) arrow.innerHTML = isHidden ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle;"><path d="M 3 6 L 8 11 L 13 6 Z"/></svg>' : '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle;"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
+
+    if (isHidden) {
+        // Populate the nsec value
+        const nsecInput = document.getElementById('revealedNsecValue');
+        if (nsecInput && nym.privkey) {
+            try {
+                const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
+                nsecInput.value = nsec;
+            } catch (e) {
+                nsecInput.value = 'Unable to encode private key';
+            }
+        } else if (nsecInput) {
+            nsecInput.value = 'No private key available (using browser extension)';
+        }
+    }
+}
+
+function toggleNsecVisibility() {
+    const input = document.getElementById('revealedNsecValue');
+    if (!input) return;
+    input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function copyRevealedNsec() {
+    const input = document.getElementById('revealedNsecValue');
+    if (!input) return;
+    navigator.clipboard.writeText(input.value).then(() => {
+        const btn = document.getElementById('nsecCopyBtn');
+        if (btn) {
+            const orig = btn.innerHTML;
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.innerHTML = orig; }, 2000);
+        }
     });
 }
 
@@ -21784,11 +21960,18 @@ async function showSettings() {
         blurSelect.value = nym.blurOthersImages ? 'true' : 'false';
     }
 
-    // Load auto-ephemeral setting (always shown, always ephemeral mode)
+    // Load auto-ephemeral setting (hidden, kept for compatibility)
     const autoEphemeralSelect = document.getElementById('autoEphemeralSelect');
     if (autoEphemeralSelect) {
         const autoEphemeral = localStorage.getItem('nym_auto_ephemeral') === 'true';
         autoEphemeralSelect.value = autoEphemeral ? 'true' : 'false';
+    }
+
+    // Load random keypair per session setting
+    const randomKeypairSelect = document.getElementById('randomKeypairSelect');
+    if (randomKeypairSelect) {
+        const randomKeypair = localStorage.getItem('nym_random_keypair_per_session') === 'true';
+        randomKeypairSelect.value = randomKeypair ? 'true' : 'false';
     }
 
     // Load nickname style setting
@@ -22051,7 +22234,7 @@ async function saveSettings() {
     nym.settings.readReceiptsEnabled = readReceiptsEnabled;
     localStorage.setItem('nym_read_receipts_enabled', String(readReceiptsEnabled));
 
-    // Handle auto-ephemeral setting
+    // Handle auto-ephemeral setting (hidden, kept for compatibility)
     const autoEphemeral = document.getElementById('autoEphemeralSelect').value === 'true';
     if (autoEphemeral) {
         localStorage.setItem('nym_auto_ephemeral', 'true');
@@ -22059,6 +22242,26 @@ async function saveSettings() {
         localStorage.removeItem('nym_auto_ephemeral');
         localStorage.removeItem('nym_auto_ephemeral_nick');
         localStorage.removeItem('nym_auto_ephemeral_channel');
+    }
+
+    // Handle random keypair per session setting
+    const randomKeypairEl = document.getElementById('randomKeypairSelect');
+    if (randomKeypairEl) {
+        const randomKeypair = randomKeypairEl.value === 'true';
+        if (randomKeypair) {
+            localStorage.setItem('nym_random_keypair_per_session', 'true');
+            // Clear saved session keypair so next reload generates fresh one
+            localStorage.removeItem('nym_session_nsec');
+        } else {
+            localStorage.removeItem('nym_random_keypair_per_session');
+            // Save current keypair for reuse if not already saved
+            if (nym.privkey && !localStorage.getItem('nym_session_nsec')) {
+                try {
+                    const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
+                    localStorage.setItem('nym_session_nsec', nsec);
+                } catch (e) {}
+            }
+        }
     }
 
     // Handle hide non-pinned channels setting
@@ -22172,6 +22375,8 @@ function clearLocalStorageCache() {
             key === 'nym_auto_ephemeral' ||
             key === 'nym_auto_ephemeral_nick' ||
             key === 'nym_auto_ephemeral_channel' ||
+            key === 'nym_session_nsec' ||
+            key === 'nym_random_keypair_per_session' ||
             key === 'nym_dev_nsec' ||
             key === 'nym_active_style' ||
             key === 'nym_active_flair' ||
@@ -22315,7 +22520,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.43.156 ═══<br/>
+═══ Nymchat v3.44.156 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -22435,7 +22640,7 @@ async function checkSavedConnection() {
         }
     }
 
-    // Auto-ephemeral preference
+    // Auto-ephemeral preference (or saved session keypair)
     const autoEphemeral = localStorage.getItem('nym_auto_ephemeral');
     if (autoEphemeral === 'true') {
         try {
@@ -22444,6 +22649,7 @@ async function checkSavedConnection() {
             setupModal.classList.remove('active');
 
             let isDeveloperLogin = false;
+            const randomKeypairPerSession = localStorage.getItem('nym_random_keypair_per_session') === 'true';
 
             // Use saved custom nickname if available, otherwise random
             const savedNick = localStorage.getItem('nym_auto_ephemeral_nick');
@@ -22468,8 +22674,37 @@ async function checkSavedConnection() {
                     nym.nym = nym.generateRandomNym();
                     nym.connectionMode = 'ephemeral';
                 }
+            } else if (!randomKeypairPerSession) {
+                // Reuse saved keypair if available (persistent session)
+                const savedNsec = localStorage.getItem('nym_session_nsec');
+                if (savedNsec) {
+                    try {
+                        const secretKey = nym.decodeNsec(savedNsec);
+                        const pubkey = window.NostrTools.getPublicKey(secretKey);
+                        nym.privkey = secretKey;
+                        nym.pubkey = pubkey;
+                        nym.nym = savedNick || nym.generateRandomNym();
+                        nym.connectionMode = 'ephemeral';
+                    } catch (e) {
+                        // Saved keypair invalid, generate fresh
+                        localStorage.removeItem('nym_session_nsec');
+                        await nym.generateKeypair();
+                        nym.nym = savedNick || nym.generateRandomNym();
+                        nym.connectionMode = 'ephemeral';
+                    }
+                } else {
+                    // No saved keypair yet, generate and save
+                    await nym.generateKeypair();
+                    nym.nym = savedNick || nym.generateRandomNym();
+                    nym.connectionMode = 'ephemeral';
+                    // Save the generated keypair for reuse
+                    try {
+                        const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
+                        localStorage.setItem('nym_session_nsec', nsec);
+                    } catch (e) {}
+                }
             } else {
-                // Generate ephemeral keypair
+                // Generate fresh ephemeral keypair each session (random keypair mode)
                 await nym.generateKeypair();
                 nym.nym = savedNick || nym.generateRandomNym();
                 nym.connectionMode = 'ephemeral';
@@ -22597,20 +22832,31 @@ async function initializeNym() {
             localStorage.removeItem('nym_connection_mode');
         }
 
-        // Auto-ephemeral checkbox - save custom nickname if provided
-        const autoEphemeralCheckbox = document.getElementById('autoEphemeralCheckbox');
-        if (autoEphemeralCheckbox && autoEphemeralCheckbox.checked) {
-            localStorage.setItem('nym_auto_ephemeral', 'true');
-            if (nymInput) {
-                localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
-                // If developer verified, also save nsec for auto-login
-                if (nym.isReservedNick(nymInput)) {
-                    const nsecVal = document.getElementById('devNsecInput').value.trim();
-                    if (nsecVal) {
-                        localStorage.setItem('nym_dev_nsec', nsecVal);
-                    }
+        // Always enable auto-login on next session (replaces old auto-ephemeral checkbox)
+        localStorage.setItem('nym_auto_ephemeral', 'true');
+        if (nymInput) {
+            localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
+            // If developer verified, also save nsec for auto-login
+            if (nym.isReservedNick(nymInput)) {
+                const nsecVal = document.getElementById('devNsecInput').value.trim();
+                if (nsecVal) {
+                    localStorage.setItem('nym_dev_nsec', nsecVal);
                 }
             }
+        }
+
+        // Save the generated keypair for reuse across sessions (unless random keypair mode enabled)
+        if (!isDeveloperLogin && nym.privkey) {
+            try {
+                const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
+                localStorage.setItem('nym_session_nsec', nsec);
+            } catch (e) {}
+        }
+
+        // Save bio from setup modal
+        const setupBioVal = document.getElementById('setupBioInput');
+        if (setupBioVal && setupBioVal.value.trim()) {
+            localStorage.setItem('nym_bio', setupBioVal.value.trim());
         }
 
         // If nostr logged in, apply identity keys BEFORE connecting to relays
@@ -22660,36 +22906,47 @@ async function initializeNym() {
 
             // Apply avatar: either from setup modal upload or from localStorage
             if (setupAvatarUrl) {
-                // Avatar was already uploaded in the setup modal - just ensure it's applied
                 nym.userAvatars.set(nym.pubkey, setupAvatarUrl);
                 nym.cacheAvatarImage(nym.pubkey, setupAvatarUrl);
                 localStorage.setItem('nym_avatar_url', setupAvatarUrl);
                 nym.updateSidebarAvatar();
                 setupAvatarUrl = null;
                 setupKeypair = null;
-                await nym.saveToNostrProfile();
             } else {
-                // Restore avatar from localStorage for ephemeral sessions
                 const savedAvatarUrl = localStorage.getItem('nym_avatar_url');
                 if (savedAvatarUrl) {
                     nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
                     nym.cacheAvatarImage(nym.pubkey, savedAvatarUrl);
                     nym.updateSidebarAvatar();
                 }
+            }
 
-                // Restore banner from localStorage
+            // Apply banner: either from setup modal upload or from localStorage
+            if (setupBannerUrl) {
+                nym.userBanners.set(nym.pubkey, setupBannerUrl);
+                localStorage.setItem('nym_banner_url', setupBannerUrl);
+                setupBannerUrl = null;
+            } else {
                 const savedBannerUrl2 = localStorage.getItem('nym_banner_url');
                 if (savedBannerUrl2) {
                     nym.userBanners.set(nym.pubkey, savedBannerUrl2);
                 }
-                // Restore bio from localStorage
+            }
+
+            // Apply bio: either from setup modal or from localStorage
+            const setupBioInput = document.getElementById('setupBioInput');
+            if (setupBioInput && setupBioInput.value.trim()) {
+                nym.userBios.set(nym.pubkey, setupBioInput.value.trim());
+                localStorage.setItem('nym_bio', setupBioInput.value.trim());
+            } else {
                 const savedBio2 = localStorage.getItem('nym_bio');
                 if (savedBio2) {
                     nym.userBios.set(nym.pubkey, savedBio2);
                 }
-                // Publish profile with restored avatar and/or lightning address
-                await nym.saveToNostrProfile();
             }
+
+            // Publish profile
+            await nym.saveToNostrProfile();
 
             // Re-publish profile after more relays connect
             setTimeout(() => { nym.saveToNostrProfile(); }, 5000);
@@ -23430,6 +23687,8 @@ function signOut() {
         localStorage.removeItem('nym_auto_ephemeral');
         localStorage.removeItem('nym_auto_ephemeral_nick');
         localStorage.removeItem('nym_auto_ephemeral_channel');
+        localStorage.removeItem('nym_session_nsec');
+        localStorage.removeItem('nym_random_keypair_per_session');
         localStorage.removeItem('nym_dev_nsec');
         localStorage.removeItem('nym_color_mode');
         localStorage.removeItem('nym_purchases_cache');

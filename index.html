@@ -174,6 +174,15 @@
             </svg>
             Block User
         </div>
+
+        <div class="context-menu-item" id="ctxEditProfile" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <path d="M 11.5 2.5 L 13.5 4.5 L 5 13 L 2 14 L 3 11 Z" stroke-linejoin="round" />
+                <path d="M 10 4 L 12 6" stroke-linecap="round" />
+            </svg>
+            Edit Profile
+        </div>
         </div>
     </div>
 
@@ -595,7 +604,7 @@
                 <!-- Browser Extension Option (hidden for NymchatApp shell) -->
                 <div id="nostrLoginExtensionOption" style="margin-bottom: 14px;">
                     <button class="send-btn" id="nostrLoginExtensionBtn" onclick="nostrLoginWithExtension()" style="width: 100%; padding: 12px;">
-                        Login with Browser Extension (NIP-07)
+                        Login with Browser Extension
                     </button>
                     <div class="form-hint" style="margin-top: 6px;">Use Alby, nos2x, or another NIP-07 extension</div>
                 </div>
@@ -615,6 +624,9 @@
             <div class="modal-actions">
                 <button class="icon-btn" onclick="closeModal('nostrLoginModal')">Cancel</button>
                 <button class="send-btn" id="nostrLoginSubmitBtn" onclick="nostrLoginWithNsec()">Login</button>
+            </div><br/>
+            <div style="text-align: center; padding: 0 20px 16px; color: var(--text-dim); font-size: 12px;">
+                By logging in, you agree to our <a href="static/tos.html" target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> and <a href="static/pp.html" target="_blank" rel="noopener" style="color: var(--secondary)">Privacy Policy</a>.
             </div>
         </div>
     </div>
@@ -736,6 +748,25 @@
                     </div>
                     <div class="form-hint">Short bio shown on your profile (max 150 characters)</div>
                 </div>
+
+                <div class="form-group" id="revealPrivkeyGroup">
+                    <div class="reveal-privkey-toggle" onclick="toggleRevealPrivkey()" style="cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--glass-border, var(--border-color)); border-radius: 12px; background: rgba(255,255,255,0.02);">
+                        <span style="color: var(--text-dim);" id="revealPrivkeyArrow"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle;"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg></span>
+                        <span style="font-size: 14px; color: var(--secondary); font-weight: 500;">Reveal this nym's private key</span>
+                    </div>
+                    <div id="privkeySlideout" style="display: none; margin-top: 10px; padding: 14px; border: 1px solid var(--glass-border, var(--border-color)); border-radius: 12px; background: rgba(255,255,255,0.02);">
+                        <div style="color: var(--warning); font-size: 12px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid rgba(255, 255, 0, 0.2); border-radius: 8px; background: rgba(255, 255, 0, 0.04);">
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle; margin-right: 4px; flex-shrink: 0;"><path d="M 8 1 L 15 14 L 1 14 Z" stroke-linejoin="round"/><path d="M 8 6 L 8 9.5" stroke-linecap="round" stroke-width="2"/><circle cx="8" cy="11.5" r="0.8" fill="currentColor" stroke="none"/></svg> Your private key (nsec) is like a password for your Nym identity. Anyone with access to it can post as you and read your encrypted messages. Store it securely in a password manager and never share it publicly. You can use the nsec to login on Nymchat.
+                        </div><br/>
+                        <label class="form-label" style="font-size: 12px; margin-bottom: 4px;">nsec (Nostr Private Key)</label>
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <input type="password" class="form-input" id="revealedNsecValue" readonly
+                                style="flex: 1; font-family: monospace; font-size: 12px;">
+                            <button type="button" class="icon-btn" onclick="toggleNsecVisibility()" id="nsecVisibilityBtn" title="Show/hide" style="min-width: 36px; padding: 6px;"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle;"><path d="M 1 8 C 3 4 6 3 8 3 C 10 3 13 4 15 8 C 13 12 10 13 8 13 C 6 13 3 12 1 8 Z"/><circle cx="8" cy="8" r="2.5"/></svg></button>
+                            <button type="button" class="icon-btn" onclick="copyRevealedNsec()" id="nsecCopyBtn" title="Copy" style="min-width: 36px; padding: 6px;"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle;"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="modal-actions">
                 <button class="icon-btn" onclick="randomizeNick()">Randomize</button>
@@ -765,12 +796,14 @@
             </div>
             <div class="modal-body">
                 <div class="form-group" id="nymGroup">
+                    <div style="text-align: center; color: var(--text-dim); font-size: 13px; margin-bottom: 8px;">(Click logo to login with nsec private key or extension)</div><br/>
                     <label class="form-label">Choose Your Nickname (optional)</label>
-                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nick"
+                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
                         maxlength="20">
                     <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
 
-                    <label class="form-label" style="margin-top: 15px;">Choose Your Avatar (optional)</label>
+                    <br/>
+                    <label class="form-label">Choose Your Avatar (optional)</label>
                     <div class="avatar-upload-section">
                         <div class="avatar-preview-wrap">
                             <img id="setupAvatarPreview" class="avatar-preview"
@@ -790,14 +823,34 @@
                         </div>
                     </div>
 
-                    <div id="autoEphemeralGroup" style="margin-top: 15px;">
-                        <label style="display: flex; align-items: center; cursor: pointer; font-size: 14px;">
-                            <input type="checkbox" id="autoEphemeralCheckbox" checked
-                                style="margin-right: 10px; width: auto; cursor: pointer;">
-                            <span style="color: var(--text-dim);">Automatically assign new ephemeral nym on each session
-                                restart to skip the welcome screen</span>
-                        </label>
+                    <label class="form-label" style="margin-top: 15px;">Choose Your Banner (optional)</label>
+                    <div class="banner-upload-section">
+                        <div class="banner-preview-wrap" id="setupBannerPreviewWrap">
+                            <img id="setupBannerPreview" class="banner-preview" src="" alt="Banner"
+                                style="display: none;">
+                            <div class="banner-placeholder" id="setupBannerPlaceholder">No banner set</div>
+                            <div class="avatar-upload-spinner" id="setupBannerSpinner"></div>
+                        </div>
+                        <div class="avatar-upload-controls">
+                            <input type="file" id="setupBannerInput" accept="image/*" style="display: none"
+                                onchange="handleSetupBannerSelect(event)">
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                <button type="button" class="avatar-upload-btn" id="setupBannerUploadBtn"
+                                    onclick="document.getElementById('setupBannerInput').click()">Choose banner</button>
+                                <button type="button" class="avatar-remove-btn" id="setupBannerRemoveBtn"
+                                    style="display: none;" onclick="removeSetupBanner()">Remove</button>
+                            </div>
+                            <div class="avatar-upload-status" id="setupBannerStatus"></div>
+                        </div>
                     </div>
+
+                    <label class="form-label" style="margin-top: 15px;">Bio (optional)</label>
+                    <div class="bio-input-wrap">
+                        <textarea id="setupBioInput" placeholder="Tell people a bit about yourself..."
+                            maxlength="150" oninput="updateSetupBioCharCount()"></textarea>
+                        <div class="bio-char-count" id="setupBioCharCount">0/150</div>
+                    </div>
+                    <div class="form-hint">Short bio shown on your profile (max 150 characters)</div>
                 </div>
 
                 <div
@@ -943,6 +996,15 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Generate Random Keypair Per Session</label>
+                    <select class="form-select" id="randomKeypairSelect">
+                        <option value="false">Disabled (reuse same keypair)</option>
+                        <option value="true">Enabled (new identity each session)</option>
+                    </select>
+                    <div class="form-hint">Generate a new random keypair on every session restart for improved anonymity. When disabled, your generated keypair persists across reloads.</div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Sort Geohash Channels by Proximity</label>
                     <select class="form-select" id="proximitySelect">
                         <option value="false">Disabled</option>
@@ -1039,7 +1101,7 @@
                     </select>
                 </div>
 
-                <div class="form-group" id="autoEphemeralSettingGroup">
+                <div class="form-group" id="autoEphemeralSettingGroup" style="display: none;">
                     <label class="form-label">Auto Ephemeral Mode on Restart</label>
                     <select class="form-select" id="autoEphemeralSelect">
                         <option value="false">Disabled</option>
