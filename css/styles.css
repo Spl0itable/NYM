@@ -7501,3 +7501,82 @@ body.light-mode .poll-option-selected .poll-option-bar {
     background: linear-gradient(90deg, rgba(0, 100, 200, 0.12), rgba(0, 100, 200, 0.04));
 }
 
+.typing-indicator {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 20px;
+    font-size: 12px;
+    color: var(--text-dim);
+    height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: height 0.2s ease, opacity 0.2s ease, padding 0.2s ease;
+    flex-shrink: 0;
+    background-color: rgba(0, 0, 0, 0.15);
+}
+
+.typing-indicator.active {
+    display: flex;
+    opacity: 1;
+    height: 24px;
+    padding: 4px 20px;
+}
+
+.typing-indicator-avatars {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.typing-indicator-avatars img {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1.5px solid var(--bg-primary, var(--background, #000));
+    object-fit: cover;
+}
+
+.typing-indicator-avatars img + img {
+    margin-left: -6px;
+}
+
+.typing-indicator-dots {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.typing-indicator-dots span {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    animation: typingBounce 1.2s ease-in-out infinite;
+}
+
+.typing-indicator-dots span:nth-child(2) {
+    animation-delay: 0.15s;
+}
+
+.typing-indicator-dots span:nth-child(3) {
+    animation-delay: 0.3s;
+}
+
+@keyframes typingBounce {
+    0%, 60%, 100% {
+        opacity: 0.3;
+        transform: translateY(0);
+    }
+    30% {
+        opacity: 1;
+        transform: translateY(-3px);
+    }
+}
+
+.typing-indicator-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+

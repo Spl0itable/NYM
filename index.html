@@ -413,6 +413,12 @@
 
             <div class="messages-container" id="messagesContainer"></div>
 
+            <div class="typing-indicator" id="typingIndicator">
+                <div class="typing-indicator-avatars" id="typingIndicatorAvatars"></div>
+                <div class="typing-indicator-dots"><span></span><span></span><span></span></div>
+                <div class="typing-indicator-text" id="typingIndicatorText"></div>
+            </div>
+
             <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" onclick="scrollToBottom()"
                 title="Scroll to bottom">
                 <svg viewBox="0 0 24 24" width="20" height="20">
@@ -1065,6 +1071,15 @@
                     </select>
                     <div class="form-hint">When enabled, senders will see when you've read their private messages (✓✓).
                     </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Typing Indicators</label>
+                    <select class="form-select" id="typingIndicatorsSelect">
+                        <option value="true">Enabled</option>
+                        <option value="false">Disabled</option>
+                    </select>
+                    <div class="form-hint">When enabled, others will see when you're typing a private message.</div>
                 </div>
 
                 <div class="form-group">

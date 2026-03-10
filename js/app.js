@@ -1145,6 +1145,11 @@ class NYM {
         this.torrentClient = null;
         this.torrentSeeds = new Map();
         this.awayMessages = new Map();
+        this.typingUsers = new Map();
+        this._typingThrottleTime = 0;
+        this._typingSendInterval = 3000;
+        this._typingExpireMs = 5000;
+        this._typingStopTimer = null;
         this.recentEmojis = [];
         this.allEmojis = {
             'smileys': ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '☺️', '😚', '😙', '🥲', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🫢', '🫣', '🤫', '🤔', '🫡', '🤐', '🤨', '😐', '😑', '😶', '🫥', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '😵‍💫', '🤯', '🤠', '🥳', '🥸', '😎', '🤓', '🧐', '😕', '🫤', '😟', '☹️', '🙁', '😮', '😯', '😲', '😳', '🥺', '🥹', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'],
@@ -3370,6 +3375,7 @@ ${code}
                     dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
                     dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
                     readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,
+                    typingIndicatorsEnabled: this.settings.typingIndicatorsEnabled !== false,
                     pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
                     wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'geometric',
                     wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
@@ -3511,6 +3517,10 @@ ${code}
                 this.settings.readReceiptsEnabled = s.readReceiptsEnabled;
                 localStorage.setItem('nym_read_receipts_enabled', String(s.readReceiptsEnabled));
             }
+            if (s.typingIndicatorsEnabled !== undefined) {
+                this.settings.typingIndicatorsEnabled = s.typingIndicatorsEnabled;
+                localStorage.setItem('nym_typing_indicators_enabled', String(s.typingIndicatorsEnabled));
+            }
             if (s.pinnedLandingChannel) {
                 this.pinnedLandingChannel = s.pinnedLandingChannel;
                 this.settings.pinnedLandingChannel = s.pinnedLandingChannel;
@@ -3584,6 +3594,10 @@ ${code}
                 if (s.readReceiptsEnabled !== undefined) {
                     const el = document.getElementById('readReceiptsSelect');
                     if (el) el.value = String(s.readReceiptsEnabled);
+                }
+                if (s.typingIndicatorsEnabled !== undefined) {
+                    const el = document.getElementById('typingIndicatorsSelect');
+                    if (el) el.value = String(s.typingIndicatorsEnabled);
                 }
                 if (s.nickStyle) {
                     const el = document.getElementById('nickStyleSelect');
@@ -9042,6 +9056,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
                 dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
                 readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,  // Default true
+                typingIndicatorsEnabled: this.settings.typingIndicatorsEnabled !== false,  // Default true
                 pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
                 chatLayout: this.settings.chatLayout || 'irc'
             };
@@ -10388,6 +10403,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.settings.readReceiptsEnabled = settings.readReceiptsEnabled !== false;
                 localStorage.setItem('nym_read_receipts_enabled', String(this.settings.readReceiptsEnabled));
             }
+            if (settings.typingIndicatorsEnabled !== undefined) {
+                this.settings.typingIndicatorsEnabled = settings.typingIndicatorsEnabled !== false;
+                localStorage.setItem('nym_typing_indicators_enabled', String(this.settings.typingIndicatorsEnabled));
+            }
 
             // If modal open, reflect values
             if (document.getElementById('settingsModal').classList.contains('active')) {
@@ -10403,6 +10422,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const readReceiptsSel = document.getElementById('readReceiptsSelect');
                 if (readReceiptsSel) {
                     readReceiptsSel.value = this.settings.readReceiptsEnabled !== false ? 'true' : 'false';
+                }
+                // Also update typing indicators select if modal is open
+                const typingIndicatorsSel = document.getElementById('typingIndicatorsSelect');
+                if (typingIndicatorsSel) {
+                    typingIndicatorsSel.value = this.settings.typingIndicatorsEnabled !== false ? 'true' : 'false';
                 }
             }
         } catch (error) {
@@ -11407,6 +11431,172 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.sendDMToRelays(['EVENT', wrapped]);
     }
 
+    // Check if a rumor is a typing indicator
+    isTypingIndicator(rumor) {
+        if (!rumor || !rumor.tags) return false;
+        return rumor.tags.some(t => Array.isArray(t) && t[0] === 'typing');
+    }
+
+    // Parse typing indicator rumor
+    parseTypingIndicator(rumor) {
+        if (!rumor || !rumor.tags) return null;
+        let status = null;
+        let groupId = null;
+        for (const tag of rumor.tags) {
+            if (Array.isArray(tag)) {
+                if (tag[0] === 'typing') status = tag[1]; // 'start' or 'stop'
+                if (tag[0] === 'g') groupId = tag[1];
+            }
+        }
+        return status ? { status, groupId, pubkey: rumor.pubkey } : null;
+    }
+
+    // Called when input changes in PM/group mode to signal typing
+    handleTypingSignal() {
+        if (!this.privkey || !this.inPMMode) return;
+        if (this.settings?.typingIndicatorsEnabled === false) return;
+
+        const now = Date.now();
+        if (now - this._typingThrottleTime < this._typingSendInterval) return;
+        this._typingThrottleTime = now;
+
+        // Clear previous stop timer
+        if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
+
+        // Send start
+        this._sendTypingEvent('start');
+
+        // Auto-send stop after 4s of no further typing
+        this._typingStopTimer = setTimeout(() => {
+            this._sendTypingEvent('stop');
+        }, 4000);
+    }
+
+    // Send typing stop immediately (e.g. when message is sent)
+    sendTypingStop() {
+        if (!this.privkey || !this.inPMMode) return;
+        if (this.settings?.typingIndicatorsEnabled === false) return;
+        if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
+        this._typingThrottleTime = 0;
+        this._sendTypingEvent('stop');
+    }
+
+    // Internal: build and send a typing indicator gift-wrap
+    _sendTypingEvent(status) {
+        if (!this.privkey) return;
+
+        const now = Math.floor(Date.now() / 1000);
+        const tags = [['typing', status]];
+
+        if (this.currentGroup) {
+            const group = this.groupConversations.get(this.currentGroup);
+            if (!group) return;
+            tags.push(['g', this.currentGroup]);
+
+            const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
+            this._sendGiftWraps(group.members, rumor, null);
+        } else if (this.currentPM) {
+            tags.push(['p', this.currentPM]);
+            const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
+            const wrapped = this.nip59WrapEvent(rumor, this.privkey, this.currentPM, null);
+            this.sendDMToRelays(['EVENT', wrapped]);
+        }
+    }
+
+    // Handle an incoming typing indicator
+    handleTypingIndicatorEvent(parsed, senderPubkey) {
+        if (!parsed || senderPubkey === this.pubkey) return;
+
+        // Determine the conversation key for this indicator
+        let convKey;
+        if (parsed.groupId) {
+            convKey = this.getGroupConversationKey(parsed.groupId);
+        } else {
+            convKey = this.getPMConversationKey(senderPubkey);
+        }
+
+        if (!this.typingUsers.has(convKey)) {
+            this.typingUsers.set(convKey, new Map());
+        }
+        const convTypers = this.typingUsers.get(convKey);
+
+        if (parsed.status === 'stop') {
+            const entry = convTypers.get(senderPubkey);
+            if (entry && entry.timeout) clearTimeout(entry.timeout);
+            convTypers.delete(senderPubkey);
+        } else {
+            // 'start' – add or refresh
+            const existing = convTypers.get(senderPubkey);
+            if (existing && existing.timeout) clearTimeout(existing.timeout);
+
+            const user = this.users.get(senderPubkey);
+            const nym = user ? this.parseNymFromDisplay(user.nym) : this.getPubkeySuffix(senderPubkey);
+
+            const timeout = setTimeout(() => {
+                convTypers.delete(senderPubkey);
+                this.renderTypingIndicator();
+            }, this._typingExpireMs);
+
+            convTypers.set(senderPubkey, { nym, timeout, timestamp: Date.now() });
+        }
+
+        this.renderTypingIndicator();
+    }
+
+    // Render the typing indicator UI for the current conversation
+    renderTypingIndicator() {
+        const el = document.getElementById('typingIndicator');
+        const avatarsEl = document.getElementById('typingIndicatorAvatars');
+        const textEl = document.getElementById('typingIndicatorText');
+        if (!el || !avatarsEl || !textEl) return;
+
+        // Determine current conversation key
+        let convKey = null;
+        if (this.inPMMode && this.currentGroup) {
+            convKey = this.getGroupConversationKey(this.currentGroup);
+        } else if (this.inPMMode && this.currentPM) {
+            convKey = this.getPMConversationKey(this.currentPM);
+        }
+
+        const convTypers = convKey ? this.typingUsers.get(convKey) : null;
+        const typers = convTypers ? Array.from(convTypers.entries()) : [];
+
+        if (typers.length === 0) {
+            el.classList.remove('active');
+            return;
+        }
+
+        // Build avatars
+        const avatarHtml = typers.slice(0, 3).map(([pk]) => {
+            const src = this.getAvatarUrl(pk);
+            return `<img src="${this.escapeHtml(src)}" data-avatar-pubkey="${pk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pk}.png?set=set1&size=80x80'">`;
+        }).join('');
+        avatarsEl.innerHTML = avatarHtml;
+
+        // Build text
+        if (typers.length === 1) {
+            textEl.textContent = `${typers[0][1].nym} is typing`;
+        } else if (typers.length === 2) {
+            textEl.textContent = `${typers[0][1].nym} and ${typers[1][1].nym} are typing`;
+        } else {
+            textEl.textContent = `${typers.length} people are typing`;
+        }
+
+        el.classList.add('active');
+    }
+
+    // Clear typing indicators for a conversation (e.g. when leaving the view)
+    clearTypingIndicators(convKey) {
+        const convTypers = this.typingUsers.get(convKey);
+        if (convTypers) {
+            for (const [, entry] of convTypers) {
+                if (entry.timeout) clearTimeout(entry.timeout);
+            }
+            convTypers.clear();
+        }
+        this.renderTypingIndicator();
+    }
+
     // Check if a rumor is a Nymchat receipt
     isNymReceipt(rumor) {
         if (!rumor || !rumor.tags) return false;
@@ -12018,6 +12208,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.nymUsers.add(senderPubkey);
             }
 
+            // Handle typing indicators immediately (lightweight, no profile fetch needed)
+            if (this.isTypingIndicator(rumor)) {
+                const parsed = this.parseTypingIndicator(rumor);
+                this.handleTypingIndicatorEvent(parsed, senderPubkey);
+                return;
+            }
+
             // Fetch profile for any PM sender we don't have (await to get nickname)
             if (!isOwn && !this.users.has(senderPubkey)) {
                 await this.fetchProfileDirect(senderPubkey);
@@ -12198,6 +12395,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const peerName = this.getNymFromPubkey(peerPubkey);
             this.addPMConversation(peerName, peerPubkey, tsSec * 1000);
             this.movePMToTop(peerPubkey, tsSec * 1000);
+
+            // Clear typing indicator for sender (they sent a message, so they stopped typing)
+            if (!isOwn) {
+                const convTypers = this.typingUsers.get(conversationKey);
+                if (convTypers && convTypers.has(senderPubkey)) {
+                    const entry = convTypers.get(senderPubkey);
+                    if (entry.timeout) clearTimeout(entry.timeout);
+                    convTypers.delete(senderPubkey);
+                    this.renderTypingIndicator();
+                }
+            }
 
             if (this.inPMMode && this.currentPM === peerPubkey) {
                 this.displayMessage(msg);
@@ -12511,6 +12719,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000);
         this._saveGroupConversations();
         this.moveGroupToTop(groupId, tsSec * 1000);
+
+        // Clear typing indicator for sender (they sent a message, so they stopped typing)
+        if (!isOwn) {
+            const convTypers = this.typingUsers.get(groupConvKey);
+            if (convTypers && convTypers.has(senderPubkey)) {
+                const entry = convTypers.get(senderPubkey);
+                if (entry.timeout) clearTimeout(entry.timeout);
+                convTypers.delete(senderPubkey);
+                this.renderTypingIndicator();
+            }
+        }
 
         const senderBlocked = this.blockedUsers.has(senderPubkey) || this.isNymBlocked(msg.author);
         if (this.inPMMode && this.currentGroup === groupId) {
@@ -12971,6 +13190,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentGeohash = null;
         this.userScrolledUp = false;
 
+        // Re-render typing indicator for the new conversation
+        this.renderTypingIndicator();
+
         // Build stacked avatar header
         const otherMembers = group.members.filter(pk => pk !== this.pubkey);
         const headerAvatars = otherMembers.slice(0, 4).map(pk => {
@@ -13303,6 +13525,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentChannel = null;
         this.currentGeohash = null;
         this.userScrolledUp = false;
+
+        // Re-render typing indicator for the new conversation
+        this.renderTypingIndicator();
 
         // Format the nym with pubkey suffix for display
         const known = this.users.get(pubkey);
@@ -16467,6 +16692,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         input.addEventListener('input', (e) => {
             this.handleInputChange(e.target.value);
             this.autoResizeTextarea(e.target);
+            // Signal typing in PM/group mode
+            if (this.inPMMode && e.target.value.trim().length > 0) {
+                this.handleTypingSignal();
+            }
         });
 
         // Use event delegation for channel clicks
@@ -17387,6 +17616,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.hideCommandPalette();
         this.hideAutocomplete();
         this.hideEmojiAutocomplete();
+        this.sendTypingStop();
     }
 
     async sendMessageAnonymous() {
@@ -17432,6 +17662,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.hideCommandPalette();
         this.hideAutocomplete();
         this.hideEmojiAutocomplete();
+        this.sendTypingStop();
     }
 
     handleCommand(command) {
@@ -19270,6 +19501,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.userScrolledUp = false;
         this.clearQuoteReply();
 
+        // Hide typing indicator when leaving PM mode
+        this.renderTypingIndicator();
+
         // Handle geo-relay connections for Bitchat compatibility
         // Clean up previous geo relays if switching away from a geohash channel
         if (previousGeohash && previousGeohash !== geohash) {
@@ -20862,6 +21096,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             dmForwardSecrecyEnabled: localStorage.getItem('nym_dm_fwdsec_enabled') === 'true',
             dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
             readReceiptsEnabled: localStorage.getItem('nym_read_receipts_enabled') !== 'false',  // Enabled by default
+            typingIndicatorsEnabled: localStorage.getItem('nym_typing_indicators_enabled') !== 'false',  // Enabled by default
             pinnedLandingChannel: pinnedLandingChannel,
             nickStyle: localStorage.getItem('nym_nick_style') || 'fancy',
             chatLayout: localStorage.getItem('nym_chat_layout') || 'irc',
@@ -22153,6 +22388,12 @@ async function showSettings() {
         readReceiptsSel.value = nym.settings.readReceiptsEnabled !== false ? 'true' : 'false';
     }
 
+    // Fill in typing indicators toggle
+    const typingIndicatorsSel = document.getElementById('typingIndicatorsSelect');
+    if (typingIndicatorsSel) {
+        typingIndicatorsSel.value = nym.settings.typingIndicatorsEnabled !== false ? 'true' : 'false';
+    }
+
     // Initialize wallpaper UI selection
     initWallpaperUI();
 
@@ -22233,6 +22474,11 @@ async function saveSettings() {
     const readReceiptsEnabled = document.getElementById('readReceiptsSelect').value === 'true';
     nym.settings.readReceiptsEnabled = readReceiptsEnabled;
     localStorage.setItem('nym_read_receipts_enabled', String(readReceiptsEnabled));
+
+    // Read and save typing indicators setting
+    const typingIndicatorsEnabled = document.getElementById('typingIndicatorsSelect').value === 'true';
+    nym.settings.typingIndicatorsEnabled = typingIndicatorsEnabled;
+    localStorage.setItem('nym_typing_indicators_enabled', String(typingIndicatorsEnabled));
 
     // Handle auto-ephemeral setting (hidden, kept for compatibility)
     const autoEphemeral = document.getElementById('autoEphemeralSelect').value === 'true';
@@ -22520,7 +22766,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.44.159 ═══<br/>
+═══ Nymchat v3.45.159 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -23233,6 +23479,7 @@ async function nostrSettingsSave() {
             dmForwardSecrecyEnabled: !!nym.settings.dmForwardSecrecyEnabled,
             dmTTLSeconds: nym.settings.dmTTLSeconds || 86400,
             readReceiptsEnabled: nym.settings.readReceiptsEnabled !== false,
+            typingIndicatorsEnabled: nym.settings.typingIndicatorsEnabled !== false,
             nickStyle: nym.settings.nickStyle || 'fancy',
             colorMode: localStorage.getItem('nym_color_mode') || 'auto',
             wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'none',
@@ -23618,6 +23865,12 @@ function applyNostrSettings(s) {
     if (typeof s.readReceiptsEnabled === 'boolean') {
         nym.settings.readReceiptsEnabled = s.readReceiptsEnabled;
         localStorage.setItem('nym_read_receipts_enabled', String(s.readReceiptsEnabled));
+    }
+
+    // Typing indicators
+    if (typeof s.typingIndicatorsEnabled === 'boolean') {
+        nym.settings.typingIndicatorsEnabled = s.typingIndicatorsEnabled;
+        localStorage.setItem('nym_typing_indicators_enabled', String(s.typingIndicatorsEnabled));
     }
 
     // Nick style
