@@ -1053,6 +1053,7 @@ class NYM {
         this._scrollRAF = null;
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
+        this.deletedEventIds = new Set();
         this.pendingDMs = new Map();
         this.dmRetryInterval = null;
         this.dmRetryCheckMs = 5000;
@@ -6791,6 +6792,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 "#k": ["20000"],
                 since: since1h,
                 limit: this.channelMessageLimit
+            },
+            {
+                kinds: [5],
+                since: since1h,
+                limit: 50
             }
         ];
 
@@ -7154,6 +7160,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             { kinds: [30078], "#t": ["nym-presence"], limit: 100 },
             { kinds: [7], "#k": ["20000"], since: since1h, limit: 100 },
             { kinds: [7], "#k": ["1059"], limit: 100 },
+            { kinds: [5], since: since1h, limit: 100 },
             { kinds: [30078], "#d": ["nym-shop-active"], limit: 100 },
             { kinds: [9735], limit: 100 }
         ];
@@ -9351,7 +9358,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } catch (_) { }
 
         const is30078Fanout = evt && evt.kind === 30078 && evt.tags && evt.tags.some(t => t[0] === 't' && ['nym-poll', 'nym-poll-vote', 'nym-presence'].includes(t[1]));
-        const wideFanout = evt && (evt.kind === 0 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
 
         if (wideFanout) {
             // Send to every connected relay for maximum propagation
@@ -10052,6 +10059,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } else if (event.kind === 7) {
             // Handle reactions (NIP-25)
             this.handleReaction(event);
+        } else if (event.kind === 5) {
+            // Handle deletion events (NIP-09)
+            this.handleDeletionEvent(event);
         } else if (event.kind === 9735) {
             // Check if this is a shop zap receipt
             const pTag = event.tags.find(t => t[0] === 'p');
@@ -11062,6 +11072,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 }
             }
 
+            // For 1:1 PM messages: send reaction as gift wrap to the peer so it stays private
+            if (messageEl.dataset.isPM === '1' && !groupId && this.privkey && this.currentPM) {
+                const now = Math.floor(Date.now() / 1000);
+                const reactionRumor = {
+                    kind: 7,
+                    created_at: now,
+                    tags: [['e', messageId], ['p', targetPubkey], ['k', '1059']],
+                    content: emoji,
+                    pubkey: this.pubkey
+                };
+                // Gift wrap to both ourselves and the peer
+                this._sendGiftWraps([this.pubkey, this.currentPM], reactionRumor, null);
+                this.addToRecentEmojis(emoji);
+                return;
+            }
+
             const signedEvent = await this.signEvent(event);
 
             if (signedEvent) {
@@ -11874,6 +11900,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             if (this.inPMMode && this.currentPM === recipientPubkey) {
                 this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
+                // Force auto-scroll to bottom after sending own PM
+                this._scheduleScrollToBottom();
             }
             return true;
         }
@@ -11951,6 +11979,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             if (this.inPMMode && this.currentPM === recipientPubkey) {
                 this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
+                // Force auto-scroll to bottom after sending own PM
+                this._scheduleScrollToBottom();
             }
             return true;
         }
@@ -12227,6 +12257,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 return;
             }
 
+            // Handle 1:1 PM reactions (kind 7 gift-wrapped without group tag)
+            if (rumor.kind === 7) {
+                const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
+                if (eTag) {
+                    const reactionMessageId = eTag[1];
+                    const emoji = rumor.content;
+                    if (emoji) {
+                        const reactorNym = this.getNymFromPubkey(senderPubkey);
+                        if (!this.reactions.has(reactionMessageId)) this.reactions.set(reactionMessageId, new Map());
+                        const msgReactions = this.reactions.get(reactionMessageId);
+                        if (!msgReactions.has(emoji)) msgReactions.set(emoji, new Map());
+                        msgReactions.get(emoji).set(senderPubkey, reactorNym);
+                        this.updateMessageReactions(reactionMessageId);
+                    }
+                }
+                return;
+            }
+
             // Determine the peer for the conversation
             const rumorPTags = (rumor.tags || []).filter(t => Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string').map(t => t[1]);
             let peerPubkey = null;
@@ -12241,7 +12289,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
 
             // Deduplicate within the correct conversation
-            const list = this.pmMessages.get(conversationKey);
+            let list = this.pmMessages.get(conversationKey);
             if (list.some(m => m.id === event.id)) return;
 
             const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
@@ -12409,6 +12457,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             if (this.inPMMode && this.currentPM === peerPubkey) {
                 this.displayMessage(msg);
+                // Force auto-scroll to bottom for PM messages
+                this._scheduleScrollToBottom();
                 // Send READ receipt if viewing the conversation
                 if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
                     this.sendBitchatReceipt(parsed.messageId, 0x02, senderPubkey); // 0x02 = READ
@@ -12735,6 +12785,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (this.inPMMode && this.currentGroup === groupId) {
             // displayMessage already filters blocked senders; no extra check needed here
             this.displayMessage(msg);
+            // Force auto-scroll to bottom for group messages
+            this._scheduleScrollToBottom();
         } else {
             // Always notify for non-own, non-historical, non-blocked messages
             if (!msg.isHistorical && !isOwn && !senderBlocked) {
@@ -13586,9 +13638,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     loadPMMessages(conversationKey) {
         const container = document.getElementById('messagesContainer');
 
-        // Skip reload if already viewing this PM conversation
+        // Skip reload if already viewing this PM conversation,
+        // but force re-render if DOM is empty while we have stored messages
         if (container.dataset.lastChannel === conversationKey) {
-            return;
+            const storedCount = (this.pmMessages.get(conversationKey) || []).length;
+            const domCount = container.querySelectorAll('.message[data-message-id]').length;
+            if (storedCount === 0 || domCount > 0) {
+                return;
+            }
+            // Messages exist but DOM is empty — fall through to re-render
         }
 
         // Cache current channel/PM DOM before switching
@@ -13734,21 +13792,75 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const signedEvent = await this.signEvent(event);
             this.sendToRelay(['EVENT', signedEvent]);
 
+            // Track deleted event ID
+            this.deletedEventIds.add(messageId);
+
             // Remove message from DOM
             const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
             if (messageEl) {
                 messageEl.remove();
             }
 
-            // Remove message from stored messages
+            // Remove message from stored channel messages
             this.messages.forEach((msgs, channel) => {
                 const idx = msgs.findIndex(m => m.id === messageId);
                 if (idx !== -1) {
                     msgs.splice(idx, 1);
                 }
             });
+
+            // Remove message from stored PM messages
+            this.pmMessages.forEach((msgs, convKey) => {
+                const idx = msgs.findIndex(m => m.id === messageId);
+                if (idx !== -1) {
+                    msgs.splice(idx, 1);
+                    this.channelDOMCache.delete(convKey);
+                }
+            });
         } catch (error) {
             this.displaySystemMessage('Failed to delete message: ' + error.message);
+        }
+    }
+
+    handleDeletionEvent(event) {
+        // NIP-09: Deletion events reference messages to delete via 'e' tags
+        const eTags = (event.tags || []).filter(t => Array.isArray(t) && t[0] === 'e' && t[1]);
+        if (eTags.length === 0) return;
+
+        for (const eTag of eTags) {
+            const deletedId = eTag[1];
+
+            // Track deleted event ID to prevent re-displaying
+            this.deletedEventIds.add(deletedId);
+
+            // Prune if too large
+            if (this.deletedEventIds.size > 5000) {
+                const arr = Array.from(this.deletedEventIds);
+                this.deletedEventIds = new Set(arr.slice(-4000));
+            }
+
+            // Remove from DOM
+            const messageEl = document.querySelector(`[data-message-id="${deletedId}"]`);
+            if (messageEl) {
+                messageEl.remove();
+            }
+
+            // Remove from channel messages
+            this.messages.forEach((msgs, channel) => {
+                const idx = msgs.findIndex(m => m.id === deletedId);
+                if (idx !== -1) {
+                    msgs.splice(idx, 1);
+                }
+            });
+
+            // Remove from PM messages
+            this.pmMessages.forEach((msgs, convKey) => {
+                const idx = msgs.findIndex(m => m.id === deletedId);
+                if (idx !== -1) {
+                    msgs.splice(idx, 1);
+                    this.channelDOMCache.delete(convKey);
+                }
+            });
         }
     }
 
@@ -15277,6 +15389,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     displayMessage(message) {
+        // Check if message has been deleted (kind 5)
+        if (this.deletedEventIds.has(message.id)) {
+            return; // Don't display deleted messages
+        }
+
         // Check if message is from a blocked user (from stored state OR by pubkey)
         if (message.blocked || this.blockedUsers.has(message.pubkey) || this.isNymBlocked(message.author)) {
             return; // Don't display blocked messages
@@ -15337,7 +15454,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Don't re-add if already displayed in DOM
         // For group messages use the shared nymMessageId so duplicates from multiple relays are caught
-        const _dedupeId = (message.isGroup && message.nymMessageId) ? message.nymMessageId : message.id;
+        const _dedupeId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         if (document.querySelector(`[data-message-id="${_dedupeId}"]`)) {
             return;
         }
@@ -15433,8 +15550,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             messageEl.className = classes.join(' ');
-            // For group messages use nymMessageId as the stable shared key (gift wrap IDs differ per recipient)
-            messageEl.dataset.messageId = (message.isGroup && message.nymMessageId) ? message.nymMessageId : message.id;
+            // For PM messages use nymMessageId as the stable shared key (gift wrap IDs differ per recipient)
+            messageEl.dataset.messageId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             messageEl.dataset.author = message.author;
             messageEl.dataset.pubkey = message.pubkey;
             messageEl.dataset.rawContent = message.content;
@@ -15450,10 +15567,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
 
             // Check if this is a valid event ID (not temporary PM ID)
-            // Group messages use nymMessageId (UUID) as the shared reaction key, so accept those too
-            const isValidEventId = (message.isGroup && message.nymMessageId)
+            // PM messages use nymMessageId (UUID) as the shared reaction key, so accept those too
+            const isValidEventId = (message.isPM && message.nymMessageId)
                 || (message.id && /^[0-9a-f]{64}$/i.test(message.id));
-            const reactionMsgId = (message.isGroup && message.nymMessageId) ? message.nymMessageId : message.id;
+            const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             const isMobile = window.innerWidth <= 768;
 
             // Show reaction button for all messages with valid IDs (including PMs)
@@ -15712,8 +15829,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Add existing reactions if any (for both channel messages and PMs)
-        if (message.id && this.reactions.has(message.id)) {
-            this.updateMessageReactions(message.id);
+        // For PMs, reactions are keyed by nymMessageId (shared across recipients)
+        const reactionKey = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
+        if (reactionKey && this.reactions.has(reactionKey)) {
+            this.updateMessageReactions(reactionKey);
         }
 
         // Add zaps display - check if this message has any zaps
@@ -19752,6 +19871,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const messages = this.messages.get(storageKey) || [];
 
         return messages.filter(msg => {
+            if (this.deletedEventIds.has(msg.id)) return false;
             if (this.blockedUsers.has(msg.pubkey) || this.isNymBlocked(msg.author) || msg.blocked) return false;
             if (this.hasBlockedKeyword(msg.content)) return false;
             if (this.isSpamMessage(msg.content)) return false;
@@ -19764,6 +19884,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const pmMessages = this.pmMessages.get(conversationKey) || [];
 
         return pmMessages.filter(msg => {
+            // Check if message has been deleted
+            if (this.deletedEventIds.has(msg.id)) return false;
             // Check if message is from blocked user
             if (this.blockedUsers.has(msg.pubkey) || msg.blocked) return false;
             // Check if message content is spam
@@ -22766,7 +22888,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.45.161 ═══<br/>
+═══ Nymchat v3.45.162 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
