@@ -24,24 +24,24 @@
         state.steps = [
             {
                 title: 'Nymchat Tutorial',
-                body: 'Take a quick tour so you know what’s where. You can skip anytime. And use the /help command in any channel to learn more.',
+                body: 'Take a quick tour so you know where important functionality is across the app. You can skip anytime. And use the /help command in any channel to learn more.',
                 selector: null
             },
             {
                 title: 'Your Nym',
-                body: 'Tap here to edit your nickname for this session.',
+                body: 'Tap here to edit the nickname, avatar, banner, and bio for your Nym in this session. View the private key (nsec) of the Nym and save it if you would like to reuse this same Nym identity to login with it across devices.',
                 selector: '.nym-display',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Connection',
-                body: 'The current relay connection status.',
+                body: 'The current relay connection status. Tap here to view network stats such as the average latency, number of received events, and bandwidth use',
                 selector: '.status-indicator',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Main Menu',
-                body: 'Get flair addon packs to change the styling of your messages and nickname. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start anew.',
+                body: 'Get flair addon packs to change the styling of your messages and nickname. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start a new identity.',
                 selector: (window.innerWidth > 768 ? '.header-actions' : '.sidebar-actions'),
                 onBefore: () => { if (window.innerWidth <= 768) return ensureSidebarOpenOnMobile(); }
             },
@@ -59,13 +59,13 @@
             },
             {
                 title: 'Private Messages',
-                body: 'Your one‑on‑one, end-to-end encrypted messages live here.',
+                body: 'Your end-to-end encrypted one‑on‑one and group chat messages live here.',
                 selector: '#pmList',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Active Nyms',
-                body: 'See who is currently active. Tap a nym to PM them.',
+                body: 'See who is currently active. Tap a nym to PM them and more.',
                 selector: '#userList',
                 onBefore: ensureSidebarOpenOnMobile
             },
@@ -22520,7 +22520,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.44.157 ═══<br/>
+═══ Nymchat v3.44.158 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
