@@ -21099,7 +21099,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             typingIndicatorsEnabled: localStorage.getItem('nym_typing_indicators_enabled') !== 'false',  // Enabled by default
             pinnedLandingChannel: pinnedLandingChannel,
             nickStyle: localStorage.getItem('nym_nick_style') || 'fancy',
-            chatLayout: localStorage.getItem('nym_chat_layout') || 'irc',
+            chatLayout: localStorage.getItem('nym_chat_layout') || 'bubbles',
             lowDataMode: localStorage.getItem('nym_low_data_mode') === 'true',
             textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10)
         };
@@ -22664,7 +22664,7 @@ function clearLocalStorageCache() {
     // Re-apply defaults visually
     nym.applyColorMode();
     nym.applyWallpaper('none');
-    applyMessageLayout('irc');
+    applyMessageLayout('bubbles');
     nym.updateChannelPins();
     nym.applyHiddenChannels();
 
@@ -22766,7 +22766,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.45.160 ═══<br/>
+═══ Nymchat v3.45.161 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -23431,6 +23431,28 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Restore persisted groups for this identity before relay history arrives
     nym._loadGroupConversations();
 
+    // Update isOwn for messages that were loaded before this identity was applied
+    nym.messages.forEach(channelMessages => {
+        channelMessages.forEach(msg => {
+            const shouldBeOwn = msg.pubkey === pubkey;
+            if (msg.isOwn !== shouldBeOwn) {
+                msg.isOwn = shouldBeOwn;
+                const el = document.querySelector(`[data-message-id="${msg.id}"]`);
+                if (el) el.classList.toggle('self', shouldBeOwn);
+            }
+        });
+    });
+    nym.pmMessages?.forEach(pmMessages => {
+        pmMessages.forEach(msg => {
+            const shouldBeOwn = msg.pubkey === pubkey;
+            if (msg.isOwn !== shouldBeOwn) {
+                msg.isOwn = shouldBeOwn;
+                const el = document.querySelector(`[data-message-id="${msg.id}"]`);
+                if (el) el.classList.toggle('self', shouldBeOwn);
+            }
+        });
+    });
+
     // Refresh relay subscriptions with the new pubkey so purchase/flair
     // events for this identity flow through the main event handler
     nym.resubscribeAllRelays();
@@ -23969,31 +23991,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cb) cb.checked = true;
     }
 
-    // Scale all logo-ascii elements to fit inside their containers at any resolution
-    function scaleLogoToFit() {
-        document.querySelectorAll('.logo-ascii').forEach(logo => {
-            // Reset transform to measure natural size
-            logo.style.transform = '';
-            const container = logo.parentElement;
-            const containerWidth = container.clientWidth;
-            const containerHeight = container.clientHeight;
-            const logoWidth = logo.scrollWidth;
-            const logoHeight = logo.scrollHeight;
-            if (containerWidth > 0 && logoWidth > 0) {
-                const scaleX = containerWidth / logoWidth;
-                const scaleY = containerHeight > 0 && logoHeight > containerHeight
-                    ? containerHeight / logoHeight
-                    : Infinity;
-                const scale = Math.min(scaleX, scaleY, 1);
-                if (scale < 1) {
-                    logo.style.transformOrigin = 'top center';
-                    logo.style.transform = `scale(${scale})`;
-                }
-            }
-        });
-    }
-    scaleLogoToFit();
-    window.addEventListener('resize', scaleLogoToFit);
+    // Scale logo-ascii to fit inside sidebar at any resolution
+    (function scaleLogoToFit() {
+        const logo = document.querySelector('.sidebar-header .logo-ascii');
+        if (!logo) return;
+        const container = logo.parentElement;
+        const containerWidth = container.clientWidth;
+        const logoNaturalWidth = logo.scrollWidth;
+        if (logoNaturalWidth > containerWidth && containerWidth > 0) {
+            const scale = containerWidth / logoNaturalWidth;
+            logo.style.fontSize = (parseFloat(getComputedStyle(logo).fontSize) * scale) + 'px';
+        }
+    })();
 
     // Pre-connect to a broadcast relay for instant connection
     async function preConnect() {

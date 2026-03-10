@@ -967,21 +967,21 @@
                 <div class="form-group">
                     <label class="form-label">Message Layout</label>
                     <div class="layout-grid" id="layoutGrid">
-                        <div class="layout-option selected" data-layout="irc" onclick="selectMessageLayout('irc')">
-                            <div class="layout-preview layout-preview-irc">
-                                <div class="layout-line"><span class="lp-time">12:01</span> <span class="lp-nick">&lt;alice&gt;</span> <span class="lp-msg">hey there!</span></div>
-                                <div class="layout-line"><span class="lp-time">12:02</span> <span class="lp-nick lp-self">&lt;you&gt;</span> <span class="lp-msg">hello!</span></div>
-                                <div class="layout-line"><span class="lp-time">12:03</span> <span class="lp-nick">&lt;bob&gt;</span> <span class="lp-msg">what's up?</span></div>
-                            </div>
-                            <span class="layout-label">IRC (Default)</span>
-                        </div>
-                        <div class="layout-option" data-layout="bubbles" onclick="selectMessageLayout('bubbles')">
+                        <div class="layout-option selected" data-layout="bubbles" onclick="selectMessageLayout('bubbles')">
                             <div class="layout-preview layout-preview-bubbles">
-                                <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">alice</span><span class="lp-bubble-text">hey there!</span></div>
-                                <div class="lp-bubble lp-bubble-self"><span class="lp-bubble-text">hello!</span></div>
-                                <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">bob</span><span class="lp-bubble-text">what's up?</span></div>
+                                <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">&lt;alice#e45f&gt;</span><span class="lp-bubble-text">hey there!</span></div>
+                                <div class="lp-bubble lp-bubble-self"><span class="lp-bubble-nick">&lt;you#6si9&gt;</span><span class="lp-bubble-text">hello!</span></div>
+                                <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">&lt;bob#2t5g&gt;</span><span class="lp-bubble-text">what's up?</span></div>
                             </div>
-                            <span class="layout-label">Bubbles</span>
+                            <span class="layout-label">Bubbles (Default)</span>
+                        </div>
+                        <div class="layout-option" data-layout="irc" onclick="selectMessageLayout('irc')">
+                            <div class="layout-preview layout-preview-irc">
+                                <div class="layout-line"><span class="lp-time">12:01</span> <span class="lp-nick">&lt;alice#e45f&gt;</span> <span class="lp-msg">hey there!</span></div>
+                                <div class="layout-line"><span class="lp-time">12:02</span> <span class="lp-nick lp-self">&lt;you#6si9&gt;</span> <span class="lp-msg">hello!</span></div>
+                                <div class="layout-line"><span class="lp-time">12:03</span> <span class="lp-nick">&lt;bob#2t5g&gt;</span> <span class="lp-msg">what's up?</span></div>
+                            </div>
+                            <span class="layout-label">IRC Style</span>
                         </div>
                     </div>
                     <div class="form-hint">Choose between classic IRC-style or modern chat bubbles</div>

@@ -194,10 +194,8 @@ body::after {
     margin-bottom: 8px;
     font-family: monospace;
     white-space: pre;
-    overflow: visible;
+    overflow: hidden;
     opacity: 0.9;
-    display: inline-block;
-    max-width: 100%;
 }
 
 .nym-display {
@@ -2117,10 +2115,11 @@ body.light-mode .pubkey-slideout-copy:hover {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: safe center;
     box-shadow: none;
     animation: none;
     margin: 0px !important;
+    overflow-y: auto;
 }
 
 .setup-modal-header {
@@ -6784,7 +6783,8 @@ body.light-mode .wallpaper-preview.wallpaper-diamonds {
 }
 
 .layout-option {
-    flex: 1;
+    flex: 1 1 0;
+    min-width: 0;
     cursor: pointer;
     border-radius: var(--radius-sm);
     border: 2px solid var(--glass-border);
@@ -6862,7 +6862,7 @@ body.light-mode .layout-preview {
 }
 
 .lp-bubble-other {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.14);
     align-self: flex-start;
     border-bottom-left-radius: 2px;
 }
