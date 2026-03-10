@@ -23969,19 +23969,31 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cb) cb.checked = true;
     }
 
-    // Scale logo-ascii to fit inside sidebar at any resolution
-    (function scaleLogoToFit() {
-        const logo = document.querySelector('.logo-ascii');
-        if (!logo) return;
-        const container = logo.parentElement;
-        const containerWidth = container.clientWidth;
-        const logoNaturalWidth = logo.scrollWidth;
-        if (logoNaturalWidth > containerWidth && containerWidth > 0) {
-            const scale = containerWidth / logoNaturalWidth;
-            logo.style.transformOrigin = 'top center';
-            logo.style.transform = `scaleX(${scale})`;
-        }
-    })();
+    // Scale all logo-ascii elements to fit inside their containers at any resolution
+    function scaleLogoToFit() {
+        document.querySelectorAll('.logo-ascii').forEach(logo => {
+            // Reset transform to measure natural size
+            logo.style.transform = '';
+            const container = logo.parentElement;
+            const containerWidth = container.clientWidth;
+            const containerHeight = container.clientHeight;
+            const logoWidth = logo.scrollWidth;
+            const logoHeight = logo.scrollHeight;
+            if (containerWidth > 0 && logoWidth > 0) {
+                const scaleX = containerWidth / logoWidth;
+                const scaleY = containerHeight > 0 && logoHeight > containerHeight
+                    ? containerHeight / logoHeight
+                    : Infinity;
+                const scale = Math.min(scaleX, scaleY, 1);
+                if (scale < 1) {
+                    logo.style.transformOrigin = 'top center';
+                    logo.style.transform = `scale(${scale})`;
+                }
+            }
+        });
+    }
+    scaleLogoToFit();
+    window.addEventListener('resize', scaleLogoToFit);
 
     // Pre-connect to a broadcast relay for instant connection
     async function preConnect() {

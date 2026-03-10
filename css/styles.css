@@ -194,8 +194,10 @@ body::after {
     margin-bottom: 8px;
     font-family: monospace;
     white-space: pre;
-    overflow: hidden;
+    overflow: visible;
     opacity: 0.9;
+    display: inline-block;
+    max-width: 100%;
 }
 
 .nym-display {
