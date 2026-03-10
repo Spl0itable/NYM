@@ -689,9 +689,10 @@
                             style="padding: 8px 12px; background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border, var(--border-color)); border-left: none; border-radius: 0 12px 12px 0; font-size: 14px; white-space: nowrap; cursor: pointer; position: relative;"
                             title="Click to view full pubkey"></span>
                     </div>
-                    <div class="form-hint">Your ephemeral pseudonym nickname for this session</div>
+                    <div class="form-hint">Your ephemeral pseudonym nickname for this session. Click the # and four characters to the right to reveal this Nym's full pubkey.</div>
                     <div class="pubkey-slideout" id="pubkeySlideout">
                         <div class="pubkey-slideout-label">Full Hex Pubkey</div>
+                        <div class="form-hint">This is the current Nym's full pubkey. A "pubkey" aka "public key" is a part of a keypair in cryptography. A keypair is two connected codes: your public key (like a username that identifies you to everyone) and your private key (like a password that only you should know and use to prove you're really you). You use this pubkey for others to find you on Nymchat and you use other people's pubkeys to find them.</div>
                         <div class="pubkey-slideout-value" id="pubkeySlideoutValue"></div>
                         <button type="button" class="pubkey-slideout-copy" id="pubkeySlideoutCopy">Copy</button>
                     </div>
