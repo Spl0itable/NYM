@@ -59,7 +59,7 @@
             },
             {
                 title: 'Private Messages',
-                body: 'Your end-to-end encrypted one‑on‑one and group chat messages live here.',
+                body: 'Your end-to-end encrypted one‑on‑one and group chat messages live here. Tap the + symbol to start a new PM or group chat.',
                 selector: '#pmList',
                 onBefore: ensureSidebarOpenOnMobile
             },
@@ -22520,7 +22520,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.44.158 ═══<br/>
+═══ Nymchat v3.44.159 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
