@@ -5735,7 +5735,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         });
 
         document.getElementById('ctxReact').addEventListener('click', () => {
-            if (this.contextMenuData && this.contextMenuData.messageId) {
+            if (this.contextMenuData && this.contextMenuData.reactionId) {
                 this.closeContextMenu();
 
                 // Use a delay to ensure context menu closes first
@@ -5749,7 +5749,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     tempButton.style.pointerEvents = 'none';
                     document.body.appendChild(tempButton);
 
-                    this.showEnhancedReactionPicker(this.contextMenuData.messageId, tempButton);
+                    this.showEnhancedReactionPicker(this.contextMenuData.reactionId, tempButton);
 
                     // Remove temp button after modal is created
                     setTimeout(() => tempButton.remove(), 100);
@@ -5892,7 +5892,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
-    showContextMenu(e, nym, pubkey, content = null, messageId = null, profileOnly = false) {
+    showContextMenu(e, nym, pubkey, content = null, messageId = null, profileOnly = false, reactionId = null) {
         e.preventDefault();
         e.stopPropagation();
 
@@ -5904,7 +5904,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const suffix = this.getPubkeySuffix(pubkey);
         const fullNym = `${baseNym}#${suffix}`;
 
-        this.contextMenuData = { nym: baseNym, pubkey, content, messageId };
+        // reactionId is the DOM-facing ID (nymMessageId for PMs), messageId is the real event ID
+        this.contextMenuData = { nym: baseNym, pubkey, content, messageId, reactionId: reactionId || messageId };
 
         // Populate banner if available
         const ctxBannerImg = document.getElementById('ctxBannerImg');
@@ -7582,7 +7583,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const pmMessages = this.pmMessages.get(conversationKey) || [];
 
             pmMessages.forEach(message => {
-                if (!document.querySelector(`[data-message-id="${message.id}"]`)) {
+                const pmDomId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
+                if (!document.querySelector(`[data-message-id="${pmDomId}"]`)) {
                     this.displayMessage(message);
                 }
             });
@@ -11839,7 +11841,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const bitchatRumor = {
                     kind: 14,
                     created_at: now,
-                    tags: [],  // Bitchat uses empty tags in rumor!
+                    tags: [['x', nymMessageId]],  // Include nymMessageId so reactions match across formats
                     content: encoded.content,
                     pubkey: this.pubkey
                 };
@@ -11883,7 +11885,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
                 bitchatMessageId,  // For tracking Bitchat delivery/read receipts
-                nymMessageId: isKnownBitchat ? null : nymMessageId,  // For tracking Nymchat delivery/read receipts
+                nymMessageId,  // Always store for reaction matching (peer may react using nymMessageId from x tag)
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
             // Cap PM conversations at 100 messages
@@ -12320,7 +12322,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                                     this.updateGroupReaderAvatars(msg.nymMessageId);
                                 } else {
                                     // 1:1 PM: update checkmark in-place
-                                    const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
+                                    // Use nymMessageId for DOM lookup since data-message-id uses it for PMs
+                                    const domId = msg.nymMessageId || msg.id;
+                                    const msgEl = document.querySelector(`[data-message-id="${domId}"]`);
                                     if (msgEl) {
                                         let statusEl = msgEl.querySelector('.delivery-status');
                                         if (!statusEl) {
@@ -12360,7 +12364,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                                 // Invalidate cached DOM for this conversation since status changed
                                 this.channelDOMCache.delete(convKey);
                                 // Update in-place without re-rendering to avoid flicker
-                                const msgEl = document.querySelector(`[data-message-id="${msg.id}"]`);
+                                // Use nymMessageId for DOM lookup since data-message-id uses it for PMs
+                                const domId = msg.nymMessageId || msg.id;
+                                const msgEl = document.querySelector(`[data-message-id="${domId}"]`);
                                 if (msgEl) {
                                     let statusEl = msgEl.querySelector('.delivery-status');
                                     if (!statusEl) {
@@ -12386,7 +12392,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Content-based dedup for dual-wrapped messages: when nymchat sends
             // both bitchat + nymchat format to unknown peers, the recipient may
             // decrypt both. Deduplicate by sender + content + close timestamp.
-            if (list.some(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5)) return;
+            // If the existing message is missing nymMessageId (arrived as bitchat format
+            // first), backfill it from the nymchat duplicate so reactions can match.
+            const nymMsgIdFromRumor = this.getNymMessageId(rumor);
+            const dupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5);
+            if (dupMsg) {
+                if (!dupMsg.nymMessageId && nymMsgIdFromRumor) {
+                    dupMsg.nymMessageId = nymMsgIdFromRumor;
+                    // Update the DOM element's data-message-id to use nymMessageId
+                    const oldEl = document.querySelector(`[data-message-id="${dupMsg.id}"]`);
+                    if (oldEl) {
+                        oldEl.dataset.messageId = nymMsgIdFromRumor;
+                    }
+                    this.channelDOMCache.delete(conversationKey);
+                }
+                return;
+            }
 
             // Silently drop channel invitations for blocked channels
             if (messageContent && messageContent.includes('Channel Invitation:')) {
@@ -12402,8 +12423,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Get sender name from kind 0 profile (not from rumor tags)
             const senderName = this.getNymFromPubkey(senderPubkey);
 
-            // Extract Nymchat message ID from rumor tags
-            const nymMsgId = this.getNymMessageId(rumor);
+            // Use nymMessageId already extracted above (during dedup check)
+            const nymMsgId = nymMsgIdFromRumor;
 
             const msg = {
                 id: event.id,                                  // keep outer id for reactions/zaps
@@ -15723,7 +15744,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 authorSpan.addEventListener('click', (e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    this.showContextMenu(e, displayAuthor, message.pubkey, message.content, message.id);
+                    const ctxReactionId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
+                    this.showContextMenu(e, displayAuthor, message.pubkey, message.content, message.id, false, ctxReactionId);
                     return false;
                 });
             }
@@ -15833,6 +15855,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const reactionKey = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         if (reactionKey && this.reactions.has(reactionKey)) {
             this.updateMessageReactions(reactionKey);
+        }
+        // Also check reactions stored under the other key (nymMessageId vs event ID mismatch)
+        if (message.isPM && message.nymMessageId && message.nymMessageId !== message.id && this.reactions.has(message.id)) {
+            // Merge reactions from event-ID key into nymMessageId key
+            const altReactions = this.reactions.get(message.id);
+            if (!this.reactions.has(message.nymMessageId)) this.reactions.set(message.nymMessageId, new Map());
+            const primary = this.reactions.get(message.nymMessageId);
+            for (const [emoji, reactors] of altReactions) {
+                if (!primary.has(emoji)) primary.set(emoji, new Map());
+                for (const [pk, nym] of reactors) primary.get(emoji).set(pk, nym);
+            }
+            this.reactions.delete(message.id);
+            this.updateMessageReactions(message.nymMessageId);
         }
 
         // Add zaps display - check if this message has any zaps
@@ -22888,7 +22923,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.45.162 ═══<br/>
+═══ Nymchat v3.45.163 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -23569,7 +23604,8 @@ function applyNostrLogin(pubkey, secretKey, method) {
             const shouldBeOwn = msg.pubkey === pubkey;
             if (msg.isOwn !== shouldBeOwn) {
                 msg.isOwn = shouldBeOwn;
-                const el = document.querySelector(`[data-message-id="${msg.id}"]`);
+                const pmDomId = (msg.isPM && msg.nymMessageId) ? msg.nymMessageId : msg.id;
+                const el = document.querySelector(`[data-message-id="${pmDomId}"]`);
                 if (el) el.classList.toggle('self', shouldBeOwn);
             }
         });
