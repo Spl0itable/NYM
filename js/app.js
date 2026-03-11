@@ -1084,7 +1084,11 @@ class NYM {
             document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
         }
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
-        if (this.pinnedLandingChannel.type === 'geohash' && this.pinnedLandingChannel.geohash) {
+        if (this.settings.groupChatPMOnlyMode) {
+            // In PM-only mode, don't default to a geohash channel
+            this.currentChannel = null;
+            this.currentGeohash = null;
+        } else if (this.pinnedLandingChannel.type === 'geohash' && this.pinnedLandingChannel.geohash) {
             this.currentChannel = this.pinnedLandingChannel.geohash;
             this.currentGeohash = this.pinnedLandingChannel.geohash;
         } else {
@@ -3382,7 +3386,8 @@ ${code}
                     wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
                     chatLayout: this.settings.chatLayout || 'irc',
                     colorMode: this.getColorMode(),
-                    nickStyle: this.settings.nickStyle || 'fancy'
+                    nickStyle: this.settings.nickStyle || 'fancy',
+                    groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false
                 }
             };
 
@@ -3543,6 +3548,11 @@ ${code}
             if (s.nickStyle) {
                 this.settings.nickStyle = s.nickStyle;
                 localStorage.setItem('nym_nick_style', s.nickStyle);
+            }
+            if (s.groupChatPMOnlyMode !== undefined) {
+                this.settings.groupChatPMOnlyMode = s.groupChatPMOnlyMode;
+                localStorage.setItem('nym_groupchat_pm_only_mode', String(s.groupChatPMOnlyMode));
+                this.applyGroupChatPMOnlyMode(s.groupChatPMOnlyMode);
             }
 
             // Save synced settings to Nostr
@@ -4648,6 +4658,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!geohash || !this.isValidGeohash(geohash)) {
             return;
         }
+
+        // Skip geo relay connections in group chat & PM only mode
+        if (this.settings.groupChatPMOnlyMode) return;
 
         // Multiplexed pool mode: add geo relays to the pool config
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
@@ -6313,20 +6326,26 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this._poolSubscribe();
 
                 // Set initial channel label
-                const channelLabel = `#${this.currentChannel}`;
-                const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
-                document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
+                if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
+                    const channelLabel = `#${this.currentChannel}`;
+                    const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
+                    document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
+                }
 
-                // Switch to pinned landing channel
+                // Switch to pinned landing channel (or PM-only mode landing)
                 setTimeout(() => {
                     if (window.pendingChannel || window.urlChannelRouted) return;
-                    const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
-                    this.currentChannel = '';
-                    this.currentGeohash = '';
-                    if (pinned.type === 'geohash' && pinned.geohash) {
-                        this.switchChannel(pinned.geohash, pinned.geohash);
+                    if (this.settings.groupChatPMOnlyMode) {
+                        this.navigateToLatestPMOrGroup();
                     } else {
-                        this.switchChannel('nym', 'nym');
+                        const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+                        this.currentChannel = '';
+                        this.currentGeohash = '';
+                        if (pinned.type === 'geohash' && pinned.geohash) {
+                            this.switchChannel(pinned.geohash, pinned.geohash);
+                        } else {
+                            this.switchChannel('nym', 'nym');
+                        }
                     }
                 }, 100);
 
@@ -6458,29 +6477,33 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 });
             }
 
-            // Set initial channel label to pinned landing channel
-            const channelLabel = `#${this.currentChannel}`;
-            const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
-            document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
+            // Set initial channel label
+            if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
+                const channelLabel = `#${this.currentChannel}`;
+                const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
+                document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
+            }
 
             // Start subscriptions on all connected relays
             this.subscribeToAllRelays();
 
-            // Switch to the pinned landing channel (geohash only)
-            // Reset current channel so switchChannel doesn't skip via isSameChannel check,
-            // which would prevent geohash coordinates from being displayed on the landing channel
+            // Switch to the pinned landing channel or PM-only mode landing
             setTimeout(() => {
                 // Skip if a URL channel is pending or was already routed
                 if (window.pendingChannel || window.urlChannelRouted) return;
 
-                const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
-                this.currentChannel = '';
-                this.currentGeohash = '';
-
-                if (pinned.type === 'geohash' && pinned.geohash) {
-                    this.switchChannel(pinned.geohash, pinned.geohash);
+                if (this.settings.groupChatPMOnlyMode) {
+                    this.navigateToLatestPMOrGroup();
                 } else {
-                    this.switchChannel('nym', 'nym');
+                    const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+                    this.currentChannel = '';
+                    this.currentGeohash = '';
+
+                    if (pinned.type === 'geohash' && pinned.geohash) {
+                        this.switchChannel(pinned.geohash, pinned.geohash);
+                    } else {
+                        this.switchChannel('nym', 'nym');
+                    }
                 }
             }, 100);
 
@@ -6673,51 +6696,61 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const since1h = Math.floor(Date.now() / 1000) - 3600;
 
-        const filters = [
+        const filters = [];
+
+        // Skip geohash channel subscriptions in group chat & PM only mode
+        if (!this.settings.groupChatPMOnlyMode) {
             // Messages in geohash channels (past 1hr)
-            {
+            filters.push({
                 kinds: [20000],
                 since: since1h,
                 limit: 100,
-            },
+            });
             // Polls and poll votes (kind 30078 with t-tag)
-            {
+            filters.push({
                 kinds: [30078],
                 "#t": ["nym-poll", "nym-poll-vote"],
                 since: since1h,
                 limit: 100,
-            },
-            // Presence broadcasts (away/online status, kind 30078 with d-tag)
-            {
-                kinds: [30078],
-                "#t": ["nym-presence"],
-                limit: 100,
-            },
+            });
             // Reactions for geohash channels
-            {
+            filters.push({
                 kinds: [7],
                 "#k": ["20000"],
                 since: since1h,
                 limit: 100,
-            },
-            // Reactions for PMs
-            {
-                kinds: [7],
-                "#k": ["1059"],
-                limit: 100
-            },
-            // User shop items
-            {
-                kinds: [30078],
-                "#d": ["nym-shop-active"],
-                limit: 100
-            },
-            // Zap receipts
-            {
-                kinds: [9735],
+            });
+            // Delete events
+            filters.push({
+                kinds: [5],
+                since: since1h,
                 limit: 100,
-            }
-        ];
+            });
+        }
+
+        // Presence broadcasts (needed even in PM-only mode for user list)
+        filters.push({
+            kinds: [30078],
+            "#t": ["nym-presence"],
+            limit: 100,
+        });
+        // Reactions for PMs
+        filters.push({
+            kinds: [7],
+            "#k": ["1059"],
+            limit: 100
+        });
+        // User shop items
+        filters.push({
+            kinds: [30078],
+            "#d": ["nym-shop-active"],
+            limit: 100
+        });
+        // Zap receipts
+        filters.push({
+            kinds: [9735],
+            limit: 100,
+        });
 
         if (this.pubkey) {
             filters.push(
@@ -7162,16 +7195,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const subId = "nym-" + Math.random().toString(36).substring(7);
         const since1h = Math.floor(Date.now() / 1000) - 3600;
 
-        const filters = [
-            { kinds: [20000], since: since1h, limit: 100 },
-            { kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 },
+        const filters = [];
+
+        // Skip geohash channel subscriptions in group chat & PM only mode
+        if (!this.settings.groupChatPMOnlyMode) {
+            filters.push(
+                { kinds: [20000], since: since1h, limit: 100 },
+                { kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 },
+                { kinds: [7], "#k": ["20000"], since: since1h, limit: 100 },
+                { kinds: [5], since: since1h, limit: 100 }
+            );
+        }
+
+        filters.push(
             { kinds: [30078], "#t": ["nym-presence"], limit: 100 },
-            { kinds: [7], "#k": ["20000"], since: since1h, limit: 100 },
             { kinds: [7], "#k": ["1059"], limit: 100 },
-            { kinds: [5], since: since1h, limit: 100 },
             { kinds: [30078], "#d": ["nym-shop-active"], limit: 100 },
             { kinds: [9735], limit: 100 }
-        ];
+        );
 
         if (this.pubkey) {
             filters.push(
@@ -9085,7 +9126,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
                 hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
                 textSize: this.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
-                lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true'
+                lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
+                groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false
             };
 
             const settingsEvent = {
@@ -9111,6 +9153,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     discoverChannels() {
+        // Skip channel discovery in group chat & PM only mode
+        if (this.settings.groupChatPMOnlyMode) return;
+
         // Create a mixed array of geohash channels
         const allChannels = [];
 
@@ -9456,6 +9501,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Pre-load messages for user-joined channels using batch subscriptions
     loadJoinedChannelsFromRelays() {
+        // Skip channel loading in group chat & PM only mode
+        if (this.settings.groupChatPMOnlyMode) return;
+
         const channelsToLoad = [];
 
         // Add user-joined channels
@@ -11888,6 +11936,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 }
             }
 
+            // Send a self-wrap so our own message is retrievable from relays after reload.
+            // The outer gift wrap has #p = our pubkey, so our subscription picks it up.
+            if (recipientPubkey !== this.pubkey) {
+                const selfWrapped = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
+                this.sendDMToRelays(['EVENT', selfWrapped]);
+            }
+
             // Show locally
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
@@ -11966,6 +12021,29 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 setTimeout(() => {
                     this.publishDeletionEvent(eventIdToDelete);
                 }, 600000); // 10 minutes
+            }
+
+            // Send a self-wrap so our own message is retrievable from relays after reload.
+            if (recipientPubkey !== this.pubkey) {
+                try {
+                    const selfSealContent = await window.nostr.nip44.encrypt(this.pubkey, JSON.stringify(rumor));
+                    const selfSealUnsigned = {
+                        kind: 13, content: selfSealContent, created_at: this.randomNow(), tags: []
+                    };
+                    const selfSeal = await window.nostr.signEvent(selfSealUnsigned);
+                    const selfEphSk = NT.generateSecretKey();
+                    const selfCkWrap = NT.nip44.getConversationKey(selfEphSk, this.pubkey);
+                    const selfWrapContent = NT.nip44.encrypt(JSON.stringify(selfSeal), selfCkWrap);
+                    const selfWrapUnsigned = {
+                        kind: 1059,
+                        content: selfWrapContent,
+                        created_at: this.randomNow(),
+                        tags: [['p', this.pubkey]]
+                    };
+                    if (expirationTs) selfWrapUnsigned.tags.push(['expiration', String(expirationTs)]);
+                    const selfWrapped = NT.finalizeEvent(selfWrapUnsigned, selfEphSk);
+                    this.sendDMToRelays(['EVENT', selfWrapped]);
+                } catch (_) { /* Self-wrap failed — non-critical */ }
             }
 
             // Show locally
@@ -16453,6 +16531,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const userListContent = document.getElementById('userListContent');
         const currentChannelKey = this.currentGeohash || this.currentChannel;
 
+        // Build set of pubkeys from PM conversations and group chats for PM-only mode filtering
+        let pmOnlyPubkeys = null;
+        if (this.settings.groupChatPMOnlyMode) {
+            pmOnlyPubkeys = new Set();
+            // Add all PM conversation peers
+            this.pmConversations.forEach((conv, pubkey) => {
+                pmOnlyPubkeys.add(pubkey);
+            });
+            // Add all group chat members
+            this.groupConversations.forEach((group) => {
+                if (group.members) {
+                    group.members.forEach(pk => pmOnlyPubkeys.add(pk));
+                }
+            });
+        }
+
         // Get deduplicated users (one entry per pubkey), including inactive
         // Compute effective status without mutating the source user objects
         const uniqueUsers = new Map();
@@ -16460,6 +16554,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const activeThreshold = 300000; // 5 minutes
         this.users.forEach((user, pubkey) => {
             if (!this.blockedUsers.has(user.nym)) {
+                // In PM-only mode, only show users from PMs and group chats
+                if (pmOnlyPubkeys && !pmOnlyPubkeys.has(pubkey)) return;
+
                 if (!uniqueUsers.has(pubkey)) {
                     let effectiveStatus = user.status;
                     if (now - user.lastSeen >= activeThreshold && effectiveStatus !== 'away') {
@@ -21299,6 +21396,82 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         });
     }
 
+    applyGroupChatPMOnlyMode(enabled) {
+        // Hide or show the channels section in the sidebar
+        const channelsSection = document.querySelector('#channelList')?.closest('.nav-section');
+        if (channelsSection) {
+            channelsSection.style.display = enabled ? 'none' : '';
+        }
+
+        if (enabled) {
+            // Navigate to the latest PM/group chat, or show empty state
+            this.navigateToLatestPMOrGroup();
+        } else {
+            // Restore default channel view
+            const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+            if (pinned.type === 'geohash' && pinned.geohash) {
+                this.switchChannel(pinned.geohash, pinned.geohash);
+            } else {
+                this.switchChannel('nym', 'nym');
+            }
+            // Re-discover and subscribe to channels
+            this.discoverChannels();
+            this.loadJoinedChannelsFromRelays();
+        }
+
+        // Update active nyms list
+        this.updateUserList();
+    }
+
+    navigateToLatestPMOrGroup() {
+        // Find the most recent PM or group chat by looking at the PM list DOM order
+        const pmList = document.getElementById('pmList');
+        if (pmList) {
+            const firstItem = pmList.querySelector('.pm-item');
+            if (firstItem) {
+                const groupId = firstItem.dataset.groupId;
+                const pubkey = firstItem.dataset.pubkey;
+                if (groupId) {
+                    this.openGroup(groupId);
+                } else if (pubkey) {
+                    const nym = firstItem.querySelector('.pm-name')?.textContent || 'Unknown';
+                    this.openPM(nym, pubkey);
+                }
+                return;
+            }
+        }
+
+        // No PM or group chat found - show empty state
+        this.showPMOnlyEmptyState();
+    }
+
+    showPMOnlyEmptyState() {
+        this.inPMMode = true;
+        this.currentPM = null;
+        this.currentGroup = null;
+        this.currentChannel = null;
+        this.currentGeohash = null;
+
+        document.getElementById('currentChannel').innerHTML = '<span style="color: var(--text-dim);">No conversation selected</span>';
+        document.getElementById('channelMeta').textContent = '';
+
+        const shareBtn = document.getElementById('shareChannelBtn');
+        if (shareBtn) shareBtn.style.display = 'none';
+
+        document.querySelectorAll('.channel-item').forEach(i => i.classList.remove('active'));
+        document.querySelectorAll('.pm-item').forEach(i => i.classList.remove('active'));
+
+        const container = document.getElementById('messagesContainer');
+        if (container) {
+            container.innerHTML = `
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); text-align: center; padding: 40px;">
+                    <div style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;">+</div>
+                    <div style="font-size: 16px; margin-bottom: 8px;">No conversations yet</div>
+                    <div style="font-size: 13px; opacity: 0.7;">Click the <strong>+</strong> button in the Private Messages section to start a new group chat or private message.</div>
+                </div>`;
+        }
+    }
+
     loadSettings() {
         let pinnedLandingChannel;
         try {
@@ -21323,7 +21496,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             nickStyle: localStorage.getItem('nym_nick_style') || 'fancy',
             chatLayout: localStorage.getItem('nym_chat_layout') || 'bubbles',
             lowDataMode: localStorage.getItem('nym_low_data_mode') === 'true',
-            textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10)
+            textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10),
+            groupChatPMOnlyMode: localStorage.getItem('nym_groupchat_pm_only_mode') === 'true'
         };
     }
 
@@ -22647,6 +22821,23 @@ async function showSettings() {
         if (textSizeValue) textSizeValue.textContent = currentSize + 'px';
     }
 
+    // Initialize group chat & PM only mode toggle
+    const gcPmOnlySelect = document.getElementById('groupChatPMOnlySelect');
+    if (gcPmOnlySelect) {
+        gcPmOnlySelect.value = nym.settings.groupChatPMOnlyMode ? 'true' : 'false';
+        // Show/hide geohash-related settings based on current mode
+        const geohashSettings = document.querySelectorAll('[data-geohash-setting]');
+        geohashSettings.forEach(el => {
+            el.style.display = nym.settings.groupChatPMOnlyMode ? 'none' : '';
+        });
+        gcPmOnlySelect.onchange = function () {
+            const enabled = this.value === 'true';
+            geohashSettings.forEach(el => {
+                el.style.display = enabled ? 'none' : '';
+            });
+        };
+    }
+
     // Initialize low data mode select
     const lowDataSelect = document.getElementById('lowDataModeSelect');
     if (lowDataSelect) {
@@ -22820,6 +23011,19 @@ async function saveSettings() {
     nym.settings.textSize = textSize;
     localStorage.setItem('nym_text_size', String(textSize));
     document.documentElement.style.setProperty('--user-text-size', textSize + 'px');
+
+    // Save group chat & PM only mode
+    const gcPmOnlySelect = document.getElementById('groupChatPMOnlySelect');
+    if (gcPmOnlySelect) {
+        const gcPmOnlyMode = gcPmOnlySelect.value === 'true';
+        const wasGcPmOnly = nym.settings.groupChatPMOnlyMode;
+        nym.settings.groupChatPMOnlyMode = gcPmOnlyMode;
+        localStorage.setItem('nym_groupchat_pm_only_mode', String(gcPmOnlyMode));
+
+        if (gcPmOnlyMode !== wasGcPmOnly) {
+            nym.applyGroupChatPMOnlyMode(gcPmOnlyMode);
+        }
+    }
 
     // Save low data mode
     const lowDataMode = document.getElementById('lowDataModeSelect').value === 'true';
@@ -23004,7 +23208,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.45.168 ═══<br/>
+═══ Nymchat v3.46.168 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -23102,16 +23306,21 @@ async function checkSavedConnection() {
             // Start tutorial if not seen
             window.maybeStartTutorial(false);
 
-            // Resume to last channel from previous session
-            const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
-            if (savedChannel) {
-                try {
-                    const { channel, geohash } = JSON.parse(savedChannel);
-                    if (channel && channel !== nym.currentChannel) {
-                        if (geohash) nym.addChannel(channel, geohash);
-                        nym.switchChannel(channel, geohash || '');
-                    }
-                } catch (e) { }
+            // Resume to last channel from previous session (skip in PM-only mode)
+            if (nym.settings.groupChatPMOnlyMode) {
+                // In PM-only mode, navigate to latest PM/group after relays settle
+                setTimeout(() => nym.navigateToLatestPMOrGroup(), 500);
+            } else {
+                const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
+                if (savedChannel) {
+                    try {
+                        const { channel, geohash } = JSON.parse(savedChannel);
+                        if (channel && channel !== nym.currentChannel) {
+                            if (geohash) nym.addChannel(channel, geohash);
+                            nym.switchChannel(channel, geohash || '');
+                        }
+                    } catch (e) { }
+                }
             }
 
             // Route to channel from URL if present (overrides saved channel)
@@ -23249,18 +23458,22 @@ async function checkSavedConnection() {
             // Start tutorial if not seen
             window.maybeStartTutorial(false);
 
-            // Resume to last channel from previous auto-ephemeral session
-            const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
-            if (savedChannel) {
-                try {
-                    const { channel, geohash } = JSON.parse(savedChannel);
-                    if (channel && channel !== nym.currentChannel) {
-                        if (geohash) {
-                            nym.addChannel(channel, geohash);
+            // Resume to last channel from previous auto-ephemeral session (skip in PM-only mode)
+            if (nym.settings.groupChatPMOnlyMode) {
+                setTimeout(() => nym.navigateToLatestPMOrGroup(), 500);
+            } else {
+                const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
+                if (savedChannel) {
+                    try {
+                        const { channel, geohash } = JSON.parse(savedChannel);
+                        if (channel && channel !== nym.currentChannel) {
+                            if (geohash) {
+                                nym.addChannel(channel, geohash);
+                            }
+                            nym.switchChannel(channel, geohash || '');
                         }
-                        nym.switchChannel(channel, geohash || '');
-                    }
-                } catch (e) { }
+                    } catch (e) { }
+                }
             }
 
             // Route to channel from URL if present (overrides saved channel)
@@ -23753,6 +23966,7 @@ async function nostrSettingsSave() {
             pinnedLandingChannel: nym.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
             textSize: nym.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
             lowDataMode: nym.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
+            groupChatPMOnlyMode: nym.settings.groupChatPMOnlyMode || false,
             pinnedChannels: Array.from(nym.pinnedChannels || []),
             blockedChannels: Array.from(nym.blockedChannels || []),
             userJoinedChannels: Array.from(nym.userJoinedChannels || []),
@@ -24215,6 +24429,13 @@ function applyNostrSettings(s) {
         localStorage.setItem('nym_low_data_mode', String(s.lowDataMode));
     }
 
+    // Group chat & PM only mode
+    if (typeof s.groupChatPMOnlyMode === 'boolean') {
+        nym.settings.groupChatPMOnlyMode = s.groupChatPMOnlyMode;
+        localStorage.setItem('nym_groupchat_pm_only_mode', String(s.groupChatPMOnlyMode));
+        nym.applyGroupChatPMOnlyMode(s.groupChatPMOnlyMode);
+    }
+
     // Pinned channels
     if (Array.isArray(s.pinnedChannels)) {
         nym.pinnedChannels = new Set(s.pinnedChannels);
@@ -24286,6 +24507,12 @@ document.addEventListener('DOMContentLoaded', () => {
     parseUrlChannel();
 
     nym.initialize();
+
+    // Apply group chat & PM only mode on startup (hide channels section)
+    if (nym.settings.groupChatPMOnlyMode) {
+        const channelsSection = document.querySelector('#channelList')?.closest('.nav-section');
+        if (channelsSection) channelsSection.style.display = 'none';
+    }
 
     // Pre-select auto-ephemeral checkbox if previously enabled
     if (localStorage.getItem('nym_auto_ephemeral') === 'true') {

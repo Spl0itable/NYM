@@ -1003,6 +1003,15 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Group Chats & PMs Only Mode</label>
+                    <select class="form-select" id="groupChatPMOnlySelect">
+                        <option value="false">Disabled (show geohash channels)</option>
+                        <option value="true">Enabled (group chats & PMs only)</option>
+                    </select>
+                    <div class="form-hint">Hides all geohash channels and focuses the app on group chats and private messages only. Reduces bandwidth by skipping channel subscriptions.</div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Generate Random Keypair Per Session</label>
                     <select class="form-select" id="randomKeypairSelect">
                         <option value="false">Disabled (reuse same keypair)</option>
@@ -1011,7 +1020,7 @@
                     <div class="form-hint">Generate a new random keypair on every session restart for improved anonymity. When disabled, your generated keypair persists across reloads.</div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" data-geohash-setting>
                     <label class="form-label">Sort Geohash Channels by Proximity</label>
                     <select class="form-select" id="proximitySelect">
                         <option value="false">Disabled</option>
@@ -1135,7 +1144,7 @@
                     <div class="form-hint">Style used when generating random nicknames</div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" data-geohash-setting>
                     <label class="form-label">Pinned Landing Channel</label>
                     <div style="position: relative;">
                         <input type="text" class="form-control" id="pinnedLandingChannelSearch"
@@ -1170,7 +1179,7 @@
                     </div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" data-geohash-setting>
                     <label class="form-label">Hide All Non-Pinned Channels</label>
                     <select class="form-select" id="hideNonPinnedSelect">
                         <option value="false">Disabled</option>
@@ -1179,14 +1188,14 @@
                     <div class="form-hint">When enabled, only your pinned channels will appear in the sidebar</div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" data-geohash-setting>
                     <label class="form-label">Hidden Channels</label>
                     <div class="blocked-list" id="hiddenChannelsList">
                         <div style="color: var(--text-dim); font-size: 12px;">No hidden channels</div>
                     </div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" data-geohash-setting>
                     <label class="form-label">Blocked Channels</label>
                     <div class="blocked-list" id="blockedChannelsList">
                         <div style="color: var(--text-dim); font-size: 12px;">No blocked channels</div>
