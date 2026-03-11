@@ -11123,7 +11123,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // For group messages: send reaction as gift wrap to all members so it stays private
             const groupId = messageEl.dataset.groupId;
-            if (groupId && this.privkey) {
+            if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
                 if (group) {
                     const now = Math.floor(Date.now() / 1000);
@@ -11134,14 +11134,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         content: emoji,
                         pubkey: this.pubkey
                     };
-                    this._sendGiftWraps(group.members, reactionRumor, null);
+                    await this._sendGiftWrapsAsync(group.members, reactionRumor, null);
                     this.addToRecentEmojis(emoji);
                     return;
                 }
             }
 
             // For 1:1 PM messages: send reaction as gift wrap to the peer so it stays private
-            if (messageEl.dataset.isPM === '1' && !groupId && this.privkey && this.currentPM) {
+            if (messageEl.dataset.isPM === '1' && !groupId && this._canSendGiftWraps() && this.currentPM) {
                 const now = Math.floor(Date.now() / 1000);
                 const reactionRumor = {
                     kind: 7,
@@ -11151,7 +11151,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     pubkey: this.pubkey
                 };
                 // Gift wrap to both ourselves and the peer
-                this._sendGiftWraps([this.pubkey, this.currentPM], reactionRumor, null);
+                await this._sendGiftWrapsAsync([this.pubkey, this.currentPM], reactionRumor, null);
                 this.addToRecentEmojis(emoji);
                 return;
             }
@@ -11500,7 +11500,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Format: rumor with kind 69420 (custom), content empty, tags include ['x', messageId] and ['receipt', type]
     // Using kind 69420 instead of 14 to avoid showing blank DMs in other NIP-17 clients
     async sendNymReceipt(messageId, receiptType, recipientPubkey) {
-        if (!this.privkey) return;
+        if (!this._canSendGiftWraps()) return;
 
         // Skip READ receipts if user has disabled them in settings
         if (receiptType === 'read' && this.settings?.readReceiptsEnabled === false) {
@@ -11521,8 +11521,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         };
 
         // Wrap using standard NIP-59 format
-        const wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, null);
-        this.sendDMToRelays(['EVENT', wrapped]);
+        if (this.privkey) {
+            const wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, null);
+            this.sendDMToRelays(['EVENT', wrapped]);
+        } else {
+            await this._sendGiftWrapsAsync([recipientPubkey], rumor, null);
+        }
     }
 
     // Check if a rumor is a typing indicator
@@ -11547,7 +11551,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     // Called when input changes in PM/group mode to signal typing
     handleTypingSignal() {
-        if (!this.privkey || !this.inPMMode) return;
+        if (!this._canSendGiftWraps() || !this.inPMMode) return;
         if (this.settings?.typingIndicatorsEnabled === false) return;
 
         const now = Date.now();
@@ -11568,7 +11572,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     // Send typing stop immediately (e.g. when message is sent)
     sendTypingStop() {
-        if (!this.privkey || !this.inPMMode) return;
+        if (!this._canSendGiftWraps() || !this.inPMMode) return;
         if (this.settings?.typingIndicatorsEnabled === false) return;
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
@@ -11576,8 +11580,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     // Internal: build and send a typing indicator gift-wrap
-    _sendTypingEvent(status) {
-        if (!this.privkey) return;
+    async _sendTypingEvent(status) {
+        if (!this._canSendGiftWraps()) return;
 
         const now = Math.floor(Date.now() / 1000);
         const tags = [['typing', status]];
@@ -11588,12 +11592,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             tags.push(['g', this.currentGroup]);
 
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
-            this._sendGiftWraps(group.members, rumor, null);
+            await this._sendGiftWrapsAsync(group.members, rumor, null);
         } else if (this.currentPM) {
             tags.push(['p', this.currentPM]);
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
-            const wrapped = this.nip59WrapEvent(rumor, this.privkey, this.currentPM, null);
-            this.sendDMToRelays(['EVENT', wrapped]);
+            if (this.privkey) {
+                const wrapped = this.nip59WrapEvent(rumor, this.privkey, this.currentPM, null);
+                this.sendDMToRelays(['EVENT', wrapped]);
+            } else {
+                await this._sendGiftWrapsAsync([this.currentPM], rumor, null);
+            }
         }
     }
 
@@ -12917,14 +12925,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Send read receipt back to sender so they can show our avatar as "read"
-        if (!isOwn && !msg.isHistorical && this.privkey && nymMsgId) {
+        if (!isOwn && !msg.isHistorical && this._canSendGiftWraps() && nymMsgId) {
             this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
         }
     }
 
     // Create a new private group and send invites to all members
     async createGroup(name, memberPubkeys) {
-        if (!this.privkey) {
+        if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Creating groups requires a logged-in account (not anonymous mode)');
             return null;
         }
@@ -12946,7 +12954,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
 
-        this._sendGiftWraps(allMembers, rumor, expirationTs);
+        await this._sendGiftWrapsAsync(allMembers, rumor, expirationTs);
 
         // addGroupConversation creates the sidebar item (existing is null at this point)
         this.addGroupConversation(groupId, name, allMembers, Date.now());
@@ -12960,7 +12968,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     // Add a new member to an existing group
     async addMemberToGroup(groupId, newMemberPubkey) {
-        if (!this.privkey) {
+        if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Adding members requires a logged-in account');
             return false;
         }
@@ -12993,7 +13001,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
 
-        this._sendGiftWraps(group.members, rumor, expirationTs);
+        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs);
 
         this.updateGroupConversationUI(groupId);
         this._saveGroupConversations();
@@ -13007,6 +13015,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     // Wrap and send one NIP-59 gift wrap per group member.
+    // Check whether the user can send gift-wrapped messages.
+    // True when a local privkey is available OR a NIP-07 extension exposes
+    // the required nip44 encrypt + signEvent methods.
+    _canSendGiftWraps() {
+        return !!this.privkey || !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
+    }
+
     _sendGiftWraps(members, rumor, expirationTs) {
         for (const pubkey of members) {
             const wrapped = this.nip59WrapEvent(rumor, this.privkey, pubkey, expirationTs);
@@ -13018,9 +13033,60 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
+    // Uses the local privkey when available, otherwise falls back to the
+    // NIP-07 extension for sealing (nip44.encrypt + signEvent) while still
+    // wrapping with a local ephemeral keypair.
+    async _sendGiftWrapsAsync(members, rumor, expirationTs) {
+        // Fast path — local key available
+        if (this.privkey) {
+            this._sendGiftWraps(members, rumor, expirationTs);
+            return;
+        }
+
+        // Extension path
+        if (!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent)) return;
+
+        const NT = window.NostrTools;
+        // Compute rumor id once
+        const rumorWithId = { ...rumor };
+        rumorWithId.id = NT.getEventHash(rumorWithId);
+
+        for (const pubkey of members) {
+            try {
+                // Seal via extension (ECDH done inside extension)
+                const sealContent = await window.nostr.nip44.encrypt(pubkey, JSON.stringify(rumorWithId));
+                const sealUnsigned = {
+                    kind: 13, content: sealContent, created_at: this.randomNow(), tags: []
+                };
+                const seal = await window.nostr.signEvent(sealUnsigned);
+
+                // Wrap with local ephemeral keypair
+                const ephSk = NT.generateSecretKey();
+                const ckWrap = NT.nip44.getConversationKey(ephSk, pubkey);
+                const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+                const wrapUnsigned = {
+                    kind: 1059,
+                    content: wrapContent,
+                    created_at: this.randomNow(),
+                    tags: [['p', pubkey]]
+                };
+                if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
+
+                const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
+                this.sendDMToRelays(['EVENT', wrapped]);
+
+                if (this.activeCosmetics?.has('cosmetic-redacted')) {
+                    setTimeout(() => { this.publishDeletionEvent(wrapped.id); }, 600000);
+                }
+            } catch (e) {
+                console.warn('[GiftWrap] Extension wrap failed for', pubkey, e);
+            }
+        }
+    }
+
     // Send a message to a group (one gift wrap per member)
     async sendGroupMessage(content, groupId) {
-        if (!this.privkey) {
+        if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Group messages require a logged-in account');
             return false;
         }
@@ -13073,7 +13139,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displayMessage(msg);
         }
 
-        this._sendGiftWraps(group.members, rumor, expirationTs);
+        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs);
         return true;
     }
 
@@ -13105,7 +13171,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Send a leave notification to remaining group members, then clean up locally
     async leaveGroup(groupId) {
         const group = this.groupConversations.get(groupId);
-        if (group && this.privkey) {
+        if (group && this._canSendGiftWraps()) {
             const otherMembers = group.members.filter(pk => pk !== this.pubkey);
             if (otherMembers.length > 0) {
                 const now = Math.floor(Date.now() / 1000);
@@ -13117,7 +13183,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 tags.push(['x', this.generateUUID()]);
                 const rumor = { kind: 14, created_at: now, tags, content: leaveContent, pubkey: this.pubkey };
                 // Send to remaining members only (not self)
-                this._sendGiftWraps(otherMembers, rumor, null);
+                await this._sendGiftWrapsAsync(otherMembers, rumor, null);
             }
         }
         // Remove persisted entry
@@ -13149,10 +13215,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Remove a member from the current group (owner only).
     // Sends a group-remove-member rumor to all current members including the
     // kicked user so they can clean up their local state, then updates locally.
-    kickFromGroup(pubkey) {
+    async kickFromGroup(pubkey) {
         this.closeContextMenu();
         const groupId = this.currentGroup;
-        if (!groupId || !this.privkey) return;
+        if (!groupId || !this._canSendGiftWraps()) return;
         const group = this.groupConversations.get(groupId);
         if (!group || group.createdBy !== this.pubkey) return;
         if (!group.members.includes(pubkey)) return;
@@ -13172,7 +13238,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
 
         // Send to everyone including the kicked member so they can remove themselves
-        this._sendGiftWraps(group.members, rumor, null);
+        await this._sendGiftWrapsAsync(group.members, rumor, null);
 
         // Update local state immediately
         group.members = group.members.filter(pk => pk !== pubkey);
@@ -18287,7 +18353,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     // /group @alice @bob [GroupName] — create a new private group
     async cmdGroup(args) {
-        if (!this.privkey) {
+        if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Creating groups requires a logged-in account (not anonymous mode)');
             return;
         }
@@ -23208,7 +23274,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.46.168 ═══<br/>
+═══ Nymchat v3.46.169 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
