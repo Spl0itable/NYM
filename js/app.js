@@ -8021,10 +8021,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Call LibreTranslate directly (no proxy). Tries multiple public instances.
     async _translateDirect(text, targetLang) {
         const instances = [
-            'https://translate.terraprint.co',
-            'https://trans.zillyhuhn.com',
             'https://translate.fedilab.app',
+            'https://trans.zillyhuhn.com',
             'https://lt.vern.cc',
+            'https://translate.terraprint.co',
         ];
         let lastError = null;
         for (const instance of instances) {
@@ -23821,7 +23821,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.47.170 ═══<br/>
+═══ Nymchat v3.47.171 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

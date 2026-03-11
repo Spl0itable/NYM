@@ -21,10 +21,10 @@ const MAX_UNFURL_SIZE = 512 * 1024;
 
 // LibreTranslate public instances
 const LIBRE_TRANSLATE_INSTANCES = [
-  'https://translate.terraprint.co',
-  'https://trans.zillyhuhn.com',
   'https://translate.fedilab.app',
+  'https://trans.zillyhuhn.com',
   'https://lt.vern.cc',
+  'https://translate.terraprint.co',
 ];
 
 // Timeout for translation requests
