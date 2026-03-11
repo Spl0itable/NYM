@@ -132,6 +132,17 @@
             Copy Message
         </div>
 
+        <div class="context-menu-item" id="ctxTranslate">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <path d="M 2 3 L 8 3 M 5 3 L 5 2 M 3.5 3 C 3.5 5.5 4.5 7.5 7 9" stroke-linecap="round" />
+                <path d="M 7 3 C 6 6 4 7.5 2 8.5" stroke-linecap="round" />
+                <path d="M 9 7 L 11 13 L 13 7" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M 9.5 11 L 12.5 11" stroke-linecap="round" />
+            </svg>
+            Translate Message
+        </div>
+
         <div class="context-menu-item report" id="ctxReport">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 style="vertical-align: middle; margin-right: 8px;">
@@ -1081,6 +1092,34 @@
                     </select>
                     <div class="form-hint">When enabled, senders will see when you've read their private messages (✓✓).
                     </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Translation Language</label>
+                    <select class="form-select" id="translateLanguageSelect">
+                        <option value="">Disabled</option>
+                        <option value="en">English</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="de">German</option>
+                        <option value="it">Italian</option>
+                        <option value="pt">Portuguese</option>
+                        <option value="ru">Russian</option>
+                        <option value="zh">Chinese</option>
+                        <option value="ja">Japanese</option>
+                        <option value="ko">Korean</option>
+                        <option value="ar">Arabic</option>
+                        <option value="hi">Hindi</option>
+                        <option value="tr">Turkish</option>
+                        <option value="nl">Dutch</option>
+                        <option value="pl">Polish</option>
+                        <option value="uk">Ukrainian</option>
+                        <option value="vi">Vietnamese</option>
+                        <option value="th">Thai</option>
+                        <option value="id">Indonesian</option>
+                        <option value="sv">Swedish</option>
+                    </select>
+                    <div class="form-hint">Choose your preferred language for translating messages via the context menu. Translations are provided by LibreTranslate.</div>
                 </div>
 
                 <div class="form-group">

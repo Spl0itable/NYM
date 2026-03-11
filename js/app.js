@@ -1070,6 +1070,10 @@ class NYM {
         this.currentGroup = null;
         this._newPMRecipients = [];
         this.groupMessageReaders = new Map();
+        this._unfurlCache = new Map();
+        this.nostrFollowList = [];
+        this.nostrFollowProfiles = [];
+        this._followListFetched = false;
         this.unreadCounts = new Map();
         this.blockedUsers = new Set();
         this.blockedKeywords = new Set();
@@ -5816,6 +5820,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.closeContextMenu();
         });
 
+        // Translate message handler
+        document.getElementById('ctxTranslate').addEventListener('click', async () => {
+            if (this.contextMenuData && this.contextMenuData.content) {
+                await this.translateMessage(this.contextMenuData.content, this.contextMenuData.messageId || this.contextMenuData.reactionId);
+            } else {
+                this.displaySystemMessage('No message content to translate');
+            }
+            this.closeContextMenu();
+        });
+
         // Add delete message handler
         document.getElementById('ctxDeleteMessage').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.messageId && this.contextMenuData.pubkey === this.pubkey) {
@@ -7965,6 +7979,268 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     closeContextMenu() {
         document.getElementById('contextMenu').classList.remove('active');
         document.getElementById('contextMenuOverlay').classList.remove('active');
+    }
+
+    // Returns the base URL for the Cloudflare proxy endpoint (only available on CF-hosted versions)
+    _getProxyBaseUrl() {
+        if (!this.useRelayProxy) return null;
+        return `${window.location.protocol}//${window.location.host}/api/proxy`;
+    }
+
+    // Returns a proxied URL for media (images/videos) to hide the user's IP
+    getProxiedMediaUrl(originalUrl) {
+        const base = this._getProxyBaseUrl();
+        if (!base) return originalUrl;
+        return `${base}?url=${encodeURIComponent(originalUrl)}`;
+    }
+
+    // Translate a message and show the result inline below the original message.
+    // Uses the CF proxy when available, falls back to calling LibreTranslate directly.
+    async translateMessage(content, messageId) {
+        const targetLang = this.settings.translateLanguage;
+        if (!targetLang) {
+            this.displaySystemMessage('Set a translation language in Settings first.');
+            return;
+        }
+
+        // Strip HTML tags for translation (send plain text)
+        const plainText = content.replace(/<[^>]+>/g, '').trim();
+        if (!plainText) {
+            this.displaySystemMessage('No text to translate.');
+            return;
+        }
+
+        // Find the message element to append translation
+        const msgEl = messageId ? document.querySelector(`[data-message-id="${messageId}"]`) : null;
+
+        // Show loading state
+        if (msgEl) {
+            let translationEl = msgEl.querySelector('.message-translation');
+            if (!translationEl) {
+                translationEl = document.createElement('div');
+                translationEl.className = 'message-translation';
+                const contentEl = msgEl.querySelector('.message-content') || msgEl;
+                contentEl.after(translationEl);
+            }
+            translationEl.innerHTML = '<span class="translation-loading">Translating...</span>';
+        }
+
+        try {
+            let translatedText, detectedLang;
+
+            const base = this._getProxyBaseUrl();
+            if (base) {
+                // Proxied path (CF-hosted): translate via our worker
+                const resp = await fetch(`${base}?action=translate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: plainText, source: 'auto', target: targetLang }),
+                });
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                translatedText = data.translatedText;
+                detectedLang = data.detectedLanguage || 'auto';
+            } else {
+                // Direct path: call LibreTranslate instances directly
+                const result = await this._translateDirect(plainText, targetLang);
+                translatedText = result.translatedText;
+                detectedLang = result.detectedLanguage || 'auto';
+            }
+
+            if (msgEl) {
+                let translationEl = msgEl.querySelector('.message-translation');
+                if (!translationEl) {
+                    translationEl = document.createElement('div');
+                    translationEl.className = 'message-translation';
+                    const contentEl = msgEl.querySelector('.message-content') || msgEl;
+                    contentEl.after(translationEl);
+                }
+                const langLabel = detectedLang !== 'auto' && detectedLang !== targetLang
+                    ? `<span class="translation-lang">${detectedLang} → ${targetLang}</span>` : '';
+                translationEl.innerHTML = `<span class="translation-icon">🌐</span> ${this.escapeHtml(translatedText)} ${langLabel}`;
+            } else {
+                this.displaySystemMessage(`Translation: ${translatedText}`);
+            }
+        } catch (err) {
+            if (msgEl) {
+                const translationEl = msgEl.querySelector('.message-translation');
+                if (translationEl) translationEl.innerHTML = '<span class="translation-error">Translation failed</span>';
+            }
+            this.displaySystemMessage('Translation failed: ' + (err.message || 'Unknown error'));
+        }
+    }
+
+    // Call LibreTranslate directly (no proxy). Tries multiple public instances.
+    async _translateDirect(text, targetLang) {
+        const instances = [
+            'https://libretranslate.com',
+            'https://translate.terraprint.co',
+            'https://trans.zillyhuhn.com',
+        ];
+        let lastError = null;
+        for (const instance of instances) {
+            try {
+                const resp = await fetch(`${instance}/translate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        q: text.slice(0, 5000),
+                        source: 'auto',
+                        target: targetLang,
+                        format: 'text',
+                    }),
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    return {
+                        translatedText: data.translatedText,
+                        detectedLanguage: data.detectedLanguage?.language || 'auto',
+                    };
+                }
+                lastError = `${instance} returned ${resp.status}`;
+            } catch (err) {
+                lastError = `${instance}: ${err.message}`;
+            }
+        }
+        throw new Error('All translation instances failed: ' + lastError);
+    }
+
+    // Unfurl a URL and return Open Graph metadata.
+    // Uses CF proxy when available; falls back to direct fetch (may be blocked by CORS).
+    async unfurlUrl(url) {
+        // Check cache first
+        if (this._unfurlCache.has(url)) return this._unfurlCache.get(url);
+
+        try {
+            let data;
+            const base = this._getProxyBaseUrl();
+            if (base) {
+                const resp = await fetch(`${base}?action=unfurl&url=${encodeURIComponent(url)}`);
+                if (!resp.ok) return null;
+                data = await resp.json();
+            } else {
+                // Direct fetch fallback — works when the target sets CORS headers
+                const resp = await fetch(url, {
+                    headers: { 'Accept': 'text/html' },
+                    redirect: 'follow',
+                });
+                if (!resp.ok) return null;
+                const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+                if (!contentType.includes('text/html')) return null;
+                const html = await resp.text();
+                data = this._extractOpenGraph(html, url);
+            }
+            if (!data || data.error) return null;
+
+            // Cache result
+            this._unfurlCache.set(url, data);
+            // Trim cache to max 200 entries
+            if (this._unfurlCache.size > 200) {
+                const first = this._unfurlCache.keys().next().value;
+                this._unfurlCache.delete(first);
+            }
+            return data;
+        } catch {
+            return null;
+        }
+    }
+
+    // Client-side Open Graph extraction (used when CF proxy is unavailable)
+    _extractOpenGraph(html, pageUrl) {
+        const get = (property) => {
+            const ogMatch = html.match(new RegExp(`<meta[^>]+property=["']og:${property}["'][^>]+content=["']([^"']+)["']`, 'i'))
+                || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:${property}["']`, 'i'));
+            if (ogMatch) return ogMatch[1];
+            const twMatch = html.match(new RegExp(`<meta[^>]+name=["']twitter:${property}["'][^>]+content=["']([^"']+)["']`, 'i'))
+                || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:${property}["']`, 'i'));
+            if (twMatch) return twMatch[1];
+            return null;
+        };
+        const title = get('title') || (html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+        const description = get('description')
+            || (html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) || [])[1] || '';
+        let image = get('image') || '';
+        if (image && !image.startsWith('http')) {
+            try { image = new URL(image, pageUrl).href; } catch { image = ''; }
+        }
+        let favicon = '';
+        const favMatch = html.match(/<link[^>]+rel=["'](?:icon|shortcut icon)["'][^>]+href=["']([^"']+)["']/i)
+            || html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["'](?:icon|shortcut icon)["']/i);
+        if (favMatch) {
+            favicon = favMatch[1];
+            if (!favicon.startsWith('http')) {
+                try { favicon = new URL(favicon, pageUrl).href; } catch { favicon = ''; }
+            }
+        }
+        const decode = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        return {
+            url: pageUrl,
+            title: decode(title).slice(0, 300),
+            description: decode(description).slice(0, 500),
+            image,
+            siteName: decode(get('site_name') || ''),
+            type: get('type') || '',
+            favicon,
+        };
+    }
+
+    // Render a rich link preview card for an unfurled URL
+    _renderLinkPreview(meta) {
+        if (!meta || (!meta.title && !meta.description)) return '';
+
+        const imageHtml = meta.image
+            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.image))}" class="link-preview-image" loading="lazy" onerror="this.style.display='none'">`
+            : '';
+
+        const faviconHtml = meta.favicon
+            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.favicon))}" class="link-preview-favicon" loading="lazy" onerror="this.style.display='none'">`
+            : '';
+
+        const siteNameHtml = meta.siteName
+            ? `<span class="link-preview-site">${faviconHtml}${this.escapeHtml(meta.siteName)}</span>`
+            : '';
+
+        let host = '';
+        try { host = new URL(meta.url).hostname; } catch {}
+
+        return `<a href="${this.escapeHtml(meta.url)}" target="_blank" rel="noopener" class="link-preview" onclick="event.stopPropagation()">
+            ${imageHtml}
+            <div class="link-preview-text">
+                ${siteNameHtml || `<span class="link-preview-site">${this.escapeHtml(host)}</span>`}
+                <span class="link-preview-title">${this.escapeHtml(meta.title || '')}</span>
+                <span class="link-preview-desc">${this.escapeHtml((meta.description || '').slice(0, 200))}</span>
+            </div>
+        </a>`;
+    }
+
+    // After a message is rendered, find URLs in it and attach link previews
+    async _attachLinkPreviews(messageEl) {
+        const links = messageEl.querySelectorAll('.message-content a[href^="http"]');
+        if (links.length === 0) return;
+
+        // Limit to first 3 links per message
+        const linksToUnfurl = Array.from(links).slice(0, 3);
+        for (const link of linksToUnfurl) {
+            const href = link.getAttribute('href');
+            // Skip media URLs (already embedded)
+            if (/\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?.*)?$/i.test(href)) continue;
+            // Skip Nymchat app links
+            if (/app\.nym\.bar/i.test(href)) continue;
+
+            const meta = await this.unfurlUrl(href);
+            if (meta && (meta.title || meta.description)) {
+                const previewHtml = this._renderLinkPreview(meta);
+                if (previewHtml) {
+                    const container = messageEl.querySelector('.message-content');
+                    if (container) {
+                        const previewEl = document.createElement('div');
+                        previewEl.className = 'link-preview-container';
+                        previewEl.innerHTML = previewHtml;
+                        container.appendChild(previewEl);
+                    }
+                }
+            }
+        }
     }
 
     // Update already-rendered message avatars when a kind 0 profile picture arrives
@@ -10232,6 +10508,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } catch (e) {
                 // Ignore profile parse errors
             }
+        } else if (event.kind === 3) {
+            // Handle follow list (kind:3 contact list) for Nostr login follow suggestions
+            this._handleFollowListEvent(event);
         } else if (event.kind === this.P2P_SIGNALING_KIND) {
             // Handle P2P signaling (WebRTC SDP/ICE)
             this.handleP2PSignalingEvent(event);
@@ -13307,8 +13586,68 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="delete-pm" onclick="event.stopPropagation(); nym.deleteGroup('${groupId}')">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
     }
 
-    // Update the stacked reader avatars shown under an own group message
+    // Update the stacked reader avatars for group messages using waterfall logic:
+    // Each reader's avatar only appears on the LATEST message they've read, since
+    // reading message N implies having read all prior messages.
     updateGroupReaderAvatars(nymMessageId) {
+        // Find the current group conversation
+        if (!this.inPMMode || !this.currentGroup) {
+            // Fallback: just update the single message
+            this._updateSingleGroupReaders(nymMessageId);
+            return;
+        }
+        const groupConvKey = this.getGroupConversationKey(this.currentGroup);
+        const messages = this.pmMessages.get(groupConvKey);
+        if (!messages) {
+            this._updateSingleGroupReaders(nymMessageId);
+            return;
+        }
+
+        // Build a map: readerPubkey -> latest nymMessageId they've read
+        // by iterating own messages from newest to oldest
+        const latestReadByReader = new Map(); // pubkey -> nymMessageId
+        const ownMessages = messages
+            .filter(m => m.isOwn && m.nymMessageId && this.groupMessageReaders.has(m.nymMessageId))
+            .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()); // newest first
+
+        for (const msg of ownMessages) {
+            const readers = this.groupMessageReaders.get(msg.nymMessageId);
+            if (!readers) continue;
+            for (const [pk] of readers) {
+                if (!latestReadByReader.has(pk)) {
+                    latestReadByReader.set(pk, msg.nymMessageId);
+                }
+            }
+        }
+
+        // Now for each own message, compute which readers to DISPLAY on it
+        // (only those whose latest-read message is THIS message)
+        const displayReaders = new Map(); // nymMessageId -> Map(pk -> nym)
+        for (const [pk, msgId] of latestReadByReader) {
+            if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
+            const readers = this.groupMessageReaders.get(msgId);
+            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
+            displayReaders.get(msgId).set(pk, name);
+        }
+
+        // Update each visible own message's reader avatars
+        for (const msg of ownMessages) {
+            const el = document.querySelector(`.group-readers[data-nym-msg-id="${msg.nymMessageId}"]`);
+            if (!el) continue;
+            const waterfallReaders = displayReaders.get(msg.nymMessageId);
+            const html = waterfallReaders && waterfallReaders.size > 0
+                ? this._buildGroupReadersHtmlFromMap(waterfallReaders)
+                : '';
+            el.innerHTML = html;
+            if (html && !el._readerLongPressBound) {
+                this._bindReaderLongPress(el, msg.nymMessageId);
+                el._readerLongPressBound = true;
+            }
+        }
+    }
+
+    // Fallback: update a single message's reader avatars without waterfall
+    _updateSingleGroupReaders(nymMessageId) {
         const el = document.querySelector(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
         if (!el) return;
         const html = this._buildGroupReadersHtml(nymMessageId);
@@ -13318,6 +13657,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this._bindReaderLongPress(el, nymMessageId);
             el._readerLongPressBound = true;
         }
+    }
+
+    // Build reader avatars HTML from a provided Map (used by waterfall)
+    _buildGroupReadersHtmlFromMap(readersMap) {
+        const MAX_VISIBLE = 3;
+        if (!readersMap || readersMap.size === 0) return '';
+        const entries = Array.from(readersMap.entries());
+        const visible = entries.slice(0, MAX_VISIBLE);
+        const overflow = readersMap.size - MAX_VISIBLE;
+        const avatarHtml = visible.map(([pk, name]) =>
+            `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${pk}" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pk}.png?set=set1&size=80x80'">`
+        ).join('');
+        const overflowHtml = overflow > 0
+            ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
+            : '';
+        return avatarHtml + overflowHtml;
     }
 
     // Returns the inner HTML for a .group-readers span: up to 3 avatars + overflow badge
@@ -13538,6 +13893,60 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         });
 
         try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+    }
+
+    // Fetch the Nostr kind:3 contact list (follow list) for a pubkey
+    // This allows suggesting followed users when composing new messages
+    async fetchNostrFollowList(pubkey) {
+        if (this._followListFetched) return;
+        this._followListFetched = true;
+
+        const subId = 'follow-list-' + Math.random().toString(36).slice(2);
+        const req = ["REQ", subId, { kinds: [3], authors: [pubkey], limit: 1 }];
+
+        try { this.sendToRelay(req); } catch (_) { return; }
+
+        // Listen for the response via a one-time handler
+        const handleFollowList = (event) => {
+            if (event.kind !== 3 || event.pubkey !== pubkey) return;
+            const followPubkeys = (event.tags || [])
+                .filter(t => Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string' && t[1].length === 64)
+                .map(t => t[1]);
+
+            this.nostrFollowList = [...new Set(followPubkeys)];
+
+            // Fetch profiles for follow list entries (batch, background)
+            const unknownPubkeys = this.nostrFollowList.filter(pk => !this.users.has(pk));
+            // Batch fetch in groups of 20
+            for (let i = 0; i < unknownPubkeys.length; i += 20) {
+                const batch = unknownPubkeys.slice(i, i + 20);
+                const batchSubId = 'follow-profiles-' + Math.random().toString(36).slice(2);
+                try {
+                    this.sendToRelay(["REQ", batchSubId, { kinds: [0], authors: batch, limit: batch.length }]);
+                    // Auto-close after 5 seconds
+                    setTimeout(() => {
+                        try { this.sendToRelay(["CLOSE", batchSubId]); } catch (_) {}
+                    }, 5000);
+                } catch (_) {}
+            }
+        };
+
+        // Register a temporary follow list handler
+        this._pendingFollowListHandler = handleFollowList;
+
+        // Auto-close subscription after 6 seconds
+        setTimeout(() => {
+            try { this.sendToRelay(["CLOSE", subId]); } catch (_) {}
+            this._pendingFollowListHandler = null;
+        }, 6000);
+    }
+
+    // Called from event handler when a kind:3 event arrives
+    _handleFollowListEvent(event) {
+        if (this._pendingFollowListHandler) {
+            this._pendingFollowListHandler(event);
+            this._pendingFollowListHandler = null;
+        }
     }
 
     // Resolve all pending profile callbacks for a pubkey (called from kind 0 handler)
@@ -16104,6 +16513,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.playSound(this.settings.sound);
             }
         }
+
+        // Attach rich link previews for URLs in the message (async, non-blocking)
+        if (!message.isHistorical) {
+            this._attachLinkPreviews(messageEl);
+        }
     }
 
 
@@ -16258,17 +16672,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             (match, url, ext) => {
                 const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
                 const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
+                const proxiedUrl = this.getProxiedMediaUrl(url);
                 const idx = videoPlaceholders.length;
-                videoPlaceholders.push(`<span class="video-container" onclick="event.stopPropagation()"><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${url}" type="${type}"></video><button class="video-expand-btn" data-video-src="${url.replace(/"/g, '&quot;')}" onclick="event.stopPropagation(); var v=this.previousElementSibling; nym.expandVideo(v.dataset.blobSrc||this.dataset.videoSrc)">⛶</button></span>`);
+                videoPlaceholders.push(`<span class="video-container" onclick="event.stopPropagation()"><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${proxiedUrl}" type="${type}"></video><button class="video-expand-btn" data-video-src="${proxiedUrl.replace(/"/g, '&quot;')}" onclick="event.stopPropagation(); var v=this.previousElementSibling; nym.expandVideo(v.dataset.blobSrc||this.dataset.videoSrc)">⛶</button></span>`);
                 return `__VID_${idx}__`;
             }
         );
 
-        // Convert image URLs to images
+        // Convert image URLs to images (proxied through Cloudflare worker for IP privacy)
         formatted = formatted.replace(
             /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
             (match, url) => {
-                return `<img src="${url}" alt="Image" onclick="nym.expandImage(this.src)" />`;
+                const proxiedUrl = this.getProxiedMediaUrl(url);
+                return `<img src="${proxiedUrl}" alt="Image" onclick="nym.expandImage(this.dataset.originalSrc || this.src)" data-original-src="${url}" />`;
             }
         );
 
@@ -18461,14 +18877,57 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         document.getElementById('pmInitialMessage').value = '';
         document.getElementById('pmStartBtn').disabled = true;
         document.getElementById('newPMModal').classList.add('active');
-        setTimeout(() => document.getElementById('pmRecipientInput').focus(), 80);
+        setTimeout(() => {
+            document.getElementById('pmRecipientInput').focus();
+            // Show follow list suggestions when Nostr-logged-in user opens the modal
+            if (this.nostrFollowList.length > 0) {
+                this._showFollowListSuggestions('');
+            }
+        }, 80);
         if (window.innerWidth <= 768) this.closeSidebar();
+    }
+
+    // Show follow list suggestions in the New Message modal
+    _showFollowListSuggestions(query) {
+        const suggestions = document.getElementById('pmSuggestions');
+        if (!suggestions) return;
+
+        const followMatches = [];
+        for (const pk of this.nostrFollowList) {
+            if (pk === this.pubkey) continue;
+            if (this._newPMRecipients.some(r => r.pubkey === pk)) continue;
+            const user = this.users.get(pk);
+            const name = user ? this.stripPubkeySuffix(user.nym) : pk.slice(0, 12) + '...';
+            if (query && !name.toLowerCase().includes(query)) continue;
+            followMatches.push({ nym: name, pubkey: pk, isFollow: true });
+        }
+
+        if (followMatches.length === 0) return;
+
+        const header = query ? '' : '<div class="pm-suggestion-header">From your Nostr follows</div>';
+        const html = header + followMatches.slice(0, 10).map(m => {
+            const suffix = this.getPubkeySuffix(m.pubkey);
+            const safeNym = m.nym.replace(/'/g, "\\'");
+            const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
+            return `<div class="pm-suggestion-item" onclick="nym.addNewPMRecipient('${m.pubkey}','${safeNym}')"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span><span class="pm-suggestion-follow-badge">following</span></div>`;
+        }).join('');
+
+        suggestions.innerHTML = html;
+        suggestions.style.display = 'block';
     }
 
     onNewPMRecipientInput(value) {
         const suggestions = document.getElementById('pmSuggestions');
         const query = value.trim().replace(/^@/, '').toLowerCase();
-        if (!query) { suggestions.style.display = 'none'; return; }
+        if (!query) {
+            // Show follow list when input is empty (if Nostr-logged-in)
+            if (this.nostrFollowList.length > 0) {
+                this._showFollowListSuggestions('');
+            } else {
+                suggestions.style.display = 'none';
+            }
+            return;
+        }
 
         // Direct pubkey paste
         if (/^[0-9a-f]{64}$/i.test(query)) {
@@ -18496,21 +18955,43 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
+        // Search active users
         const matches = [];
+        const matchedPubkeys = new Set();
         this.users.forEach((user, pubkey) => {
             if (pubkey === this.pubkey) return;
             if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
             const baseNym = this.stripPubkeySuffix(user.nym).toLowerCase();
-            if (baseNym.includes(query)) matches.push({ nym: this.stripPubkeySuffix(user.nym), pubkey });
+            if (baseNym.includes(query)) {
+                matches.push({ nym: this.stripPubkeySuffix(user.nym), pubkey, isFollow: this.nostrFollowList.includes(pubkey) });
+                matchedPubkeys.add(pubkey);
+            }
         });
+
+        // Also search follow list for users not in active users
+        if (this.nostrFollowList.length > 0) {
+            for (const pk of this.nostrFollowList) {
+                if (pk === this.pubkey || matchedPubkeys.has(pk)) continue;
+                if (this._newPMRecipients.some(r => r.pubkey === pk)) continue;
+                const user = this.users.get(pk);
+                const name = user ? this.stripPubkeySuffix(user.nym) : pk.slice(0, 12) + '...';
+                if (name.toLowerCase().includes(query)) {
+                    matches.push({ nym: name, pubkey: pk, isFollow: true });
+                }
+            }
+        }
 
         if (matches.length === 0) { suggestions.style.display = 'none'; return; }
 
-        suggestions.innerHTML = matches.slice(0, 8).map(m => {
+        // Sort: follows first, then by name
+        matches.sort((a, b) => (b.isFollow ? 1 : 0) - (a.isFollow ? 1 : 0));
+
+        suggestions.innerHTML = matches.slice(0, 10).map(m => {
             const suffix = this.getPubkeySuffix(m.pubkey);
             const safeNym = m.nym.replace(/'/g, "\\'");
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
-            return `<div class="pm-suggestion-item" onclick="nym.addNewPMRecipient('${m.pubkey}','${safeNym}')"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span></div>`;
+            const followBadge = m.isFollow ? '<span class="pm-suggestion-follow-badge">following</span>' : '';
+            return `<div class="pm-suggestion-item" onclick="nym.addNewPMRecipient('${m.pubkey}','${safeNym}')"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span>${followBadge}</div>`;
         }).join('');
         suggestions.style.display = 'block';
     }
@@ -21563,7 +22044,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             chatLayout: localStorage.getItem('nym_chat_layout') || 'bubbles',
             lowDataMode: localStorage.getItem('nym_low_data_mode') === 'true',
             textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10),
-            groupChatPMOnlyMode: localStorage.getItem('nym_groupchat_pm_only_mode') === 'true'
+            groupChatPMOnlyMode: localStorage.getItem('nym_groupchat_pm_only_mode') === 'true',
+            translateLanguage: localStorage.getItem('nym_translate_language') || ''
         };
     }
 
@@ -22683,6 +23165,12 @@ async function showSettings() {
         randomKeypairSelect.value = randomKeypair ? 'true' : 'false';
     }
 
+    // Load translation language setting
+    const translateLangSelect = document.getElementById('translateLanguageSelect');
+    if (translateLangSelect) {
+        translateLangSelect.value = nym.settings.translateLanguage || '';
+    }
+
     // Load nickname style setting
     const nickStyleSelect = document.getElementById('nickStyleSelect');
     if (nickStyleSelect) {
@@ -22966,6 +23454,13 @@ async function saveSettings() {
     const readReceiptsEnabled = document.getElementById('readReceiptsSelect').value === 'true';
     nym.settings.readReceiptsEnabled = readReceiptsEnabled;
     localStorage.setItem('nym_read_receipts_enabled', String(readReceiptsEnabled));
+
+    // Read and save translation language
+    const translateLangEl = document.getElementById('translateLanguageSelect');
+    if (translateLangEl) {
+        nym.settings.translateLanguage = translateLangEl.value;
+        localStorage.setItem('nym_translate_language', translateLangEl.value);
+    }
 
     // Read and save typing indicators setting
     const typingIndicatorsEnabled = document.getElementById('typingIndicatorsSelect').value === 'true';
@@ -23274,7 +23769,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.46.169 ═══<br/>
+═══ Nymchat v3.47.169 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -23945,6 +24440,9 @@ function applyNostrLogin(pubkey, secretKey, method) {
         }, 3000);
     });
 
+    // Fetch Nostr follow list (kind:3 contact list) for search in New Message modal
+    nym.fetchNostrFollowList(pubkey);
+
     // Restore persisted groups for this identity before relay history arrives
     nym._loadGroupConversations();
 
@@ -24038,7 +24536,8 @@ async function nostrSettingsSave() {
             userJoinedChannels: Array.from(nym.userJoinedChannels || []),
             hiddenChannels: Array.from(nym.hiddenChannels || []),
             blockedUsers: Array.from(nym.blockedUsers || []),
-            blockedKeywords: Array.from(nym.blockedKeywords || [])
+            blockedKeywords: Array.from(nym.blockedKeywords || []),
+            translateLanguage: nym.settings.translateLanguage || ''
         };
 
         const event = {
@@ -24539,6 +25038,12 @@ function applyNostrSettings(s) {
     if (Array.isArray(s.blockedKeywords)) {
         nym.blockedKeywords = new Set(s.blockedKeywords);
         localStorage.setItem('nym_blocked_keywords', JSON.stringify(s.blockedKeywords));
+    }
+
+    // Translation language
+    if (typeof s.translateLanguage === 'string') {
+        nym.settings.translateLanguage = s.translateLanguage;
+        localStorage.setItem('nym_translate_language', s.translateLanguage);
     }
 
     nym.displaySystemMessage('Settings synced from Nostr relays.');
