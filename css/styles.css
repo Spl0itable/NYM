@@ -62,6 +62,7 @@
 }
 
 :root {
+    color-scheme: dark;
     --primary: #00ff00;
     --secondary: #00ffff;
     --warning: #ffff00;
@@ -338,7 +339,7 @@ body::after {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xs);
-    color: #ffffff;
+    color: var(--text-bright, #ffffff);
     padding: 8px 28px 8px 12px;
     font-family: var(--font-sans);
     font-size: 12px;
@@ -1771,6 +1772,13 @@ body.light-mode .pubkey-slideout-copy:hover {
     font-family: var(--font-mono);
 }
 
+.message-content pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+}
+
 .message-content blockquote {
     border-left: 3px solid rgb(from var(--primary) r g b / 0.4);
     padding-left: 12px;
@@ -1984,7 +1992,7 @@ body.light-mode .pubkey-slideout-copy:hover {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
-    color: #ffffff;
+    color: var(--text-bright, #ffffff);
     padding: 10px 16px;
     font-family: var(--font-sans);
     font-size: var(--user-text-size);
@@ -2228,7 +2236,7 @@ body.light-mode .pubkey-slideout-copy:hover {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm);
-    color: #ffffff;
+    color: var(--text-bright, #ffffff);
     padding: 11px 14px;
     font-family: var(--font-sans);
     font-size: 15px;
@@ -2672,7 +2680,7 @@ body.light-mode .pubkey-slideout-copy:hover {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xs);
-    color: #ffffff;
+    color: var(--text-bright, #ffffff);
     padding: 7px 10px;
     font-size: 12px;
     outline: none;
@@ -3623,7 +3631,7 @@ body.light-mode .verified-badge::before {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xs);
-    color: #ffffff;
+    color: var(--text-bright, #ffffff);
     padding: 7px 10px;
     font-size: 12px;
     outline: none;
@@ -3808,10 +3816,10 @@ body.theme-ghost::before {
 }
 
 body.light-mode {
+    color-scheme: light;
     --bg: #f5f5f2;
     --bg-secondary: rgba(255, 255, 255, 0.85);
     --bg-tertiary: rgba(240, 240, 237, 0.9);
-    --text-dim: #666666;
     --border: rgba(0, 0, 0, 0.1);
     --glass-bg: rgba(255, 255, 255, 0.6);
     --glass-border: rgba(0, 0, 0, 0.08);
@@ -3897,6 +3905,14 @@ body.light-mode .send-btn:hover:not(:disabled) {
 
 body.light-mode *:not(.message-author) {
     text-shadow: none;
+}
+
+body.light-mode .message-content code {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .message-content pre {
+    background: rgba(0, 0, 0, 0.04);
 }
 
 body.light-mode .shop-content {
@@ -4534,6 +4550,48 @@ body.light-mode .messages-container {
 
 body.light-mode .message.self::before {
     background: rgba(0, 0, 0, 0.25);
+}
+
+body.light-mode .emoji-picker-search {
+    background: rgba(255, 255, 255, 0.92);
+}
+
+body.light-mode .nym-display {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .nym-display:hover {
+    background: rgba(0, 0, 0, 0.07);
+}
+
+body.light-mode .user-item:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+body.light-mode .video-expand-btn {
+    background: rgba(0, 0, 0, 0.4);
+    border-color: rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .message-content .video-container:hover video.message-video {
+    border-color: rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .chat-header {
+    border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .input-container {
+    border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .color-mode-group {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+body.light-mode .color-mode-btn.active {
+    background: rgb(from var(--primary) r g b / 0.15);
 }
 
 .shop-modal {
@@ -5377,7 +5435,7 @@ body.light-mode .message.self::before {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xs);
-    color: #ffffff;
+    color: var(--text-bright, #ffffff);
     padding: 8px 12px;
     font-size: 12px;
     outline: none;
@@ -7122,6 +7180,21 @@ body.light-mode.chat-bubbles .message.mentioned .message-content {
 
 body.light-mode.chat-bubbles .message:hover {
     background: none !important;
+}
+
+body.light-mode.chat-bubbles .message.style-fire .message-content,
+body.light-mode.chat-bubbles .message.style-ice .message-content,
+body.light-mode.chat-bubbles .message.style-rainbow .message-content,
+body.light-mode.chat-bubbles .message.style-aurora .message-content {
+    background: rgba(0, 0, 0, 0.08) !important;
+}
+
+body.light-mode.chat-bubbles .message.style-satoshi .message-content {
+    background: rgba(247, 147, 26, 0.12) !important;
+}
+
+body.light-mode.chat-bubbles .message.supporter-style .message-content {
+    background: rgba(180, 150, 0, 0.08) !important;
 }
 
 body.theme-ghost.chat-bubbles .message-content {

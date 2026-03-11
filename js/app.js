@@ -5934,7 +5934,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             ctxAvatarImg.onerror = function () { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
         }
         if (ctxAvatarNym) {
-            let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+            const flairHtml = this.getFlairForUser(pubkey);
+            const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+                ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 4px;">✓</span>`
+                : '';
+            let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}`;
             if (this.isVerifiedDeveloper(pubkey)) {
                 nymHtml += `<div class="context-menu-dev-label">Nymchat Developer</div>`;
             }
@@ -16077,6 +16081,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return `<pre><code>${formattedCode}</code></pre>`;
         });
 
+        // Inline code `text`
+        formatted = formatted.replace(/`([^`]+?)`/g, '<code>$1</code>');
+
         // Bold **text** or __text__
         formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
         formatted = formatted.replace(/__(.+?)__/g, '<strong>$1</strong>');
@@ -16505,7 +16512,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         displayUsers.forEach((user) => {
             const baseNym = this.parseNymFromDisplay(user.nym);
             const suffix = this.getPubkeySuffix(user.pubkey);
-            const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+            const flairHtml = this.getFlairForUser(user.pubkey);
+            const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
             const verifiedBadge = this.isVerifiedDeveloper(user.pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>`
                 : '';
@@ -21037,7 +21045,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     applyTheme(theme) {
-        const root = document.documentElement;
         document.body.classList.remove('theme-ghost', 'theme-bitchat');
 
         if (theme === 'ghost') {
@@ -21159,12 +21166,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         };
 
+        // Clear any stale inline theme vars from both documentElement and body
+        ['--primary', '--secondary', '--text', '--text-dim', '--text-bright', '--lightning'].forEach(v => {
+            document.documentElement.style.removeProperty(v);
+            document.body.style.removeProperty(v);
+        });
+
         const mode = isLight ? 'light' : 'dark';
         const selectedTheme = themes[theme] && themes[theme][mode];
         if (selectedTheme) {
             Object.entries(selectedTheme).forEach(([key, value]) => {
                 const cssVar = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
-                root.style.setProperty(cssVar, value);
+                document.body.style.setProperty(cssVar, value);
             });
         }
         this.refreshMessages();
@@ -21191,6 +21204,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
         // Re-apply current theme to pick up light/dark color variants
         this.applyTheme(this.settings.theme);
+
+        // Re-apply wallpaper so custom overlays match the new mode
+        this.loadWallpaper();
+
+        // Update meta theme-color to match the mode
+        const metaTheme = document.querySelector('meta[name="theme-color"]');
+        if (metaTheme) {
+            metaTheme.content = resolved === 'light' ? '#f5f5f2' : '#000000';
+        }
     }
 
     setupColorModeListener() {
@@ -21207,6 +21229,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Clear user colors cache when theme changes
         this.userColors.clear();
 
+        // Remove stale dynamic bitchat style elements so they regenerate for current mode
+        this.cleanupBitchatStyles();
+
         // Re-display all messages to apply new colors
         const container = document.getElementById('messagesContainer');
         const messages = container.querySelectorAll('.message');
@@ -21214,23 +21239,27 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         messages.forEach(msg => {
             const pubkey = msg.dataset.pubkey;
             const authorElement = msg.querySelector('.message-author');
-            if (authorElement) {
-                // Remove existing bitchat classes
+            const contentElement = msg.querySelector('.message-content');
+
+            // Helper to swap bitchat classes on an element
+            const updateBitchatClass = (el) => {
+                if (!el) return;
                 const classesToRemove = [];
-                authorElement.classList.forEach(cls => {
+                el.classList.forEach(cls => {
                     if (cls.startsWith('bitchat-user-') || cls === 'bitchat-theme') {
                         classesToRemove.push(cls);
                     }
                 });
+                classesToRemove.forEach(cls => el.classList.remove(cls));
 
-                classesToRemove.forEach(cls => authorElement.classList.remove(cls));
-
-                // Add new color class
                 const colorClass = this.getUserColorClass(pubkey);
                 if (colorClass) {
-                    authorElement.classList.add(colorClass);
+                    el.classList.add(colorClass);
                 }
-            }
+            };
+
+            updateBitchatClass(authorElement);
+            updateBitchatClass(contentElement);
         });
 
         // Also refresh user list
@@ -21657,12 +21686,23 @@ function previewTextSize(value) {
     document.documentElement.style.setProperty('--user-text-size', value + 'px');
 }
 
+function commitTextSize(value) {
+    const size = parseInt(value, 10);
+    nym.settings.textSize = size;
+    localStorage.setItem('nym_text_size', String(size));
+    document.documentElement.style.setProperty('--user-text-size', size + 'px');
+    nostrSettingsSave();
+}
+
 function resetTextSize() {
     const slider = document.getElementById('textSizeSlider');
     const label = document.getElementById('textSizeValue');
     if (slider) slider.value = 15;
     if (label) label.textContent = '15px';
     document.documentElement.style.setProperty('--user-text-size', '15px');
+    nym.settings.textSize = 15;
+    localStorage.setItem('nym_text_size', '15');
+    nostrSettingsSave();
 }
 
 function selectImage() {
@@ -22363,6 +22403,7 @@ async function showSettings() {
                 btn.classList.add('active');
                 localStorage.setItem('nym_color_mode', btn.dataset.mode);
                 nym.applyColorMode();
+                nostrSettingsSave();
             };
         });
     }
@@ -22540,6 +22581,7 @@ async function showSettings() {
         nym.settings.theme = this.value;
         nym.applyTheme(this.value);
         nym.saveSettings();
+        nostrSettingsSave();
     };
 
     document.getElementById('soundSelect').value = nym.settings.sound;
@@ -22870,6 +22912,7 @@ function selectMessageLayout(layout) {
     nym.settings.chatLayout = layout;
     localStorage.setItem('nym_chat_layout', layout);
     applyMessageLayout(layout);
+    nostrSettingsSave();
 }
 
 function applyMessageLayout(layout) {
@@ -22887,6 +22930,7 @@ function selectWallpaper(type) {
     if (type !== 'custom') {
         nym.applyWallpaper(type);
         nym.saveWallpaper(type);
+        nostrSettingsSave();
     }
 }
 
@@ -22926,6 +22970,7 @@ async function handleWallpaperUpload(event) {
 
         nym.applyWallpaper('custom', url);
         nym.saveWallpaper('custom', url);
+        nostrSettingsSave();
         nym.displaySystemMessage('Wallpaper uploaded and applied.');
     } else {
         customPreview.innerHTML = originalContent;
@@ -22956,7 +23001,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.45.166 ═══<br/>
+═══ Nymchat v3.45.167 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
