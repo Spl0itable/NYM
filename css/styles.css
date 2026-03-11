@@ -4163,9 +4163,8 @@ body.light-mode .style-preview-ghost {
 }
 
 body.light-mode .message.style-fire .message-content {
-    background: linear-gradient(45deg, #cc0000, #cc4400, #aa7700);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: #cc4400 !important;
+    text-shadow: none;
 }
 
 body.light-mode .style-preview-fire {
@@ -4176,9 +4175,8 @@ body.light-mode .style-preview-fire {
 }
 
 body.light-mode .message.style-ice .message-content {
-    background: linear-gradient(135deg, #007799, #004488);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: #006688 !important;
+    text-shadow: none;
 }
 
 body.light-mode .style-preview-ice {
@@ -4189,9 +4187,7 @@ body.light-mode .style-preview-ice {
 }
 
 body.light-mode .message.style-rainbow .message-content {
-    background: linear-gradient(90deg, #cc0000, #cc5500, #888800, #007700, #005599, #442299);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    animation: rainbowTextLight 3s linear infinite;
 }
 
 body.light-mode .style-preview-rainbow {
@@ -4209,9 +4205,8 @@ body.light-mode .style-preview-glitch {
 }
 
 body.light-mode .message.style-aurora .message-content {
-    background: linear-gradient(120deg, #007766, #334499, #880066, #007766);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    animation: auroraTextLight 6s linear infinite;
+    text-shadow: none;
 }
 
 body.light-mode .style-preview-aurora {
@@ -4219,6 +4214,54 @@ body.light-mode .style-preview-aurora {
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     text-shadow: none;
+}
+
+@keyframes rainbowTextLight {
+    0% {
+        color: #cc0000;
+    }
+
+    16% {
+        color: #cc5500;
+    }
+
+    33% {
+        color: #888800;
+    }
+
+    50% {
+        color: #007700;
+    }
+
+    66% {
+        color: #005599;
+    }
+
+    83% {
+        color: #442299;
+    }
+
+    100% {
+        color: #cc0000;
+    }
+}
+
+@keyframes auroraTextLight {
+    0% {
+        color: #007766;
+    }
+
+    33% {
+        color: #334499;
+    }
+
+    66% {
+        color: #880066;
+    }
+
+    100% {
+        color: #007766;
+    }
 }
 
 body.light-mode .message.style-satoshi .message-content {
@@ -4780,11 +4823,11 @@ body.light-mode .message.self::before {
 
     0%,
     100% {
-        opacity: 1;
+        text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00;
     }
 
     50% {
-        opacity: 0.7;
+        text-shadow: 0 0 4px #00ff00, 0 0 8px #00ff00;
     }
 }
 
@@ -4816,11 +4859,11 @@ body.light-mode .message.self::before {
 
     0%,
     100% {
-        transform: translateY(0);
+        text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
     }
 
     50% {
-        transform: translateY(-3px);
+        text-shadow: 0 2px 16px rgba(255, 255, 255, 0.5);
     }
 }
 
@@ -4836,11 +4879,13 @@ body.light-mode .message.self::before {
 
     0%,
     100% {
-        filter: brightness(1);
+        color: #ff6600;
+        text-shadow: 0 0 8px rgba(255, 100, 0, 0.6);
     }
 
     50% {
-        filter: brightness(1.2);
+        color: #ffaa00;
+        text-shadow: 0 0 14px rgba(255, 160, 0, 0.8);
     }
 }
 
@@ -4866,6 +4911,36 @@ body.light-mode .message.self::before {
 
     100% {
         filter: hue-rotate(360deg);
+    }
+}
+
+@keyframes rainbowText {
+    0% {
+        color: #ff0000;
+    }
+
+    16% {
+        color: #ff7700;
+    }
+
+    33% {
+        color: #ffff00;
+    }
+
+    50% {
+        color: #00ff00;
+    }
+
+    66% {
+        color: #0099ff;
+    }
+
+    83% {
+        color: #6633ff;
+    }
+
+    100% {
+        color: #ff0000;
     }
 }
 
@@ -5035,23 +5110,18 @@ body.light-mode .message.self::before {
 }
 
 .message.style-fire .message-content {
-    background: linear-gradient(45deg, #ff0000, #ff6600, #ffaa00);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: #ff6600 !important;
+    text-shadow: 0 0 8px rgba(255, 100, 0, 0.6);
     animation: fireFlicker 0.5s ease-in-out infinite;
 }
 
 .message.style-ice .message-content {
-    background: linear-gradient(135deg, #00ffff, #0088ff);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: #00ccee !important;
+    text-shadow: 0 0 8px rgba(0, 200, 255, 0.5);
 }
 
 .message.style-rainbow .message-content {
-    background: linear-gradient(90deg, #ff0000, #ff7700, #ffff00, #00ff00, #0099ff, #6633ff);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: rainbowShift 3s linear infinite;
+    animation: rainbowText 3s linear infinite;
 }
 
 .message.style-glitch .message-content {
@@ -5078,11 +5148,26 @@ body.light-mode .message.self::before {
     }
 }
 
+@keyframes auroraText {
+    0% {
+        color: #00ffd5;
+    }
+
+    33% {
+        color: #5b8cff;
+    }
+
+    66% {
+        color: #ff00ea;
+    }
+
+    100% {
+        color: #00ffd5;
+    }
+}
+
 .message.style-aurora .message-content {
-    background: linear-gradient(120deg, #00ffd5, #5b8cff, #ff00ea, #00ffd5);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: auroraShift 6s linear infinite;
+    animation: auroraText 6s linear infinite;
     text-shadow: 0 0 10px rgba(91, 140, 255, 0.3);
 }
 
@@ -5096,17 +5181,27 @@ body.light-mode .message.self::before {
     text-shadow: 0 0 10px rgba(82, 255, 157, 0.6);
 }
 
+/* Protect non-text content inside styled messages from style effects */
 .message[class*="style-"] .message-content img,
 .message[class*="style-"] .message-content video,
 .message[class*="style-"] .message-content .video-container,
-.message[class*="style-"] .message-content .file-offer {
-    -webkit-text-fill-color: initial;
-    -webkit-background-clip: initial;
-    background: none;
-    color: inherit;
-    text-shadow: none;
-    animation: none;
-    filter: none;
+.message[class*="style-"] .message-content .file-offer,
+.message[class*="style-"] .message-content blockquote,
+.message[class*="style-"] .message-content pre,
+.message[class*="style-"] .message-content a,
+.message[class*="style-"] .message-content .emoji {
+    color: initial !important;
+    text-shadow: none !important;
+    animation: none !important;
+    filter: none !important;
+}
+
+.message[class*="style-"] .message-content a {
+    color: var(--secondary) !important;
+}
+
+.message[class*="style-"] .message-content blockquote {
+    color: var(--text-dim) !important;
 }
 
 .message.supporter-style {
@@ -7047,25 +7142,19 @@ body.theme-ghost.light-mode.chat-bubbles .message.self .message-content {
 
 body.chat-bubbles .message.style-fire .message-content {
     background: rgba(255, 255, 255, 0.14) !important;
-    -webkit-background-clip: border-box !important;
-    -webkit-text-fill-color: #ff6600 !important;
+    color: #ff6600 !important;
 }
 body.chat-bubbles .message.style-ice .message-content {
     background: rgba(255, 255, 255, 0.14) !important;
-    -webkit-background-clip: border-box !important;
-    -webkit-text-fill-color: #00ccff !important;
+    color: #00ccff !important;
 }
 body.chat-bubbles .message.style-rainbow .message-content {
     background: rgba(255, 255, 255, 0.14) !important;
-    -webkit-background-clip: border-box !important;
-    -webkit-text-fill-color: #ff7700 !important;
-    animation: rainbowShift 3s linear infinite;
-    filter: hue-rotate(0deg);
+    animation: rainbowText 3s linear infinite;
 }
 body.chat-bubbles .message.style-aurora .message-content {
     background: rgba(255, 255, 255, 0.14) !important;
-    -webkit-background-clip: border-box !important;
-    -webkit-text-fill-color: #5b8cff !important;
+    animation: auroraText 6s linear infinite;
 }
 body.chat-bubbles .message.style-satoshi .message-content {
     background: rgba(247, 147, 26, 0.2) !important;

@@ -9061,13 +9061,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 pinnedChannels: Array.from(this.pinnedChannels),
                 blockedChannels: Array.from(this.blockedChannels),
                 userJoinedChannels: Array.from(this.userJoinedChannels),
+                hiddenChannels: Array.from(this.hiddenChannels || []),
+                blockedUsers: Array.from(this.blockedUsers || []),
+                blockedKeywords: Array.from(this.blockedKeywords || []),
                 lightningAddress: this.lightningAddress,
                 dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
                 dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
                 readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,  // Default true
                 typingIndicatorsEnabled: this.settings.typingIndicatorsEnabled !== false,  // Default true
                 pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
-                chatLayout: this.settings.chatLayout || 'irc'
+                chatLayout: this.settings.chatLayout || 'irc',
+                nickStyle: this.settings.nickStyle || 'fancy',
+                colorMode: localStorage.getItem('nym_color_mode') || 'auto',
+                wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'none',
+                wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
+                powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
+                hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
+                textSize: this.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
+                lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true'
             };
 
             const settingsEvent = {
@@ -15945,7 +15956,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
 
-    formatMessageWithQuotes(content) {
+    formatMessageWithQuotes(content, depth = 0) {
+        const MAX_QUOTE_DEPTH = 5;
+
         // Split content into lines and group consecutive > lines into quote blocks
         const lines = content.split('\n');
         let html = '';
@@ -15958,6 +15971,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 while (i < lines.length && lines[i].startsWith('>')) {
                     quoteLines.push(lines[i].substring(1).trim());
                     i++;
+                }
+
+                // If we've reached the max depth, strip the nested quote entirely
+                if (depth >= MAX_QUOTE_DEPTH) {
+                    continue;
                 }
 
                 // First line may have author attribution
@@ -15992,11 +16010,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     const flairHtml = authorPubkey ? this.getFlairForUser(authorPubkey) : '';
                     const displayAuthor = `${this.escapeHtml(cleanAuthor)}${flairHtml}`;
 
-                    html += `<blockquote><span class="quote-author">@${displayAuthor}:</span> ${this.formatMessageWithQuotes(quotedMessage)}</blockquote>`;
+                    html += `<blockquote><span class="quote-author">@${displayAuthor}:</span> ${this.formatMessageWithQuotes(quotedMessage, depth + 1)}</blockquote>`;
                 } else {
                     // Regular quote without author
                     const quotedMessage = quoteLines.join('\n');
-                    html += `<blockquote>${this.formatMessageWithQuotes(quotedMessage)}</blockquote>`;
+                    html += `<blockquote>${this.formatMessageWithQuotes(quotedMessage, depth + 1)}</blockquote>`;
                 }
             } else if (lines[i].trim() === '') {
                 // Skip empty lines adjacent to quotes
@@ -17584,7 +17602,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     setQuoteReply(author, text) {
-        this.pendingQuote = { author, text };
+        // Strip nested quotes deeper than 4 levels (adding > on send makes it 5)
+        const MAX_NESTED = 4;
+        const strippedLines = [];
+        for (const line of text.split('\n')) {
+            let depth = 0;
+            let tmp = line;
+            while (tmp.startsWith('>')) {
+                depth++;
+                tmp = tmp.substring(1).trimStart();
+            }
+            if (depth < MAX_NESTED) {
+                strippedLines.push(line);
+            }
+        }
+        const strippedText = strippedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+        this.pendingQuote = { author, text: strippedText };
         const preview = document.getElementById('quotePreview');
         const authorEl = document.getElementById('quotePreviewAuthor');
         const textEl = document.getElementById('quotePreviewText');
@@ -23669,7 +23702,15 @@ async function nostrSettingsSave() {
             powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
             hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
             blurOthersImages: nym.blurOthersImages !== false,
-            pinnedLandingChannel: nym.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' }
+            pinnedLandingChannel: nym.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
+            textSize: nym.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
+            lowDataMode: nym.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
+            pinnedChannels: Array.from(nym.pinnedChannels || []),
+            blockedChannels: Array.from(nym.blockedChannels || []),
+            userJoinedChannels: Array.from(nym.userJoinedChannels || []),
+            hiddenChannels: Array.from(nym.hiddenChannels || []),
+            blockedUsers: Array.from(nym.blockedUsers || []),
+            blockedKeywords: Array.from(nym.blockedKeywords || [])
         };
 
         const event = {
@@ -24101,6 +24142,9 @@ function applyNostrSettings(s) {
     // Blur images
     if (typeof s.blurOthersImages === 'boolean') {
         nym.blurOthersImages = s.blurOthersImages;
+        if (nym.pubkey) {
+            localStorage.setItem(`nym_image_blur_${nym.pubkey}`, String(s.blurOthersImages));
+        }
     }
 
     // Pinned landing channel
@@ -24108,6 +24152,58 @@ function applyNostrSettings(s) {
         nym.pinnedLandingChannel = s.pinnedLandingChannel;
         nym.settings.pinnedLandingChannel = s.pinnedLandingChannel;
         localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(s.pinnedLandingChannel));
+    }
+
+    // Text size
+    if (typeof s.textSize === 'number' && s.textSize >= 12 && s.textSize <= 28) {
+        nym.settings.textSize = s.textSize;
+        localStorage.setItem('nym_text_size', String(s.textSize));
+        document.documentElement.style.setProperty('--user-text-size', s.textSize + 'px');
+    }
+
+    // Low data mode
+    if (typeof s.lowDataMode === 'boolean') {
+        nym.settings.lowDataMode = s.lowDataMode;
+        localStorage.setItem('nym_low_data_mode', String(s.lowDataMode));
+    }
+
+    // Pinned channels
+    if (Array.isArray(s.pinnedChannels)) {
+        nym.pinnedChannels = new Set(s.pinnedChannels);
+        localStorage.setItem('nym_pinned_channels', JSON.stringify(s.pinnedChannels));
+    }
+
+    // Blocked channels
+    if (Array.isArray(s.blockedChannels)) {
+        nym.blockedChannels = new Set(s.blockedChannels);
+        localStorage.setItem('nym_blocked_channels', JSON.stringify(s.blockedChannels));
+    }
+
+    // User joined channels
+    if (Array.isArray(s.userJoinedChannels)) {
+        nym.userJoinedChannels = new Set(s.userJoinedChannels);
+        localStorage.setItem('nym_user_joined_channels', JSON.stringify(s.userJoinedChannels));
+    }
+
+    // Hidden channels
+    if (Array.isArray(s.hiddenChannels)) {
+        nym.hiddenChannels = new Set(s.hiddenChannels);
+        localStorage.setItem('nym_hidden_channels', JSON.stringify(s.hiddenChannels));
+        if (typeof nym.applyHiddenChannels === 'function') {
+            nym.applyHiddenChannels();
+        }
+    }
+
+    // Blocked users
+    if (Array.isArray(s.blockedUsers)) {
+        nym.blockedUsers = new Set(s.blockedUsers);
+        localStorage.setItem('nym_blocked', JSON.stringify(s.blockedUsers));
+    }
+
+    // Blocked keywords
+    if (Array.isArray(s.blockedKeywords)) {
+        nym.blockedKeywords = new Set(s.blockedKeywords);
+        localStorage.setItem('nym_blocked_keywords', JSON.stringify(s.blockedKeywords));
     }
 
     nym.displaySystemMessage('Settings synced from Nostr relays.');
