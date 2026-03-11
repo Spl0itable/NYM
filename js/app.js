@@ -452,6 +452,8 @@ class NYM {
         this.poolConnectedRelays = [];
         this.poolRelayTypes = {};
         this.poolReady = false;
+        this._poolReconnecting = false;
+        this._poolReconnectRetries = 0;
         this.blacklistedRelays = new Set();
         this.relayKinds = new Map();
         this.relayStats = {
@@ -1044,6 +1046,10 @@ class NYM {
         this.currentChannel = 'nym';
         this.currentGeohash = '';
         this.currentPM = null;
+        this.navigationHistory = [];
+        this.navigationIndex = -1;
+        this._navigating = false;
+        try { history.replaceState({ _nym_nav: -1 }, ''); } catch {}
         this.messages = new Map();
         this.channelDOMCache = new Map();
         this.virtualScroll = {
@@ -5122,6 +5128,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.setupEmojiPicker();
             this.setupContextMenu();
             this.setupMobileGestures();
+            this.setupTranslateInput();
 
             // Load saved preferences
             this.applyColorMode();
@@ -5235,6 +5242,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Reset reconnection attempt counter so we get a fresh set of attempts
         this.reconnectionAttempts = 0;
         this.isReconnecting = false;
+        this._poolReconnecting = false;
+        this._poolReconnectRetries = 0;
     }
 
     async checkConnectionHealth() {
@@ -5319,11 +5328,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Multiplexed pool mode: just reconnect the single pool socket
         if (this.useRelayProxy) {
             if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) return;
-            try {
-                await this._connectToRelayPool();
-                this._poolSubscribe();
-                this.updateConnectionStatus();
-            } catch { /* Will auto-retry via onclose */ }
+            this._schedulePoolReconnect();
             return;
         }
 
@@ -5383,14 +5388,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Multiplexed pool mode: just reconnect the pool
             if (this.useRelayProxy) {
-                if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) {
-                    this._connectToRelayPool()
-                        .then(() => {
-                            this._poolSubscribe();
-                            this.retryPendingDMsOnReconnect();
-                        })
-                        .catch(() => {});
-                }
+                this._poolReconnecting = false; // Reset so schedule can run
+                this._poolReconnectRetries = 0;  // Reset backoff on network restore
+                this._schedulePoolReconnect();
                 return;
             }
 
@@ -5528,6 +5528,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async attemptReconnection() {
+        // Pool mode: delegate to the guarded pool reconnect
+        if (this.useRelayProxy) {
+            this._poolReconnecting = false; // Allow a fresh attempt
+            this._schedulePoolReconnect();
+            return;
+        }
+
         // Prevent multiple simultaneous reconnection attempts
         if (this.isReconnecting) {
             return;
@@ -6978,7 +6985,62 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return `${proto}//${window.location.host}/api/relay-pool`;
     }
 
+    // Schedule a pool reconnection with exponential backoff, preventing concurrent attempts.
+    _schedulePoolReconnect() {
+        if (this._poolReconnecting) return;
+        if (!this.useRelayProxy) return;
+
+        const attempt = (retries) => {
+            if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+                this._poolReconnecting = false;
+                return;
+            }
+            if (!navigator.onLine) {
+                // Wait for the 'online' event to trigger reconnection instead
+                this._poolReconnecting = false;
+                return;
+            }
+
+            const delay = Math.min(3000 * Math.pow(2, retries), 30000);
+            this.updateConnectionStatus(retries > 0
+                ? `Reconnecting (attempt ${retries + 1})...`
+                : 'Reconnecting...');
+
+            setTimeout(() => {
+                // Re-check: another path may have reconnected while we waited
+                if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+                    this._poolReconnecting = false;
+                    return;
+                }
+                this._connectToRelayPool()
+                    .then(() => {
+                        this._poolReconnecting = false;
+                        this._poolReconnectRetries = 0;
+                        this._poolSubscribe();
+                        this.retryPendingDMsOnReconnect();
+                    })
+                    .catch(() => {
+                        if (retries < 9) {
+                            attempt(retries + 1);
+                        } else {
+                            this._poolReconnecting = false;
+                            this._poolReconnectRetries = 0;
+                            this.updateConnectionStatus('Disconnected - Click to reconnect');
+                        }
+                    });
+            }, delay);
+        };
+
+        this._poolReconnecting = true;
+        attempt(this._poolReconnectRetries || 0);
+    }
+
     _connectToRelayPool() {
+        // Prevent concurrent connection attempts
+        if (this.poolSocket && this.poolSocket.readyState === WebSocket.CONNECTING) {
+            return Promise.reject(new Error('Connection already in progress'));
+        }
+
         return new Promise((resolve, reject) => {
             const url = this._getRelayPoolUrl();
             const ws = new WebSocket(url);
@@ -7103,24 +7165,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             ws.onclose = () => {
                 clearTimeout(timeout);
-                this.poolSocket = null;
-                this.poolReady = false;
-                this.poolConnectedRelays = [];
-                this.poolRelayTypes = {};
-                this.relayPool.clear();
-                this.connected = false;
-                this.updateConnectionStatus('Disconnected');
+                // Only clean up if this is still the active socket
+                if (this.poolSocket === ws) {
+                    this.poolSocket = null;
+                    this.poolReady = false;
+                    this.poolConnectedRelays = [];
+                    this.poolRelayTypes = {};
+                    this.relayPool.clear();
+                    this.connected = false;
+                    this.updateConnectionStatus('Disconnected');
+                }
 
-                // Reconnect after 3 seconds
-                setTimeout(() => {
-                    if (navigator.onLine) {
-                        this._connectToRelayPool()
-                            .then(() => {
-                                this._poolSubscribe();
-                            })
-                            .catch(() => {});
-                    }
-                }, 3000);
+                // Reconnect with exponential backoff, guarded against concurrent attempts
+                this._schedulePoolReconnect();
             };
 
             ws.onerror = () => {
@@ -8005,7 +8062,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
                 const langLabel = detectedLang !== 'auto' && detectedLang !== targetLang
                     ? `<span class="translation-lang">${detectedLang} → ${targetLang}</span>` : '';
-                translationEl.innerHTML = `<span class="translation-icon">🌐</span> ${this.escapeHtml(translatedText)} ${langLabel}`;
+                translationEl.innerHTML = `<span class="translation-icon">🌐</span> ${this.escapeHtml(translatedText).replace(/\n/g, '<br>')} ${langLabel}`;
             } else {
                 this.displaySystemMessage(`Translation: ${translatedText}`);
             }
@@ -8056,6 +8113,154 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         }
         throw new Error('All translation instances failed: ' + lastError);
+    }
+
+    // Translate text from the message input and replace it with the translation.
+    async translateInputText(targetLang) {
+        const input = document.getElementById('messageInput');
+        const text = input.value.trim();
+        if (!text) return;
+
+        const btn = document.getElementById('translateInputBtn');
+        if (btn) btn.classList.add('translating');
+
+        try {
+            let translatedText;
+            const base = this._getProxyBaseUrl();
+            if (base) {
+                const resp = await fetch(`${base}?action=translate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, source: 'auto', target: targetLang }),
+                });
+                const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+                if (!contentType.includes('application/json')) {
+                    throw new Error(`Proxy returned non-JSON response (${resp.status})`);
+                }
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                translatedText = data.translatedText;
+            } else {
+                const result = await this._translateDirect(text, targetLang);
+                translatedText = result.translatedText;
+            }
+            input.value = translatedText;
+            this.autoResizeTextarea(input);
+        } catch (err) {
+            this.displaySystemMessage('Translation failed: ' + (err.message || 'Unknown error'));
+        } finally {
+            if (btn) btn.classList.remove('translating');
+        }
+    }
+
+    // Set up the translate input button and dropdown in the message input area.
+    setupTranslateInput() {
+        const btn = document.getElementById('translateInputBtn');
+        const dropdown = document.getElementById('translateInputDropdown');
+        if (!btn || !dropdown) return;
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropdown.classList.toggle('active');
+        });
+
+        dropdown.querySelectorAll('.translate-dropdown-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const lang = item.dataset.lang;
+                dropdown.classList.remove('active');
+                this.translateInputText(lang);
+            });
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#translateInputBtn') && !e.target.closest('#translateInputDropdown')) {
+                dropdown.classList.remove('active');
+            }
+        });
+    }
+
+    // Show/hide the translate input button based on whether the input has text.
+    updateTranslateInputBtn() {
+        const input = document.getElementById('messageInput');
+        const btn = document.getElementById('translateInputBtn');
+        if (!btn || !input) return;
+        btn.style.display = input.value.trim().length > 0 ? 'flex' : 'none';
+        // Hide dropdown when button hides
+        if (input.value.trim().length === 0) {
+            const dropdown = document.getElementById('translateInputDropdown');
+            if (dropdown) dropdown.classList.remove('active');
+        }
+    }
+
+    // Push a navigation entry onto the history stack.
+    _pushNavigation(entry) {
+        if (this._navigating) return;
+        // Avoid duplicate adjacent entries
+        const current = this.navigationHistory[this.navigationIndex];
+        if (current && current.type === entry.type) {
+            if (entry.type === 'channel' && current.channel === entry.channel && current.geohash === entry.geohash) return;
+            if (entry.type === 'pm' && current.pubkey === entry.pubkey) return;
+            if (entry.type === 'group' && current.groupId === entry.groupId) return;
+        }
+        // Truncate any forward history
+        this.navigationHistory = this.navigationHistory.slice(0, this.navigationIndex + 1);
+        this.navigationHistory.push(entry);
+        // Cap at 50 entries
+        if (this.navigationHistory.length > 50) {
+            this.navigationHistory.shift();
+        }
+        this.navigationIndex = this.navigationHistory.length - 1;
+        // Sync with browser history so mouse back/forward buttons trigger popstate
+        try {
+            history.pushState({ _nym_nav: this.navigationIndex }, '');
+        } catch {
+            // Ignore if pushState fails (e.g. sandboxed iframe)
+        }
+        this._updateNavButtons();
+    }
+
+    // Navigate back in history.
+    navigateBack() {
+        if (this.navigationIndex <= 0) return;
+        this.navigationIndex--;
+        this._navigateTo(this.navigationHistory[this.navigationIndex]);
+        try { history.replaceState({ _nym_nav: this.navigationIndex }, ''); } catch {}
+        this._updateNavButtons();
+    }
+
+    // Navigate forward in history.
+    navigateForward() {
+        if (this.navigationIndex >= this.navigationHistory.length - 1) return;
+        this.navigationIndex++;
+        this._navigateTo(this.navigationHistory[this.navigationIndex]);
+        try { history.replaceState({ _nym_nav: this.navigationIndex }, ''); } catch {}
+        this._updateNavButtons();
+    }
+
+    // Navigate to a specific history entry without recording it.
+    _navigateTo(entry) {
+        this._navigating = true;
+        try {
+            if (entry.type === 'channel') {
+                this.switchChannel(entry.channel, entry.geohash);
+            } else if (entry.type === 'pm') {
+                this.openUserPM(entry.nym, entry.pubkey);
+            } else if (entry.type === 'group') {
+                this.openGroup(entry.groupId);
+            }
+        } finally {
+            this._navigating = false;
+        }
+    }
+
+    // Update the enabled/disabled state of the back/forward buttons.
+    _updateNavButtons() {
+        const backBtn = document.getElementById('channelBackBtn');
+        const fwdBtn = document.getElementById('channelForwardBtn');
+        if (backBtn) backBtn.disabled = this.navigationIndex <= 0;
+        if (fwdBtn) fwdBtn.disabled = this.navigationIndex >= this.navigationHistory.length - 1;
     }
 
     // Unfurl a URL and return Open Graph metadata.
@@ -13826,6 +14031,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentGeohash = null;
         this.userScrolledUp = false;
 
+        // Track navigation history
+        this._pushNavigation({ type: 'group', groupId });
+
         // Re-render typing indicator for the new conversation
         this.renderTypingIndicator();
 
@@ -14212,6 +14420,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentChannel = null;
         this.currentGeohash = null;
         this.userScrolledUp = false;
+
+        // Track navigation history
+        this._pushNavigation({ type: 'pm', nym, pubkey });
 
         // Re-render typing indicator for the new conversation
         this.renderTypingIndicator();
@@ -17433,6 +17644,35 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Double-click to reply on desktop
         this.setupDoubleClickToReply();
 
+        // Alt+Left / Alt+Right for channel back/forward navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.altKey && e.key === 'ArrowLeft') {
+                e.preventDefault();
+                this.navigateBack();
+            } else if (e.altKey && e.key === 'ArrowRight') {
+                e.preventDefault();
+                this.navigateForward();
+            }
+        });
+
+        // Mouse back/forward buttons: browser intercepts these before JS can
+        // preventDefault, so we integrate with the History API instead.
+        // pushState is called in _pushNavigation; popstate handles back/forward.
+        window.addEventListener('popstate', (e) => {
+            if (e.state && e.state._nym_nav != null) {
+                const targetIndex = e.state._nym_nav;
+                if (targetIndex < this.navigationIndex) {
+                    this.navigationIndex = targetIndex;
+                    this._navigateTo(this.navigationHistory[this.navigationIndex]);
+                    this._updateNavButtons();
+                } else if (targetIndex > this.navigationIndex) {
+                    this.navigationIndex = targetIndex;
+                    this._navigateTo(this.navigationHistory[this.navigationIndex]);
+                    this._updateNavButtons();
+                }
+            }
+        });
+
         const input = document.getElementById('messageInput');
 
         input.addEventListener('keydown', (e) => {
@@ -17502,6 +17742,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         input.addEventListener('input', (e) => {
             this.handleInputChange(e.target.value);
             this.autoResizeTextarea(e.target);
+            this.updateTranslateInputBtn();
             // Signal typing in PM/group mode
             if (this.inPMMode && e.target.value.trim().length > 0) {
                 this.handleTypingSignal();
@@ -17951,12 +18192,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 ...allEmojiEntries.filter(e => !recentSet.has(e.emoji)).slice(0, 10)
             ].slice(0, 8);
         } else {
+            const searchLower = search.toLowerCase();
             matches = allEmojiEntries
                 .filter(entry =>
-                    entry.name.toLowerCase().includes(search.toLowerCase()) ||
+                    entry.name.toLowerCase().includes(searchLower) ||
                     entry.emoji.includes(search)
                 )
-                .sort((a, b) => a.priority - b.priority)
+                .sort((a, b) => {
+                    const aName = a.name.toLowerCase();
+                    const bName = b.name.toLowerCase();
+                    // Exact match first
+                    const aExact = aName === searchLower ? 0 : 1;
+                    const bExact = bName === searchLower ? 0 : 1;
+                    if (aExact !== bExact) return aExact - bExact;
+                    // Prefix match before substring match
+                    const aPrefix = aName.startsWith(searchLower) ? 0 : 1;
+                    const bPrefix = bName.startsWith(searchLower) ? 0 : 1;
+                    if (aPrefix !== bPrefix) return aPrefix - bPrefix;
+                    // Then by priority (emojiMap entries before category-only)
+                    if (a.priority !== b.priority) return a.priority - b.priority;
+                    // Shorter names first (more likely what user wants)
+                    return aName.length - bName.length;
+                })
                 .slice(0, 8);
         }
 
@@ -20390,6 +20647,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentGeohash = geohash;
         this.userScrolledUp = false;
         this.clearQuoteReply();
+
+        // Track navigation history
+        this._pushNavigation({ type: 'channel', channel, geohash });
 
         // Hide typing indicator when leaving PM mode
         this.renderTypingIndicator();
@@ -23821,7 +24081,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.47.171 ═══<br/>
+═══ Nymchat v3.48.171 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

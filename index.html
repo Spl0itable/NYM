@@ -133,12 +133,9 @@
         </div>
 
         <div class="context-menu-item" id="ctxTranslate">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"
                 style="vertical-align: middle; margin-right: 8px;">
-                <path d="M 2 3 L 8 3 M 5 3 L 5 2 M 3.5 3 C 3.5 5.5 4.5 7.5 7 9" stroke-linecap="round" />
-                <path d="M 7 3 C 6 6 4 7.5 2 8.5" stroke-linecap="round" />
-                <path d="M 9 7 L 11 13 L 13 7" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M 9.5 11 L 12.5 11" stroke-linecap="round" />
+                <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
             </svg>
             Translate Message
         </div>
@@ -401,6 +398,18 @@
             <header class="chat-header">
                 <div class="channel-info">
                     <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="channel-nav-buttons">
+                            <button class="channel-nav-btn" id="channelBackBtn" onclick="nym.navigateBack()" title="Go back (Alt+Left)" disabled>
+                                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="15 18 9 12 15 6"></polyline>
+                                </svg>
+                            </button>
+                            <button class="channel-nav-btn" id="channelForwardBtn" onclick="nym.navigateForward()" title="Go forward (Alt+Right)" disabled>
+                                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="9 6 15 12 9 18"></polyline>
+                                </svg>
+                            </button>
+                        </div>
                         <div>
                             <div class="channel-title" id="currentChannel">#nym</div>
                             <div class="channel-meta" id="channelMeta">0 nyms in channel</div>
@@ -461,8 +470,37 @@
                             </svg>
                         </button>
                     </div>
-                    <textarea class="message-input" id="messageInput" placeholder="Type a message or / for commands..."
-                        rows="1" disabled></textarea>
+                    <div class="message-input-row">
+                        <textarea class="message-input" id="messageInput" placeholder="Type a message or / for commands..."
+                            rows="1" disabled></textarea>
+                        <button class="translate-input-btn" id="translateInputBtn" title="Translate text" style="display: none;">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                                <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
+                            </svg>
+                        </button>
+                        <div class="translate-input-dropdown" id="translateInputDropdown">
+                            <div class="translate-dropdown-item" data-lang="en">English</div>
+                            <div class="translate-dropdown-item" data-lang="es">Spanish</div>
+                            <div class="translate-dropdown-item" data-lang="fr">French</div>
+                            <div class="translate-dropdown-item" data-lang="de">German</div>
+                            <div class="translate-dropdown-item" data-lang="it">Italian</div>
+                            <div class="translate-dropdown-item" data-lang="pt">Portuguese</div>
+                            <div class="translate-dropdown-item" data-lang="ru">Russian</div>
+                            <div class="translate-dropdown-item" data-lang="zh">Chinese</div>
+                            <div class="translate-dropdown-item" data-lang="ja">Japanese</div>
+                            <div class="translate-dropdown-item" data-lang="ko">Korean</div>
+                            <div class="translate-dropdown-item" data-lang="ar">Arabic</div>
+                            <div class="translate-dropdown-item" data-lang="hi">Hindi</div>
+                            <div class="translate-dropdown-item" data-lang="tr">Turkish</div>
+                            <div class="translate-dropdown-item" data-lang="nl">Dutch</div>
+                            <div class="translate-dropdown-item" data-lang="pl">Polish</div>
+                            <div class="translate-dropdown-item" data-lang="uk">Ukrainian</div>
+                            <div class="translate-dropdown-item" data-lang="vi">Vietnamese</div>
+                            <div class="translate-dropdown-item" data-lang="th">Thai</div>
+                            <div class="translate-dropdown-item" data-lang="id">Indonesian</div>
+                            <div class="translate-dropdown-item" data-lang="sv">Swedish</div>
+                        </div>
+                    </div>
                 </div>
                 <div class="input-buttons">
                     <input type="file" class="file-input" id="fileInput" accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime">
