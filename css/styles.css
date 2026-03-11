@@ -7017,7 +7017,7 @@ body.light-mode .layout-preview {
 .lp-bubble-other {
     background: rgba(255, 255, 255, 0.14);
     align-self: flex-start;
-    border-bottom-left-radius: 2px;
+    border-top-left-radius: 2px;
 }
 
 body.light-mode .lp-bubble-other {
@@ -7027,7 +7027,7 @@ body.light-mode .lp-bubble-other {
 .lp-bubble-self {
     background: rgb(from var(--primary) r g b / 0.2);
     align-self: flex-end;
-    border-bottom-right-radius: 2px;
+    border-top-right-radius: 2px;
     color: var(--text);
 }
 

@@ -5935,10 +5935,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         if (ctxAvatarNym) {
             const flairHtml = this.getFlairForUser(pubkey);
+            const userShopItems = this.getUserShopItems(pubkey);
+            const supporterBadge = userShopItems?.supporter ?
+                '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
             const verifiedBadge = this.isVerifiedDeveloper(pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 4px;">✓</span>`
                 : '';
-            let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}`;
+            let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}${verifiedBadge}`;
             if (this.isVerifiedDeveloper(pubkey)) {
                 nymHtml += `<div class="context-menu-dev-label">Nymchat Developer</div>`;
             }
@@ -23001,7 +23004,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.45.167 ═══<br/>
+═══ Nymchat v3.45.168 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
