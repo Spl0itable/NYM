@@ -45,20 +45,29 @@ export async function onRequest(context) {
   const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
   const FAILED_COOLDOWN = 60000;       // 1 minute before retrying a failed relay
   const MAX_BACKOFF = 180000;          // 3 minute max backoff
+
+  // Track reconnection attempts separately from failure cooldown
+  const reconnectAttempts = new Map(); // relayUrl -> number of consecutive reconnects
+  const MAX_RECONNECT_ATTEMPTS = 5;   // Stop reconnecting after this many consecutive failures
+
   // Connection staggering for large relay sets
   let connectionQueue = [];
   let connectionTimer = null;
   const CONNECTION_STAGGER_MS = 100;   // 100ms between relay connections
   const MAX_CONCURRENT = 20;           // Max simultaneous connecting relays
 
-  // Debounce pool status updates to avoid flooding client during startup
+  // Track relays pending reconnection to avoid duplicate queue entries
+  const pendingReconnect = new Set();  // relayUrls scheduled for reconnect
+
+  // Debounce pool status updates to avoid flooding client during rapid changes
   let statusTimer = null;
+  let statusDelay = 500;              // Base debounce delay (ms)
   function schedulePoolStatus() {
-    if (statusTimer) return;
+    if (statusTimer) clearTimeout(statusTimer);
     statusTimer = setTimeout(() => {
       statusTimer = null;
       sendPoolStatus();
-    }, 500);
+    }, statusDelay);
   }
 
   // Clean old dedup entries periodically
@@ -144,6 +153,8 @@ export async function onRequest(context) {
   // Stagger relay connections to avoid overwhelming the worker
   function queueConnection(relayUrl, type) {
     if (upstreams.has(relayUrl)) return;
+    // Avoid duplicate entries in the queue
+    if (connectionQueue.some(item => item.url === relayUrl)) return;
     connectionQueue.push({ url: relayUrl, type });
     drainConnectionQueue();
   }
@@ -171,6 +182,34 @@ export async function onRequest(context) {
     }
   }
 
+  // Schedule a reconnection through the queue with jittered delay
+  function scheduleReconnect(relayUrl, type) {
+    if (!serverOpen) return;
+    if (pendingReconnect.has(relayUrl)) return;
+
+    // Check reconnect attempt limit
+    const attempts = reconnectAttempts.get(relayUrl) || 0;
+    if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+      trackRelayFailure(relayUrl);
+      reconnectAttempts.delete(relayUrl);
+      return;
+    }
+    reconnectAttempts.set(relayUrl, attempts + 1);
+
+    pendingReconnect.add(relayUrl);
+
+    // Jittered exponential delay: base 3s, grows with attempts, plus random jitter
+    const baseDelay = 3000;
+    const delay = baseDelay * Math.pow(1.5, attempts) + Math.random() * 2000;
+
+    setTimeout(() => {
+      pendingReconnect.delete(relayUrl);
+      if (serverOpen && !upstreams.has(relayUrl)) {
+        queueConnection(relayUrl, type);
+      }
+    }, delay);
+  }
+
   // Replay all active subscriptions to a newly connected relay
   function replaySubscriptions(relayUrl, ws) {
     if (writeOnlyRelays.has(relayUrl)) return;
@@ -187,7 +226,7 @@ export async function onRequest(context) {
     // Skip relays in failed cooldown
     if (shouldSkipRelay(relayUrl)) return;
 
-    const info = { ws: null, type, status: 'connecting' };
+    const info = { ws: null, type, status: 'connecting', handled: false };
     upstreams.set(relayUrl, info);
 
     const connectStartTime = Date.now();
@@ -199,6 +238,7 @@ export async function onRequest(context) {
       // Connection timeout — 8s to accommodate slower geo relays
       const timeout = setTimeout(() => {
         if (info.status === 'connecting') {
+          info.handled = true;
           info.status = 'failed';
           trackRelayFailure(relayUrl);
           try { ws.close(); } catch { /* noop */ }
@@ -211,6 +251,8 @@ export async function onRequest(context) {
         clearTimeout(timeout);
         info.status = 'connected';
         clearRelayFailure(relayUrl);
+        // Clear reconnect attempt counter on successful connection
+        reconnectAttempts.delete(relayUrl);
         relayLatency.set(relayUrl, Date.now() - connectStartTime);
         // Replay active subscriptions so this relay starts sending events
         replaySubscriptions(relayUrl, ws);
@@ -279,33 +321,39 @@ export async function onRequest(context) {
       });
 
       ws.addEventListener('close', () => {
+        clearTimeout(timeout);
+        // Guard against double-handling from error+close both firing
+        if (info.handled) return;
+        info.handled = true;
+
         const wasConnected = info.status === 'connected';
         info.status = 'closed';
         upstreams.delete(relayUrl);
         schedulePoolStatus();
 
-        // Only attempt reconnection if it was previously connected (not a fresh failure)
-        // and the relay isn't in cooldown
-        if (serverOpen && wasConnected && !shouldSkipRelay(relayUrl)) {
-          setTimeout(() => {
-            if (serverOpen) {
-              connectUpstream(relayUrl, type);
-            }
-          }, 5000);
-        } else if (serverOpen && !wasConnected) {
-          // Connection failed — track it; don't blindly retry
+        if (wasConnected) {
+          // Was a healthy connection that dropped — schedule reconnection
+          // through the queue with jitter to avoid thundering herd
+          scheduleReconnect(relayUrl, type);
+        } else {
+          // Never fully connected — track as failure
           trackRelayFailure(relayUrl);
         }
       });
 
       ws.addEventListener('error', () => {
         clearTimeout(timeout);
+        // Guard against double-handling from error+close both firing
+        if (info.handled) return;
+        info.handled = true;
+
         info.status = 'failed';
         trackRelayFailure(relayUrl);
         upstreams.delete(relayUrl);
         schedulePoolStatus();
       });
     } catch {
+      info.handled = true;
       info.status = 'failed';
       trackRelayFailure(relayUrl);
       upstreams.delete(relayUrl);
@@ -354,9 +402,14 @@ export async function onRequest(context) {
               }
             }
 
-            // Clear any pending connection queue from previous config
+            // Clear any pending connection queue and reconnect timers from previous config
             connectionQueue = [];
+            pendingReconnect.clear();
             if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
+
+            // Temporarily increase status debounce during bulk connection phase
+            statusDelay = 1500;
+            setTimeout(() => { statusDelay = 500; }, relays.length * CONNECTION_STAGGER_MS + 5000);
 
             // Connect new relays with staggering to avoid overwhelming the worker
             for (const url of relays) {
@@ -443,6 +496,7 @@ export async function onRequest(context) {
     serverOpen = false;
     if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
     connectionQueue = [];
+    pendingReconnect.clear();
     upstreams.forEach((info) => {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });
@@ -453,6 +507,7 @@ export async function onRequest(context) {
     serverOpen = false;
     if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
     connectionQueue = [];
+    pendingReconnect.clear();
     upstreams.forEach((info) => {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });
