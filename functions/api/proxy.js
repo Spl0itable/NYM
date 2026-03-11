@@ -19,12 +19,16 @@ const MAX_PROXY_SIZE = 25 * 1024 * 1024;
 // Max size for unfurl HTML fetch (512 KB)
 const MAX_UNFURL_SIZE = 512 * 1024;
 
-// LibreTranslate public instances (free, no API key required)
+// LibreTranslate public instances
 const LIBRE_TRANSLATE_INSTANCES = [
-  'https://libretranslate.com',
   'https://translate.terraprint.co',
   'https://trans.zillyhuhn.com',
+  'https://translate.fedilab.app',
+  'https://lt.vern.cc',
 ];
+
+// Timeout for translation requests
+const TRANSLATE_TIMEOUT = 8000;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -135,6 +139,8 @@ async function handleTranslate(request) {
   let lastError = null;
   for (const instance of LIBRE_TRANSLATE_INSTANCES) {
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TRANSLATE_TIMEOUT);
       const resp = await fetch(`${instance}/translate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -144,7 +150,9 @@ async function handleTranslate(request) {
           target: target,
           format: 'text',
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timer);
 
       if (resp.ok) {
         const data = await resp.json();
@@ -155,7 +163,7 @@ async function handleTranslate(request) {
       }
       lastError = `${instance} returned ${resp.status}`;
     } catch (err) {
-      lastError = `${instance}: ${err.message}`;
+      lastError = `${instance}: ${err.name === 'AbortError' ? 'timeout' : err.message}`;
     }
   }
 

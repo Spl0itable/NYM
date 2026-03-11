@@ -466,7 +466,10 @@ class NYM {
         this._relayStatsInterval = null;
         this._relayStatsAnimFrame = null;
         this.relayVerificationTimeout = 10000;
-        this.monitorRelays = ['wss://relay.nostr.watch', 'wss://monitorlizard.nostr1.com'];
+        // NIP-66 relay monitor relays and known monitor pubkeys
+        this.monitorRelays = ['wss://relay.nostr.watch', 'wss://history.nostr.watch', 'wss://relaypag.es'];
+        // nostr.watch Amsterdam monitor pubkey (publishes kind 30166 liveness events)
+        this.monitorPubkeys = ['9bbbb845e5b6c831c29789900769843ab43bb5047abe697870cb50b6fc9bf923'];
         this.broadcastRelays = [
             'wss://relay.damus.io',
             'wss://offchain.pub',
@@ -1019,6 +1022,7 @@ class NYM {
             'wss://nostr21.com'
         ];
         this.discoveredRelays = new Set();
+        this.pendingConnections = new Map();
         this.relayList = [];
         this.lastRelayDiscovery = 0;
         this.relayDiscoveryInterval = 300000;
@@ -4733,14 +4737,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const delay = i * 100;
             const connectionPromise = new Promise(resolve => {
                 setTimeout(async () => {
-                    try {
-                        await this.connectToRelayWithTimeout(relayUrl, 'geo', 3000);
+                    await this.connectToRelayWithTimeout(relayUrl, 'geo', 3000);
+                    const relay = this.relayPool.get(relayUrl);
+                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                         this.currentGeoRelays.add(relayUrl);
-                        this.subscribeToSingleRelay(relayUrl);
+                        // Geo relays only get channel-specific subscriptions
+                        if (this.currentChannel || this.currentGeohash) {
+                            const channelKey = this.currentGeohash || this.currentChannel;
+                            this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
+                        }
                         this.updateConnectionStatus();
-                    } catch (err) {
-                        this.trackRelayFailure(relayUrl);
-                        // Don't log errors for geo relays - they're supplemental
                     }
                     resolve();
                 }, delay);
@@ -4771,12 +4777,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
             if (!isConnected && this.shouldRetryRelay(relayUrl)) {
-                try {
-                    await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
+                await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
+                const r = this.relayPool.get(relayUrl);
+                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                     this.subscribeToSingleRelay(relayUrl);
                     this.updateConnectionStatus();
-                } catch (err) {
-                    this.trackRelayFailure(relayUrl);
                 }
             }
         }
@@ -4787,7 +4792,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
                 // Pool mode: send only default relays + active geo relays to the proxy
                 const writeOnly = ['wss://sendit.nosflare.com'];
-                const blocked = ['wss://relay.nosflare.com'];
+                const blocked = ['wss://relay.nosflare.com', 'wss://relay.nostraddress.com'];
                 const relays = this.defaultRelays.filter(r => !writeOnly.includes(r) && !blocked.includes(r));
                 for (const url of this.currentGeoRelays) {
                     if (!relays.includes(url)) relays.push(url);
@@ -4827,24 +4832,29 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // Direct mode: reconnect to all broadcast and geo relays
                 this.broadcastRelays.forEach(relayUrl => {
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                        this.connectToRelay(relayUrl, 'broadcast')
-                            .then(() => {
-                                this.subscribeToSingleRelay(relayUrl);
-                                this.updateConnectionStatus();
-                            })
-                            .catch(err => this.trackRelayFailure(relayUrl));
+                        this.connectToRelay(relayUrl, 'broadcast').then(() => {
+                                const r = this.relayPool.get(relayUrl);
+                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                    this.subscribeToSingleRelay(relayUrl);
+                                    this.updateConnectionStatus();
+                                }
+                            });
                     }
                 });
                 this.geoRelays.forEach((relay, index) => {
                     const relayUrl = relay.url;
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                         setTimeout(() => {
-                            this.connectToRelayWithTimeout(relayUrl, 'geo', 3000)
-                                .then(() => {
-                                    this.subscribeToSingleRelay(relayUrl);
-                                    this.updateConnectionStatus();
-                                })
-                                .catch(err => this.trackRelayFailure(relayUrl));
+                            this.connectToRelayWithTimeout(relayUrl, 'geo', 3000).then(() => {
+                                    const r = this.relayPool.get(relayUrl);
+                                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                        if (this.currentChannel || this.currentGeohash) {
+                                            const channelKey = this.currentGeohash || this.currentChannel;
+                                            this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
+                                        }
+                                        this.updateConnectionStatus();
+                                    }
+                                });
                         }, index * 50);
                     }
                 });
@@ -5336,8 +5346,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 (this.relayPool.get(relayUrl).ws &&
                     this.relayPool.get(relayUrl).ws.readyState !== WebSocket.OPEN)) {
 
-                try {
-                    await this.connectToRelay(relayUrl, 'broadcast');
+                await this.connectToRelay(relayUrl, 'broadcast');
+                const r = this.relayPool.get(relayUrl);
+                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                     this.subscribeToSingleRelay(relayUrl);
                     connectedCount++;
 
@@ -5346,8 +5357,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.connected = true;
                         this.updateConnectionStatus();
                     }
-                } catch (err) {
-                    this.trackRelayFailure(relayUrl);
                 }
 
                 // Small delay between connections to avoid overwhelming
@@ -5413,14 +5422,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Attempt to reconnect to all broadcast relays
             this.broadcastRelays.forEach(relayUrl => {
                 if (!this.relayPool.has(relayUrl)) {
-                    this.connectToRelay(relayUrl, 'broadcast')
-                        .then(() => {
-                            this.subscribeToSingleRelay(relayUrl);
-                            this.updateConnectionStatus();
-                        })
-                        .catch(err => {
-                            // Restore to blacklist if it fails again
-                            if (tempBlacklist.has(relayUrl)) {
+                    this.connectToRelay(relayUrl, 'broadcast').then(() => {
+                            const r = this.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                this.subscribeToSingleRelay(relayUrl);
+                            } else if (tempBlacklist.has(relayUrl)) {
+                                // Restore to blacklist if it fails again
                                 this.blacklistedRelays.add(relayUrl);
                             }
                             this.updateConnectionStatus();
@@ -5557,16 +5564,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 }
 
-                try {
-                    await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
-                    // Verify the relay is actually connected (not silently skipped)
-                    const relay = this.relayPool.get(relayUrl);
-                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        this.subscribeToSingleRelay(relayUrl);
-                        connected = true;
-                        break;
-                    }
-                } catch (err) {
+                await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
+                const relay = this.relayPool.get(relayUrl);
+                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                    this.subscribeToSingleRelay(relayUrl);
+                    connected = true;
+                    break;
                 }
             }
 
@@ -5822,19 +5825,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Translate message handler
         document.getElementById('ctxTranslate').addEventListener('click', async () => {
-            if (this.contextMenuData && this.contextMenuData.content) {
-                await this.translateMessage(this.contextMenuData.content, this.contextMenuData.messageId || this.contextMenuData.reactionId);
+            const data = this.contextMenuData;
+            this.closeContextMenu();
+            if (data && data.content) {
+                await this.translateMessage(data.content, data.messageId || data.reactionId);
             } else {
                 this.displaySystemMessage('No message content to translate');
             }
-            this.closeContextMenu();
         });
 
         // Add delete message handler
         document.getElementById('ctxDeleteMessage').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.messageId && this.contextMenuData.pubkey === this.pubkey) {
                 if (confirm('Are you sure you want to delete this message? This will send a deletion request to relays.')) {
-                    await this.publishDeletionEvent(this.contextMenuData.messageId);
+                    await this.publishDeletionEvent(this.contextMenuData.messageId, this.inPMMode ? 1059 : 20000);
                     this.displaySystemMessage('Deletion request sent to relays');
                 }
             }
@@ -6414,17 +6418,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (initialRelays.length > 0) {
                     // Create connection promises that resolve with relay URL on success
                     const connectionPromises = initialRelays.map(relayUrl =>
-                        this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000)
-                            .then(() => {
-                                // Verify actual connection before reporting success
+                        this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000).then(() => {
                                 const relay = this.relayPool.get(relayUrl);
                                 if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                                     return relayUrl;
                                 }
-                                return null;
-                            })
-                            .catch(err => {
-                                this.trackRelayFailure(relayUrl);
                                 return null;
                             })
                     );
@@ -6457,13 +6455,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             continue;
                         }
 
-                        try {
-                            await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000);
+                        await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000);
+                        const relay = this.relayPool.get(relayUrl);
+                        if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                             initialConnected = true;
                             connectedRelayUrl = relayUrl;
                             break;
-                        } catch (err) {
-                            this.trackRelayFailure(relayUrl);
                         }
                     }
                 }
@@ -6528,13 +6525,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 : this.broadcastRelays;
             broadcastRelaysToConnect.forEach(relayUrl => {
                 if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                    this.connectToRelay(relayUrl, 'broadcast')
-                        .then(() => {
-                            this.subscribeToSingleRelay(relayUrl);
-                            this.updateConnectionStatus();
-                        })
-                        .catch(err => {
-                            this.trackRelayFailure(relayUrl);
+                    this.connectToRelay(relayUrl, 'broadcast').then(() => {
+                            const r = this.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                this.subscribeToSingleRelay(relayUrl);
+                                this.updateConnectionStatus();
+                            }
                         });
                 }
             });
@@ -6542,13 +6538,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Connect to sendit.nosflare.com for write-only (no subscriptions)
             const senditRelay = 'wss://sendit.nosflare.com';
             if (this.shouldRetryRelay(senditRelay)) {
-                this.connectToRelay(senditRelay, 'nosflare')
-                    .then(() => {
-                        this.updateConnectionStatus();
-                    })
-                    .catch(err => {
-                        this.trackRelayFailure(senditRelay);
-                    });
+                this.connectToRelay(senditRelay, 'nosflare').then(() => {
+                    this.updateConnectionStatus();
+                });
             }
 
             // Connect to geo relays at startup in the background (staggered)
@@ -6558,13 +6550,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const relayUrl = relay.url;
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                         setTimeout(() => {
-                            this.connectToRelayWithTimeout(relayUrl, 'geo', 3000)
-                                .then(() => {
-                                    this.subscribeToSingleRelay(relayUrl);
-                                    this.updateConnectionStatus();
-                                })
-                                .catch(err => {
-                                    this.trackRelayFailure(relayUrl);
+                            this.connectToRelayWithTimeout(relayUrl, 'geo', 3000).then(() => {
+                                    const r = this.relayPool.get(relayUrl);
+                                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                        // Geo relays only get channel-specific subscriptions
+                                        if (this.currentChannel || this.currentGeohash) {
+                                            const channelKey = this.currentGeohash || this.currentChannel;
+                                            this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
+                                        }
+                                        this.updateConnectionStatus();
+                                    }
                                 });
                         }, index * 50); // 50ms stagger to avoid overwhelming browser
                     }
@@ -6585,13 +6580,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         // Stagger connections to avoid overwhelming the browser
                         relaysToConnect.forEach((relayUrl, index) => {
                             setTimeout(() => {
-                                this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout)
-                                    .then(() => {
-                                        this.subscribeToSingleRelay(relayUrl);
-                                        this.updateConnectionStatus();
-                                    })
-                                    .catch(err => {
-                                        this.trackRelayFailure(relayUrl);
+                                this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout).then(() => {
+                                        const r = this.relayPool.get(relayUrl);
+                                        if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                            // Only subscribe to current channel on discovered relays
+                                            // (don't send the full global subscription — that would flood with events)
+                                            if (this.currentChannel || this.currentGeohash) {
+                                                const channelKey = this.currentGeohash || this.currentChannel;
+                                                const channelType = this.getChannelType(channelKey);
+                                                this.subscribeToChannelTargeted(channelKey, channelType);
+                                            }
+                                            this.updateConnectionStatus();
+                                        }
                                     });
                             }, index * 100);
                         });
@@ -6634,9 +6634,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 continue;
             }
 
-            try {
-                await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 1500); // 1.5 second timeout
-
+            await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 1500);
+            const relay = this.relayPool.get(relayUrl);
+            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                 // Enable input immediately
                 document.getElementById('messageInput').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
@@ -6647,8 +6647,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 this.updateConnectionStatus();
                 return true;
-            } catch (err) {
-                this.trackRelayFailure(relayUrl);
             }
         }
 
@@ -6715,97 +6713,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Skip geohash channel subscriptions in group chat & PM only mode
         if (!this.settings.groupChatPMOnlyMode) {
             // Messages in geohash channels (past 1hr)
-            filters.push({
-                kinds: [20000],
-                since: since1h,
-                limit: 100,
-            });
+            filters.push({ kinds: [20000], since: since1h, limit: 100 });
             // Polls and poll votes (kind 30078 with t-tag)
-            filters.push({
-                kinds: [30078],
-                "#t": ["nym-poll", "nym-poll-vote"],
-                since: since1h,
-                limit: 100,
-            });
-            // Reactions for geohash channels
-            filters.push({
-                kinds: [7],
-                "#k": ["20000"],
-                since: since1h,
-                limit: 100,
-            });
-            // Delete events
-            filters.push({
-                kinds: [5],
-                since: since1h,
-                limit: 100,
-            });
+            filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 });
+            // Delete events (scoped to NYM kinds: geohash channels + DM gift wraps)
+            filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since1h, limit: 100 });
         }
 
         // Presence broadcasts (needed even in PM-only mode for user list)
-        filters.push({
-            kinds: [30078],
-            "#t": ["nym-presence"],
-            limit: 100,
-        });
-        // Reactions for PMs
-        filters.push({
-            kinds: [7],
-            "#k": ["1059"],
-            limit: 100
-        });
+        filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
         // User shop items
-        filters.push({
-            kinds: [30078],
-            "#d": ["nym-shop-active"],
-            limit: 100
-        });
+        filters.push({ kinds: [30078], "#d": ["nym-shop-active"], limit: 100 });
         // Zap receipts
-        filters.push({
-            kinds: [9735],
-            limit: 100,
-        });
+        filters.push({ kinds: [9735], limit: 100 });
 
         if (this.pubkey) {
             filters.push(
                 // Gift wraps addressed to me
-                {
-                    kinds: [1059],
-                    "#p": [this.pubkey],
-                    limit: 500,
-                },
+                { kinds: [1059], "#p": [this.pubkey], limit: 500 },
                 // Any reactions with #p = my pubkey
-                {
-                    kinds: [7],
-                    "#p": [this.pubkey],
-                    limit: 100
-                },
-                // MY shop purchases and active items
-                {
-                    kinds: [30078],
-                    authors: [this.pubkey],
-                    "#d": ["nym-shop-purchases", "nym-shop-active"],
-                    limit: 100
-                },
-                // Incoming transfers (shop items & settings) from other users
-                {
-                    kinds: [30078],
-                    "#p": [this.pubkey],
-                    limit: 50
-                },
-                // P2P signaling addressed to me
-                {
-                    kinds: [25051],
-                    "#p": [this.pubkey],
-                    since: Math.floor(Date.now() / 1000) - 120, // Last 2 minutes
-                    limit: 50
-                },
-                // P2P file status events (unseeded notifications) for current channel
-                {
-                    kinds: [25052],
-                    since: Math.floor(Date.now() / 1000) - 86400, // Last 24 hours
-                    limit: 100
-                }
+                { kinds: [7], "#p": [this.pubkey], limit: 100 },
+                // My shop purchases & active items
+                { kinds: [30078], authors: [this.pubkey], "#d": ["nym-shop-purchases", "nym-shop-active"], limit: 100 },
+                // Shop items tagged to me
+                { kinds: [30078], "#p": [this.pubkey], limit: 50 },
+                // P2P signaling events addressed to me (recent 2 min)
+                { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
+                // P2P connection announcements (recent 24hr)
+                { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 }
             );
         }
 
@@ -6993,9 +6928,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async connectToRelayWithTimeout(relayUrl, type, timeout) {
         return Promise.race([
             this.connectToRelay(relayUrl, type),
-            new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(`Timeout connecting to ${relayUrl}`)), timeout)
-            )
+            new Promise(resolve => setTimeout(resolve, timeout))
         ]);
     }
 
@@ -7063,7 +6996,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.poolReady = false; // not ready until RELAYS sent
 
                 // Gather all relays to connect to
-                const blocked = ['wss://relay.nosflare.com'];
+                const blocked = ['wss://relay.nosflare.com', 'wss://relay.nostraddress.com'];
                 const writeOnly = ['wss://sendit.nosflare.com'];
                 const geoRelayUrls = this.geoRelays ? this.geoRelays.map(r => r.url) : [];
                 const allRelays = [...new Set([
@@ -7213,28 +7146,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Skip geohash channel subscriptions in group chat & PM only mode
         if (!this.settings.groupChatPMOnlyMode) {
-            filters.push(
-                { kinds: [20000], since: since1h, limit: 100 },
-                { kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 },
-                { kinds: [7], "#k": ["20000"], since: since1h, limit: 100 },
-                { kinds: [5], since: since1h, limit: 100 }
-            );
+            // Messages in geohash channels (past 1hr)
+            filters.push({ kinds: [20000], since: since1h, limit: 100 });
+            // Polls and poll votes (kind 30078 with t-tag)
+            filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 });
+            // Delete events (scoped to NYM kinds: geohash channels + DM gift wraps)
+            filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since1h, limit: 100 });
         }
 
-        filters.push(
-            { kinds: [30078], "#t": ["nym-presence"], limit: 100 },
-            { kinds: [7], "#k": ["1059"], limit: 100 },
-            { kinds: [30078], "#d": ["nym-shop-active"], limit: 100 },
-            { kinds: [9735], limit: 100 }
-        );
+        // Presence broadcasts (needed even in PM-only mode for user list)
+        filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
+        // User shop items
+        filters.push({ kinds: [30078], "#d": ["nym-shop-active"], limit: 100 });
+        // Zap receipts
+        filters.push({ kinds: [9735], limit: 100 });
 
         if (this.pubkey) {
             filters.push(
+                // Gift wraps addressed to me
                 { kinds: [1059], "#p": [this.pubkey], limit: 500 },
+                // Any reactions with #p = my pubkey
                 { kinds: [7], "#p": [this.pubkey], limit: 100 },
+                // My shop purchases & active items
                 { kinds: [30078], authors: [this.pubkey], "#d": ["nym-shop-purchases", "nym-shop-active"], limit: 100 },
+                // Shop items tagged to me
                 { kinds: [30078], "#p": [this.pubkey], limit: 50 },
+                // P2P signaling events addressed to me (recent 2 min)
                 { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
+                // P2P connection announcements (recent 24hr)
                 { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 }
             );
         }
@@ -7244,7 +7183,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     _poolSendRelayConfig() {
         if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) return;
-        const blocked = ['wss://relay.nosflare.com'];
+        const blocked = ['wss://relay.nosflare.com', 'wss://relay.nostraddress.com'];
         const writeOnly = ['wss://sendit.nosflare.com'];
 
         // Low data mode: only send default relays + active geo relays
@@ -7268,7 +7207,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             ...Array.from(this.discoveredRelays),
             ...geoRelayUrls
         ].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
-        // Deduplicate
         const unique = [...new Set(allRelays)];
         this._poolSend(['RELAYS', {
             relays: unique,
@@ -7278,37 +7216,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async connectToRelay(relayUrl, type = 'read') {
-        return new Promise((resolve, reject) => {
+        // Block known-bad relays entirely - never connect
+        if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com') {
+            return; // Silently skip blocked relays
+        }
+
+        // Skip blacklisted/retry-throttled relays (no pending tracking needed)
+        if (this.blacklistedRelays.has(relayUrl) && !this.isBlacklistExpired(relayUrl)) {
+            return;
+        }
+        if (!this.shouldRetryRelay(relayUrl)) {
+            return;
+        }
+
+        // Skip if already connected
+        if (this.relayPool.has(relayUrl)) {
+            const existingRelay = this.relayPool.get(relayUrl);
+            if (existingRelay.ws && existingRelay.ws.readyState === WebSocket.OPEN) {
+                return Promise.resolve();
+            }
+        }
+
+        // Deduplicate: if a connection attempt is already in-flight, reuse its promise
+        if (this.pendingConnections.has(relayUrl)) {
+            return this.pendingConnections.get(relayUrl);
+        }
+
+        const connectionPromise = new Promise((resolve) => {
             try {
-                // Block relay.nosflare.com entirely - never connect
-                if (relayUrl === 'wss://relay.nosflare.com') {
-                    reject(new Error('relay.nosflare.com is blocked'));
-                    return;
-                }
-
-                // Check if blacklisted but also check if expired
-                if (this.blacklistedRelays.has(relayUrl)) {
-                    if (!this.isBlacklistExpired(relayUrl)) {
-                        // Still blacklisted - reject so callers know no connection was made
-                        reject(new Error(`Relay ${relayUrl} is blacklisted`));
-                        return;
-                    }
-                    // Was expired and removed, continue connecting
-                }
-
-                if (!this.shouldRetryRelay(relayUrl)) {
-                    reject(new Error(`Relay ${relayUrl} should not be retried yet`));
-                    return;
-                }
-
-                // Skip if already connected
-                if (this.relayPool.has(relayUrl)) {
-                    const existingRelay = this.relayPool.get(relayUrl);
-                    if (existingRelay.ws && existingRelay.ws.readyState === WebSocket.OPEN) {
-                        resolve();
-                        return;
-                    }
-                }
 
                 const wsTarget = this._getProxiedRelayUrl(relayUrl);
                 const ws = new WebSocket(wsTarget);
@@ -7322,7 +7257,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         ws.close();
                         this.blacklistedRelays.add(relayUrl);
                         this.blacklistTimestamps.set(relayUrl, Date.now());
-                        reject(new Error('Connection timeout'));
+                        resolve(); // Resolve (not reject) — callers check relayPool state
                     }
                 }, 5000);
 
@@ -7395,7 +7330,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 };
 
-                ws.onerror = (error) => {
+                ws.onerror = () => {
                     clearTimeout(verificationTimeout);
                     clearTimeout(connectionTimeout);
 
@@ -7403,7 +7338,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.blacklistedRelays.add(relayUrl);
                     this.blacklistTimestamps.set(relayUrl, Date.now());
 
-                    reject(error);
+                    resolve(); // Resolve (not reject) — callers check relayPool state
                 };
 
                 ws.onclose = (event) => {
@@ -7478,40 +7413,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                     return;
                                 }
 
-                                this.connectToRelay(relayUrl, type)
-                                    .then(() => {
-                                        // Re-subscribe after reconnection for ALL relay types (except nosflare which is write-only)
-                                        if (type === 'broadcast' || type === 'read' || type === 'geo') {
-                                            this.subscribeToSingleRelay(relayUrl);
-                                        }
-                                        this.updateConnectionStatus();
+                                this.connectToRelay(relayUrl, type).then(() => {
+                                        // Check if actually connected (connectToRelay resolves even on failure)
+                                        const relay = this.relayPool.get(relayUrl);
+                                        const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
-                                        // Remove from reconnecting set
-                                        this.reconnectingRelays.delete(relayUrl);
-
-                                        if (this.reconnectingRelays.size === 0) {
-
-                                            // After broadcast relays reconnect, also retry discovered relays
-                                            if (type === 'broadcast') {
-                                                setTimeout(() => {
-                                                    this.retryDiscoveredRelays();
-                                                }, 2000);
+                                        if (isConnected) {
+                                            // Re-subscribe after reconnection for ALL relay types (except nosflare which is write-only)
+                                            if (type === 'broadcast' || type === 'read' || type === 'geo') {
+                                                this.subscribeToSingleRelay(relayUrl);
                                             }
-
-                                            // Retry any pending DMs after relays reconnect
-                                            setTimeout(() => this.retryPendingDMsOnReconnect(), 1000);
-                                        }
-                                    })
-                                    .catch(err => {
-                                        this.trackRelayFailure(relayUrl);
-                                        this.updateConnectionStatus();
-
-                                        // Try again if we haven't exceeded max attempts
-                                        if (attempt < maxAttempts - 1) {
-                                            attemptReconnect(attempt + 1);
-                                        } else {
-                                            this.reconnectingRelays.delete(relayUrl);
                                             this.updateConnectionStatus();
+                                            this.reconnectingRelays.delete(relayUrl);
+
+                                            if (this.reconnectingRelays.size === 0) {
+                                                if (type === 'broadcast') {
+                                                    setTimeout(() => this.retryDiscoveredRelays(), 2000);
+                                                }
+                                                setTimeout(() => this.retryPendingDMsOnReconnect(), 1000);
+                                            }
+                                        } else {
+                                            this.trackRelayFailure(relayUrl);
+                                            this.updateConnectionStatus();
+                                            if (attempt < maxAttempts - 1) {
+                                                attemptReconnect(attempt + 1);
+                                            } else {
+                                                this.reconnectingRelays.delete(relayUrl);
+                                                this.updateConnectionStatus();
+                                            }
                                         }
                                     });
                             }, delay);
@@ -7526,9 +7455,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.blacklistedRelays.add(relayUrl);
                 this.blacklistTimestamps.set(relayUrl, Date.now());
                 this.trackRelayFailure(relayUrl);
-                reject(error);
+                resolve();
             }
         });
+
+        // Track in-flight connection and clean up when settled
+        this.pendingConnections.set(relayUrl, connectionPromise);
+        connectionPromise.finally(() => {
+            this.pendingConnections.delete(relayUrl);
+        });
+
+        return connectionPromise;
     }
 
     isBlacklistExpired(relayUrl) {
@@ -7585,13 +7522,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             for (let i = 0; i < Math.min(relaysToTry.length, 20); i++) { // Try up to 20 relays
                 const relayUrl = relaysToTry[i];
                 setTimeout(() => {
-                    this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout)
-                        .then(() => {
-                            this.subscribeToSingleRelay(relayUrl);
-                            this.updateConnectionStatus();
-                        })
-                        .catch(err => {
-                            this.trackRelayFailure(relayUrl);
+                    this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout).then(() => {
+                            const r = this.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                // Only subscribe to current channel on discovered relays
+                                if (this.currentChannel || this.currentGeohash) {
+                                    const channelKey = this.currentGeohash || this.currentChannel;
+                                    this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
+                                }
+                                this.updateConnectionStatus();
+                            }
                         });
                 }, i * 200); // Stagger by 200ms
             }
@@ -7611,13 +7551,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (newRelaysToTry.length > 0) {
                     newRelaysToTry.forEach((relayUrl, index) => {
                         setTimeout(() => {
-                            this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout)
-                                .then(() => {
-                                    this.subscribeToSingleRelay(relayUrl);
-                                    this.updateConnectionStatus();
-                                })
-                                .catch(err => {
-                                    this.trackRelayFailure(relayUrl);
+                            this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout).then(() => {
+                                    const r = this.relayPool.get(relayUrl);
+                                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                        if (this.currentChannel || this.currentGeohash) {
+                                            const channelKey = this.currentGeohash || this.currentChannel;
+                                            this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
+                                        }
+                                        this.updateConnectionStatus();
+                                    }
                                 });
                         }, index * 200);
                     });
@@ -7792,10 +7734,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         try { this.requestUserProfile(pubkey); } catch (_) { }
 
-        // Fire a direct, one-shot profile request to all connected relays
+        // Fire a direct, one-shot profile request to a few relays
         const subId = 'ln-addr-' + Math.random().toString(36).slice(2);
         const req = ["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }];
-        try { this.sendToRelay(req); } catch (_) { }
+        try { this.sendRequestToFewRelays(req); } catch (_) { }
 
         // Wait for handleEvent(kind 0) to notice LUD16/LUD06 (or timeout)
         const addr = await this.waitForLightningAddress(pubkey, 8000);
@@ -7924,7 +7866,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     cacheAvatarImage(pubkey, url) {
         if (this.avatarBlobCache.has(pubkey)) return Promise.resolve();
         if (this.avatarBlobInflight.has(pubkey)) return this.avatarBlobInflight.get(pubkey);
-        const p = fetch(url, { mode: 'cors' })
+        const fetchUrl = this.getProxiedMediaUrl(url);
+        const p = fetch(fetchUrl, { mode: 'cors' })
             .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
             .then(blob => {
                 // Revoke old blob URL if avatar changed
@@ -7947,7 +7890,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     cacheBannerImage(pubkey, url) {
         if (this.bannerBlobCache.has(pubkey)) return Promise.resolve();
         if (this.bannerBlobInflight.has(pubkey)) return this.bannerBlobInflight.get(pubkey);
-        const p = fetch(url, { mode: 'cors' })
+        const fetchUrl = this.getProxiedMediaUrl(url);
+        const p = fetch(fetchUrl, { mode: 'cors' })
             .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
             .then(blob => {
                 const old = this.bannerBlobCache.get(pubkey);
@@ -8036,6 +7980,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text: plainText, source: 'auto', target: targetLang }),
                 });
+                const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+                if (!contentType.includes('application/json')) {
+                    throw new Error(`Proxy returned non-JSON response (${resp.status})`);
+                }
                 const data = await resp.json();
                 if (data.error) throw new Error(data.error);
                 translatedText = data.translatedText;
@@ -8073,13 +8021,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Call LibreTranslate directly (no proxy). Tries multiple public instances.
     async _translateDirect(text, targetLang) {
         const instances = [
-            'https://libretranslate.com',
             'https://translate.terraprint.co',
             'https://trans.zillyhuhn.com',
+            'https://translate.fedilab.app',
+            'https://lt.vern.cc',
         ];
         let lastError = null;
         for (const instance of instances) {
             try {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 8000);
                 const resp = await fetch(`${instance}/translate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -8089,7 +8040,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         target: targetLang,
                         format: 'text',
                     }),
+                    signal: controller.signal,
                 });
+                clearTimeout(timer);
                 if (resp.ok) {
                     const data = await resp.json();
                     return {
@@ -8099,7 +8052,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
                 lastError = `${instance} returned ${resp.status}`;
             } catch (err) {
-                lastError = `${instance}: ${err.message}`;
+                lastError = `${instance}: ${err.name === 'AbortError' ? 'timeout' : err.message}`;
             }
         }
         throw new Error('All translation instances failed: ' + lastError);
@@ -8525,8 +8478,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         ];
 
-        // Send request
-        this.sendToRelay(subscription);
+        // Send request to a few relays (profiles don't need full fan-out)
+        this.sendRequestToFewRelays(subscription);
 
         // Set timeout to close subscription
         setTimeout(() => {
@@ -9182,124 +9135,175 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         });
     }
 
-    // Discovering relays via NIP-66
+    // Discover relays via NIP-66 (kind 30166) from monitor relays,
+    // with NIP-65 (kind 10002) from connected relays as a secondary source,
+    // falling back to broadcastRelays if neither returns results.
     async discoverRelays() {
+        const now = Date.now();
+        if (now - this.lastRelayDiscovery < this.relayDiscoveryInterval && this.discoveredRelays.size > 0) {
+            return;
+        }
+
+        // Try to load from localStorage cache first
         try {
-            // Check if we need to refresh the relay list
-            const now = Date.now();
-            if (now - this.lastRelayDiscovery < this.relayDiscoveryInterval && this.discoveredRelays.size > 0) {
-                return;
-            }
-
-            // Try to load from cache first
-            this.loadCachedRelays();
-
-            // Connect to monitor relays to get relay list
-            for (const monitorRelay of this.monitorRelays) {
-                try {
-                    await this.fetchRelaysFromMonitor(monitorRelay);
-                } catch (error) {
+            const cached = localStorage.getItem('nym_discovered_relays');
+            if (cached) {
+                const data = JSON.parse(cached);
+                if (data.timestamp && now - data.timestamp < this.relayDiscoveryInterval && data.relays && data.relays.length > 0) {
+                    data.relays.forEach(r => this.discoveredRelays.add(r));
+                    this.lastRelayDiscovery = now;
+                    return;
                 }
             }
+        } catch { /* ignore */ }
 
-            // Save discovered relays to cache
-            this.saveCachedRelays();
+        const beforeCount = this.discoveredRelays.size;
 
-            this.lastRelayDiscovery = now;
+        // NIP-66: fetch kind 30166 relay metadata from monitor relays
+        const monitorPromises = this.monitorRelays.map(url =>
+            this.fetchRelaysFromMonitor(url).catch(() => {})
+        );
+        // Run monitor fetches in parallel with a 12s overall timeout
+        await Promise.race([
+            Promise.allSettled(monitorPromises),
+            new Promise(resolve => setTimeout(resolve, 12000))
+        ]);
 
-        } catch (error) {
-            // Fall back to broadcast relays if discovery fails
-            if (this.discoveredRelays.size === 0) {
-                this.broadcastRelays.forEach(relay => this.discoveredRelays.add(relay));
-            }
+        // NIP-65: fetch kind 10002 relay list metadata from the pool (if connected)
+        try {
+            await this.fetchRelayListsFromPool();
+        } catch { /* ignore */ }
+
+        // Fall back to broadcast relays if nothing was discovered
+        if (this.discoveredRelays.size === 0) {
+            this.broadcastRelays.forEach(relay => this.discoveredRelays.add(relay));
         }
+
+        // Cache if we found new relays
+        if (this.discoveredRelays.size > beforeCount) {
+            try {
+                localStorage.setItem('nym_discovered_relays', JSON.stringify({
+                    timestamp: now,
+                    relays: Array.from(this.discoveredRelays)
+                }));
+            } catch { /* ignore */ }
+        }
+
+        this.lastRelayDiscovery = now;
     }
 
+    // Connect to a NIP-66 monitor relay via the single-relay proxy and fetch kind 30166 events.
+    // Uses the known monitor pubkeys as authors filter and a since filter (last 3 hours)
+    // to only get relays recently verified as online.
     async fetchRelaysFromMonitor(monitorUrl) {
         return new Promise((resolve, reject) => {
             const wsTarget = this._getProxiedRelayUrl(monitorUrl);
             const ws = new WebSocket(wsTarget);
             const timeout = setTimeout(() => {
                 ws.close();
-                reject(new Error('Timeout fetching relay list'));
+                resolve(); // Resolve on timeout (don't reject — we may have partial results)
             }, 10000);
 
             ws.onopen = () => {
-                const subId = "relay-list-" + Math.random().toString(36).substring(7);
-                // Request NIP-66 relay discovery (kind 30166)
-                const subscription = [
-                    "REQ",
-                    subId,
-                    { kinds: [30166], limit: 500 }
-                ];
-                ws.send(JSON.stringify(subscription));
+                const subId = "relay-disc-" + Math.random().toString(36).substring(7);
+                // NIP-66: request kind 30166 relay liveness events,
+                // only relays verified online in the last 3 hours
+                const since3h = Math.floor(Date.now() / 1000) - 10800;
+                ws.send(JSON.stringify(["REQ", subId, { kinds: [30166], since: since3h, limit: 500 }]));
             };
 
             ws.onmessage = (event) => {
                 try {
                     const msg = JSON.parse(event.data);
-                    if (Array.isArray(msg) && msg[0] === 'EVENT') {
-                        const relayEvent = msg[2];
-                        if (relayEvent && relayEvent.kind === 30166) {
-                            this.parseRelayMetadata(relayEvent);
+                    if (!Array.isArray(msg)) return;
+                    if (msg[0] === 'EVENT') {
+                        const evt = msg[2];
+                        if (evt && evt.kind === 30166) {
+                            // Extract relay URL from the d tag (required by NIP-66)
+                            const dTag = evt.tags.find(t => t[0] === 'd');
+                            if (!dTag || !dTag[1]) return;
+                            const relayUrl = dTag[1];
+
+                            // Only add wss:// relays
+                            if (!relayUrl.startsWith('wss://')) return;
+
+                            // Skip relays that require auth or payment
+                            const rTags = evt.tags.filter(t => t[0] === 'R');
+                            const requiresAuth = rTags.some(t => t[1] === 'auth');
+                            const requiresPayment = rTags.some(t => t[1] === 'payment');
+                            if (requiresAuth || requiresPayment) return;
+
+                            this.discoveredRelays.add(relayUrl);
                         }
-                    } else if (Array.isArray(msg) && msg[0] === 'EOSE') {
+                    } else if (msg[0] === 'EOSE') {
                         clearTimeout(timeout);
                         ws.close();
                         resolve();
                     }
-                } catch (e) {
-                }
+                } catch { /* ignore */ }
             };
 
-            ws.onerror = (error) => {
+            ws.onerror = () => {
                 clearTimeout(timeout);
-                reject(error);
+                resolve(); // Don't reject — caller handles empty results gracefully
             };
         });
     }
 
-    parseRelayMetadata(event) {
-        try {
-            // Extract relay URL from d tag
-            const dTag = event.tags.find(t => t[0] === 'd');
-            if (!dTag || !dTag[1]) return;
-
-            const relayUrl = dTag[1];
-
-            // Check if relay supports required NIPs
-            const nTags = event.tags.filter(t => t[0] === 'n');
-            const supportsRequired = nTags.some(t => t[1] === '1') || nTags.length === 0; // Basic protocol support
-
-            if (supportsRequired && relayUrl.startsWith('wss://')) {
-                this.discoveredRelays.add(relayUrl);
+    // Discover relays from NIP-65 kind 10002 events via the already-connected pool.
+    // Sends a temporary REQ and processes responses through the normal event handler
+    // (kind 10002 events are caught by handleEvent which is a no-op for unknown kinds,
+    //  so we register a temporary listener on the instance instead of monkey-patching onmessage).
+    fetchRelayListsFromPool() {
+        return new Promise((resolve) => {
+            if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) {
+                return resolve();
             }
-        } catch (error) {
-        }
+
+            const subId = "relay-nip65-" + Math.random().toString(36).substring(7);
+
+            // Temporary listener for kind 10002 events from this subscription
+            this._nip65SubId = subId;
+            this._nip65Resolve = resolve;
+
+            const timeout = setTimeout(() => {
+                this._poolSend(["CLOSE", subId]);
+                this._nip65SubId = null;
+                this._nip65Resolve = null;
+                resolve();
+            }, 5000);
+
+            this._nip65Timeout = timeout;
+
+            this._poolSend(["REQ", subId, { kinds: [10002], limit: 50 }]);
+        });
     }
 
-    loadCachedRelays() {
-        try {
-            const cached = localStorage.getItem('nym_discovered_relays');
-            if (cached) {
-                const data = JSON.parse(cached);
-                if (data.timestamp && Date.now() - data.timestamp < this.relayDiscoveryInterval) {
-                    data.relays.forEach(relay => this.discoveredRelays.add(relay));
+    // Called from handleRelayMessage for NIP-65 relay list discovery events
+    _handleNip65Event(subId, msg) {
+        if (!this._nip65SubId || subId !== this._nip65SubId) return false;
+
+        if (msg[0] === 'EVENT') {
+            const evt = msg[2];
+            if (evt && evt.kind === 10002 && evt.tags) {
+                for (const tag of evt.tags) {
+                    if (tag[0] === 'r' && tag[1] && tag[1].startsWith('wss://')) {
+                        this.discoveredRelays.add(tag[1]);
+                    }
                 }
             }
-        } catch (error) {
+            return true;
+        } else if (msg[0] === 'EOSE') {
+            clearTimeout(this._nip65Timeout);
+            this._poolSend(["CLOSE", this._nip65SubId]);
+            const resolve = this._nip65Resolve;
+            this._nip65SubId = null;
+            this._nip65Resolve = null;
+            this._nip65Timeout = null;
+            if (resolve) resolve();
+            return true;
         }
-    }
-
-    saveCachedRelays() {
-        try {
-            const data = {
-                timestamp: Date.now(),
-                relays: Array.from(this.discoveredRelays)
-            };
-            localStorage.setItem('nym_discovered_relays', JSON.stringify(data));
-        } catch (error) {
-        }
+        return false;
     }
 
     async loadSyncedSettings() {
@@ -9682,6 +9686,42 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         });
     }
 
+    // Send a REQ to only a few relays (for profile/metadata fetches that don't
+    // need full fan-out). Picks up to maxRelays from broadcast relays first,
+    // then fills from the relay pool.
+    sendRequestToFewRelays(message, maxRelays = 5) {
+        // Multiplexed pool mode: proxy handles dedup
+        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+            this._poolSend(message);
+            return;
+        }
+
+        const msg = JSON.stringify(message);
+        let sent = 0;
+
+        // Prefer broadcast relays (more likely to have profiles)
+        for (const url of this.broadcastRelays) {
+            if (sent >= maxRelays) break;
+            const relay = this.relayPool.get(url);
+            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+                relay.ws.send(msg);
+                sent++;
+            }
+        }
+
+        // Fill from pool if needed
+        if (sent < maxRelays) {
+            for (const [url, relay] of this.relayPool) {
+                if (sent >= maxRelays) break;
+                if (this.broadcastRelays.includes(url)) continue; // already sent
+                if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+                    relay.ws.send(msg);
+                    sent++;
+                }
+            }
+        }
+    }
+
     broadcastEvent(message) {
         // Multiplexed pool mode: proxy handles fan-out to all relays
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
@@ -9818,6 +9858,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     handleRelayMessage(msg, relayUrl) {
         if (!Array.isArray(msg)) return;
+
+        // Intercept NIP-65 relay discovery events before normal routing
+        if (this._nip65SubId && msg[1] === this._nip65SubId) {
+            this._handleNip65Event(msg[1], msg);
+            return; // Don't process NIP-65 events through normal handler
+        }
 
         const [type, ...data] = msg;
 
@@ -12205,7 +12251,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                 // Schedule deletion if redacted cosmetic is active
                 if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                    setTimeout(() => { this.publishDeletionEvent(bitchatWrapped.id); }, 600000);
+                    setTimeout(() => { this.publishDeletionEvent(bitchatWrapped.id, 1059); }, 600000);
                 }
             }
 
@@ -12219,7 +12265,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                 // Schedule deletion if redacted cosmetic is active
                 if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                    setTimeout(() => { this.publishDeletionEvent(nymWrapped.id); }, 600000);
+                    setTimeout(() => { this.publishDeletionEvent(nymWrapped.id, 1059); }, 600000);
                 }
             }
 
@@ -12306,7 +12352,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                 const eventIdToDelete = wrapped.id;
                 setTimeout(() => {
-                    this.publishDeletionEvent(eventIdToDelete);
+                    this.publishDeletionEvent(eventIdToDelete, 1059);
                 }, 600000); // 10 minutes
             }
 
@@ -13307,7 +13353,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.sendDMToRelays(['EVENT', wrapped]);
 
             if (this.activeCosmetics?.has('cosmetic-redacted')) {
-                setTimeout(() => { this.publishDeletionEvent(wrapped.id); }, 600000);
+                setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
             }
         }
     }
@@ -13355,7 +13401,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.sendDMToRelays(['EVENT', wrapped]);
 
                 if (this.activeCosmetics?.has('cosmetic-redacted')) {
-                    setTimeout(() => { this.publishDeletionEvent(wrapped.id); }, 600000);
+                    setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
                 }
             } catch (e) {
                 console.warn('[GiftWrap] Extension wrap failed for', pubkey, e);
@@ -13878,7 +13924,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const subId = 'pm-profile-' + Math.random().toString(36).slice(2);
         const req = ["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }];
 
-        try { this.sendToRelay(req); } catch (_) { }
+        try { this.sendRequestToFewRelays(req); } catch (_) { }
 
         await new Promise(resolve => {
             const timer = setTimeout(() => {
@@ -13904,7 +13950,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const subId = 'follow-list-' + Math.random().toString(36).slice(2);
         const req = ["REQ", subId, { kinds: [3], authors: [pubkey], limit: 1 }];
 
-        try { this.sendToRelay(req); } catch (_) { return; }
+        try { this.sendRequestToFewRelays(req); } catch (_) { return; }
 
         // Listen for the response via a one-time handler
         const handleFollowList = (event) => {
@@ -13915,18 +13961,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             this.nostrFollowList = [...new Set(followPubkeys)];
 
-            // Fetch profiles for follow list entries (batch, background)
+            // Fetch all follow list profiles from a few relays (not all 200+)
             const unknownPubkeys = this.nostrFollowList.filter(pk => !this.users.has(pk));
-            // Batch fetch in groups of 20
-            for (let i = 0; i < unknownPubkeys.length; i += 20) {
-                const batch = unknownPubkeys.slice(i, i + 20);
-                const batchSubId = 'follow-profiles-' + Math.random().toString(36).slice(2);
+            if (unknownPubkeys.length > 0) {
+                const profileSubId = 'follow-profiles-' + Math.random().toString(36).slice(2);
                 try {
-                    this.sendToRelay(["REQ", batchSubId, { kinds: [0], authors: batch, limit: batch.length }]);
-                    // Auto-close after 5 seconds
+                    this.sendRequestToFewRelays(["REQ", profileSubId, { kinds: [0], authors: unknownPubkeys, limit: unknownPubkeys.length }]);
                     setTimeout(() => {
-                        try { this.sendToRelay(["CLOSE", batchSubId]); } catch (_) {}
-                    }, 5000);
+                        try { this.sendToRelay(["CLOSE", profileSubId]); } catch (_) {}
+                    }, 10000);
                 } catch (_) {}
             }
         };
@@ -13992,7 +14035,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const subId = 'batch-profile-' + Math.random().toString(36).slice(2);
         const req = ["REQ", subId, { kinds: [0], authors: pubkeys, limit: pubkeys.length }];
-        try { this.sendToRelay(req); } catch (_) { }
+        try { this.sendRequestToFewRelays(req); } catch (_) { }
 
         // Close subscription after responses arrive or timeout
         setTimeout(() => {
@@ -14371,12 +14414,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    async publishDeletionEvent(messageId) {
+    async publishDeletionEvent(messageId, originalKind) {
         try {
+            const tags = [['e', messageId]];
+            // Add k tag per NIP-09 so relays can filter deletes by kind
+            if (originalKind) {
+                tags.push(['k', String(originalKind)]);
+            }
             const event = {
                 kind: 5,
                 created_at: Math.floor(Date.now() / 1000),
-                tags: [['e', messageId]],
+                tags: tags,
                 content: '',
                 pubkey: this.pubkey
             };
@@ -14597,7 +14645,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         ];
 
         if (this.connected) {
-            this.sendToRelay(subscription);
+            this.sendRequestToFewRelays(subscription);
             setTimeout(() => {
                 this.sendToRelay(["CLOSE", subId]);
             }, 3500);
@@ -22217,7 +22265,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 }
             ];
 
-            this.sendToRelay(subscription);
+            this.sendRequestToFewRelays(subscription);
         });
     }
 
@@ -23111,7 +23159,11 @@ async function changeRelay() {
     }
 
     nym.displaySystemMessage('Switching relay...');
-    await nym.connectToRelay(newRelayUrl);
+    try {
+        await nym.connectToRelay(newRelayUrl);
+    } catch (_) {
+        nym.displaySystemMessage('Failed to connect to relay.');
+    }
 }
 
 async function showSettings() {
@@ -23769,7 +23821,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.47.169 ═══<br/>
+═══ Nymchat v3.47.170 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -25107,14 +25159,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Pre-connect to a broadcast relay for instant connection
     async function preConnect() {
         for (const relayUrl of nym.broadcastRelays) {
-            try {
-                await nym.connectToRelay(relayUrl, 'broadcast');
+            await nym.connectToRelay(relayUrl, 'broadcast');
+            const r = nym.relayPool.get(relayUrl);
+            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                 nym.updateConnectionStatus('Ready');
                 return; // Stop after first successful connection
-            } catch (err) {
             }
         }
-        // If all failed, just log it - the main connection flow will try again
     }
 
     preConnect();
@@ -25297,13 +25348,12 @@ document.addEventListener('DOMContentLoaded', () => {
             // Try to reconnect to expired blacklisted relays
             expiredRelays.forEach(relayUrl => {
                 if (nym.broadcastRelays.includes(relayUrl) && !nym.relayPool.has(relayUrl)) {
-                    nym.connectToRelay(relayUrl, 'broadcast')
-                        .then(() => {
-                            nym.subscribeToSingleRelay(relayUrl);
-                            nym.updateConnectionStatus();
-                        })
-                        .catch(err => {
-                            nym.trackRelayFailure(relayUrl);
+                    nym.connectToRelay(relayUrl, 'broadcast').then(() => {
+                            const r = nym.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                nym.subscribeToSingleRelay(relayUrl);
+                                nym.updateConnectionStatus();
+                            }
                         });
                 }
             });
