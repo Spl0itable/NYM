@@ -59,15 +59,14 @@ export async function onRequest(context) {
   // Track relays pending reconnection to avoid duplicate queue entries
   const pendingReconnect = new Set();  // relayUrls scheduled for reconnect
 
-  // Debounce pool status updates to avoid flooding client during rapid changes
+  // Throttle pool status updates: guaranteed delivery every 300ms at most
   let statusTimer = null;
-  let statusDelay = 500;              // Base debounce delay (ms)
   function schedulePoolStatus() {
-    if (statusTimer) clearTimeout(statusTimer);
+    if (statusTimer) return; // Already scheduled — will fire soon
     statusTimer = setTimeout(() => {
       statusTimer = null;
       sendPoolStatus();
-    }, statusDelay);
+    }, 300);
   }
 
   // Clean old dedup entries periodically
@@ -406,10 +405,6 @@ export async function onRequest(context) {
             connectionQueue = [];
             pendingReconnect.clear();
             if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
-
-            // Temporarily increase status debounce during bulk connection phase
-            statusDelay = 1500;
-            setTimeout(() => { statusDelay = 500; }, relays.length * CONNECTION_STAGGER_MS + 5000);
 
             // Connect new relays with staggering to avoid overwhelming the worker
             for (const url of relays) {
