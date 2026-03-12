@@ -18036,8 +18036,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : msgRect.top);
 
             const popupWidth = 270;
+            const translateGap = 8;
+            const translateBtnWidth = 42;
+            // Reserve space for popup + gap + translate button so nothing gets cut off
+            const totalWidth = popupWidth + translateGap + translateBtnWidth;
             let left = clientX - popupWidth / 2;
-            left = Math.max(10, Math.min(left, window.innerWidth - popupWidth - 10));
+            left = Math.max(10, Math.min(left, window.innerWidth - totalWidth - 10));
             let top = clientY - 55;
             top = Math.max(10, top);
 
@@ -18046,13 +18050,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Position translate bubble to the right of the popup
             translateBubble.style.position = 'fixed';
-            translateBubble.style.left = (left + popupWidth + 8) + 'px';
+            translateBubble.style.left = (left + popupWidth + translateGap) + 'px';
             translateBubble.style.top = top + 'px';
 
             document.body.appendChild(popup);
             document.body.appendChild(translateBubble);
 
-            // Match translate button height to popup height
+            // Match translate button height to popup's actual rendered height
             const popupHeight = popup.offsetHeight;
             translateBubble.style.height = popupHeight + 'px';
 
