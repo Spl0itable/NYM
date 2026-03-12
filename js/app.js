@@ -7995,13 +7995,93 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return `${base}?url=${encodeURIComponent(originalUrl)}`;
     }
 
+    // Show a language-picker popup when the user tries to translate without a language set.
+    // Returns the chosen language code, or '' if cancelled.
+    _promptTranslateLanguage() {
+        return new Promise((resolve) => {
+            const languages = [
+                { code: 'en', name: 'English' },
+                { code: 'es', name: 'Spanish' },
+                { code: 'fr', name: 'French' },
+                { code: 'de', name: 'German' },
+                { code: 'it', name: 'Italian' },
+                { code: 'pt', name: 'Portuguese' },
+                { code: 'ru', name: 'Russian' },
+                { code: 'zh', name: 'Chinese' },
+                { code: 'ja', name: 'Japanese' },
+                { code: 'ko', name: 'Korean' },
+                { code: 'ar', name: 'Arabic' },
+                { code: 'hi', name: 'Hindi' },
+                { code: 'tr', name: 'Turkish' },
+                { code: 'nl', name: 'Dutch' },
+                { code: 'pl', name: 'Polish' },
+                { code: 'uk', name: 'Ukrainian' },
+                { code: 'vi', name: 'Vietnamese' },
+                { code: 'th', name: 'Thai' },
+                { code: 'id', name: 'Indonesian' },
+                { code: 'sv', name: 'Swedish' },
+            ];
+
+            const overlay = document.createElement('div');
+            overlay.className = 'modal active';
+            overlay.style.zIndex = '10003';
+            overlay.innerHTML = `
+                <div class="modal-content" style="max-width:360px;padding:24px;">
+                    <h3 style="margin:0 0 6px;font-size:1.1em;color:var(--text-bright);">Select Your Language</h3>
+                    <p style="margin:0 0 16px;font-size:0.85em;color:var(--text-dim);">Choose the language you'd like messages translated into. This will be saved to your settings.</p>
+                    <div class="translate-lang-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:320px;overflow-y:auto;padding-right:4px;">
+                        ${languages.map(l => `<button class="translate-lang-option" data-lang="${l.code}" style="
+                            padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--glass-border);
+                            background:rgba(255,255,255,0.04);color:var(--text);cursor:pointer;font-size:0.9em;
+                            transition:background 0.12s,border-color 0.12s;text-align:left;
+                        ">${l.name}</button>`).join('')}
+                    </div>
+                </div>
+            `;
+
+            const cleanup = (langCode) => {
+                overlay.remove();
+                resolve(langCode);
+            };
+
+            // Click on a language option
+            overlay.querySelectorAll('.translate-lang-option').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const code = btn.dataset.lang;
+                    // Save to settings and localStorage
+                    this.settings.translateLanguage = code;
+                    localStorage.setItem('nym_translate_language', code);
+                    // Sync the settings modal select if it exists
+                    const select = document.getElementById('translateLanguageSelect');
+                    if (select) select.value = code;
+                    cleanup(code);
+                });
+                btn.addEventListener('mouseenter', () => {
+                    btn.style.background = 'rgba(255,255,255,0.1)';
+                    btn.style.borderColor = 'var(--primary)';
+                });
+                btn.addEventListener('mouseleave', () => {
+                    btn.style.background = 'rgba(255,255,255,0.04)';
+                    btn.style.borderColor = 'var(--glass-border)';
+                });
+            });
+
+            // Click on backdrop to cancel
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) cleanup('');
+            });
+
+            document.body.appendChild(overlay);
+        });
+    }
+
     // Translate a message and show the result inline below the original message.
     // Uses the CF proxy when available, falls back to calling LibreTranslate directly.
     async translateMessage(content, messageId) {
-        const targetLang = this.settings.translateLanguage;
+        let targetLang = this.settings.translateLanguage;
         if (!targetLang) {
-            this.displaySystemMessage('Set a translation language in Settings first.');
-            return;
+            targetLang = await this._promptTranslateLanguage();
+            if (!targetLang) return; // user cancelled
         }
 
         // Strip HTML tags for translation (send plain text)
@@ -24198,7 +24278,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.48.175 ═══<br/>
+═══ Nymchat v3.48.176 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
