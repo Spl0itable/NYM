@@ -17990,7 +17990,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             // Remove any existing quick react popup
-            document.querySelectorAll('.quick-react-popup').forEach(el => el.remove());
+            document.querySelectorAll('.quick-react-popup, .quick-react-translate').forEach(el => el.remove());
 
             const popup = document.createElement('div');
             popup.className = 'quick-react-popup';
@@ -18003,6 +18003,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         <path d="M4 6 L8 10 L12 6"/>
                     </svg>
                 </button>`;
+
+            // Create separate translate button
+            const translateBubble = document.createElement('button');
+            translateBubble.className = 'quick-react-translate';
+            translateBubble.title = 'Translate';
+            translateBubble.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
+            </svg>`;
 
             // Position near the long-press point
             const msgRect = msgEl.getBoundingClientRect();
@@ -18021,10 +18029,23 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             popup.style.left = left + 'px';
             popup.style.top = top + 'px';
 
+            // Position translate bubble to the right of the popup
+            translateBubble.style.position = 'fixed';
+            translateBubble.style.left = (left + popupWidth + 8) + 'px';
+            translateBubble.style.top = top + 'px';
+
             document.body.appendChild(popup);
+            document.body.appendChild(translateBubble);
+
+            // Match translate button height to popup height
+            const popupHeight = popup.offsetHeight;
+            translateBubble.style.height = popupHeight + 'px';
 
             // Trigger animation
-            requestAnimationFrame(() => popup.classList.add('active'));
+            requestAnimationFrame(() => {
+                popup.classList.add('active');
+                translateBubble.classList.add('active');
+            });
 
             // Handle expand button to open full reaction picker
             const expandBtn = popup.querySelector('.quick-react-expand');
@@ -18032,6 +18053,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 ev.preventDefault();
                 ev.stopPropagation();
                 popup.remove();
+                translateBubble.remove();
                 removeCloseListeners();
 
                 // Create a temporary button for positioning the full picker
@@ -18049,6 +18071,21 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             expandBtn.addEventListener('click', openFullPicker);
             expandBtn.addEventListener('touchend', openFullPicker);
 
+            // Handle translate button
+            const doTranslate = (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                popup.remove();
+                translateBubble.remove();
+                removeCloseListeners();
+                const contentEl = msgEl.querySelector('.message-content');
+                if (!contentEl) return;
+                const content = contentEl.textContent.trim();
+                if (content) this.translateMessage(content, messageId);
+            };
+            translateBubble.addEventListener('click', doTranslate);
+            translateBubble.addEventListener('touchend', doTranslate);
+
             // Handle emoji clicks via both click and touchend for reliability
             popup.addEventListener('click', async (ev) => {
                 ev.stopPropagation();
@@ -18056,6 +18093,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (!btn) return;
                 const emoji = btn.dataset.emoji;
                 popup.remove();
+                translateBubble.remove();
                 removeCloseListeners();
                 await this.sendReaction(messageId, emoji);
                 this.addToRecentEmojis(emoji);
@@ -18068,6 +18106,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     ev.stopPropagation();
                     const emoji = btn.dataset.emoji;
                     popup.remove();
+                    translateBubble.remove();
                     removeCloseListeners();
                     await this.sendReaction(messageId, emoji);
                     this.addToRecentEmojis(emoji);
@@ -18079,9 +18118,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // gesture (mouseup + click, or touchend) that triggered the popup.
             const openedAt = Date.now();
             const closePopup = (ev) => {
-                if (popup.contains(ev.target)) return;
+                if (popup.contains(ev.target) || translateBubble.contains(ev.target)) return;
                 if (Date.now() - openedAt < 400) return;
                 popup.remove();
+                translateBubble.remove();
                 removeCloseListeners();
             };
             const removeCloseListeners = () => {
@@ -24139,7 +24179,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.48.172 ═══<br/>
+═══ Nymchat v3.48.173 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

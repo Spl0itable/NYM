@@ -6617,6 +6617,36 @@ body.light-mode .color-mode-btn.active {
     background: rgba(255, 255, 255, 0.08);
 }
 
+.quick-react-translate {
+    background: rgba(20, 20, 35, 0.92);
+    backdrop-filter: blur(20px) saturate(1.5);
+    -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
+    border-radius: 24px;
+    padding: 0 10px;
+    cursor: pointer;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    z-index: 10001;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: opacity 0.15s ease, transform 0.15s ease, color 0.12s ease, background 0.12s ease;
+    box-sizing: border-box;
+}
+
+.quick-react-translate.active {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.quick-react-translate:hover {
+    color: var(--primary);
+    background: rgba(40, 40, 55, 0.95);
+}
+
 body.light-mode .quick-react-popup {
     background: rgba(255, 255, 255, 0.92);
     border-color: rgba(0, 0, 0, 0.1);
@@ -6633,6 +6663,16 @@ body.light-mode .quick-react-expand {
 
 body.light-mode .quick-react-expand:hover {
     background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .quick-react-translate {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .quick-react-translate:hover {
+    background: rgba(240, 240, 240, 0.95);
 }
 
 body.light-mode .context-menu-copy-pubkey:hover {
