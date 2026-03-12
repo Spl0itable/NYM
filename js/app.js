@@ -8011,6 +8011,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
+        // Protect emoji from being stripped by the translation API
+        const { text: shieldedText, emojis: savedEmojis } = this._shieldEmojis(plainText);
+
         // Find the message element to append translation
         const msgEl = messageId ? document.querySelector(`[data-message-id="${messageId}"]`) : null;
 
@@ -8035,7 +8038,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const resp = await fetch(`${base}?action=translate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: plainText, source: 'auto', target: targetLang }),
+                    body: JSON.stringify({ text: shieldedText, source: 'auto', target: targetLang }),
                 });
                 const contentType = (resp.headers.get('content-type') || '').toLowerCase();
                 if (!contentType.includes('application/json')) {
@@ -8043,12 +8046,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
                 const data = await resp.json();
                 if (data.error) throw new Error(data.error);
-                translatedText = data.translatedText;
+                translatedText = this._restoreEmojis(data.translatedText, savedEmojis);
                 detectedLang = data.detectedLanguage || 'auto';
             } else {
                 // Direct path: call LibreTranslate instances directly
-                const result = await this._translateDirect(plainText, targetLang);
-                translatedText = result.translatedText;
+                const result = await this._translateDirect(shieldedText, targetLang);
+                translatedText = this._restoreEmojis(result.translatedText, savedEmojis);
                 detectedLang = result.detectedLanguage || 'auto';
             }
 
@@ -8076,6 +8079,35 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     // Call LibreTranslate directly (no proxy). Tries multiple public instances.
+    // Protect emoji from being stripped by translation APIs.
+    // Returns { text, emojis } where text has placeholders and emojis is the map to restore them.
+    _shieldEmojis(text) {
+        const emojis = [];
+        const shielded = text.replace(
+            /(?:[\u{1F1E0}-\u{1F1FF}]{2})|(?:[#*0-9]\u{FE0F}?\u{20E3})|(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?(?:\u{200D}(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?)*)(?:[\u{E0020}-\u{E007E}]+\u{E007F})?/gu,
+            (match) => {
+                const idx = emojis.length;
+                emojis.push(match);
+                return `EMJ${idx}EMJ`;
+            }
+        );
+        return { text: shielded, emojis };
+    }
+
+    _restoreEmojis(text, emojis) {
+        return text.replace(/EMJ(\d+)EMJ/g, (_, idx) => emojis[parseInt(idx)] || '');
+    }
+
+    translateHoverMessage(btn) {
+        const msgEl = btn.closest('[data-message-id]');
+        if (!msgEl) return;
+        const messageId = msgEl.getAttribute('data-message-id');
+        const contentEl = msgEl.querySelector('.message-content');
+        if (!contentEl) return;
+        const content = contentEl.textContent.trim();
+        if (content) this.translateMessage(content, messageId);
+    }
+
     async _translateDirect(text, targetLang) {
         const instances = [
             'https://translate.fedilab.app',
@@ -8121,6 +8153,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const text = input.value.trim();
         if (!text) return;
 
+        // Protect emoji from being stripped by the translation API
+        const { text: shieldedText, emojis: savedEmojis } = this._shieldEmojis(text);
+
         const btn = document.getElementById('translateInputBtn');
         if (btn) btn.classList.add('translating');
 
@@ -8131,7 +8166,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const resp = await fetch(`${base}?action=translate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, source: 'auto', target: targetLang }),
+                    body: JSON.stringify({ text: shieldedText, source: 'auto', target: targetLang }),
                 });
                 const contentType = (resp.headers.get('content-type') || '').toLowerCase();
                 if (!contentType.includes('application/json')) {
@@ -8139,10 +8174,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
                 const data = await resp.json();
                 if (data.error) throw new Error(data.error);
-                translatedText = data.translatedText;
+                translatedText = this._restoreEmojis(data.translatedText, savedEmojis);
             } else {
-                const result = await this._translateDirect(text, targetLang);
-                translatedText = result.translatedText;
+                const result = await this._translateDirect(shieldedText, targetLang);
+                translatedText = this._restoreEmojis(result.translatedText, savedEmojis);
             }
             input.value = translatedText;
             this.autoResizeTextarea(input);
@@ -8186,9 +8221,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const input = document.getElementById('messageInput');
         const btn = document.getElementById('translateInputBtn');
         if (!btn || !input) return;
-        btn.style.display = input.value.trim().length > 0 ? 'flex' : 'none';
+        const hasText = input.value.trim().length > 0;
+        btn.style.display = hasText ? 'flex' : 'none';
+        input.style.paddingRight = hasText ? '38px' : '';
         // Hide dropdown when button hides
-        if (input.value.trim().length === 0) {
+        if (!hasText) {
             const dropdown = document.getElementById('translateInputDropdown');
             if (dropdown) dropdown.classList.remove('active');
         }
@@ -16424,16 +16461,23 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             const isMobile = window.innerWidth <= 768;
 
-            // Show reaction button for all messages with valid IDs (including PMs)
-            const reactionButton = isValidEventId && !isMobile ? `
-    <button class="reaction-btn" onclick="nym.showReactionPicker('${reactionMsgId}', this)">
-        <svg viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-            <circle cx="9" cy="9" r="1"></circle>
-            <circle cx="15" cy="9" r="1"></circle>
-        </svg>
-    </button>
+            // Show reaction & translate buttons for all messages with valid IDs (including PMs)
+            const hoverButtons = isValidEventId && !isMobile ? `
+    <div class="msg-hover-buttons">
+        <button class="reaction-btn" onclick="nym.showReactionPicker('${reactionMsgId}', this)">
+            <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                <circle cx="9" cy="9" r="1"></circle>
+                <circle cx="15" cy="9" r="1"></circle>
+            </svg>
+        </button>
+        <button class="translate-msg-btn" onclick="nym.translateHoverMessage(this)" title="Translate">
+            <svg viewBox="0 0 24 24">
+                <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
+            </svg>
+        </button>
+    </div>
 ` : '';
 
             // Build the initial HTML with quote detection
@@ -16564,7 +16608,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
     <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time">${bubbleTime}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
     <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner">${bubbleTime}</span></span>
-    ${reactionButton}
+    ${hoverButtons}
     ${deliveryCheckmark}
 `;
 
@@ -17832,6 +17876,20 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         document.getElementById('fileInput').addEventListener('change', (e) => {
             if (e.target.files && e.target.files[0]) {
                 this.uploadImage(e.target.files[0]);
+            }
+        });
+
+        // Clipboard paste — auto-upload images/videos pasted into the message input
+        document.getElementById('messageInput').addEventListener('paste', (e) => {
+            const items = e.clipboardData && e.clipboardData.items;
+            if (!items) return;
+            for (const item of items) {
+                if (item.type.startsWith('image/') || item.type.startsWith('video/')) {
+                    e.preventDefault();
+                    const file = item.getAsFile();
+                    if (file) this.uploadImage(file);
+                    return;
+                }
             }
         });
 
@@ -24081,7 +24139,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.48.171 ═══<br/>
+═══ Nymchat v3.48.172 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

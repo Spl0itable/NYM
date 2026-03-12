@@ -148,7 +148,7 @@ async function handleTranslate(request) {
           q: text.slice(0, 5000), // Limit text length
           source: source || 'auto',
           target: target,
-          format: 'text',
+          format: 'html',
         }),
         signal: controller.signal,
       });
