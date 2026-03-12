@@ -8005,14 +8005,25 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         // Strip HTML tags for translation (send plain text)
-        const plainText = content.replace(/<[^>]+>/g, '').trim();
+        let plainText = content.replace(/<[^>]+>/g, '').trim();
         if (!plainText) {
             this.displaySystemMessage('No text to translate.');
             return;
         }
 
+        // Strip trailing timestamp (e.g. "12:34 PM", "3:05 AM", "23:59")
+        plainText = plainText.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
+
         // Protect emoji from being stripped by the translation API
         const { text: shieldedText, emojis: savedEmojis } = this._shieldEmojis(plainText);
+
+        // Protect @mentions from being mangled by the translation API
+        const mentions = [];
+        const mentionShielded = shieldedText.replace(/@[^\s@]+(?:#[0-9a-f]{4})?/gi, (match) => {
+            const idx = mentions.length;
+            mentions.push(match);
+            return `MNT${idx}MNT`;
+        });
 
         // Find the message element to append translation
         const msgEl = messageId ? document.querySelector(`[data-message-id="${messageId}"]`) : null;
@@ -8038,7 +8049,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const resp = await fetch(`${base}?action=translate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: shieldedText, source: 'auto', target: targetLang }),
+                    body: JSON.stringify({ text: mentionShielded, source: 'auto', target: targetLang }),
                 });
                 const contentType = (resp.headers.get('content-type') || '').toLowerCase();
                 if (!contentType.includes('application/json')) {
@@ -8046,12 +8057,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
                 const data = await resp.json();
                 if (data.error) throw new Error(data.error);
-                translatedText = this._restoreEmojis(data.translatedText, savedEmojis);
+                translatedText = this._restoreMentions(this._restoreEmojis(data.translatedText, savedEmojis), mentions);
                 detectedLang = data.detectedLanguage || 'auto';
             } else {
                 // Direct path: call LibreTranslate instances directly
-                const result = await this._translateDirect(shieldedText, targetLang);
-                translatedText = this._restoreEmojis(result.translatedText, savedEmojis);
+                const result = await this._translateDirect(mentionShielded, targetLang);
+                translatedText = this._restoreMentions(this._restoreEmojis(result.translatedText, savedEmojis), mentions);
                 detectedLang = result.detectedLanguage || 'auto';
             }
 
@@ -8096,6 +8107,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     _restoreEmojis(text, emojis) {
         return text.replace(/EMJ(\d+)EMJ/g, (_, idx) => emojis[parseInt(idx)] || '');
+    }
+
+    _restoreMentions(text, mentions) {
+        return text.replace(/MNT(\d+)MNT/g, (_, idx) => mentions[parseInt(idx)] || '');
     }
 
     translateHoverMessage(btn) {
@@ -24179,7 +24194,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.48.173 ═══<br/>
+═══ Nymchat v3.48.174 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
