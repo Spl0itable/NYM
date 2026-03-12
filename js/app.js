@@ -18118,27 +18118,52 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const popupWidth = 270;
             const translateGap = 8;
             const translateBtnWidth = 42;
-            // Reserve space for popup + gap + translate button so nothing gets cut off
-            const totalWidth = popupWidth + translateGap + translateBtnWidth;
-            let left = clientX - popupWidth / 2;
-            left = Math.max(10, Math.min(left, window.innerWidth - totalWidth - 10));
-            let top = clientY - 55;
-            top = Math.max(10, top);
+            const isMobileView = window.innerWidth <= 280;
 
-            popup.style.left = left + 'px';
-            popup.style.top = top + 'px';
+            // On mobile, stack translate button below; on desktop, place it to the right
+            if (isMobileView) {
+                let left = clientX - popupWidth / 2;
+                left = Math.max(10, Math.min(left, window.innerWidth - popupWidth - 10));
+                let top = clientY - 55;
+                top = Math.max(10, top);
 
-            // Position translate bubble to the right of the popup
-            translateBubble.style.position = 'fixed';
-            translateBubble.style.left = (left + popupWidth + translateGap) + 'px';
-            translateBubble.style.top = top + 'px';
+                popup.style.left = left + 'px';
+                popup.style.top = top + 'px';
 
-            document.body.appendChild(popup);
-            document.body.appendChild(translateBubble);
+                document.body.appendChild(popup);
 
-            // Match translate button height to popup's actual rendered height
-            const popupHeight = popup.offsetHeight;
-            translateBubble.style.height = popupHeight + 'px';
+                // Position translate bubble centered below the popup
+                translateBubble.style.position = 'fixed';
+                const popupHeight = popup.offsetHeight;
+                translateBubble.style.top = (top + popupHeight + translateGap) + 'px';
+                const actualPopupWidth = popup.offsetWidth;
+                translateBubble.style.left = (left + (actualPopupWidth / 2) - (translateBtnWidth / 2)) + 'px';
+                translateBubble.style.width = translateBtnWidth + 'px';
+                translateBubble.style.height = translateBtnWidth + 'px';
+
+                document.body.appendChild(translateBubble);
+            } else {
+                const totalWidth = popupWidth + translateGap + translateBtnWidth;
+                let left = clientX - popupWidth / 2;
+                left = Math.max(10, Math.min(left, window.innerWidth - totalWidth - 10));
+                let top = clientY - 55;
+                top = Math.max(10, top);
+
+                popup.style.left = left + 'px';
+                popup.style.top = top + 'px';
+
+                // Position translate bubble to the right of the popup
+                translateBubble.style.position = 'fixed';
+                translateBubble.style.left = (left + popupWidth + translateGap) + 'px';
+                translateBubble.style.top = top + 'px';
+
+                document.body.appendChild(popup);
+                document.body.appendChild(translateBubble);
+
+                // Match translate button height to popup's actual rendered height
+                const popupHeight = popup.offsetHeight;
+                translateBubble.style.height = popupHeight + 'px';
+            }
 
             // Trigger animation
             requestAnimationFrame(() => {
@@ -24278,7 +24303,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.48.176 ═══<br/>
+═══ Nymchat v3.48.177 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
