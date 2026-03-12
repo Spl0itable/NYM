@@ -1015,6 +1015,7 @@ class NYM {
         this.geoRelayConnections = new Map();
         this.currentGeoRelays = new Set();
         this.geoRelayCount = 10;
+        this.fetchGeoRelays();
         this.defaultRelays = this.broadcastRelays.slice(0, 5);
         this.bitchatDMRelays = [
             'wss://relay.damus.io',
@@ -1064,6 +1065,8 @@ class NYM {
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
         this.deletedEventIds = new Set();
+        this.editedMessages = new Map();
+        this.pendingEdit = null;
         this.pendingDMs = new Map();
         this.dmRetryInterval = null;
         this.dmRetryCheckMs = 5000;
@@ -4642,6 +4645,42 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return R * c;
     }
 
+    // Fetch geo relay list from the same remote CSV that bitchat uses.
+    // Falls back to the hardcoded list if fetch fails.
+    fetchGeoRelays() {
+        const url = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
+        fetch(url, { cache: 'no-cache' })
+            .then(res => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return res.text();
+            })
+            .then(csv => {
+                const parsed = [];
+                const lines = csv.split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (!line) continue;
+                    if (i === 0 && line.toLowerCase().includes('relay url')) continue;
+                    const parts = line.split(',');
+                    if (parts.length < 3) continue;
+                    let host = parts[0].trim()
+                        .replace('https://', '').replace('http://', '')
+                        .replace('wss://', '').replace('ws://', '')
+                        .replace(/\/+$/, '');
+                    const lat = parseFloat(parts[1]);
+                    const lng = parseFloat(parts[2]);
+                    if (!host || isNaN(lat) || isNaN(lng)) continue;
+                    parsed.push({ url: `wss://${host}`, lat, lng });
+                }
+                if (parsed.length > 0) {
+                    this.geoRelays = parsed;
+                }
+            })
+            .catch(() => {
+                // Silently fall back to hardcoded list
+            });
+    }
+
     // Find the N closest relays to a geohash location
     getClosestRelaysForGeohash(geohash, count = this.geoRelayCount) {
         try {
@@ -4868,7 +4907,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
-    // Disconnect from geo-specific relays that are no longer needed
     cleanupGeoRelays(previousGeohash) {
         if (!previousGeohash) return;
 
@@ -5841,6 +5879,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         });
 
+        // Add edit message handler
+        document.getElementById('ctxEditMessage').addEventListener('click', () => {
+            if (this.contextMenuData && this.contextMenuData.messageId && this.contextMenuData.pubkey === this.pubkey) {
+                this.startEditMessage(this.contextMenuData);
+            }
+            this.closeContextMenu();
+        });
+
+        // Edit preview close button
+        document.getElementById('editPreviewClose').addEventListener('click', () => {
+            this.cancelEditMessage();
+        });
+
         // Add delete message handler
         document.getElementById('ctxDeleteMessage').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.messageId && this.contextMenuData.pubkey === this.pubkey) {
@@ -6091,6 +6142,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const reactOption = document.getElementById('ctxReact');
         reactOption.style.display = messageId ? 'block' : 'none';
 
+        // Show/hide Edit Message option - only for own messages with content
+        const editOption = document.getElementById('ctxEditMessage');
+        if (pubkey === this.pubkey && messageId && content) {
+            editOption.style.display = 'block';
+        } else {
+            editOption.style.display = 'none';
+        }
+
         // Show/hide Delete Message option - only for own messages
         const deleteOption = document.getElementById('ctxDeleteMessage');
         if (pubkey === this.pubkey && messageId) {
@@ -6109,6 +6168,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (slapOption) slapOption.style.display = 'none';
             if (hugOption) hugOption.style.display = 'none';
             if (kickOption) kickOption.style.display = 'none';
+            if (editOption) editOption.style.display = 'none';
         }
 
         // Populate bio
@@ -10528,6 +10588,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
+            // Check if this is an edit of a previous message (has 'edit' tag)
+            const editTag = event.tags.find(t => t[0] === 'edit');
+            if (editTag && editTag[1]) {
+                const originalId = editTag[1];
+                this.handleIncomingEdit(originalId, event.content, event.pubkey, event.id);
+                return;
+            }
+
             const message = {
                 id: event.id,
                 author: nym,
@@ -13152,6 +13220,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const messageContent = parsed.content;
 
+            // Check if this is an edit of a previous message (has 'edit' tag in rumor)
+            const pmEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
+            if (pmEditTag) {
+                const originalId = pmEditTag[1];
+                this.handleIncomingPMEdit(originalId, messageContent, senderPubkey, conversationKey);
+                return;
+            }
+
             // Content-based dedup for dual-wrapped messages: when nymchat sends
             // both bitchat + nymchat format to unknown peers, the recipient may
             // decrypt both. Deduplicate by sender + content + close timestamp.
@@ -13514,6 +13590,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const messageContent = rumor.content;
         const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
+
+        // Check if this is an edit of a previous group message (has 'edit' tag in rumor)
+        const groupEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
+        if (groupEditTag) {
+            const originalId = groupEditTag[1];
+            this.handleIncomingPMEdit(originalId, messageContent, senderPubkey, groupConvKey);
+            return;
+        }
 
         // Content dedup for dual-wrap scenarios
         if (list.some(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5)) return;
@@ -14159,6 +14243,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentChannel = null;
         this.currentGeohash = null;
         this.userScrolledUp = false;
+        if (this.pendingEdit) this.cancelEditMessage();
 
         // Track navigation history
         this._pushNavigation({ type: 'group', groupId });
@@ -14549,6 +14634,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentChannel = null;
         this.currentGeohash = null;
         this.userScrolledUp = false;
+        if (this.pendingEdit) this.cancelEditMessage();
 
         // Track navigation history
         this._pushNavigation({ type: 'pm', nym, pubkey });
@@ -14842,6 +14928,77 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 }
             });
         }
+    }
+
+    handleIncomingEdit(originalEventId, newContent, senderPubkey, editEventId) {
+        // Always store the edit so it can be applied even if the original arrives later
+        // (same pattern as deletedEventIds for out-of-order relay delivery)
+        const existing = this.editedMessages.get(originalEventId);
+        // Only update if this edit is newer (or first edit seen)
+        if (!existing || (editEventId && editEventId !== existing.editEventId)) {
+            this.editedMessages.set(originalEventId, {
+                newContent,
+                editEventId,
+                senderPubkey,
+                timestamp: new Date()
+            });
+        }
+
+        // Prune if too large
+        if (this.editedMessages.size > 5000) {
+            const entries = Array.from(this.editedMessages.entries());
+            this.editedMessages = new Map(entries.slice(-4000));
+        }
+
+        // Try to apply to already-loaded messages
+        let found = false;
+        this.messages.forEach((msgs) => {
+            const msg = msgs.find(m => m.id === originalEventId);
+            if (msg && msg.pubkey === senderPubkey) {
+                msg.content = newContent;
+                msg.isEdited = true;
+                found = true;
+            }
+        });
+
+        if (found) {
+            this.updateMessageInDOM(originalEventId, newContent);
+        }
+    }
+
+    handleIncomingPMEdit(originalId, newContent, senderPubkey, conversationKey) {
+        // Always store the edit so it can be applied even if the original arrives later
+        const existing = this.editedMessages.get(originalId);
+        if (!existing) {
+            this.editedMessages.set(originalId, {
+                newContent,
+                editEventId: null,
+                senderPubkey,
+                timestamp: new Date()
+            });
+        }
+
+        // Prune if too large
+        if (this.editedMessages.size > 5000) {
+            const entries = Array.from(this.editedMessages.entries());
+            this.editedMessages = new Map(entries.slice(-4000));
+        }
+
+        // Try to apply to already-loaded messages
+        const msgs = this.pmMessages.get(conversationKey);
+        if (!msgs) return;
+
+        const msg = msgs.find(m =>
+            (m.nymMessageId === originalId || m.id === originalId) && m.pubkey === senderPubkey
+        );
+        if (!msg) return;
+
+        msg.content = newContent;
+        msg.isEdited = true;
+
+        const domId = msg.nymMessageId || msg.id;
+        this.channelDOMCache.delete(conversationKey);
+        this.updateMessageInDOM(domId, newContent);
     }
 
     async fetchProfileFromRelay(pubkey) {
@@ -16374,6 +16531,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return; // Don't display deleted messages
         }
 
+        // Apply pending edits that arrived before the original message
+        const editLookupId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
+        const pendingEdit = this.editedMessages.get(editLookupId);
+        if (pendingEdit && pendingEdit.senderPubkey === message.pubkey) {
+            message.content = pendingEdit.newContent;
+            message.isEdited = true;
+        }
+
         // Check if message is from a blocked user (from stored state OR by pubkey)
         if (message.blocked || this.blockedUsers.has(message.pubkey) || this.isNymBlocked(message.author)) {
             return; // Don't display blocked messages
@@ -16696,10 +16861,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const bubbleTime = time || displayTimestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: this.settings.timeFormat === '12hr' });
 
+            // Check if this message has been edited
+            const isEdited = message.isEdited;
+            const editedBubble = isEdited ? '<span class="edited-indicator" title="This message has been edited">(edited)</span> ' : '';
+            const editedIRC = isEdited ? '<span class="edited-indicator edited-indicator-irc" title="This message has been edited">(edited)</span>' : '';
+
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
     <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
-    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span></span>
+    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${editedBubble}${bubbleTime}</span></span>
+    ${editedIRC}
     ${hoverButtons}
     ${deliveryCheckmark}
 `;
@@ -17862,6 +18033,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     this.sendMessage();
+                } else if (e.key === 'Escape' && this.pendingEdit) {
+                    e.preventDefault();
+                    this.cancelEditMessage();
                 } else if (e.key === 'Escape' && this.pendingQuote) {
                     e.preventDefault();
                     this.clearQuoteReply();
@@ -18728,6 +18902,327 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (preview) preview.style.display = 'none';
     }
 
+    startEditMessage(contextData) {
+        const { messageId, content, pubkey } = contextData;
+        if (!messageId || !content || pubkey !== this.pubkey) return;
+
+        // Determine message context for later sending
+        let isPM = false;
+        let isGroup = false;
+        let groupId = null;
+        let conversationKey = null;
+        let nymMessageId = null;
+
+        if (this.inPMMode && this.currentGroup) {
+            isPM = true;
+            isGroup = true;
+            groupId = this.currentGroup;
+            conversationKey = this.getGroupConversationKey(this.currentGroup);
+            // Find the nymMessageId from stored messages
+            const msgs = this.pmMessages.get(conversationKey);
+            if (msgs) {
+                const msg = msgs.find(m => m.nymMessageId === messageId || m.id === messageId);
+                if (msg) nymMessageId = msg.nymMessageId;
+            }
+        } else if (this.inPMMode && this.currentPM) {
+            isPM = true;
+            conversationKey = this.getPMConversationKey(this.currentPM);
+            const msgs = this.pmMessages.get(conversationKey);
+            if (msgs) {
+                const msg = msgs.find(m => m.nymMessageId === messageId || m.id === messageId);
+                if (msg) nymMessageId = msg.nymMessageId;
+            }
+        }
+
+        this.pendingEdit = { messageId, content, pubkey, isPM, isGroup, groupId, conversationKey, nymMessageId };
+
+        // Clear any pending quote
+        this.clearQuoteReply();
+
+        // Show edit preview bar
+        const preview = document.getElementById('editPreview');
+        const textEl = document.getElementById('editPreviewText');
+        const cleanText = content.replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
+        textEl.textContent = cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText;
+        preview.style.display = 'flex';
+
+        // Populate input with original content
+        const input = document.getElementById('messageInput');
+        input.value = content;
+        input.focus();
+        this.autoResizeTextarea(input);
+    }
+
+    cancelEditMessage() {
+        this.pendingEdit = null;
+        const preview = document.getElementById('editPreview');
+        if (preview) preview.style.display = 'none';
+        const input = document.getElementById('messageInput');
+        input.value = '';
+        this.autoResizeTextarea(input);
+    }
+
+    async publishEditedChannelMessage(newContent, originalEventId) {
+        try {
+            if (!this.connected) throw new Error('Not connected to relay');
+
+            const geohash = this.currentGeohash || 'nym';
+
+            const now = Math.floor(Date.now() / 1000);
+            const tags = [
+                ['n', this.nym],
+                ['g', geohash],
+                ['expiration', String(now + 3600)],
+                ['edit', originalEventId] // Tag referencing the original message being edited
+            ];
+
+            let event = {
+                kind: 20000,
+                created_at: now,
+                tags: tags,
+                content: newContent,
+                pubkey: this.pubkey
+            };
+
+            if (this.enablePow && this.powDifficulty > 0) {
+                event = NostrTools.nip13.minePow(event, this.powDifficulty);
+            }
+
+            const signedEvent = await this.signEvent(event);
+
+            // Track this edit locally so it replaces the original visually
+            this.editedMessages.set(originalEventId, {
+                newContent,
+                editEventId: signedEvent.id,
+                timestamp: new Date(now * 1000)
+            });
+
+            // Update the original message in stored messages
+            this.messages.forEach((msgs) => {
+                const msg = msgs.find(m => m.id === originalEventId);
+                if (msg) {
+                    msg.content = newContent;
+                    msg.isEdited = true;
+                }
+            });
+
+            // Update DOM in-place
+            this.updateMessageInDOM(originalEventId, newContent);
+
+            // Send to relay
+            this.sendToRelay(['EVENT', signedEvent]);
+
+            // Schedule deletion if redacted cosmetic is active
+            if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                setTimeout(() => { this.publishDeletionEvent(signedEvent.id); }, 600000);
+            }
+
+            return true;
+        } catch (error) {
+            this.displaySystemMessage('Failed to edit message: ' + error.message);
+            return false;
+        }
+    }
+
+    async sendEditedPM(newContent, originalMessageId, recipientPubkey, originalNymMessageId) {
+        try {
+            if (!this.connected) throw new Error('Not connected to relay');
+
+            const now = Math.floor(Date.now() / 1000);
+            const nymMessageId = this.generateUUID();
+
+            const rumor = {
+                kind: 14,
+                created_at: now,
+                tags: [
+                    ['p', recipientPubkey],
+                    ['x', nymMessageId],
+                    ['edit', originalNymMessageId || originalMessageId] // Reference the original message
+                ],
+                content: newContent,
+                pubkey: this.pubkey
+            };
+
+            const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
+                ? now + this.settings.dmTTLSeconds : null;
+
+            if (this.privkey) {
+                const NT = window.NostrTools;
+                const isKnownBitchat = this.bitchatUsers.has(recipientPubkey);
+                const isKnownNym = this.nymUsers.has(recipientPubkey);
+                const isUnknownPeer = !isKnownBitchat && !isKnownNym;
+
+                if (isKnownNym || isUnknownPeer) {
+                    const nymWrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
+                    this.sendDMToRelays(['EVENT', nymWrapped]);
+                }
+
+                // Self-wrap so edit is retrievable on reload
+                if (recipientPubkey !== this.pubkey) {
+                    const selfWrapped = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
+                    this.sendDMToRelays(['EVENT', selfWrapped]);
+                }
+            } else if (window.nostr?.nip44?.encrypt && window.nostr?.signEvent) {
+                // Extension path: create seal + wrap via extension
+                const NT = window.NostrTools;
+                const sealContent = await window.nostr.nip44.encrypt(recipientPubkey, JSON.stringify(rumor));
+                const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
+                const seal = await window.nostr.signEvent(sealUnsigned);
+                const ephSk = NT.generateSecretKey();
+                const ephPk = NT.getPublicKey(ephSk);
+                const ckWrap = NT.nip44.getConversationKey(ephSk, recipientPubkey);
+                const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+                const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: [['p', recipientPubkey]], pubkey: ephPk };
+                if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
+                const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
+                this.sendDMToRelays(['EVENT', wrapped]);
+
+                // Self-wrap so our own edit is retrievable from relays after reload
+                if (recipientPubkey !== this.pubkey) {
+                    try {
+                        const selfSealContent = await window.nostr.nip44.encrypt(this.pubkey, JSON.stringify(rumor));
+                        const selfSealUnsigned = { kind: 13, content: selfSealContent, created_at: this.randomNow(), tags: [] };
+                        const selfSeal = await window.nostr.signEvent(selfSealUnsigned);
+                        const selfEphSk = NT.generateSecretKey();
+                        const selfCkWrap = NT.nip44.getConversationKey(selfEphSk, this.pubkey);
+                        const selfWrapContent = NT.nip44.encrypt(JSON.stringify(selfSeal), selfCkWrap);
+                        const selfWrapUnsigned = { kind: 1059, content: selfWrapContent, created_at: this.randomNow(), tags: [['p', this.pubkey]] };
+                        if (expirationTs) selfWrapUnsigned.tags.push(['expiration', String(expirationTs)]);
+                        const selfWrapped = NT.finalizeEvent(selfWrapUnsigned, selfEphSk);
+                        this.sendDMToRelays(['EVENT', selfWrapped]);
+                    } catch (_) { /* Self-wrap failed — non-critical */ }
+                }
+            }
+
+            // Track edit locally
+            const lookupId = originalNymMessageId || originalMessageId;
+            this.editedMessages.set(lookupId, {
+                newContent,
+                editEventId: nymMessageId,
+                timestamp: new Date(now * 1000)
+            });
+
+            // Update stored PM messages
+            const conversationKey = this.getPMConversationKey(recipientPubkey);
+            const msgs = this.pmMessages.get(conversationKey);
+            if (msgs) {
+                const msg = msgs.find(m => m.nymMessageId === lookupId || m.id === lookupId);
+                if (msg) {
+                    msg.content = newContent;
+                    msg.isEdited = true;
+                }
+            }
+            this.channelDOMCache.delete(conversationKey);
+
+            // Update DOM in-place
+            this.updateMessageInDOM(lookupId, newContent);
+
+            return true;
+        } catch (error) {
+            this.displaySystemMessage('Failed to edit message: ' + error.message);
+            return false;
+        }
+    }
+
+    async sendEditedGroupMessage(newContent, originalMessageId, groupId, originalNymMessageId) {
+        try {
+            if (!this._canSendGiftWraps()) {
+                this.displaySystemMessage('Group messages require a logged-in account');
+                return false;
+            }
+
+            const group = this.groupConversations.get(groupId);
+            if (!group) return false;
+
+            const now = Math.floor(Date.now() / 1000);
+            const nymMessageId = this.generateUUID();
+
+            const tags = group.members.map(pk => ['p', pk]);
+            tags.push(['g', groupId]);
+            tags.push(['subject', group.name]);
+            tags.push(['x', nymMessageId]);
+            tags.push(['edit', originalNymMessageId || originalMessageId]); // Reference the original message
+
+            const rumor = { kind: 14, created_at: now, tags, content: newContent, pubkey: this.pubkey };
+            const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
+                ? now + this.settings.dmTTLSeconds : null;
+
+            // Track edit locally
+            const lookupId = originalNymMessageId || originalMessageId;
+            this.editedMessages.set(lookupId, {
+                newContent,
+                editEventId: nymMessageId,
+                timestamp: new Date(now * 1000)
+            });
+
+            // Update stored messages
+            const groupConvKey = this.getGroupConversationKey(groupId);
+            const msgs = this.pmMessages.get(groupConvKey);
+            if (msgs) {
+                const msg = msgs.find(m => m.nymMessageId === lookupId || m.id === lookupId);
+                if (msg) {
+                    msg.content = newContent;
+                    msg.isEdited = true;
+                }
+            }
+            this.channelDOMCache.delete(groupConvKey);
+
+            // Update DOM in-place
+            this.updateMessageInDOM(lookupId, newContent);
+
+            // Send gift wraps to all group members
+            await this._sendGiftWrapsAsync(group.members, rumor, expirationTs);
+            return true;
+        } catch (error) {
+            this.displaySystemMessage('Failed to edit message: ' + error.message);
+            return false;
+        }
+    }
+
+    updateMessageInDOM(messageId, newContent) {
+        const msgEl = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!msgEl) return;
+
+        // Update raw content data attribute
+        msgEl.dataset.rawContent = newContent;
+
+        // Find the message-content element and update its content
+        const contentEl = msgEl.querySelector('.message-content');
+        if (contentEl) {
+            // Rebuild bubble-time-inner with edited indicator
+            const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
+            const formattedContent = this.formatMessageWithQuotes(newContent);
+            if (bubbleTimeEl) {
+                // Add edited indicator inside bubble-time-inner (for bubble layout)
+                if (!bubbleTimeEl.querySelector('.edited-indicator')) {
+                    const bubbleEdited = document.createElement('span');
+                    bubbleEdited.className = 'edited-indicator';
+                    bubbleEdited.title = 'This message has been edited';
+                    bubbleEdited.textContent = '(edited)';
+                    bubbleTimeEl.insertBefore(bubbleEdited, bubbleTimeEl.firstChild);
+                    bubbleTimeEl.insertBefore(document.createTextNode(' '), bubbleEdited.nextSibling);
+                }
+                contentEl.innerHTML = formattedContent + bubbleTimeEl.outerHTML;
+            } else {
+                contentEl.innerHTML = formattedContent;
+            }
+        }
+
+        // Add IRC-style edited indicator after message-content (for IRC layout)
+        if (!msgEl.querySelector('.edited-indicator-irc')) {
+            const ircIndicator = document.createElement('span');
+            ircIndicator.className = 'edited-indicator edited-indicator-irc';
+            ircIndicator.title = 'This message has been edited';
+            ircIndicator.textContent = '(edited)';
+            // Insert after message-content
+            if (contentEl && contentEl.nextSibling) {
+                msgEl.insertBefore(ircIndicator, contentEl.nextSibling);
+            } else {
+                msgEl.appendChild(ircIndicator);
+            }
+        }
+    }
+
     setupSwipeToReply() {
         const container = document.getElementById('messagesContainer');
         if (!container) return;
@@ -18859,6 +19354,33 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         if (!this.connected) {
             this.displaySystemMessage('Not connected to relay. Please wait...');
+            return;
+        }
+
+        // Handle edit mode: send edited message instead of new one
+        if (this.pendingEdit) {
+            const edit = this.pendingEdit;
+            this.cancelEditMessage();
+
+            if (content === edit.content) {
+                // No changes made
+                return;
+            }
+
+            if (edit.isGroup && edit.groupId) {
+                await this.sendEditedGroupMessage(content, edit.messageId, edit.groupId, edit.nymMessageId);
+            } else if (edit.isPM && this.currentPM) {
+                await this.sendEditedPM(content, edit.messageId, this.currentPM, edit.nymMessageId);
+            } else if (!edit.isPM) {
+                await this.publishEditedChannelMessage(content, edit.messageId);
+            }
+
+            input.value = '';
+            this.autoResizeTextarea(input);
+            this.hideCommandPalette();
+            this.hideAutocomplete();
+            this.hideEmojiAutocomplete();
+            this.sendTypingStop();
             return;
         }
 
@@ -20844,6 +21366,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.currentGeohash = geohash;
         this.userScrolledUp = false;
         this.clearQuoteReply();
+        if (this.pendingEdit) this.cancelEditMessage();
 
         // Track navigation history
         this._pushNavigation({ type: 'channel', channel, geohash });
@@ -20982,12 +21505,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     // Compute a lightweight fingerprint of messages for cache invalidation.
-    // Detects changes in count, message IDs, and delivery status.
+    // Detects changes in count, message IDs, delivery status, and edit state.
     _computeMessageFingerprint(messages) {
         if (!messages || messages.length === 0) return '';
         // Use last 10 messages for efficiency — most changes happen at the tail
         const tail = messages.slice(-10);
-        return tail.map(m => `${m.id}:${m.deliveryStatus || ''}`).join('|');
+        return tail.map(m => `${m.id}:${m.deliveryStatus || ''}:${m.isEdited ? 'e' : ''}`).join('|');
     }
 
     loadChannelMessages(displayName) {
@@ -24278,7 +24801,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.48.179 ═══<br/>
+═══ Nymchat v3.49.179 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

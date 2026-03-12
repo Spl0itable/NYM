@@ -1991,6 +1991,81 @@ body.light-mode .pubkey-slideout-copy:hover {
     background: rgba(255, 255, 255, 0.1);
 }
 
+.edit-preview {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    border: 1px solid var(--glass-border);
+    border-bottom: none;
+    animation: quoteSlideIn 0.2s ease-out;
+}
+
+.edit-preview-bar {
+    width: 3px;
+    min-height: 28px;
+    align-self: stretch;
+    background: #f0ad4e;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.edit-preview-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.edit-preview-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #f0ad4e;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.edit-preview-text {
+    font-size: 12px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.edited-indicator {
+    font-size: 10px;
+    color: var(--text-dim);
+    font-style: italic;
+    opacity: 0.7;
+}
+
+.edited-indicator-irc {
+    display: block;
+    text-align: right;
+    margin-top: 2px;
+    margin-left: auto;
+}
+
+.bubble-time-inner .edited-indicator {
+    display: none;
+}
+
+body.chat-bubbles .bubble-time-inner .edited-indicator {
+    display: inline;
+    margin-right: 2px;
+}
+
+body.chat-bubbles .edited-indicator-irc {
+    display: none;
+}
+
 .message {
     overflow: visible;
 }
@@ -4517,6 +4592,10 @@ body.light-mode .quote-preview {
 body.light-mode .quote-preview-close:hover {
     color: var(--text);
     background: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .edit-preview {
+    background: rgba(0, 0, 0, 0.03);
 }
 
 body.light-mode .search-input:focus,

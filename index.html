@@ -150,6 +150,15 @@
             Report
         </div>
 
+        <div class="context-menu-item" id="ctxEditMessage" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <path d="M 11.5 2.5 L 13.5 4.5 L 5 13 L 2 14 L 3 11 Z" stroke-linejoin="round" />
+                <path d="M 10 4 L 12 6" stroke-linecap="round" />
+            </svg>
+            Edit Message
+        </div>
+
         <div class="context-menu-item danger" id="ctxDeleteMessage">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 style="vertical-align: middle; margin-right: 8px;">
@@ -186,8 +195,8 @@
         <div class="context-menu-item" id="ctxEditProfile" style="display: none;">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 style="vertical-align: middle; margin-right: 8px;">
-                <path d="M 11.5 2.5 L 13.5 4.5 L 5 13 L 2 14 L 3 11 Z" stroke-linejoin="round" />
-                <path d="M 10 4 L 12 6" stroke-linecap="round" />
+                <circle cx="8" cy="5.5" r="2.5" />
+                <path d="M 3 14 C 3 11 5 9.5 8 9.5 C 11 9.5 13 11 13 14" stroke-linecap="round" />
             </svg>
             Edit Profile
         </div>
@@ -456,6 +465,19 @@
                         <div class="progress-bar">
                             <div class="progress-fill" id="progressFill"></div>
                         </div>
+                    </div>
+                    <div class="edit-preview" id="editPreview" style="display: none;">
+                        <div class="edit-preview-bar"></div>
+                        <div class="edit-preview-content">
+                            <span class="edit-preview-label">Editing message</span>
+                            <span class="edit-preview-text" id="editPreviewText"></span>
+                        </div>
+                        <button class="quote-preview-close" id="editPreviewClose" title="Cancel edit">
+                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
                     </div>
                     <div class="quote-preview" id="quotePreview" style="display: none;">
                         <div class="quote-preview-bar"></div>
