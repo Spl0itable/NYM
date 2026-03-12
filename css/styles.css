@@ -3590,7 +3590,7 @@ body.light-mode .verified-badge::before {
         font-size: 16px !important;
         min-height: 44px;
         -webkit-appearance: none;
-        border-radius: var(--radius-md);
+        border-radius: 0 0 var(--radius-md) var(--radius-md);
     }
 
     .message-input:focus {
