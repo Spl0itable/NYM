@@ -6723,12 +6723,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             filters.push({ kinds: [20000], since: since1h, limit: 100 });
             // Polls and poll votes (kind 30078 with t-tag)
             filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 });
+            // Reactions for geohash channels
+            filters.push({ kinds: [7], "#k": ["20000"], since: since1h, limit: 100 });
             // Delete events (scoped to NYM kinds: geohash channels + DM gift wraps)
             filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since1h, limit: 100 });
         }
 
         // Presence broadcasts (needed even in PM-only mode for user list)
         filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
+        // Reactions for PMs
+        filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
         // User shop items
         filters.push({ kinds: [30078], "#d": ["nym-shop-active"], limit: 100 });
         // Zap receipts
@@ -7207,12 +7211,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             filters.push({ kinds: [20000], since: since1h, limit: 100 });
             // Polls and poll votes (kind 30078 with t-tag)
             filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 });
+            // Reactions for geohash channels
+            filters.push({ kinds: [7], "#k": ["20000"], since: since1h, limit: 100 });
             // Delete events (scoped to NYM kinds: geohash channels + DM gift wraps)
             filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since1h, limit: 100 });
         }
 
         // Presence broadcasts (needed even in PM-only mode for user list)
         filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
+        // Reactions for PMs
+        filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
         // User shop items
         filters.push({ kinds: [30078], "#d": ["nym-shop-active"], limit: 100 });
         // Zap receipts
@@ -11319,18 +11327,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             badge.innerHTML = `${emoji} ${this.abbreviateNumber(reactors.size)}`;
 
-            // Create tooltip with user names
-            if (hasReacted) {
-                const otherUsers = Array.from(reactors.entries())
-                    .filter(([pk, nym]) => pk !== this.pubkey)
-                    .map(([pk, nym]) => nym);
-                badge.title = otherUsers.length > 0 ?
-                    `You and ${otherUsers.join(', ')}` :
-                    'You reacted with this';
-            } else {
-                const users = Array.from(reactors.values()).join(', ');
-                badge.title = `Click to also react with ${emoji} | ${users}`;
-            }
+            // No tooltip — long-press shows reactors modal instead
 
             // Long-press to show reactors modal
             let longPressTimer = null;
@@ -16701,8 +16698,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time">${bubbleTime}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
-    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner">${bubbleTime}</span></span>
+    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
+    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span></span>
     ${hoverButtons}
     ${deliveryCheckmark}
 `;
@@ -20580,7 +20577,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         messageEl.innerHTML = `
             <span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
-            <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time">${timeStr}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
+            <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
             <div class="message-content">
                 <div class="poll-container" data-poll-id="${pollId}">
                     <div class="poll-header">📊 Poll</div>
@@ -20588,7 +20585,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     <div class="poll-options">${optionsHtml}</div>
                     <div class="poll-footer">${totalVotes} vote${totalVotes !== 1 ? 's' : ''}</div>
                 </div>
-                <span class="bubble-time-inner">${timeStr}</span>
+                <span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
             </div>
         `;
 
@@ -24281,7 +24278,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.48.178 ═══<br/>
+═══ Nymchat v3.48.179 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
