@@ -21,6 +21,7 @@ const MAX_UNFURL_SIZE = 512 * 1024;
 
 // LibreTranslate public instances
 const LIBRE_TRANSLATE_INSTANCES = [
+  'https://translate.cutie.dating',
   'https://translate.fedilab.app',
   'https://trans.zillyhuhn.com',
   'https://lt.vern.cc',

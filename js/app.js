@@ -8273,6 +8273,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     async _translateDirect(text, targetLang) {
         const instances = [
+            'https://translate.cutie.dating',
             'https://translate.fedilab.app',
             'https://trans.zillyhuhn.com',
             'https://lt.vern.cc',
@@ -24801,7 +24802,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.179 ═══<br/>
+═══ Nymchat v3.49.180 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
