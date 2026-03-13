@@ -8088,6 +8088,32 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 { code: 'th', name: 'Thai' },
                 { code: 'id', name: 'Indonesian' },
                 { code: 'sv', name: 'Swedish' },
+                { code: 'af', name: 'Afrikaans' },
+                { code: 'bg', name: 'Bulgarian' },
+                { code: 'bn', name: 'Bengali' },
+                { code: 'ca', name: 'Catalan' },
+                { code: 'cs', name: 'Czech' },
+                { code: 'da', name: 'Danish' },
+                { code: 'el', name: 'Greek' },
+                { code: 'et', name: 'Estonian' },
+                { code: 'fa', name: 'Persian' },
+                { code: 'fi', name: 'Finnish' },
+                { code: 'fil', name: 'Filipino' },
+                { code: 'he', name: 'Hebrew' },
+                { code: 'hr', name: 'Croatian' },
+                { code: 'hu', name: 'Hungarian' },
+                { code: 'lt', name: 'Lithuanian' },
+                { code: 'lv', name: 'Latvian' },
+                { code: 'ms', name: 'Malay' },
+                { code: 'no', name: 'Norwegian' },
+                { code: 'ro', name: 'Romanian' },
+                { code: 'sk', name: 'Slovak' },
+                { code: 'sl', name: 'Slovenian' },
+                { code: 'sr', name: 'Serbian' },
+                { code: 'sw', name: 'Swahili' },
+                { code: 'ta', name: 'Tamil' },
+                { code: 'te', name: 'Telugu' },
+                { code: 'ur', name: 'Urdu' },
             ];
 
             const overlay = document.createElement('div');
@@ -8144,7 +8170,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     // Translate a message and show the result inline below the original message.
-    // Uses the CF proxy when available, falls back to calling LibreTranslate directly.
+    // Uses the CF proxy when available, falls back to calling Google Translate directly.
     async translateMessage(content, messageId) {
         let targetLang = this.settings.translateLanguage;
         if (!targetLang) {
@@ -8237,7 +8263,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
-    // Call LibreTranslate directly (no proxy). Tries multiple public instances.
     // Protect emoji from being stripped by translation APIs.
     // Returns { text, emojis } where text has placeholders and emojis is the map to restore them.
     _shieldEmojis(text) {
@@ -8272,43 +8297,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async _translateDirect(text, targetLang) {
-        const instances = [
-            'https://translate.cutie.dating',
-            'https://translate.fedilab.app',
-            'https://trans.zillyhuhn.com',
-            'https://lt.vern.cc',
-            'https://translate.terraprint.co',
-        ];
-        let lastError = null;
-        for (const instance of instances) {
-            try {
-                const controller = new AbortController();
-                const timer = setTimeout(() => controller.abort(), 8000);
-                const resp = await fetch(`${instance}/translate`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        q: text.slice(0, 5000),
-                        source: 'auto',
-                        target: targetLang,
-                        format: 'text',
-                    }),
-                    signal: controller.signal,
-                });
-                clearTimeout(timer);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    return {
-                        translatedText: data.translatedText,
-                        detectedLanguage: data.detectedLanguage?.language || 'auto',
-                    };
-                }
-                lastError = `${instance} returned ${resp.status}`;
-            } catch (err) {
-                lastError = `${instance}: ${err.name === 'AbortError' ? 'timeout' : err.message}`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        try {
+            const params = new URLSearchParams({
+                client: 'gtx',
+                sl: 'auto',
+                tl: targetLang,
+                dt: 't',
+                q: text.slice(0, 5000),
+            });
+            const resp = await fetch(`https://translate.googleapis.com/translate_a/single?${params}`, {
+                signal: controller.signal,
+            });
+            clearTimeout(timer);
+            if (!resp.ok) throw new Error(`Google Translate returned ${resp.status}`);
+            const data = await resp.json();
+            let translatedText = '';
+            if (Array.isArray(data[0])) {
+                translatedText = data[0].map(seg => seg[0] || '').join('');
             }
+            return {
+                translatedText,
+                detectedLanguage: data[2] || 'auto',
+            };
+        } catch (err) {
+            clearTimeout(timer);
+            throw new Error('Translation failed: ' + (err.name === 'AbortError' ? 'timeout' : err.message));
         }
-        throw new Error('All translation instances failed: ' + lastError);
     }
 
     // Translate text from the message input and replace it with the translation.
@@ -24802,7 +24818,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.180 ═══<br/>
+═══ Nymchat v3.49.181 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

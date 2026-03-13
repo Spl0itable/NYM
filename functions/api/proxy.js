@@ -3,8 +3,8 @@
 // so the user's real IP is never exposed to third-party services.
 //
 // Endpoints:
-//   GET  /api/proxy?url=<encoded-url>           — Proxy any allowed media/resource
-//   POST /api/proxy?action=translate             — Translate text via LibreTranslate
+//   GET  /api/proxy?url=<encoded-url>            — Proxy any allowed media/resource
+//   POST /api/proxy?action=translate             — Translate text
 //   GET  /api/proxy?action=unfurl&url=<url>      — Fetch Open Graph metadata for URL preview
 
 const ALLOWED_MEDIA_TYPES = new Set([
@@ -19,14 +19,8 @@ const MAX_PROXY_SIZE = 25 * 1024 * 1024;
 // Max size for unfurl HTML fetch (512 KB)
 const MAX_UNFURL_SIZE = 512 * 1024;
 
-// LibreTranslate public instances
-const LIBRE_TRANSLATE_INSTANCES = [
-  'https://translate.cutie.dating',
-  'https://translate.fedilab.app',
-  'https://trans.zillyhuhn.com',
-  'https://lt.vern.cc',
-  'https://translate.terraprint.co',
-];
+// Translate endpoint
+const GOOGLE_TRANSLATE_URL = 'https://translate.googleapis.com/translate_a/single';
 
 // Timeout for translation requests
 const TRANSLATE_TIMEOUT = 8000;
@@ -61,7 +55,7 @@ export async function onRequest(context) {
   }
 }
 
-// --- Media Proxy ---
+// Media Proxy
 async function handleMediaProxy(targetUrl) {
   if (!targetUrl) {
     return jsonResponse({ error: 'Missing url parameter' }, 400);
@@ -118,7 +112,7 @@ async function handleMediaProxy(targetUrl) {
   return new Response(resp.body, { status: 200, headers });
 }
 
-// --- Translation via LibreTranslate ---
+// Translation
 async function handleTranslate(request) {
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'POST required' }, 405);
@@ -136,42 +130,45 @@ async function handleTranslate(request) {
     return jsonResponse({ error: 'Missing text or target language' }, 400);
   }
 
-  // Try each LibreTranslate instance in order
-  let lastError = null;
-  for (const instance of LIBRE_TRANSLATE_INSTANCES) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), TRANSLATE_TIMEOUT);
-      const resp = await fetch(`${instance}/translate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          q: text.slice(0, 5000), // Limit text length
-          source: source || 'auto',
-          target: target,
-          format: 'html',
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TRANSLATE_TIMEOUT);
 
-      if (resp.ok) {
-        const data = await resp.json();
-        return jsonResponse({
-          translatedText: data.translatedText,
-          detectedLanguage: data.detectedLanguage?.language || source || 'auto',
-        });
-      }
-      lastError = `${instance} returned ${resp.status}`;
-    } catch (err) {
-      lastError = `${instance}: ${err.name === 'AbortError' ? 'timeout' : err.message}`;
+    const params = new URLSearchParams({
+      client: 'gtx',
+      sl: source || 'auto',
+      tl: target,
+      dt: 't',
+      q: text.slice(0, 5000),
+    });
+
+    const resp = await fetch(`${GOOGLE_TRANSLATE_URL}?${params}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      return jsonResponse({ error: `Google Translate returned ${resp.status}` }, 502);
     }
-  }
 
-  return jsonResponse({ error: 'Translation failed: ' + lastError }, 502);
+    const data = await resp.json();
+
+    // Response format: [[["translated text","original text",null,null,10],...],null,"detected_lang"]
+    let translatedText = '';
+    if (Array.isArray(data[0])) {
+      translatedText = data[0].map(seg => seg[0] || '').join('');
+    }
+
+    const detectedLanguage = data[2] || source || 'auto';
+
+    return jsonResponse({ translatedText, detectedLanguage });
+  } catch (err) {
+    const msg = err.name === 'AbortError' ? 'timeout' : err.message;
+    return jsonResponse({ error: 'Translation failed: ' + msg }, 502);
+  }
 }
 
-// --- URL Unfurling (Open Graph) ---
+// URL Unfurling (Open Graph)
 async function handleUnfurl(targetUrl) {
   if (!targetUrl) {
     return jsonResponse({ error: 'Missing url parameter' }, 400);
