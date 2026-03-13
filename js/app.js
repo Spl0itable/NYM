@@ -7278,19 +7278,44 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 this.poolReady = true;
                 this.connected = true;
+                this._poolLastMessage = Date.now();
+
+                // Start client-side keepalive: detect stale connections
+                // If no message received for 90s, the proxy likely died silently
+                if (this._poolKeepaliveTimer) clearInterval(this._poolKeepaliveTimer);
+                this._poolKeepaliveTimer = setInterval(() => {
+                    if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) {
+                        clearInterval(this._poolKeepaliveTimer);
+                        this._poolKeepaliveTimer = null;
+                        return;
+                    }
+                    const silenceSec = (Date.now() - (this._poolLastMessage || 0)) / 1000;
+                    if (silenceSec > 90) {
+                        // No data from proxy for 90s — connection is likely dead
+                        this.poolSocket.close();
+                    }
+                }, 30000);
+
                 resolve();
             };
 
             ws.onmessage = (event) => {
                 try {
-                    // Track total bytes received
+                    // Track total bytes received and keepalive timestamp
                     const dataLen = typeof event.data === 'string' ? event.data.length : (event.data.byteLength || 0);
                     this.relayStats.bytesReceived += dataLen;
+                    this._poolLastMessage = Date.now();
 
                     const msg = JSON.parse(event.data);
                     if (!Array.isArray(msg)) return;
 
                     const msgType = msg[0];
+
+                    if (msgType === 'POOL:PING') {
+                        // Keepalive from proxy — update last-seen timestamp
+                        this._poolLastMessage = Date.now();
+                        return;
+                    }
 
                     if (msgType === 'POOL:STATUS') {
                         const status = msg[1];
@@ -7367,6 +7392,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             ws.onclose = () => {
                 clearTimeout(timeout);
+                if (this._poolKeepaliveTimer) {
+                    clearInterval(this._poolKeepaliveTimer);
+                    this._poolKeepaliveTimer = null;
+                }
                 // Only clean up if this is still the active socket
                 if (this.poolSocket === ws) {
                     this.poolSocket = null;
@@ -25041,7 +25070,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.185 ═══<br/>
+═══ Nymchat v3.49.186 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

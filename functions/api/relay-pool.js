@@ -42,6 +42,22 @@ export async function onRequest(context) {
   let dmRelays = [];
   let serverOpen = true;
 
+  // Keepalive: send periodic POOL:PING to prevent Cloudflare idle timeout
+  // Cloudflare Workers WebSocket connections can be terminated after ~100s idle
+  let keepaliveTimer = setInterval(() => {
+    try {
+      if (serverOpen && server.readyState === 1) {
+        server.send(JSON.stringify(['POOL:PING', Date.now()]));
+      } else {
+        clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
+      }
+    } catch {
+      clearInterval(keepaliveTimer);
+      keepaliveTimer = null;
+    }
+  }, 30000); // Every 30 seconds
+
   // Track failed relays to avoid wasting cycles
   const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
   const FAILED_COOLDOWN = 60000;       // 1 minute before retrying a failed relay
@@ -59,6 +75,8 @@ export async function onRequest(context) {
 
   // Track relays pending reconnection to avoid duplicate queue entries
   const pendingReconnect = new Set();  // relayUrls scheduled for reconnect
+  const reconnectTimers = new Map();   // relayUrl -> timeoutId (so we can cancel them)
+  const intentionallyClosed = new Set(); // relays closed by RELAYS config update (no reconnect)
 
   // Throttle pool status updates: guaranteed delivery every 300ms at most
   let statusTimer = null;
@@ -202,12 +220,14 @@ export async function onRequest(context) {
     const baseDelay = 3000;
     const delay = baseDelay * Math.pow(1.5, attempts) + Math.random() * 2000;
 
-    setTimeout(() => {
+    const timerId = setTimeout(() => {
+      reconnectTimers.delete(relayUrl);
       pendingReconnect.delete(relayUrl);
-      if (serverOpen && !upstreams.has(relayUrl)) {
+      if (serverOpen && !upstreams.has(relayUrl) && !intentionallyClosed.has(relayUrl)) {
         queueConnection(relayUrl, type);
       }
     }, delay);
+    reconnectTimers.set(relayUrl, timerId);
   }
 
   // Replay all active subscriptions to a newly connected relay
@@ -331,6 +351,12 @@ export async function onRequest(context) {
         upstreams.delete(relayUrl);
         schedulePoolStatus();
 
+        // Don't reconnect relays that were intentionally removed by a RELAYS config update
+        if (intentionallyClosed.has(relayUrl)) {
+          intentionallyClosed.delete(relayUrl);
+          return;
+        }
+
         if (wasConnected) {
           // Was a healthy connection that dropped — schedule reconnection
           // through the queue with jitter to avoid thundering herd
@@ -397,12 +423,18 @@ export async function onRequest(context) {
             const newRelaySet = new Set([...relays, ...writeOnly]);
             for (const [url, info] of upstreams) {
               if (!newRelaySet.has(url)) {
+                // Mark as intentional so close handler doesn't schedule reconnection
+                intentionallyClosed.add(url);
                 try { if (info.ws) info.ws.close(); } catch { /* noop */ }
                 upstreams.delete(url);
               }
             }
 
-            // Clear any pending connection queue and reconnect timers from previous config
+            // Cancel ALL pending reconnect timers (not just clear the Set)
+            for (const [url, timerId] of reconnectTimers) {
+              clearTimeout(timerId);
+            }
+            reconnectTimers.clear();
             connectionQueue = [];
             pendingReconnect.clear();
             if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
@@ -504,27 +536,23 @@ export async function onRequest(context) {
   });
 
   // Handle client disconnect
-  server.addEventListener('close', () => {
+  function cleanupAll() {
     serverOpen = false;
     if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
     connectionQueue = [];
+    for (const [, timerId] of reconnectTimers) clearTimeout(timerId);
+    reconnectTimers.clear();
     pendingReconnect.clear();
+    intentionallyClosed.clear();
+    if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
     upstreams.forEach((info) => {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });
     upstreams.clear();
-  });
+  }
 
-  server.addEventListener('error', () => {
-    serverOpen = false;
-    if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
-    connectionQueue = [];
-    pendingReconnect.clear();
-    upstreams.forEach((info) => {
-      try { if (info.ws) info.ws.close(); } catch { /* noop */ }
-    });
-    upstreams.clear();
-  });
+  server.addEventListener('close', cleanupAll);
+  server.addEventListener('error', cleanupAll);
 
   return new Response(null, {
     status: 101,
