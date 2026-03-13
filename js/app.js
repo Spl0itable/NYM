@@ -4766,7 +4766,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.discoveredRelays.add(r.url);
                 }
                 this._poolSendRelayConfig();
-
                 this.channelLoadedFromRelays.delete(geohash);
                 this.subscribeToChannelTargeted(geohash, 'geohash');
             }
@@ -4810,7 +4809,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const existing = this.relayPool.get(relayUrl);
                 if (existing.ws && existing.ws.readyState === WebSocket.OPEN) {
                     this.currentGeoRelays.add(relayUrl);
-                    this.subscribeGeoRelayToChannel(existing, relayUrl, geohash);
+                    this.subscribeRelayToChannel(existing, relayUrl, geohash);
                     continue;
                 }
             }
@@ -4831,7 +4830,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const relay = this.relayPool.get(relayUrl);
                     if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                         this.currentGeoRelays.add(relayUrl);
-                        this.subscribeGeoRelayToChannel(relay, relayUrl, geohash);
+                        this.subscribeRelayToChannel(relay, relayUrl, geohash);
                         this.updateConnectionStatus();
                     }
                     resolve();
@@ -4853,10 +4852,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.ensureDefaultRelaysConnected();
     }
 
-    // Send a channel subscription (REQ) directly to a single geo relay
-    subscribeGeoRelayToChannel(relay, relayUrl, geohash) {
+    // Send a channel subscription (REQ) directly to a single relay
+    subscribeRelayToChannel(relay, relayUrl, channelKeyOverride) {
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
-        const channelKey = geohash || this.currentGeohash || this.currentChannel;
+        const channelKey = channelKeyOverride || this.currentGeohash || this.currentChannel;
         if (!channelKey) return;
 
         // Re-use the existing subscription ID so the relay pool treats
@@ -4983,10 +4982,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             this.connectToRelayWithTimeout(relayUrl, 'geo', 3000).then(() => {
                                     const r = this.relayPool.get(relayUrl);
                                     if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        if (this.currentChannel || this.currentGeohash) {
-                                            const channelKey = this.currentGeohash || this.currentChannel;
-                                            this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
-                                        }
+                                        this.subscribeRelayToChannel(r, relayUrl);
                                         this.updateConnectionStatus();
                                     }
                                 });
@@ -6710,11 +6706,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             this.connectToRelayWithTimeout(relayUrl, 'geo', 3000).then(() => {
                                     const r = this.relayPool.get(relayUrl);
                                     if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        // Geo relays only get channel-specific subscriptions
-                                        if (this.currentChannel || this.currentGeohash) {
-                                            const channelKey = this.currentGeohash || this.currentChannel;
-                                            this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
-                                        }
+                                        this.subscribeRelayToChannel(r, relayUrl);
                                         this.updateConnectionStatus();
                                     }
                                 });
@@ -6740,13 +6732,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                 this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout).then(() => {
                                         const r = this.relayPool.get(relayUrl);
                                         if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                            // Only subscribe to current channel on discovered relays
-                                            // (don't send the full global subscription — that would flood with events)
-                                            if (this.currentChannel || this.currentGeohash) {
-                                                const channelKey = this.currentGeohash || this.currentChannel;
-                                                const channelType = this.getChannelType(channelKey);
-                                                this.subscribeToChannelTargeted(channelKey, channelType);
-                                            }
+                                            this.subscribeRelayToChannel(r, relayUrl);
                                             this.updateConnectionStatus();
                                         }
                                     });
@@ -7740,11 +7726,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout).then(() => {
                             const r = this.relayPool.get(relayUrl);
                             if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                // Only subscribe to current channel on discovered relays
-                                if (this.currentChannel || this.currentGeohash) {
-                                    const channelKey = this.currentGeohash || this.currentChannel;
-                                    this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
-                                }
+                                this.subscribeRelayToChannel(r, relayUrl);
                                 this.updateConnectionStatus();
                             }
                         });
@@ -7769,10 +7751,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout).then(() => {
                                     const r = this.relayPool.get(relayUrl);
                                     if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        if (this.currentChannel || this.currentGeohash) {
-                                            const channelKey = this.currentGeohash || this.currentChannel;
-                                            this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
-                                        }
+                                        this.subscribeRelayToChannel(r, relayUrl);
                                         this.updateConnectionStatus();
                                     }
                                 });
@@ -9647,9 +9626,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         });
     }
 
-    // Discover relays via NIP-66 (kind 30166) from monitor relays,
-    // with NIP-65 (kind 10002) from connected relays as a secondary source,
-    // falling back to broadcastRelays if neither returns results.
+    // Discover relays via NIP-66 (kind 30166) from monitor relays
     async discoverRelays() {
         const now = Date.now();
         if (now - this.lastRelayDiscovery < this.relayDiscoveryInterval && this.discoveredRelays.size > 0) {
@@ -9704,9 +9681,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.lastRelayDiscovery = now;
     }
 
-    // Connect to a NIP-66 monitor relay via the single-relay proxy and fetch kind 30166 events.
-    // Uses the known monitor pubkeys as authors filter and a since filter (last 3 hours)
-    // to only get relays recently verified as online.
+    // Connect to a NIP-66 monitor relay via the single-relay proxy and fetch kind 30166 events
     async fetchRelaysFromMonitor(monitorUrl) {
         return new Promise((resolve, reject) => {
             const wsTarget = this._getProxiedRelayUrl(monitorUrl);
@@ -9762,10 +9737,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         });
     }
 
-    // Discover relays from NIP-65 kind 10002 events via the already-connected pool.
-    // Sends a temporary REQ and processes responses through the normal event handler
-    // (kind 10002 events are caught by handleEvent which is a no-op for unknown kinds,
-    //  so we register a temporary listener on the instance instead of monkey-patching onmessage).
+    // Discover relays from NIP-65 kind 10002 events via the already-connected pool
     fetchRelayListsFromPool() {
         return new Promise((resolve) => {
             if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) {
@@ -9999,8 +9971,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     // Send DM events (kind 1059) with priority to bitchat's hardcoded relays
-    // Ensures cross-app PM delivery by always hitting bitchat's relay set,
-    // similar to how geohash channels prioritize geo-located relays
     sendDMToRelays(message) {
         // Multiplexed pool mode: proxy handles DM relay prioritization
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
@@ -10198,9 +10168,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         });
     }
 
-    // Send a REQ to only a few relays (for profile/metadata fetches that don't
-    // need full fan-out). Picks up to maxRelays from broadcast relays first,
-    // then fills from the relay pool.
     sendRequestToFewRelays(message, maxRelays = 5) {
         // Multiplexed pool mode: proxy handles dedup
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
@@ -24999,7 +24966,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.183 ═══<br/>
+═══ Nymchat v3.49.184 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
