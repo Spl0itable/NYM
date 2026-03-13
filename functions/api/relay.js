@@ -39,13 +39,28 @@ export async function onRequest(context) {
   // (the standard way to make outbound WebSocket connections from Workers)
   const upstream = new WebSocket(targetRelay);
 
-  // Forward messages from client to upstream
+  // Buffer messages from the client until the upstream connection is open
+  let upstreamOpen = false;
+  const pendingMessages = [];
+
+  upstream.addEventListener('open', () => {
+    upstreamOpen = true;
+    // Flush any messages that arrived while upstream was connecting
+    for (const msg of pendingMessages) {
+      try { upstream.send(msg); } catch { /* noop */ }
+    }
+    pendingMessages.length = 0;
+  });
+
+  // Forward messages from client to upstream (buffering if not yet open)
   server.addEventListener('message', (event) => {
     context.waitUntil(
       (async () => {
         try {
-          if (upstream.readyState === WebSocket.OPEN) {
+          if (upstreamOpen && upstream.readyState === WebSocket.OPEN) {
             upstream.send(event.data);
+          } else if (!upstreamOpen) {
+            pendingMessages.push(event.data);
           }
         } catch {
           // Upstream closed

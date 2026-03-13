@@ -4762,8 +4762,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
             const closestRelays = this.getClosestRelaysForGeohash(geohash, this.geoRelayCount);
             if (closestRelays.length > 0) {
+                const geoRelayUrls = new Set(closestRelays.map(r => r.url));
+                this.geoRelayConnections.set(geohash, geoRelayUrls);
                 for (const r of closestRelays) {
-                    this.discoveredRelays.add(r.url);
+                    this.currentGeoRelays.add(r.url);
+                    // In low data mode, only track in currentGeoRelays (not discoveredRelays)
+                    // so _poolSendRelayConfig sends the minimal set
+                    if (!this.settings || !this.settings.lowDataMode) {
+                        this.discoveredRelays.add(r.url);
+                    }
                 }
                 this._poolSendRelayConfig();
                 this.channelLoadedFromRelays.delete(geohash);
@@ -4924,18 +4931,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     applyLowDataMode(enabled) {
         if (enabled) {
             if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-                // Pool mode: send only default relays + active geo relays to the proxy
-                const writeOnly = ['wss://sendit.nosflare.com'];
-                const blocked = ['wss://relay.nosflare.com', 'wss://relay.nostraddress.com'];
-                const relays = this.defaultRelays.filter(r => !writeOnly.includes(r) && !blocked.includes(r));
-                for (const url of this.currentGeoRelays) {
-                    if (!relays.includes(url)) relays.push(url);
-                }
-                this._poolSend(['RELAYS', {
-                    relays: relays,
-                    writeOnly: writeOnly,
-                    dmRelays: this.bitchatDMRelays || []
-                }]);
+                // Pool mode: _poolSendRelayConfig respects lowDataMode
+                // and sends only defaults + DM relays + active geo relays
+                this._poolSendRelayConfig();
             } else {
                 // Direct mode: disconnect all relays except the 5 defaults,
                 // active geo relays for the current channel, and write-only relays
@@ -5010,16 +5008,44 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         }
 
-        // Disconnect relays that are no longer needed (unless they're broadcast relays)
+        // Build set of relays that should never be disconnected
+        const keepRelays = new Set(this.defaultRelays);
+        for (const url of this.broadcastRelays) keepRelays.add(url);
+        if (this.bitchatDMRelays) {
+            for (const url of this.bitchatDMRelays) keepRelays.add(url);
+        }
+        keepRelays.add('wss://sendit.nosflare.com');
+
         for (const url of previousGeoRelays) {
-            if (!stillNeededRelays.has(url) &&
-                !this.broadcastRelays.includes(url) &&
-                !this.discoveredRelays.has(url)) {
-                // This relay was only for the previous geohash - we can keep it connected
-                // but mark it as no longer a primary geo relay
+            if (!stillNeededRelays.has(url) && !keepRelays.has(url)) {
                 this.currentGeoRelays.delete(url);
+
+                // Low data mode: actively close the connection to free resources
+                if (this.settings && this.settings.lowDataMode) {
+                    if (this.useRelayProxy) {
+                        // Pool mode: send updated config so proxy drops the relay
+                        // (batched after the loop below)
+                    } else {
+                        const relay = this.relayPool.get(url);
+                        if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                            relay.ws.close();
+                        }
+                        this.relayPool.delete(url);
+                    }
+                }
             }
         }
+
+        // Remove the cached connection entry for the old geohash
+        this.geoRelayConnections.delete(previousGeohash);
+
+        // Low data mode + pool: send updated relay config so the proxy
+        // disconnects relays that are no longer in the set
+        if (this.settings && this.settings.lowDataMode && this.useRelayProxy) {
+            this._poolSendRelayConfig();
+        }
+
+        this.updateConnectionStatus();
     }
 
     isVerifiedDeveloper(pubkey) {
@@ -5420,22 +5446,28 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.updateConnectionStatus();
 
             // If we're missing some broadcast relays, try to restore them
-            const missingBroadcast = this.broadcastRelays.filter(url => !this.relayPool.has(url));
+            // In low data mode, only check the 5 defaults (reconnectToBroadcastRelays also respects this)
+            const relaysToCheck = this.settings && this.settings.lowDataMode
+                ? this.defaultRelays
+                : this.broadcastRelays;
+            const missingBroadcast = relaysToCheck.filter(url => !this.relayPool.has(url));
             if (missingBroadcast.length > 0) {
                 this.reconnectToBroadcastRelays();
             }
 
-            // ALSO check for missing discovered relays
-            const missingDiscovered = Array.from(this.discoveredRelays).filter(url =>
-                !this.relayPool.has(url) &&
-                !this.broadcastRelays.includes(url) &&
-                url !== 'wss://sendit.nosflare.com'
-            );
+            // Check for missing discovered relays (skipped in low data mode)
+            if (!this.settings || !this.settings.lowDataMode) {
+                const missingDiscovered = Array.from(this.discoveredRelays).filter(url =>
+                    !this.relayPool.has(url) &&
+                    !this.broadcastRelays.includes(url) &&
+                    url !== 'wss://sendit.nosflare.com'
+                );
 
-            if (missingDiscovered.length > 0) {
-                setTimeout(() => {
-                    this.retryDiscoveredRelays();
-                }, 1000);
+                if (missingDiscovered.length > 0) {
+                    setTimeout(() => {
+                        this.retryDiscoveredRelays();
+                    }, 1000);
+                }
             }
 
             // Check geo relay health if we're in a geohash channel
@@ -5458,8 +5490,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         let connectedCount = 0;
 
-        // Prioritize previously connected relays for faster reconnection
-        const relaysToConnect = [...this.broadcastRelays];
+        // Low data mode: only reconnect to the 5 defaults + DM relays
+        const relaysToConnect = this.settings && this.settings.lowDataMode
+            ? [...this.defaultRelays, ...(this.bitchatDMRelays || [])]
+            : [...this.broadcastRelays];
         if (this.previouslyConnectedRelays && this.previouslyConnectedRelays.size > 0) {
             relaysToConnect.sort((a, b) => {
                 const aWasConnected = this.previouslyConnectedRelays.has(a);
@@ -5685,8 +5719,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             });
 
             // Try to connect to at least one broadcast relay
+            // In low data mode, only try the 5 defaults
+            const reconnectCandidates = this.settings && this.settings.lowDataMode
+                ? this.defaultRelays
+                : this.broadcastRelays;
             let connected = false;
-            for (const relayUrl of this.broadcastRelays) {
+            for (const relayUrl of reconnectCandidates) {
                 if (this.relayPool.has(relayUrl)) {
                     const relay = this.relayPool.get(relayUrl);
                     if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
@@ -6672,7 +6710,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }, 100);
 
             // Now connect to remaining broadcast relays in background
-            // In low data mode, only connect to the 5 default relays
+            // In low data mode, only connect to the 5 default relays + DM relays
             const broadcastRelaysToConnect = this.settings.lowDataMode
                 ? this.defaultRelays
                 : this.broadcastRelays;
@@ -6687,6 +6725,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         });
                 }
             });
+
+            // In low data mode, also connect to DM relays so PMs work
+            if (this.settings.lowDataMode && this.bitchatDMRelays) {
+                this.bitchatDMRelays.forEach(relayUrl => {
+                    if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
+                        this.connectToRelay(relayUrl, 'read').then(() => {
+                            const r = this.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                this.subscribeToSingleRelay(relayUrl);
+                                this.updateConnectionStatus();
+                            }
+                        });
+                    }
+                });
+            }
 
             // Connect to sendit.nosflare.com for write-only (no subscriptions)
             const senditRelay = 'wss://sendit.nosflare.com';
@@ -7197,15 +7250,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 clearTimeout(timeout);
                 this.poolReady = false; // not ready until RELAYS sent
 
-                // Gather all relays to connect to
+                // Gather relays to connect to
                 const blocked = ['wss://relay.nosflare.com', 'wss://relay.nostraddress.com'];
                 const writeOnly = ['wss://sendit.nosflare.com'];
-                const geoRelayUrls = this.geoRelays ? this.geoRelays.map(r => r.url) : [];
-                const allRelays = [...new Set([
-                    ...this.broadcastRelays,
-                    ...Array.from(this.discoveredRelays || []),
-                    ...geoRelayUrls
-                ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
+                let allRelays;
+                if (this.settings && this.settings.lowDataMode) {
+                    // Low data: only defaults + DM relays (geo added on-demand)
+                    allRelays = [...new Set([
+                        ...this.defaultRelays,
+                        ...(this.bitchatDMRelays || [])
+                    ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
+                } else {
+                    const geoRelayUrls = this.geoRelays ? this.geoRelays.map(r => r.url) : [];
+                    allRelays = [...new Set([
+                        ...this.broadcastRelays,
+                        ...Array.from(this.discoveredRelays || []),
+                        ...geoRelayUrls
+                    ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
+                }
 
                 // Send RELAYS config to proxy
                 ws.send(JSON.stringify(['RELAYS', {
@@ -7387,9 +7449,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const blocked = ['wss://relay.nosflare.com', 'wss://relay.nostraddress.com'];
         const writeOnly = ['wss://sendit.nosflare.com'];
 
-        // Low data mode: only send default relays + active geo relays
+        // Low data mode: only default relays + DM relays + active geo relays
         if (this.settings && this.settings.lowDataMode) {
             const relays = [...this.defaultRelays];
+            // DM relays must be in the relay list (not just dmRelays field)
+            // so the proxy actually connects to them for reading gift wraps
+            if (this.bitchatDMRelays) {
+                for (const url of this.bitchatDMRelays) {
+                    if (!relays.includes(url)) relays.push(url);
+                }
+            }
             for (const url of this.currentGeoRelays) {
                 if (!relays.includes(url)) relays.push(url);
             }
@@ -7691,6 +7760,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async retryDiscoveredRelays() {
+        // Low data mode: discovered relays are not used — skip entirely
+        if (this.settings && this.settings.lowDataMode) return;
+
         // Pool mode: just update the pool config with any new discovered relays
         if (this.useRelayProxy) {
             this._poolSendRelayConfig();
@@ -9628,6 +9700,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Discover relays via NIP-66 (kind 30166) from monitor relays
     async discoverRelays() {
+        // Low data mode: NIP-66 discovery is not needed
+        if (this.settings && this.settings.lowDataMode) return;
+
         const now = Date.now();
         if (now - this.lastRelayDiscovery < this.relayDiscoveryInterval && this.discoveredRelays.size > 0) {
             return;
@@ -24966,7 +25041,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.184 ═══<br/>
+═══ Nymchat v3.49.185 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
