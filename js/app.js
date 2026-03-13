@@ -13095,6 +13095,98 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 return;
             }
 
+            // Handle Nymchat delivery/read receipts early — before creating any
+            // PM conversation state — so group receipts (which lack a 'g' tag)
+            // don't accidentally create phantom 1:1 PM entries.
+            if (this.isNymReceipt(rumor)) {
+                const nymReceipt = this.parseNymReceipt(rumor);
+                if (nymReceipt && nymReceipt.messageId) {
+                    const receiptId = nymReceipt.messageId.toUpperCase();
+                    const receiptType = nymReceipt.receiptType;
+
+                    for (const [convKey, messages] of this.pmMessages) {
+                        const msg = messages.find(m => m.nymMessageId?.toUpperCase() === receiptId);
+                        if (msg && msg.isOwn) {
+                            const statusOrder = { sent: 0, delivered: 1, read: 2 };
+                            if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
+                                msg.deliveryStatus = receiptType;
+                                this.pendingDMs.delete(msg.id);
+                                this.channelDOMCache.delete(convKey);
+
+                                if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
+                                    // Group read receipt: store the reader's avatar instead of checkmarks
+                                    if (!this.groupMessageReaders.has(msg.nymMessageId)) {
+                                        this.groupMessageReaders.set(msg.nymMessageId, new Map());
+                                    }
+                                    const readerNym = this.getNymFromPubkey(senderPubkey);
+                                    this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
+                                    this.updateGroupReaderAvatars(msg.nymMessageId);
+                                } else {
+                                    // 1:1 PM: update checkmark in-place
+                                    const domId = msg.nymMessageId || msg.id;
+                                    const msgEl = document.querySelector(`[data-message-id="${domId}"]`);
+                                    if (msgEl) {
+                                        let statusEl = msgEl.querySelector('.delivery-status');
+                                        if (!statusEl) {
+                                            statusEl = document.createElement('span');
+                                            msgEl.appendChild(statusEl);
+                                        }
+                                        statusEl.className = `delivery-status ${receiptType}`;
+                                        statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
+                                        statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Handle Bitchat delivery/read receipts early (same reason as above)
+            if (rumor.content?.startsWith('bitchat1:')) {
+                const parsedEarly = parseBitchatMessage(rumor.content);
+                if (parsedEarly.type === 0x02 || parsedEarly.type === 0x03) {
+                    const receiptType = parsedEarly.type === 0x02 ? 'read' : 'delivered';
+                    const receiptId = parsedEarly.messageId?.toUpperCase();
+
+                    if (receiptId) {
+                        for (const [convKey, messages] of this.pmMessages) {
+                            const msg = messages.find(m => m.bitchatMessageId?.toUpperCase() === receiptId);
+                            if (msg && msg.isOwn) {
+                                const statusOrder = { sent: 0, delivered: 1, read: 2 };
+                                if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
+                                    msg.deliveryStatus = receiptType;
+                                    this.pendingDMs.delete(msg.id);
+                                    this.channelDOMCache.delete(convKey);
+                                    const domId = msg.nymMessageId || msg.id;
+                                    const msgEl = document.querySelector(`[data-message-id="${domId}"]`);
+                                    if (msgEl) {
+                                        let statusEl = msgEl.querySelector('.delivery-status');
+                                        if (!statusEl) {
+                                            statusEl = document.createElement('span');
+                                            msgEl.appendChild(statusEl);
+                                        }
+                                        statusEl.className = `delivery-status ${receiptType}`;
+                                        statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
+                                        statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+
+            // Kind 69420 is exclusively for receipts and typing indicators (handled above).
+            // If it reaches here, it's malformed — drop it so it doesn't appear as a PM.
+            if (rumor.kind === 69420) {
+                return;
+            }
+
             // Fetch profile for any PM sender we don't have (await to get nickname)
             if (!isOwn && !this.users.has(senderPubkey)) {
                 await this.fetchProfileDirect(senderPubkey);
@@ -13144,98 +13236,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
 
-            // Handle Nymchat delivery/read receipts (tag-based format)
-            if (this.isNymReceipt(rumor)) {
-                const nymReceipt = this.parseNymReceipt(rumor);
-                if (nymReceipt && nymReceipt.messageId) {
-                    const receiptId = nymReceipt.messageId.toUpperCase();
-                    const receiptType = nymReceipt.receiptType;
-
-                    for (const [convKey, messages] of this.pmMessages) {
-                        const msg = messages.find(m => m.nymMessageId?.toUpperCase() === receiptId);
-                        if (msg && msg.isOwn) {
-                            const statusOrder = { sent: 0, delivered: 1, read: 2 };
-                            if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
-                                msg.deliveryStatus = receiptType;
-                                this.pendingDMs.delete(msg.id);
-                                this.channelDOMCache.delete(convKey);
-
-                                if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
-                                    // Group read receipt: store the reader's avatar instead of checkmarks
-                                    if (!this.groupMessageReaders.has(msg.nymMessageId)) {
-                                        this.groupMessageReaders.set(msg.nymMessageId, new Map());
-                                    }
-                                    const readerNym = this.getNymFromPubkey(senderPubkey);
-                                    this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
-                                    this.updateGroupReaderAvatars(msg.nymMessageId);
-                                } else {
-                                    // 1:1 PM: update checkmark in-place
-                                    // Use nymMessageId for DOM lookup since data-message-id uses it for PMs
-                                    const domId = msg.nymMessageId || msg.id;
-                                    const msgEl = document.querySelector(`[data-message-id="${domId}"]`);
-                                    if (msgEl) {
-                                        let statusEl = msgEl.querySelector('.delivery-status');
-                                        if (!statusEl) {
-                                            statusEl = document.createElement('span');
-                                            msgEl.appendChild(statusEl);
-                                        }
-                                        statusEl.className = `delivery-status ${receiptType}`;
-                                        statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
-                                        statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
-                                    }
-                                }
-                            }
-                            break;
-                        }
-                    }
-                }
-                return;
-            }
-
             // Parse bitchat1: format if present to extract actual message
             const parsed = parseBitchatMessage(rumor.content);
 
-            // Handle Bitchat delivery receipts (0x03) and read receipts (0x02)
-            if (parsed.type === 0x02 || parsed.type === 0x03) {
-                const receiptType = parsed.type === 0x02 ? 'read' : 'delivered';
-                const receiptId = parsed.messageId?.toUpperCase();
-
-                if (receiptId) {
-                    for (const [convKey, messages] of this.pmMessages) {
-                        const msg = messages.find(m => m.bitchatMessageId?.toUpperCase() === receiptId);
-                        if (msg && msg.isOwn) {
-                            const statusOrder = { sent: 0, delivered: 1, read: 2 };
-                            if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
-                                msg.deliveryStatus = receiptType;
-                                // Remove from pending retry queue since delivery confirmed
-                                this.pendingDMs.delete(msg.id);
-                                // Invalidate cached DOM for this conversation since status changed
-                                this.channelDOMCache.delete(convKey);
-                                // Update in-place without re-rendering to avoid flicker
-                                // Use nymMessageId for DOM lookup since data-message-id uses it for PMs
-                                const domId = msg.nymMessageId || msg.id;
-                                const msgEl = document.querySelector(`[data-message-id="${domId}"]`);
-                                if (msgEl) {
-                                    let statusEl = msgEl.querySelector('.delivery-status');
-                                    if (!statusEl) {
-                                        statusEl = document.createElement('span');
-                                        msgEl.appendChild(statusEl);
-                                    }
-                                    statusEl.className = `delivery-status ${receiptType}`;
-                                    statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
-                                    statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
-                                }
-                            }
-                            break;
-                        }
-                    }
-                }
-                return;
-            }
-
+            // Non-message bitchat types (receipts handled above, skip unknown types)
             if (parsed.type !== 0x01) return;
 
-            const messageContent = parsed.content;
+            let messageContent = parsed.content;
+
+            // Drop messages whose content is raw ciphertext from other NIP-17
+            // clients that add an extra encryption layer Nymchat can't decode.
+            // These show up as long base64 strings with no whitespace and create
+            // phantom PM conversations from unknown pubkeys.
+            // Exclude known legitimate long strings: lightning invoices, Cashu
+            // tokens, nostr bech32 identifiers, Bitcoin addresses, URLs, etc.
+            if (messageContent && messageContent.length > 80 &&
+                !/\s/.test(messageContent) && /^[A-Za-z0-9+/=_-]+$/.test(messageContent) &&
+                !/^(lnbc|lnurl|lntb|lntbs|cashu|npub1|nsec1|nprofile1|nevent1|naddr1|note1|bc1|tb1|bitcoin:)/i.test(messageContent)) {
+                return;
+            }
 
             // Check if this is an edit of a previous message (has 'edit' tag in rumor)
             const pmEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
@@ -17091,7 +17110,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Play notification sound for mentions and PMs (but not for historical messages or own messages)
-        if (!message.isHistorical && !message.isOwn && this.settings.sound) {
+        // Skip sound when bulk-rendering stored messages (e.g. opening an unread conversation)
+        if (!this._suppressSound && !message.isHistorical && !message.isOwn && this.settings.sound) {
             if (isMentioned || message.isPM) {
                 this.playSound(this.settings.sound);
             }
@@ -21697,10 +21717,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // so that the programmatic scroll doesn't trigger the hide logic
         this._suppressInputButtonHide = true;
 
+        // Suppress notification sounds during bulk rendering of stored messages
+        // (e.g. when opening a conversation) to avoid replaying sounds
+        this._suppressSound = true;
+
         for (let i = 0; i < messages.length; i++) {
             this.displayMessage(messages[i]);
         }
 
+        this._suppressSound = false;
         this.virtualScroll.suppressAutoScroll = false;
 
         // Scroll to bottom if requested
@@ -24818,7 +24843,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.181 ═══<br/>
+═══ Nymchat v3.49.182 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
