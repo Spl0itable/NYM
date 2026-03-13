@@ -7,6 +7,7 @@
 // Protocol (client → proxy):
 //   ["RELAYS", { relays: ["wss://relay1.com", ...], writeOnly: ["wss://sendit.nosflare.com"], dmRelays: ["wss://relay.damus.io", ...] }]
 //   ["EVENT", eventObj]          - fans out to all connected relays
+//   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
 //   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
 //   ["REQ", subId, ...filters]   - fans out to read relays only
 //   ["CLOSE", subId]             - fans out to read relays only
@@ -420,6 +421,22 @@ export async function onRequest(context) {
           } else if (msgType === 'EVENT') {
             // Fan out EVENT to all connected relays
             sendToUpstreams(event.data);
+          } else if (msgType === 'GEO_EVENT') {
+            // Rewrite as EVENT for the wire protocol
+            const geoMsg = JSON.stringify(['EVENT', msg[1]]);
+            const geoSet = new Set(msg[2] || []);
+            // Send to geo relays first for lowest latency to bitchat users
+            upstreams.forEach((info, url) => {
+              if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
+                try { info.ws.send(geoMsg); } catch { /* noop */ }
+              }
+            });
+            // Then all others
+            upstreams.forEach((info, url) => {
+              if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
+                try { info.ws.send(geoMsg); } catch { /* noop */ }
+              }
+            });
           } else if (msgType === 'DM_EVENT') {
             // Rewrite as EVENT for the wire protocol
             const dmMsg = JSON.stringify(['EVENT', msg[1]]);

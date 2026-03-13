@@ -1015,7 +1015,7 @@ class NYM {
         this.geoRelayConnections = new Map();
         this.currentGeoRelays = new Set();
         this.geoRelayCount = 10;
-        this.fetchGeoRelays();
+        this._geoRelaysReady = this.fetchGeoRelays();
         this.defaultRelays = this.broadcastRelays.slice(0, 5);
         this.bitchatDMRelays = [
             'wss://relay.damus.io',
@@ -4647,9 +4647,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Fetch geo relay list from the same remote CSV that bitchat uses.
     // Falls back to the hardcoded list if fetch fails.
+    // Returns a promise so connectToGeoRelays can await the fresh data
+    // before selecting relays, ensuring we match bitchat's relay set.
     fetchGeoRelays() {
         const url = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
-        fetch(url, { cache: 'no-cache' })
+        return fetch(url, { cache: 'no-cache' })
             .then(res => {
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 return res.text();
@@ -4706,6 +4708,41 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
+    // Ensure an event reaches the geo relays for a given geohash channel
+    ensureGeoRelayDelivery(signedEvent, geohash) {
+        if (!geohash) return;
+        const closestRelays = this.getClosestRelaysForGeohash(geohash);
+        if (closestRelays.length === 0) return;
+        const geoUrls = new Set(closestRelays.map(r => r.url));
+
+        // Multiplexed pool mode: the proxy fans out EVENTs to every connected
+        if (this.useRelayProxy && this.poolSocket) {
+            setTimeout(() => {
+                if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+                    this._poolSend(['EVENT', signedEvent]);
+                }
+            }, 2000);
+            return;
+        }
+
+        // Legacy (direct connection) mode: explicitly send to each geo relay.
+        const msg = JSON.stringify(['EVENT', signedEvent]);
+
+        const trySend = () => {
+            for (const url of geoUrls) {
+                const relay = this.relayPool.get(url);
+                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                    try { relay.ws.send(msg); } catch (_) { /* noop */ }
+                }
+            }
+        };
+
+        // Immediate attempt (may already be connected)
+        trySend();
+        // Retry after geo relays have had more time to connect
+        setTimeout(trySend, 2000);
+    }
+
     // Connect to geo-specific relays for a geohash channel
     async connectToGeoRelays(geohash) {
         if (!geohash || !this.isValidGeohash(geohash)) {
@@ -4715,6 +4752,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Skip geo relay connections in group chat & PM only mode
         if (this.settings.groupChatPMOnlyMode) return;
 
+        // Wait for the remote CSV relay list to load so we match
+        // the same relay set that bitchat uses for this geohash.
+        if (this._geoRelaysReady) {
+            await this._geoRelaysReady;
+        }
+
         // Multiplexed pool mode: add geo relays to the pool config
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
             const closestRelays = this.getClosestRelaysForGeohash(geohash, this.geoRelayCount);
@@ -4722,8 +4765,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 for (const r of closestRelays) {
                     this.discoveredRelays.add(r.url);
                 }
-                // Update pool with new relay set
                 this._poolSendRelayConfig();
+
+                this.channelLoadedFromRelays.delete(geohash);
+                this.subscribeToChannelTargeted(geohash, 'geohash');
             }
             return;
         }
@@ -4760,12 +4805,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         for (let i = 0; i < closestRelays.length; i++) {
             const relayUrl = closestRelays[i].url;
 
-            // Skip if already connected
+            // Skip if already connected — but ensure it has the channel subscription
             if (this.relayPool.has(relayUrl)) {
                 const existing = this.relayPool.get(relayUrl);
                 if (existing.ws && existing.ws.readyState === WebSocket.OPEN) {
-                    // Mark as geo relay and ensure subscription
                     this.currentGeoRelays.add(relayUrl);
+                    this.subscribeGeoRelayToChannel(existing, relayUrl, geohash);
                     continue;
                 }
             }
@@ -4786,11 +4831,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const relay = this.relayPool.get(relayUrl);
                     if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                         this.currentGeoRelays.add(relayUrl);
-                        // Geo relays only get channel-specific subscriptions
-                        if (this.currentChannel || this.currentGeohash) {
-                            const channelKey = this.currentGeohash || this.currentChannel;
-                            this.subscribeToChannelTargeted(channelKey, this.getChannelType(channelKey));
-                        }
+                        this.subscribeGeoRelayToChannel(relay, relayUrl, geohash);
                         this.updateConnectionStatus();
                     }
                     resolve();
@@ -4810,6 +4851,55 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Always ensure default relays (first 5 broadcast relays) are connected
         this.ensureDefaultRelaysConnected();
+    }
+
+    // Send a channel subscription (REQ) directly to a single geo relay
+    subscribeGeoRelayToChannel(relay, relayUrl, geohash) {
+        if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+        const channelKey = geohash || this.currentGeohash || this.currentChannel;
+        if (!channelKey) return;
+
+        // Re-use the existing subscription ID so the relay pool treats
+        // responses as part of the same logical subscription, or create one.
+        let subId = this.channelSubscriptions.get(channelKey);
+        if (!subId) {
+            subId = 'nym-ch-' + Math.random().toString(36).substring(7);
+            this.channelSubscriptions.set(channelKey, subId);
+        }
+
+        const since1h = Math.floor(Date.now() / 1000) - 3600;
+        const filters = [
+            {
+                kinds: [20000],
+                '#g': [channelKey],
+                since: since1h,
+                limit: this.channelMessageLimit
+            },
+            {
+                kinds: [30078],
+                '#t': ['nym-poll', 'nym-poll-vote'],
+                '#g': [channelKey],
+                since: since1h,
+                limit: 50
+            },
+            {
+                kinds: [7],
+                '#k': ['20000'],
+                since: since1h,
+                limit: this.channelMessageLimit
+            },
+            {
+                kinds: [5],
+                since: since1h,
+                limit: 50
+            }
+        ];
+
+        if (!relay.subscriptions) {
+            relay.subscriptions = new Set();
+        }
+        relay.subscriptions.add(subId);
+        relay.ws.send(JSON.stringify(['REQ', subId, ...filters]));
     }
 
     // Ensure the first 5 broadcast relays are always connected regardless of channel
@@ -10147,6 +10237,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     broadcastEvent(message) {
         // Multiplexed pool mode: proxy handles fan-out to all relays
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+            // For geohash channel events, use GEO_EVENT so the proxy
+            // sends to geo relays first (same priority as DM_EVENT).
+            let evt = null;
+            try {
+                if (Array.isArray(message) && message[0] === 'EVENT' && message[1] && typeof message[1] === 'object') {
+                    evt = message[1];
+                }
+            } catch (_) { }
+            const geohashTag = evt && evt.tags && evt.tags.find(t => t[0] === 'g');
+            if (geohashTag && geohashTag[1]) {
+                const closestRelays = this.getClosestRelaysForGeohash(geohashTag[1]);
+                if (closestRelays.length > 0) {
+                    this._poolSend(['GEO_EVENT', evt, closestRelays.map(r => r.url)]);
+                    return;
+                }
+            }
             this._poolSend(message);
             return;
         }
@@ -10164,9 +10270,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
 
         if (wideFanout) {
-            // Send to every connected relay for maximum propagation
+            const sent = new Set();
+            const geohashTag = evt && evt.tags && evt.tags.find(t => t[0] === 'g');
+            if (geohashTag && geohashTag[1]) {
+                const closestRelays = this.getClosestRelaysForGeohash(geohashTag[1]);
+                for (const r of closestRelays) {
+                    const relay = this.relayPool.get(r.url);
+                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                        relay.ws.send(msg);
+                        sent.add(r.url);
+                    }
+                }
+            }
+
+            // Then send to every other connected relay for propagation
             this.relayPool.forEach((relay, url) => {
-                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                if (!sent.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                     relay.ws.send(msg);
                 }
             });
@@ -15237,6 +15356,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Send to relay (async - UI already updated)
             this.sendToRelay(["EVENT", signedEvent]);
 
+            // Ensure geo relays for this channel also receive the event
+            this.ensureGeoRelayDelivery(signedEvent, geohash);
+
             // Schedule deletion if redacted cosmetic is active
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                 const eventIdToDelete = signedEvent.id;
@@ -15334,6 +15456,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Send to relay
             this.sendToRelay(["EVENT", signedEvent]);
+
+            // Ensure geo relays for this channel also receive the event
+            this.ensureGeoRelayDelivery(signedEvent, geohash);
 
             return true;
         } catch (error) {
@@ -16609,10 +16734,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Check if message already exists
             const exists = this.messages.get(storageKey).some(m => m.id === message.id);
             if (!exists) {
-                // Add message and sort by timestamp with millisecond precision
+                // Add message and sort by timestamp, using event ID as tiebreaker
+                // for messages within the same second to ensure deterministic order
                 this.messages.get(storageKey).push(message);
                 this.messages.get(storageKey).sort((a, b) => {
-                    return a.timestamp.getTime() - b.timestamp.getTime();
+                    const dt = a.timestamp.getTime() - b.timestamp.getTime();
+                    if (dt !== 0) return dt;
+                    return (a.id || '').localeCompare(b.id || '');
                 });
 
                 // Prune in-memory messages if exceeding limit (100 max)
@@ -16985,10 +17113,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             });
         }
 
-        // Always insert messages in correct timestamp order to prevent out-of-order display
+        // Always insert messages in correct timestamp order to prevent out-of-order display.
+        // Use event ID as tiebreaker for messages within the same millisecond so that
+        // ordering is deterministic regardless of relay arrival order.
         {
             const existingMessages = Array.from(container.querySelectorAll('[data-timestamp]'));
             const messageTimestamp = displayTimestamp.getTime();
+            const messageId = (message.isPM && message.nymMessageId) ? message.nymMessageId : (message.id || '');
 
             let insertBefore = null;
             for (const existing of existingMessages) {
@@ -16996,6 +17127,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (messageTimestamp < existingTimestamp) {
                     insertBefore = existing;
                     break;
+                }
+                if (messageTimestamp === existingTimestamp) {
+                    const existingId = existing.dataset.messageId || '';
+                    if (messageId.localeCompare(existingId) < 0) {
+                        insertBefore = existing;
+                        break;
+                    }
                 }
             }
 
@@ -19048,6 +19186,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Send to relay
             this.sendToRelay(['EVENT', signedEvent]);
+
+            // Ensure geo relays for this channel also receive the edit
+            this.ensureGeoRelayDelivery(signedEvent, geohash);
 
             // Schedule deletion if redacted cosmetic is active
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
@@ -21160,7 +21301,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             });
         }
 
-        // Insert in correct chronological order using timestamp
+        // Insert in correct chronological order using timestamp with ID tiebreaker
         const messageTimestamp = displayTimestamp.getTime();
         const existingMessages = Array.from(container.querySelectorAll('[data-timestamp]'));
         let insertBefore = null;
@@ -21169,6 +21310,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (messageTimestamp < existingTimestamp) {
                 insertBefore = existing;
                 break;
+            }
+            if (messageTimestamp === existingTimestamp) {
+                const existingId = existing.dataset.messageId || existing.dataset.pollId || '';
+                if ((pollId || '').localeCompare(existingId) < 0) {
+                    insertBefore = existing;
+                    break;
+                }
             }
         }
 
@@ -21664,7 +21812,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.hasBlockedKeyword(msg.content)) return false;
             if (this.isSpamMessage(msg.content)) return false;
             return true;
-        }).sort((a, b) => a.timestamp - b.timestamp);
+        }).sort((a, b) => {
+            const dt = a.timestamp - b.timestamp;
+            if (dt !== 0) return dt;
+            return (a.id || '').localeCompare(b.id || '');
+        });
     }
 
     // Get filtered PM messages for a conversation key
@@ -21683,7 +21835,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // multiple senders so skip this check for them.
             if (!msg.isGroup && msg.pubkey !== this.pubkey && msg.pubkey !== this.currentPM) return false;
             return true;
-        }).sort((a, b) => a.timestamp - b.timestamp);
+        }).sort((a, b) => {
+            const dt = a.timestamp - b.timestamp;
+            if (dt !== 0) return dt;
+            return (a.id || '').localeCompare(b.id || '');
+        });
     }
 
     // Render all messages for a channel or PM conversation
@@ -24843,7 +24999,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.182 ═══<br/>
+═══ Nymchat v3.49.183 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
