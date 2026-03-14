@@ -1,5 +1,5 @@
 // Cloudflare Pages Function: Multiplexed WebSocket relay pool proxy
-// Single WebSocket from client, fans out to many upstream Nostr relays.
+// Single WebSocket from client, fans out to many upstream Nostr relays
 //
 // Client connects to: wss://<host>/api/relay-pool
 //
@@ -59,7 +59,7 @@ export async function onRequest(context) {
     }
   }
 
-  // Keepalive: send periodic POOL:PING to prevent Cloudflare idle timeout
+  // Keepalive to send periodic ping to prevent Cloudflare idle timeout
   let keepaliveTimer = setInterval(() => {
     try {
       if (serverOpen && server.readyState === 1) {

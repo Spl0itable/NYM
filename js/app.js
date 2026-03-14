@@ -4650,7 +4650,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Returns a promise so connectToGeoRelays can await the fresh data
     // before selecting relays, ensuring we match bitchat's relay set.
     fetchGeoRelays() {
-        const url = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
+        const url = 'https://raw.githubusercontent.com/permissionlesstech/bitchat/main/relays/online_relays_gps.csv';
         return fetch(url, { cache: 'no-cache' })
             .then(res => {
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4676,6 +4676,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
                 if (parsed.length > 0) {
                     this.geoRelays = parsed;
+                    console.log(`[GeoRelays] Loaded ${parsed.length} relays from bitchat CSV`);
                     // If the relay pool proxy is already connected, update
                     // its config so it connects to the full CSV geo relay set
                     // (initial connection may have used the smaller hardcoded list)
@@ -4684,8 +4685,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 }
             })
-            .catch(() => {
-                // Silently fall back to hardcoded list
+            .catch((err) => {
+                console.warn(`[GeoRelays] CSV fetch failed, using hardcoded list (${this.geoRelays.length} relays):`, err.message);
             });
     }
 
@@ -4860,6 +4861,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const relay = this.relayPool.get(url);
             return relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
         });
+
+        // Update network stats to reflect newly connected geo relays
+        this.updateRelayStatus();
+
+        // Re-subscribe the channel on all geo relays that just connected,
+        // since the initial subscription may have fired before they were ready
+        if (connectedGeoRelays.length > 0) {
+            this.channelLoadedFromRelays.delete(geohash);
+            this.loadChannelFromRelays(geohash, 'geohash');
+        }
 
         // Always ensure default relays (first 5 broadcast relays) are connected
         this.ensureDefaultRelaysConnected();
@@ -25121,7 +25132,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.189 ═══<br/>
+═══ Nymchat v3.49.188 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
