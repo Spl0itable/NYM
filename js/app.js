@@ -7372,15 +7372,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.relayStats.totalEvents++;
                         this.relayStats.eventsThisSecond++;
 
-                        // The proxy appends sourceRelay as 4th element for stats
-                        const sourceRelay = msg[3] || 'relay-pool';
-
-                        // Per-relay counts come from POOL:STATUS (authoritative),
-                        // don't double-count here
-
-                        // Strip the sourceRelay before passing to handler
-                        // handleRelayMessage expects ["EVENT", subId, eventObj]
-                        this.handleRelayMessage(msg.slice(0, 3), sourceRelay);
+                        // Proxy forwards raw upstream messages — no sourceRelay appended
+                        this.handleRelayMessage(msg, 'relay-pool');
                     } else {
                         // OK, EOSE, NOTICE — handle as if from a relay
                         this.handleRelayMessage(msg, 'relay-pool');
@@ -25070,7 +25063,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.186 ═══<br/>
+═══ Nymchat v3.49.187 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
