@@ -9,6 +9,7 @@
 //   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
 //   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
 //   ["REQ", subId, ...filters]   - fans out to read relays only
+//   ["GEO_REQ", ["wss://geo1",...], subId, ...filters] - geo relays first, then all other read relays
 //   ["CLOSE", subId]             - fans out to read relays only
 
 export async function onRequest(context) {
@@ -166,14 +167,15 @@ export async function onRequest(context) {
     }
   }
 
-  // Extract Nostr event ID from raw JSON string without JSON.parse
-  // Looks for "id":" pattern and extracts the 64-char hex ID
+  // Extract Nostr event ID from raw JSON string
   function extractEventId(raw) {
-    const idx = raw.indexOf('"id":"');
+    const braceIdx = raw.indexOf('{');
+    if (braceIdx === -1) return null;
+    const idx = raw.indexOf('"id":"', braceIdx);
     if (idx === -1) return null;
     const start = idx + 6;
     const end = raw.indexOf('"', start);
-    if (end === -1 || end - start < 16) return null; // Sanity check: IDs are 64-char hex
+    if (end === -1 || end - start !== 64) return null; // Nostr event IDs are exactly 64 hex chars
     return raw.substring(start, end);
   }
 
@@ -445,6 +447,26 @@ export async function onRequest(context) {
             upstreams.forEach((info, url) => {
               if (!dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
+              }
+            });
+          } else if (msgType === 'GEO_REQ') {
+            // ["GEO_REQ", ["wss://geo1", ...], subId, ...filters]
+            // Send REQ to geo relays first, then all other read relays
+            const geoList = msg[1] || [];
+            const reqMsg = JSON.stringify(['REQ', ...msg.slice(2)]);
+            const subId = msg[2];
+            activeSubscriptions.set(subId, reqMsg);
+            const geoSet = new Set(geoList);
+            // Geo relays first
+            upstreams.forEach((info, url) => {
+              if (geoSet.has(url) && info.type !== 'write' && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
+                try { info.ws.send(reqMsg); } catch { /* noop */ }
+              }
+            });
+            // Then all other read relays
+            upstreams.forEach((info, url) => {
+              if (!geoSet.has(url) && info.type !== 'write' && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
+                try { info.ws.send(reqMsg); } catch { /* noop */ }
               }
             });
           } else if (msgType === 'REQ') {

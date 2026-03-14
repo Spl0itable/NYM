@@ -4676,6 +4676,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
                 if (parsed.length > 0) {
                     this.geoRelays = parsed;
+                    // If the relay pool proxy is already connected, update
+                    // its config so it connects to the full CSV geo relay set
+                    // (initial connection may have used the smaller hardcoded list)
+                    if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+                        this._poolSendRelayConfig();
+                    }
                 }
             })
             .catch(() => {
@@ -6994,23 +7000,46 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Multiplexed pool mode: send REQ through single socket
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+            // For geohash channels, use GEO_REQ so geo relays get the
+            // subscription first — they have the most relevant data
+            if (channelType === 'geohash' && channelKey) {
+                const closestRelays = this.getClosestRelaysForGeohash(channelKey);
+                if (closestRelays.length > 0) {
+                    this._poolSend(["GEO_REQ", closestRelays.map(r => r.url), subId, ...filters]);
+                    this.channelSubscriptions.set(channelKey, subId);
+                    return;
+                }
+            }
             this._poolSend(["REQ", subId, ...filters]);
             this.channelSubscriptions.set(channelKey, subId);
             return;
         }
 
-        // Send to all readable relays except nosflare (write-only)
-        this.relayPool.forEach((relay, url) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                relay.type !== 'nosflare') {
+        // Direct mode: send to geo relays first, then all others
+        const reqStr = JSON.stringify(["REQ", subId, ...filters]);
+        const sentUrls = new Set();
 
-                // Track subscription
-                if (!relay.subscriptions) {
-                    relay.subscriptions = new Set();
+        // Geo relays first for geohash channels
+        if (channelType === 'geohash' && channelKey) {
+            const closestRelays = this.getClosestRelaysForGeohash(channelKey);
+            for (const r of closestRelays) {
+                const relay = this.relayPool.get(r.url);
+                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+                    if (!relay.subscriptions) relay.subscriptions = new Set();
+                    relay.subscriptions.add(subId);
+                    relay.ws.send(reqStr);
+                    sentUrls.add(r.url);
                 }
-                relay.subscriptions.add(subId);
+            }
+        }
 
-                relay.ws.send(JSON.stringify(["REQ", subId, ...filters]));
+        // Then all other readable relays
+        this.relayPool.forEach((relay, url) => {
+            if (!sentUrls.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN &&
+                relay.type !== 'nosflare') {
+                if (!relay.subscriptions) relay.subscriptions = new Set();
+                relay.subscriptions.add(subId);
+                relay.ws.send(reqStr);
             }
         });
 
@@ -7059,21 +7088,50 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Multiplexed pool mode
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+            // Collect geo relays for all channels in the batch
+            if (geohashChannels.length > 0) {
+                const geoUrls = new Set();
+                for (const ch of geohashChannels) {
+                    const closest = this.getClosestRelaysForGeohash(ch);
+                    for (const r of closest) geoUrls.add(r.url);
+                }
+                if (geoUrls.size > 0) {
+                    this._poolSend(["GEO_REQ", [...geoUrls], subId, ...filters]);
+                    return;
+                }
+            }
             this._poolSend(["REQ", subId, ...filters]);
             return;
         }
 
-        // Send to all readable relays (exclude nosflare write-only)
-        this.relayPool.forEach((relay, url) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                relay.type !== 'nosflare') {
+        // Direct mode: send to geo relays first, then all others
+        const reqStr = JSON.stringify(["REQ", subId, ...filters]);
+        const sentUrls = new Set();
 
-                if (!relay.subscriptions) {
-                    relay.subscriptions = new Set();
+        // Geo relays first
+        if (geohashChannels.length > 0) {
+            for (const ch of geohashChannels) {
+                const closest = this.getClosestRelaysForGeohash(ch);
+                for (const r of closest) {
+                    if (sentUrls.has(r.url)) continue;
+                    const relay = this.relayPool.get(r.url);
+                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+                        if (!relay.subscriptions) relay.subscriptions = new Set();
+                        relay.subscriptions.add(subId);
+                        relay.ws.send(reqStr);
+                        sentUrls.add(r.url);
+                    }
                 }
-                relay.subscriptions.add(subId);
+            }
+        }
 
-                relay.ws.send(JSON.stringify(["REQ", subId, ...filters]));
+        // Then all other readable relays
+        this.relayPool.forEach((relay, url) => {
+            if (!sentUrls.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN &&
+                relay.type !== 'nosflare') {
+                if (!relay.subscriptions) relay.subscriptions = new Set();
+                relay.subscriptions.add(subId);
+                relay.ws.send(reqStr);
             }
         });
     }
@@ -25063,7 +25121,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.188 ═══<br/>
+═══ Nymchat v3.49.189 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
