@@ -10,9 +10,6 @@
 //   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
 //   ["REQ", subId, ...filters]   - fans out to read relays only
 //   ["CLOSE", subId]             - fans out to read relays only
-//
-// Protocol (proxy → client):
-//   ["POOL:STATUS", { connected: [...], failed: [...], count: N }]
 
 export async function onRequest(context) {
   const { request } = context;
@@ -26,13 +23,42 @@ export async function onRequest(context) {
   server.accept();
 
   // Relay pool state
-  const upstreams = new Map();       // relayUrl -> { ws, type, status, msgCount, handled }
+  const upstreams = new Map();       // relayUrl -> { ws, type, status, eventCount, handled }
   const activeSubscriptions = new Map(); // subId -> raw JSON string of the REQ message
+  const seenEvents = new Map();      // eventId -> 1 (string-based dedup, no JSON.parse)
+  const seenOKs = new Set();         // eventId (only forward first OK per event)
+  const relayLatency = new Map();    // relayUrl -> latency ms
   let writeOnlyRelays = new Set();
   let dmRelays = [];
   let serverOpen = true;
 
-  // Keepalive to send periodic ping to prevent Cloudflare idle timeout
+  // Dedup housekeeping
+  const DEDUP_MAX = 5000;
+  let dedupCounter = 0;
+
+  function trimDedup() {
+    if (++dedupCounter < 200) return;
+    dedupCounter = 0;
+    if (seenEvents.size > DEDUP_MAX) {
+      const toDelete = seenEvents.size - DEDUP_MAX;
+      let deleted = 0;
+      for (const key of seenEvents.keys()) {
+        if (deleted >= toDelete) break;
+        seenEvents.delete(key);
+        deleted++;
+      }
+    }
+    if (seenOKs.size > 1000) {
+      let deleted = 0;
+      for (const key of seenOKs) {
+        if (deleted >= 500) break;
+        seenOKs.delete(key);
+        deleted++;
+      }
+    }
+  }
+
+  // Keepalive: send periodic POOL:PING to prevent Cloudflare idle timeout
   let keepaliveTimer = setInterval(() => {
     try {
       if (serverOpen && server.readyState === 1) {
@@ -90,18 +116,21 @@ export async function onRequest(context) {
   function sendPoolStatus() {
     const connected = [];
     const failed = [];
+    const latency = {};
     const events = {};
     const relayTypes = {};
     upstreams.forEach((info, url) => {
       if (info.status === 'connected') connected.push(url);
       else if (info.status === 'failed') failed.push(url);
       relayTypes[url] = info.type;
-      events[url] = info.msgCount;
+      events[url] = info.eventCount;
     });
+    relayLatency.forEach((ms, url) => { latency[url] = ms; });
     sendToClient(JSON.stringify(['POOL:STATUS', {
       connected,
       failed,
       count: connected.length,
+      latency,
       events,
       relayTypes,
       skippedFailed: failedRelays.size
@@ -135,6 +164,27 @@ export async function onRequest(context) {
     } catch {
       return false;
     }
+  }
+
+  // Extract Nostr event ID from raw JSON string without JSON.parse
+  // Looks for "id":" pattern and extracts the 64-char hex ID
+  function extractEventId(raw) {
+    const idx = raw.indexOf('"id":"');
+    if (idx === -1) return null;
+    const start = idx + 6;
+    const end = raw.indexOf('"', start);
+    if (end === -1 || end - start < 16) return null; // Sanity check: IDs are 64-char hex
+    return raw.substring(start, end);
+  }
+
+  // Extract OK event ID: ["OK","<eventId>",...]
+  // The event ID is the second element, starts at position 6
+  function extractOKEventId(raw) {
+    // ["OK","  = positions 0-5, event ID starts at 6
+    const start = 6;
+    const end = raw.indexOf('"', start);
+    if (end === -1 || end - start < 16) return null;
+    return raw.substring(start, end);
   }
 
   // Stagger relay connections to avoid overwhelming the worker
@@ -207,8 +257,10 @@ export async function onRequest(context) {
     if (relayUrl === 'wss://relay.nosflare.com') return;
     if (shouldSkipRelay(relayUrl)) return;
 
-    const info = { ws: null, type, status: 'connecting', msgCount: 0, handled: false };
+    const info = { ws: null, type, status: 'connecting', eventCount: 0, handled: false };
     upstreams.set(relayUrl, info);
+
+    const connectStartTime = Date.now();
 
     try {
       const ws = new WebSocket(relayUrl);
@@ -230,14 +282,41 @@ export async function onRequest(context) {
         info.status = 'connected';
         clearRelayFailure(relayUrl);
         reconnectAttempts.delete(relayUrl);
+        relayLatency.set(relayUrl, Date.now() - connectStartTime);
         replaySubscriptions(relayUrl, ws);
         schedulePoolStatus();
       });
 
-      // Thin passthrough forward raw upstream messages to client
+      // String-based dedup: extract event IDs without JSON.parse to minimize CPU
       ws.addEventListener('message', (event) => {
-        info.msgCount++;
-        sendToClient(event.data);
+        const raw = event.data;
+        if (typeof raw !== 'string' || raw.length < 10) return;
+
+        // Detect message type from raw string prefix (avoids JSON.parse)
+        // EVENT: ["EVENT","subId",{...}]
+        if (raw.charCodeAt(2) === 69 && raw.startsWith('["EVENT"')) {
+          const eventId = extractEventId(raw);
+          if (eventId) {
+            if (seenEvents.has(eventId)) return; // Dedup
+            seenEvents.set(eventId, 1);
+            trimDedup();
+          }
+          info.eventCount++;
+          sendToClient(raw);
+
+        // OK: ["OK","eventId",bool,"msg"]
+        } else if (raw.charCodeAt(2) === 79 && raw.startsWith('["OK"')) {
+          const eventId = extractOKEventId(raw);
+          if (eventId) {
+            if (seenOKs.has(eventId)) return;
+            seenOKs.add(eventId);
+          }
+          sendToClient(raw);
+
+        // EOSE, NOTICE, or anything else — forward as-is
+        } else {
+          sendToClient(raw);
+        }
       });
 
       ws.addEventListener('close', () => {
@@ -371,7 +450,6 @@ export async function onRequest(context) {
           } else if (msgType === 'REQ') {
             const subId = msg[1];
             activeSubscriptions.set(subId, event.data);
-            // Fan out to read relays — EOSE handling moved to client
             sendToUpstreams(event.data, (url, info) => info.type !== 'write');
           } else if (msgType === 'CLOSE') {
             const subId = msg[1];
