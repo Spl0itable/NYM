@@ -499,7 +499,7 @@ class NYM {
         this.geoRelays = [];
         this.geoRelayConnections = new Map();
         this.currentGeoRelays = new Set();
-        this.geoRelayCount = 10;
+        this.geoRelayCount = 5;
         this._geoRelaysReady = this.fetchGeoRelays();
         this.bitchatDMRelays = [
             'wss://relay.damus.io',
@@ -4137,7 +4137,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Returns a promise so connectToGeoRelays can await the fresh data
     // before selecting relays, ensuring we match bitchat's relay set.
     fetchGeoRelays() {
-        const url = 'https://raw.githubusercontent.com/permissionlesstech/bitchat/main/relays/online_relays_gps.csv';
+        const url = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
         return fetch(url, { cache: 'no-cache' })
             .then(res => {
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4167,7 +4167,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     for (const r of parsed) {
                         this.allRelayUrls.add(r.url);
                     }
-                    console.log(`[GeoRelays] Loaded ${parsed.length} relays from bitchat CSV (${this.allRelayUrls.size} total relays)`);
+                    console.log(`[GeoRelays] Loaded ${parsed.length} relays from georelays CSV (${this.allRelayUrls.size} total relays)`);
                     // If the relay pool proxy is already connected, update
                     // its config so it connects to the full CSV relay set
                     if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
@@ -4326,19 +4326,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 continue;
             }
 
-            // Stagger connections to avoid overwhelming the browser
-            const delay = i * 100;
-            const connectionPromise = new Promise(resolve => {
-                setTimeout(async () => {
-                    await this.connectToRelayWithTimeout(relayUrl, 'relay', 3000);
-                    const relay = this.relayPool.get(relayUrl);
-                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        this.currentGeoRelays.add(relayUrl);
-                        this.subscribeRelayToChannel(relay, relayUrl, geohash);
-                        this.updateConnectionStatus();
-                    }
-                    resolve();
-                }, delay);
+            // Connect concurrently — only 5 geo relays, no stagger needed
+            const connectionPromise = this.connectToRelayWithTimeout(relayUrl, 'relay', 3000).then(() => {
+                const relay = this.relayPool.get(relayUrl);
+                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                    this.currentGeoRelays.add(relayUrl);
+                    this.subscribeRelayToChannel(relay, relayUrl, geohash);
+                    this.updateConnectionStatus();
+                }
             });
             connectionPromises.push(connectionPromise);
         }
@@ -6230,21 +6225,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             this.allRelayUrls.add(url);
                         }
 
-                        // Connect to all relays not yet connected (staggered)
+                        // Connect to all relays not yet connected in concurrent batches
                         const relaysToConnect = [...this.allRelayUrls]
                             .filter(url => !this.relayPool.has(url) && this.shouldRetryRelay(url));
 
-                        relaysToConnect.forEach((relayUrl, index) => {
-                            setTimeout(() => {
-                                this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
-                                    const r = this.relayPool.get(relayUrl);
-                                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        this.subscribeRelayToChannel(r, relayUrl);
-                                        this.updateConnectionStatus();
-                                    }
-                                });
-                            }, index * 50); // 50ms stagger
-                        });
+                        // Fire all connections concurrently — the browser limits
+                        // parallel WebSocket handshakes natively so no artificial
+                        // stagger is needed.
+                        for (const relayUrl of relaysToConnect) {
+                            this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
+                                const r = this.relayPool.get(relayUrl);
+                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                    this.subscribeRelayToChannel(r, relayUrl);
+                                    this.updateConnectionStatus();
+                                }
+                            });
+                        }
                     });
                 });
             }
@@ -7260,18 +7256,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         if (relaysToTry.length > 0) {
 
-            // Try connecting to them with staggered timing
-            for (let i = 0; i < Math.min(relaysToTry.length, 20); i++) { // Try up to 20 relays
-                const relayUrl = relaysToTry[i];
-                setTimeout(() => {
-                    this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
-                            const r = this.relayPool.get(relayUrl);
-                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                this.subscribeRelayToChannel(r, relayUrl);
-                                this.updateConnectionStatus();
-                            }
-                        });
-                }, i * 200); // Stagger by 200ms
+            // Connect concurrently — browser handles WebSocket concurrency natively
+            for (const relayUrl of relaysToTry) {
+                this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
+                    const r = this.relayPool.get(relayUrl);
+                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                        this.subscribeRelayToChannel(r, relayUrl);
+                        this.updateConnectionStatus();
+                    }
+                });
             }
         } else {
 
@@ -7287,17 +7280,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     .slice(0, 10);
 
                 if (newRelaysToTry.length > 0) {
-                    newRelaysToTry.forEach((relayUrl, index) => {
-                        setTimeout(() => {
-                            this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
-                                    const r = this.relayPool.get(relayUrl);
-                                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        this.subscribeRelayToChannel(r, relayUrl);
-                                        this.updateConnectionStatus();
-                                    }
-                                });
-                        }, index * 200);
-                    });
+                    for (const relayUrl of newRelaysToTry) {
+                        this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
+                            const r = this.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                this.subscribeRelayToChannel(r, relayUrl);
+                                this.updateConnectionStatus();
+                            }
+                        });
+                    }
                 }
             });
         }
