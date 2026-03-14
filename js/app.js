@@ -472,551 +472,35 @@ class NYM {
         this.monitorRelays = ['wss://relay.nostr.watch', 'wss://history.nostr.watch', 'wss://relaypag.es'];
         // nostr.watch Amsterdam monitor pubkey (publishes kind 30166 liveness events)
         this.monitorPubkeys = ['9bbbb845e5b6c831c29789900769843ab43bb5047abe697870cb50b6fc9bf923'];
-        this.broadcastRelays = [
+        // Core default relays - always connected first for fast startup
+        this.defaultRelays = [
             'wss://relay.damus.io',
             'wss://offchain.pub',
             'wss://relay.primal.net',
             'wss://nos.lol',
             'wss://nostr21.com',
             'wss://a.nos.lol',
-            'wss://adre.su',
-            'wss://alien.macneilmediagroup.com',
-            'wss://articles.layer3.news',
-            'wss://black.nostrcity.club',
-            'wss://bostr.bitcointxoko.com',
-            'wss://bostr.shop',
-            'wss://bostr.syobon.net',
-            'wss://bucket.coracle.social',
-            'wss://chorus.pjv.me',
-            'wss://communities.nos.social',
-            'wss://cyberspace.nostr1.com',
-            'wss://dev-nostr.bityacht.io',
-            'wss://dev-relay.lnfi.network',
-            'wss://fanfares.nostr1.com',
-            'wss://freelay.sovbit.host',
-            'wss://gnostr.com',
-            'wss://inbox.azzamo.net',
-            'wss://ithurtswhenip.ee',
-            'wss://khatru.nostrver.se',
-            'wss://kitchen.zap.cooking',
-            'wss://knostr.neutrine.com',
-            'wss://librerelay.aaroniumii.com',
-            'wss://multiplexer.huszonegy.world',
-            'wss://n.ok0.org',
-            'wss://no.str.cr',
-            'wss://nostrelites.org',
-            'wss://nostr-01.yakihonne.com',
-            'wss://nostr-02.dorafactory.org',
-            'wss://nostr-02.yakihonne.com',
-            'wss://nostr-03.dorafactory.org',
-            'wss://nostr-1.nbo.angani.co',
-            'wss://nostr-2.21crypto.ch',
-            'wss://nostr-dev.wellorder.net',
-            'wss://nostr-pub.wellorder.net',
-            'wss://nostr-relay-1.trustlessenterprise.com',
-            'wss://nostr-relay.amethyst.name',
-            'wss://nostr-relay.cbrx.io',
-            'wss://nostr-relay.moe.gift',
-            'wss://nostr-relay.online',
-            'wss://nostr-relay.psfoundation.info',
-            'wss://nostr-relay.schnitzel.world',
-            'wss://nostr-relay.shirogaku.xyz',
-            'wss://nostr-relay.zimage.com',
-            'wss://nostr-rs-relay-ishosta.phamthanh.me',
-            'wss://nostr-rs-relay.dev.fedibtc.com',
-            'wss://nostr-verif.slothy.win',
-            'wss://nostr-verified.wellorder.net',
-            'wss://nostr.0x7e.xyz',
-            'wss://nostr.21crypto.ch',
-            'wss://nostr.2b9t.xyz',
-            'wss://nostr.4rs.nl',
-            'wss://nostr.agentcampfire.com',
-            'wss://nostr.azzamo.net',
-            'wss://nostr.bilthon.dev',
-            'wss://nostr.blankfors.se',
-            'wss://nostr.camalolo.com',
-            'wss://nostr.carroarmato0.be',
-            'wss://nostr.chaima.info',
-            'wss://nostr.coincards.com',
-            'wss://nostr.coincrowd.fund',
-            'wss://nostr.community.ath.cx',
-            'wss://nostr.data.haus',
-            'wss://nostr.dbtc.link',
-            'wss://nostr.easydns.ca',
-            'wss://nostr.einundzwanzig.space',
-            'wss://nostr.excentered.com',
-            'wss://nostr.fbxl.net',
-            'wss://nostr.hekster.org',
-            'wss://nostr.hifish.org',
-            'wss://nostr.hoppe-relay.it.com',
-            'wss://nostr.huszonegy.world',
-            'wss://nostr.jfischer.org',
-            'wss://nostr.kalf.org',
-            'wss://nostr.kungfu-g.rip',
-            'wss://nostr.l484.com',
-            'wss://nostr.liberty.fans',
-            'wss://nostr.lojong.info',
-            'wss://nostr.makibisskey.work',
-            'wss://nostr.massmux.com',
-            'wss://nostr.middling.mydns.jp',
-            'wss://nostr.mom',
-            'wss://nostr.myshosholoza.co.za',
-            'wss://nostr.n7ekb.net',
-            'wss://nostr.namek.link',
-            'wss://nostr.night7.space',
-            'wss://nostr.nodeofsven.com',
-            'wss://nostr.notribe.net',
-            'wss://nostr.novacisko.cz',
-            'wss://nostr.now',
-            'wss://nostr.overmind.lol',
-            'wss://nostr.oxtr.dev',
-            'wss://nostr.plantroon.com',
-            'wss://nostr.prl.plus',
-            'wss://nostr.rblb.it',
-            'wss://nostr.red5d.dev',
-            'wss://nostr.rikmeijer.nl',
-            'wss://nostr.rohoss.com',
-            'wss://nostr.roundrockbitcoiners.com',
-            'wss://nostr.rtvslawenia.com',
-            'wss://nostr.sagaciousd.com',
-            'wss://nostr.sathoarder.com',
-            'wss://nostr.satstralia.com',
-            'wss://nostr.slothy.win',
-            'wss://nostr.smut.cloud',
-            'wss://nostr.spaceshell.xyz',
-            'wss://nostr.spicyz.io',
-            'wss://nostr.stakey.net',
-            'wss://nostr.tac.lol',
-            'wss://nostr.tadryanom.me',
-            'wss://nostr.tavux.tech',
-            'wss://nostr.tegila.com.br',
-            'wss://nostr.thaliyal.com',
-            'wss://nostr.thebiglake.org',
-            'wss://nostr.veladan.dev',
-            'wss://nostr.vulpem.com',
-            'wss://nostr.yael.at',
-            'wss://nostr.zenon.network',
-            'wss://nostrelay.circum.space',
-            'wss://nostrelay.memory-art.xyz',
-            'wss://nostrja-kari.heguro.com',
-            'wss://nostrue.com',
-            'wss://noxir.kpherox.dev',
-            'wss://nproxy.kristapsk.lv',
-            'wss://orangepiller.org',
-            'wss://orangesync.tech',
-            'wss://portal-relay.pareto.space',
-            'wss://premium.primal.net',
-            'wss://prl.plus',
-            'wss://promenade.fiatjaf.com',
-            'wss://purplerelay.com',
-            'wss://pyramid.fiatjaf.com',
-            'wss://r.bitcoinhold.net',
-            'wss://relay-admin.thaliyal.com',
-            'wss://relay-dev.satlantis.io',
-            'wss://relay-rpi.edufeed.org',
-            'wss://relay-testnet.k8s.layer3.news',
-            'wss://relay.13room.space',
-            'wss://relay.21e6.cz',
-            'wss://relay.agorist.space',
-            'wss://relay.angor.io',
-            'wss://relay.anzenkodo.workers.dev',
-            'wss://relay.artiostr.ch',
-            'wss://relay.artx.market',
-            'wss://relay.arx-ccn.com',
-            'wss://relay.bankless.at',
-            'wss://relay.barine.co',
-            'wss://relay.bitcoinartclock.com',
-            'wss://relay.bitcoinveneto.org',
-            'wss://relay.bullishbounty.com',
-            'wss://relay.chakany.systems',
-            'wss://relay.chorus.community',
-            'wss://relay.coinos.io',
-            'wss://relay.conduit.market',
-            'wss://relay.copylaradio.com',
-            'wss://relay.cosmicbolt.net',
-            'wss://relay.credenso.cafe',
-            'wss://relay.cypherflow.ai',
-            'wss://relay.davidebtc.me',
-            'wss://relay.degmods.com',
-            'wss://relay.digitalezukunft.cyou',
-            'wss://relay.dwadziesciajeden.pl',
-            'wss://relay.etch.social',
-            'wss://relay.evanverma.com',
-            'wss://relay.fountain.fm',
-            'wss://relay.fr13nd5.com',
-            'wss://relay.freeplace.nl',
-            'wss://relay.froth.zone',
-            'wss://relay.g1sms.fr',
-            'wss://relay.getsafebox.app',
-            'wss://relay.goodmorningbitcoin.com',
-            'wss://relay.hasenpfeffr.com',
-            'wss://relay.hivetalk.org',
-            'wss://relay.hodl.ar',
-            'wss://relay.holzeis.me',
-            'wss://relay.illuminodes.com',
-            'wss://relay.javi.space',
-            'wss://relay.jeffg.fyi',
-            'wss://relay.laantungir.net',
-            'wss://relay.letsfo.com',
-            'wss://relay.lexingtonbitcoin.org',
-            'wss://relay.lnfi.network',
-            'wss://relay.lumina.rocks',
-            'wss://relay.magiccity.live',
-            'wss://relay.mattybs.lol',
-            'wss://relay.mccormick.cx',
-            'wss://relay.mess.ch',
-            'wss://relay.minibolt.info',
-            'wss://relay.mostro.network',
-            'wss://relay.mwaters.net',
-            'wss://relay.netstr.io',
-            'wss://relay.nosto.re',
-            'wss://relay.nostr.com.au',
+            'wss://relay.snort.social',
             'wss://relay.nostr.net',
-            'wss://relay.nostr.wirednet.jp',
-            'wss://relay.nostrcal.com',
-            'wss://relay.nostrcheck.me',
-            'wss://relay.nostrdice.com',
-            'wss://relay.nostrhub.fr',
-            'wss://relay.nostrhub.tech',
-            'wss://relay.nostriot.com',
-            'wss://relay.nostromo.social',
-            'wss://relay.nostx.io',
-            'wss://relay.notoshi.win',
-            'wss://relay.nsnip.io',
-            'wss://relay.oldenburg.cool',
-            'wss://relay.orangepill.ovh',
-            'wss://relay.puresignal.news',
-            'wss://relay.ru.ac.th',
-            'wss://relay.satlantis.io',
-            'wss://relay.satsdays.com',
-            'wss://relay.siamdev.cc',
-            'wss://relay.sigit.io',
-            'wss://relay.sincensura.org',
-            'wss://relay.stream.labs.h3.se',
-            'wss://relay.tagayasu.xyz',
-            'wss://relay.tapestry.ninja',
-            'wss://relay.toastr.net',
-            'wss://relay.usefusion.ai',
-            'wss://relay.utxo.farm',
-            'wss://relay.varke.eu',
-            'wss://relay.verified-nostr.com',
-            'wss://relay.vrtmrz.net',
-            'wss://relay.wavefunc.live',
-            'wss://relay.wavlake.com',
+            'wss://nostr-pub.wellorder.net',
             'wss://relay.wellorder.net',
-            'wss://relay.wolfcoil.com',
-            'wss://relay.zone667.com',
-            'wss://relay01.lnfi.network',
-            'wss://relay02.lnfi.network',
-            'wss://relay03.lnfi.network',
-            'wss://relay04.lnfi.network',
             'wss://relay1.nostrchat.io',
-            'wss://relay2.angor.io',
-            'wss://relay2.nostrchat.io',
-            'wss://relay5.bitransfer.org',
-            'wss://relayone.geektank.ai',
-            'wss://relayone.soundhsa.com',
-            'wss://relayrs.notoshi.win',
-            'wss://rn1.sotiras.org',
-            'wss://santo.iguanatech.net',
-            'wss://satsage.xyz',
-            'wss://schnorr.me',
-            'wss://slick.mjex.me',
-            'wss://social.proxymana.net',
-            'wss://soloco.nl',
-            'wss://srtrelay.c-stellar.net',
-            'wss://strfry.bonsai.com',
-            'wss://strfry.felixzieger.de',
-            'wss://strfry.openhoofd.nl',
-            'wss://strfry.shock.network',
-            'wss://temp.iris.to',
-            'wss://theoutpost.life',
-            'wss://tollbooth.stens.dev',
-            'wss://travis-shears-nostr-relay-v2.fly.dev',
-            'wss://vidono.apps.slidestr.net',
-            'wss://vitor.nostr1.com',
-            'wss://wheat.happytavern.co',
-            'wss://wot.brightbolt.net',
-            'wss://wot.codingarena.top',
-            'wss://wot.downisontheup.ca',
-            'wss://wot.dtonon.com',
-            'wss://wot.geektank.ai',
-            'wss://wot.nostr.net',
-            'wss://wot.nostr.party',
-            'wss://wot.nostr.place',
-            'wss://wot.sebastix.social',
-            'wss://wot.soundhsa.com',
-            'wss://wot.sudocarlos.com',
-            'wss://x.kojira.io',
-            'wss://zap.watch'
+            'wss://nostr-01.yakihonne.com',
+            'wss://relay.0xchat.com',
+            'wss://premium.primal.net',
+            'wss://relay.satlantis.io',
+            'wss://relay.fountain.fm',
+            'wss://nostr.mom',
+            'wss://relay.hasenpfeffr.com',
+            'wss://nostrue.com',
+            'wss://relay.nosto.re'
         ];
-        // Geo-located relays from Bitchat's relay directory for geohash channels
-        this.geoRelays = [
-            { url: 'wss://relay-admin.thaliyal.com', lat: 40.8218, lng: -74.45 },
-            { url: 'wss://nostr.notribe.net', lat: 40.8302, lng: -74.1299 },
-            { url: 'wss://strfry.bonsai.com', lat: 37.8715, lng: -122.273 },
-            { url: 'wss://nostr-relay.online', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://shu05.shugur.net', lat: 48.8566, lng: 2.35222 },
-            { url: 'wss://dev-nostr.bityacht.io', lat: 25.0797, lng: 121.234 },
-            { url: 'wss://relay.nostrhub.tech', lat: 49.0291, lng: 8.35696 },
-            { url: 'wss://relay.davidebtc.me', lat: 50.1109, lng: 8.68213 },
-            { url: 'wss://relay.moinsen.com', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://relay.olas.app', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://orangepiller.org', lat: 60.1699, lng: 24.9384 },
-            { url: 'wss://relayrs.notoshi.win', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.guggero.org', lat: 47.3769, lng: 8.54169 },
-            { url: 'wss://nostr.blankfors.se', lat: 60.1699, lng: 24.9384 },
-            { url: 'wss://wot.sovbit.host', lat: 64.1466, lng: -21.9426 },
-            { url: 'wss://nostr.huszonegy.world', lat: 47.4979, lng: 19.0402 },
-            { url: 'wss://wot.sebastix.social', lat: 51.8933, lng: 4.42083 },
-            { url: 'wss://articles.layer3.news', lat: 37.3387, lng: -121.885 },
-            { url: 'wss://nostr.spicyz.io', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://nostr.jerrynya.fun', lat: 31.2304, lng: 121.474 },
-            { url: 'wss://nostr.oxtr.dev', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://relay.mwaters.net', lat: 50.9871, lng: 2.12554 },
-            { url: 'wss://vitor.nostr1.com', lat: 40.7128, lng: -74.006 },
-            { url: 'wss://relay.lumina.rocks', lat: 49.0291, lng: 8.35695 },
-            { url: 'wss://nostr-relay-1.trustlessenterprise.com', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://nostr.bilthon.dev', lat: 25.8128, lng: -80.2377 },
-            { url: 'wss://nostr.now', lat: 36.55, lng: 139.733 },
-            { url: 'wss://nostr.girino.org', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://nostr-01.yakihonne.com', lat: 1.32123, lng: 103.695 },
-            { url: 'wss://nostrelay.memory-art.xyz', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.evanverma.com', lat: 40.8302, lng: -74.1299 },
-            { url: 'wss://a.nos.lol', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://purpura.cloud', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay.snort.social', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.holzeis.me', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://nostr.spaceshell.xyz', lat: 40.7128, lng: -74.006 },
-            { url: 'wss://nostr.liberty.fans', lat: 36.9104, lng: -89.5875 },
-            { url: 'wss://relay.fundstr.me', lat: 42.3601, lng: -71.0589 },
-            { url: 'wss://wot.basspistol.org', lat: 49.4521, lng: 11.0767 },
-            { url: 'wss://relay.notoshi.win', lat: 13.4166, lng: 101.335 },
-            { url: 'wss://relay.stream.labs.h3.se', lat: 59.4016, lng: 17.9455 },
-            { url: 'wss://nostr.stakey.net', lat: 52.3676, lng: 4.90414 },
-            { url: 'wss://relay.satlantis.io', lat: 32.8769, lng: -80.0114 },
-            { url: 'wss://nostr-2.21crypto.ch', lat: 47.4988, lng: 8.72369 },
-            { url: 'wss://nostr.satstralia.com', lat: 64.1476, lng: -21.9392 },
-            { url: 'wss://slick.mjex.me', lat: 39.048, lng: -77.4817 },
-            { url: 'wss://nostr-relay.nextblockvending.com', lat: 47.2343, lng: -119.853 },
-            { url: 'wss://relay.origin.land', lat: 35.6673, lng: 139.751 },
-            { url: 'wss://nostr.fbxl.net', lat: 48.382, lng: -89.2502 },
-            { url: 'wss://relay.nostr.place', lat: 32.7767, lng: -96.797 },
-            { url: 'wss://nr.yay.so', lat: 46.2126, lng: 6.1154 },
-            { url: 'wss://nostream.breadslice.com', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://wot.tealeaf.dev', lat: 33.7488, lng: -84.3877 },
-            { url: 'wss://relay.primal.net', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.chorus.community', lat: 50.1109, lng: 8.68213 },
-            { url: 'wss://wot.dergigi.com', lat: 64.1476, lng: -21.9392 },
-            { url: 'wss://nostr-relay.amethyst.name', lat: 39.0438, lng: -77.4874 },
-            { url: 'wss://nostr.mehdibekhtaoui.com', lat: 49.4939, lng: -1.54813 },
-            { url: 'wss://relay.mess.ch', lat: 46.948, lng: 7.44745 },
-            { url: 'wss://relay.sigit.io', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://relay-rpi.edufeed.org', lat: 49.4543, lng: 11.0746 },
-            { url: 'wss://nostr.faultables.net', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.getsafebox.app', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://cyberspace.nostr1.com', lat: 40.7128, lng: -74.006 },
-            { url: 'wss://relay.endfiat.money', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://soloco.nl', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://nostr.kungfu-g.rip', lat: 33.7946, lng: -84.4488 },
-            { url: 'wss://nostrelay.circum.space', lat: 51.2217, lng: 6.77616 },
-            { url: 'wss://relay.trustroots.org', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.wellorder.net', lat: 45.5201, lng: -122.99 },
-            { url: 'wss://relay.coinos.io', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay-testnet.k8s.layer3.news', lat: 37.3387, lng: -121.885 },
-            { url: 'wss://relay.nostriot.com', lat: 41.5695, lng: -83.9786 },
-            { url: 'wss://relay.bitcoinartclock.com', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://nostr.einundzwanzig.space', lat: 50.1109, lng: 8.68213 },
-            { url: 'wss://nostr.casa21.space', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://premium.primal.net', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay.tagayasu.xyz', lat: 43.6715, lng: -79.38 },
-            { url: 'wss://nostr.mom', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://nostr.zenon.network', lat: 43.5009, lng: -70.4428 },
-            { url: 'wss://nostr-pub.wellorder.net', lat: 45.5201, lng: -122.99 },
-            { url: 'wss://relay.g1sms.fr', lat: 43.9432, lng: 2.07537 },
-            { url: 'wss://relay.illuminodes.com', lat: 47.6061, lng: -122.333 },
-            { url: 'wss://dizzyspells.nostr1.com', lat: 40.7057, lng: -74.0136 },
-            { url: 'wss://relay.mostro.network', lat: 40.8302, lng: -74.1299 },
-            { url: 'wss://relay.nostr.wirednet.jp', lat: 34.706, lng: 135.493 },
-            { url: 'wss://relay.barine.co', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.damus.io', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.0xchat.com', lat: 1.35208, lng: 103.82 },
-            { url: 'wss://relay.mattybs.lol', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://no.str.cr', lat: 9.92857, lng: -84.0528 },
-            { url: 'wss://relay.utxo.farm', lat: 35.6916, lng: 139.768 },
-            { url: 'wss://nostr.pleb.one', lat: 38.6327, lng: -90.1961 },
-            { url: 'wss://relay-dev.satlantis.io', lat: 40.8302, lng: -74.1299 },
-            { url: 'wss://relay.nostrdice.com', lat: -33.8688, lng: 151.209 },
-            { url: 'wss://relay.nostraddress.com', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://satsage.xyz', lat: 37.3986, lng: -121.964 },
-            { url: 'wss://offchain.pub', lat: 36.1809, lng: -115.241 },
-            { url: 'wss://noxir.kpherox.dev', lat: 34.8587, lng: 135.509 },
-            { url: 'wss://nostr-relay.psfoundation.info', lat: 39.0438, lng: -77.4874 },
-            { url: 'wss://khatru.nostrver.se', lat: 51.8933, lng: 4.42083 },
-            { url: 'wss://purplerelay.com', lat: 50.1109, lng: 8.68213 },
-            { url: 'wss://relay.tapestry.ninja', lat: 40.8054, lng: -74.0241 },
-            { url: 'wss://nostr.night7.space', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://nostr.rikmeijer.nl', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://relay1.nostrchat.io', lat: 60.1699, lng: 24.9384 },
-            { url: 'wss://nostr.21crypto.ch', lat: 47.4988, lng: 8.72369 },
-            { url: 'wss://wot.soundhsa.com', lat: 33.1384, lng: -95.6011 },
-            { url: 'wss://relay.orangepill.ovh', lat: 49.1689, lng: -0.358841 },
-            { url: 'wss://talon.quest', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://nostr-rs-relay.dev.fedibtc.com', lat: 39.0438, lng: -77.4874 },
-            { url: 'wss://wot.codingarena.top', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://fanfares.nostr1.com', lat: 40.7128, lng: -74.006 },
-            { url: 'wss://gnostr.com', lat: 42.6978, lng: 23.3246 },
-            { url: 'wss://nostrelites.org', lat: 41.8781, lng: -87.6298 },
-            { url: 'wss://relay.bitcoindistrict.org', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.fr13nd5.com', lat: 52.5233, lng: 13.3426 },
-            { url: 'wss://wot.nostr.place', lat: 30.2672, lng: -97.7431 },
-            { url: 'wss://ithurtswhenip.ee', lat: 51.223, lng: 6.78245 },
-            { url: 'wss://relay.dwadziesciajeden.pl', lat: 52.2297, lng: 21.0122 },
-            { url: 'wss://relay.nostr.net', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://nostr-relay.cbrx.io', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://dev-relay.lnfi.network', lat: 39.0997, lng: -94.5786 },
-            { url: 'wss://relay.jeffg.fyi', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://nos.xmark.cc', lat: 50.6924, lng: 3.20113 },
-            { url: 'wss://relay.21e6.cz', lat: 50.1682, lng: 14.0546 },
-            { url: 'wss://relay.degmods.com', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://nostr.coincrowd.fund', lat: 39.0438, lng: -77.4874 },
-            { url: 'wss://nostr.myshosholoza.co.za', lat: 52.3676, lng: 4.90414 },
-            { url: 'wss://relay.digitalezukunft.cyou', lat: 45.5019, lng: -73.5674 },
-            { url: 'wss://r.lostr.net', lat: 52.3676, lng: 4.90414 },
-            { url: 'wss://relay.etch.social', lat: 41.2619, lng: -95.8608 },
-            { url: 'wss://nostr.tac.lol', lat: 47.4748, lng: -122.273 },
-            { url: 'wss://nostr.azzamo.net', lat: 52.2633, lng: 21.0283 },
-            { url: 'wss://nostr.4rs.nl', lat: 49.0291, lng: 8.35696 },
-            { url: 'wss://nostr-03.dorafactory.org', lat: 1.35208, lng: 103.82 },
-            { url: 'wss://relay.copylaradio.com', lat: 51.223, lng: 6.78245 },
-            { url: 'wss://nostr.camalolo.com', lat: 24.1469, lng: 120.684 },
-            { url: 'wss://nostr-dev.wellorder.net', lat: 45.5201, lng: -122.99 },
-            { url: 'wss://relay.nostx.io', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://r.bitcoinhold.net', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://nproxy.kristapsk.lv', lat: 60.1699, lng: 24.9384 },
-            { url: 'wss://adre.su', lat: 59.9311, lng: 30.3609 },
-            { url: 'wss://relay.hasenpfeffr.com', lat: 39.0438, lng: -77.4874 },
-            { url: 'wss://nos.lol', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://nostr-02.czas.top', lat: 53.471, lng: 9.88208 },
-            { url: 'wss://relay.nosto.re', lat: 51.8933, lng: 4.42083 },
-            { url: 'wss://nostr.plantroon.com', lat: 50.1013, lng: 8.62643 },
-            { url: 'wss://nostr.rblb.it', lat: 43.4633, lng: 11.8796 },
-            { url: 'wss://nostr.thebiglake.org', lat: 32.71, lng: -96.6745 },
-            { url: 'wss://nostr.luisschwab.net', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay.electriclifestyle.com', lat: 26.2897, lng: -80.1293 },
-            { url: 'wss://librerelay.aaroniumii.com', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://nostr.88mph.life', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://shu02.shugur.net', lat: 21.4902, lng: 39.2246 },
-            { url: 'wss://relay.hook.cafe', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://strfry.elswa-dev.online', lat: 48.8566, lng: 2.35222 },
-            { url: 'wss://wot.sudocarlos.com', lat: 51.5072, lng: -0.127586 },
-            { url: 'wss://relay.islandbitcoin.com', lat: 12.8498, lng: 77.6545 },
-            { url: 'wss://nostr.tadryanom.me', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay.zone667.com', lat: 60.1699, lng: 24.9384 },
-            { url: 'wss://nostr.agentcampfire.com', lat: 50.8933, lng: 6.05805 },
-            { url: 'wss://relay.ditto.pub', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay03.lnfi.network', lat: 39.0997, lng: -94.5786 },
-            { url: 'wss://relay2.angor.io', lat: 48.1046, lng: 11.6002 },
-            { url: 'wss://srtrelay.c-stellar.net', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relayone.soundhsa.com', lat: 33.1384, lng: -95.6011 },
-            { url: 'wss://relay.javi.space', lat: 43.4633, lng: 11.8796 },
-            { url: 'wss://nostr.carroarmato0.be', lat: 50.9928, lng: 3.26317 },
-            { url: 'wss://nostr.hekster.org', lat: 37.3986, lng: -121.964 },
-            { url: 'wss://strfry.shock.network', lat: 41.8959, lng: -88.2169 },
-            { url: 'wss://nostr.2b9t.xyz', lat: 34.0549, lng: -118.243 },
-            { url: 'wss://relay.toastr.net', lat: 40.8054, lng: -74.0241 },
-            { url: 'wss://relay.bitcoinveneto.org', lat: 64.1466, lng: -21.9426 },
-            { url: 'wss://relay.wavlake.com', lat: 41.2619, lng: -95.8608 },
-            { url: 'wss://relay.arx-ccn.com', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://relay.cosmicbolt.net', lat: 37.3986, lng: -121.964 },
-            { url: 'wss://relay.mccormick.cx', lat: 52.3563, lng: 4.95714 },
-            { url: 'wss://temp.iris.to', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay.vrtmrz.net', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://nostr-relay.zimage.com', lat: 34.282, lng: -118.439 },
-            { url: 'wss://nostr.data.haus', lat: 50.4754, lng: 12.3683 },
-            { url: 'wss://nostr.vulpem.com', lat: 49.4543, lng: 11.0746 },
-            { url: 'wss://relay.agora.social', lat: 50.7383, lng: 15.0648 },
-            { url: 'wss://nostr.ovia.to', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://nostr.red5d.dev', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://orangesync.tech', lat: 50.1109, lng: 8.68213 },
-            { url: 'wss://relay.fountain.fm', lat: 39.0997, lng: -94.5786 },
-            { url: 'wss://relay.aloftus.io', lat: 34.0881, lng: -118.379 },
-            { url: 'wss://nostr.hifish.org', lat: 47.4043, lng: 8.57398 },
-            { url: 'wss://relay.siamdev.cc', lat: 13.9178, lng: 100.424 },
-            { url: 'wss://fenrir-s.notoshi.win', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://nostr.overmind.lol', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://wheat.happytavern.co', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://nostr.rtvslawenia.com', lat: 49.4543, lng: 11.0746 },
-            { url: 'wss://relay.nostrhub.fr', lat: 48.1046, lng: 11.6002 },
-            { url: 'wss://strfry.openhoofd.nl', lat: 51.9229, lng: 4.40833 },
-            { url: 'wss://relay.usefusion.ai', lat: 38.7134, lng: -78.1591 },
-            { url: 'wss://relay.credenso.cafe', lat: 43.3601, lng: -80.3127 },
-            { url: 'wss://nostr.lostr.space', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay.jmoose.rocks', lat: 60.1699, lng: 24.9384 },
-            { url: 'wss://relay.nostromo.social', lat: 49.4543, lng: 11.0746 },
-            { url: 'wss://nostr.jfischer.org', lat: 49.0291, lng: 8.35696 },
-            { url: 'wss://relay.wolfcoil.com', lat: 35.6092, lng: 139.73 },
-            { url: 'wss://nostr.thaliyal.com', lat: 40.8218, lng: -74.45 },
-            { url: 'wss://relay.magiccity.live', lat: 25.8128, lng: -80.2377 },
-            { url: 'wss://relay.puresignal.news', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://prl.plus', lat: 55.7623, lng: 37.6381 },
-            { url: 'wss://wot.brightbolt.net', lat: 47.6735, lng: -116.781 },
-            { url: 'wss://relay.varke.eu', lat: 52.6921, lng: 6.19372 },
-            { url: 'wss://alienos.libretechsystems.xyz', lat: 55.4724, lng: 9.87335 },
-            { url: 'wss://relay.goodmorningbitcoin.com', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://pyramid.fiatjaf.com', lat: 51.5072, lng: -0.127586 },
-            { url: 'wss://relay02.lnfi.network', lat: 39.0997, lng: -94.5786 },
-            { url: 'wss://nostr.davidebtc.me', lat: 50.1109, lng: 8.68213 },
-            { url: 'wss://nostr-verified.wellorder.net', lat: 45.5201, lng: -122.99 },
-            { url: 'wss://relay.cypherflow.ai', lat: 48.8566, lng: 2.35222 },
-            { url: 'wss://nostr.snowbla.de', lat: 60.1699, lng: 24.9384 },
-            { url: 'wss://inbox.azzamo.net', lat: 52.2633, lng: 21.0283 },
-            { url: 'wss://shu01.shugur.net', lat: 21.4902, lng: 39.2246 },
-            { url: 'wss://nostr.middling.mydns.jp', lat: 35.8099, lng: 140.12 },
-            { url: 'wss://nostr.kalf.org', lat: 52.3676, lng: 4.90414 },
-            { url: 'wss://relay.laantungir.net', lat: -19.4692, lng: -42.5315 },
-            { url: 'wss://relay.angor.io', lat: 48.1046, lng: 11.6002 },
-            { url: 'wss://nostr2.girino.org', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay01.lnfi.network', lat: 39.0997, lng: -94.5786 },
-            { url: 'wss://nostr.chaima.info', lat: 51.223, lng: 6.78245 },
-            { url: 'wss://x.kojira.io', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://shu04.shugur.net', lat: 25.2604, lng: 55.2989 },
-            { url: 'wss://santo.iguanatech.net', lat: 40.8302, lng: -74.1299 },
-            { url: 'wss://relay.artx.market', lat: 43.652, lng: -79.3633 },
-            { url: 'wss://alien.macneilmediagroup.com', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://nostr.sathoarder.com', lat: 48.5734, lng: 7.75211 },
-            { url: 'wss://zap.watch', lat: 45.5029, lng: -73.5723 },
-            { url: 'wss://relay.basspistol.org', lat: 46.2044, lng: 6.14316 },
-            { url: 'wss://relay.13room.space', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.bullishbounty.com', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://theoutpost.life', lat: 64.1476, lng: -21.9392 },
-            { url: 'wss://nostr.coincards.com', lat: 53.5501, lng: -113.469 },
-            { url: 'wss://black.nostrcity.club', lat: 41.8781, lng: -87.6298 },
-            { url: 'wss://relay.npubhaus.com', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay.freeplace.nl', lat: 52.3676, lng: 4.90414 },
-            { url: 'wss://relay.seq1.net', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://ynostr.yael.at', lat: 60.1699, lng: 24.9384 },
-            { url: 'wss://relay.nostr.vet', lat: 52.6467, lng: 4.7395 },
-            { url: 'wss://relay.lifpay.me', lat: 1.35208, lng: 103.82 },
-            { url: 'wss://relay.chakany.systems', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.lightning.pub', lat: 41.8959, lng: -88.2169 },
-            { url: 'wss://wot.dtonon.com', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://yabu.me', lat: 35.6092, lng: 139.73 },
-            { url: 'wss://wot.nostr.net', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://relay.libernet.app', lat: 40.7357, lng: -74.1724 },
-            { url: 'wss://relay04.lnfi.network', lat: 39.0997, lng: -94.5786 },
-            { url: 'wss://nostr.0x7e.xyz', lat: 47.4988, lng: 8.72369 },
-            { url: 'wss://nostr.mikoshi.de', lat: 50.1109, lng: 8.68213 },
-            { url: 'wss://wot.nostr.party', lat: 36.1627, lng: -86.7816 },
-            { url: 'wss://relay.letsfo.com', lat: 51.098, lng: 17.0321 },
-            { url: 'wss://nostr.makibisskey.work', lat: 43.6532, lng: -79.3832 },
-            { url: 'wss://nostr.simplex.icu', lat: 50.8198, lng: -1.08798 }
-        ];
+        // Geo-located relays populated from bitchat CSV (fallback empty)
+        this.geoRelays = [];
         this.geoRelayConnections = new Map();
         this.currentGeoRelays = new Set();
         this.geoRelayCount = 10;
         this._geoRelaysReady = this.fetchGeoRelays();
-        this.defaultRelays = this.broadcastRelays.slice(0, 5);
         this.bitchatDMRelays = [
             'wss://relay.damus.io',
             'wss://nos.lol',
@@ -1024,6 +508,9 @@ class NYM {
             'wss://offchain.pub',
             'wss://nostr21.com'
         ];
+        // Unified relay set: all relays from all sources (deduped)
+        // Built from defaultRelays + bitchat CSV + NIP-66 discovery
+        this.allRelayUrls = new Set(this.defaultRelays);
         this.discoveredRelays = new Set();
         this.pendingConnections = new Map();
         this.relayList = [];
@@ -1035,7 +522,7 @@ class NYM {
         this.reconnectingRelays = new Set();
         this.blacklistedRelays = new Set();
         this.blacklistTimestamps = new Map();
-        this.blacklistDuration = 600000;
+        this.blacklistDuration = 120000; // 2 minutes before retrying failed relays
         this.pubkey = null;
         this.privkey = null;
         this.nym = null;
@@ -2612,7 +2099,7 @@ TRANSFER TO PUBKEY
                 tags: [
                     ['p', 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df'], // Shop is the recipient
                     ['amount', (parseInt(amountSats) * 1000).toString()], // Amount in millisats
-                    ['relays', ...this.broadcastRelays.slice(0, 5)], // Limit to 5 relays
+                    ['relays', ...this.defaultRelays.slice(0, 5)], // Limit to 5 relays
                     ['shop-item', this.currentPurchaseContext.itemId], // Custom tag for shop item
                     ['shop-purchase', 'true'] // Flag this as a shop purchase
                 ],
@@ -4676,17 +4163,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
                 if (parsed.length > 0) {
                     this.geoRelays = parsed;
-                    console.log(`[GeoRelays] Loaded ${parsed.length} relays from bitchat CSV`);
+                    // Add all CSV relay URLs to the unified relay set
+                    for (const r of parsed) {
+                        this.allRelayUrls.add(r.url);
+                    }
+                    console.log(`[GeoRelays] Loaded ${parsed.length} relays from bitchat CSV (${this.allRelayUrls.size} total relays)`);
                     // If the relay pool proxy is already connected, update
-                    // its config so it connects to the full CSV geo relay set
-                    // (initial connection may have used the smaller hardcoded list)
+                    // its config so it connects to the full CSV relay set
                     if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
                         this._poolSendRelayConfig();
                     }
                 }
             })
             .catch((err) => {
-                console.warn(`[GeoRelays] CSV fetch failed, using hardcoded list (${this.geoRelays.length} relays):`, err.message);
+                console.warn(`[GeoRelays] CSV fetch failed (${this.geoRelays.length} geo relays):`, err.message);
             });
     }
 
@@ -4840,7 +4330,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const delay = i * 100;
             const connectionPromise = new Promise(resolve => {
                 setTimeout(async () => {
-                    await this.connectToRelayWithTimeout(relayUrl, 'geo', 3000);
+                    await this.connectToRelayWithTimeout(relayUrl, 'relay', 3000);
                     const relay = this.relayPool.get(relayUrl);
                     if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                         this.currentGeoRelays.add(relayUrl);
@@ -4935,7 +4425,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
             if (!isConnected && this.shouldRetryRelay(relayUrl)) {
-                await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
+                await this.connectToRelayWithTimeout(relayUrl, 'relay', 3000);
                 const r = this.relayPool.get(relayUrl);
                 if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                     this.subscribeToSingleRelay(relayUrl);
@@ -4979,9 +4469,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this._poolSendRelayConfig();
             } else {
                 // Direct mode: reconnect to all broadcast and geo relays
-                this.broadcastRelays.forEach(relayUrl => {
+                this.defaultRelays.forEach(relayUrl => {
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                        this.connectToRelay(relayUrl, 'broadcast').then(() => {
+                        this.connectToRelay(relayUrl, 'relay').then(() => {
                                 const r = this.relayPool.get(relayUrl);
                                 if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                                     this.subscribeToSingleRelay(relayUrl);
@@ -4994,7 +4484,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const relayUrl = relay.url;
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                         setTimeout(() => {
-                            this.connectToRelayWithTimeout(relayUrl, 'geo', 3000).then(() => {
+                            this.connectToRelayWithTimeout(relayUrl, 'relay', 3000).then(() => {
                                     const r = this.relayPool.get(relayUrl);
                                     if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                                         this.subscribeRelayToChannel(r, relayUrl);
@@ -5027,7 +4517,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Build set of relays that should never be disconnected
         const keepRelays = new Set(this.defaultRelays);
-        for (const url of this.broadcastRelays) keepRelays.add(url);
+        for (const url of this.defaultRelays) keepRelays.add(url);
         if (this.bitchatDMRelays) {
             for (const url of this.bitchatDMRelays) keepRelays.add(url);
         }
@@ -5121,63 +4611,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const listEl = document.getElementById('connectedRelaysList');
         if (!listEl) return;
 
-        // Group relays by type
-        const broadcastRelays = [];
-        const readRelays = [];
-        const nosflareRelays = [];
-        const geoRelays = [];
+        const connectedRelays = [];
+        const writeOnlyRelays = [];
 
         this.relayPool.forEach((relay, url) => {
-            if (relay.type === 'broadcast') {
-                broadcastRelays.push(url);
-            } else if (relay.type === 'nosflare') {
-                nosflareRelays.push(url);
-            } else if (relay.type === 'geo') {
-                geoRelays.push(url);
-            } else if (relay.type === 'read') {
-                readRelays.push(url);
+            if (relay.type === 'write') {
+                writeOnlyRelays.push(url);
+            } else {
+                connectedRelays.push(url);
             }
         });
 
-        // Calculate total readable relays (broadcast, read, and geo relays can all be read from)
-        const totalReadable = broadcastRelays.length + readRelays.length + geoRelays.length;
-
         let html = '';
 
-        if (broadcastRelays.length > 0 || nosflareRelays.length > 0) {
-            html += '<div style="margin-bottom: 10px;"><strong style="color: var(--primary);">Default Relays:</strong><br/>';
-            broadcastRelays.forEach(url => {
+        if (connectedRelays.length > 0 || writeOnlyRelays.length > 0) {
+            html += '<div style="margin-bottom: 10px;"><strong style="color: var(--primary);">Connected Relays:</strong><br/>';
+            connectedRelays.slice(0, 20).forEach(url => {
                 html += `<div style="font-size: 11px; margin-left: 10px;">• ${url}</div>`;
             });
-            nosflareRelays.forEach(url => {
+            if (connectedRelays.length > 20) {
+                html += `<div style="font-size: 11px; margin-left: 10px; color: var(--text-dim);">... and ${connectedRelays.length - 20} more</div>`;
+            }
+            writeOnlyRelays.forEach(url => {
                 html += `<div style="font-size: 11px; margin-left: 10px;">• ${url} (write-only)</div>`;
             });
             html += '</div>';
         }
 
-        if (geoRelays.length > 0) {
-            html += `<div style="margin-bottom: 10px;"><strong style="color: var(--warning);">Geohash Relays (${geoRelays.length}):</strong><br/>`;
-            geoRelays.slice(0, 5).forEach(url => {
-                html += `<div style="font-size: 11px; margin-left: 10px;">• ${url}</div>`;
-            });
-            if (geoRelays.length > 5) {
-                html += `<div style="font-size: 11px; margin-left: 10px; color: var(--text-dim);">... and ${geoRelays.length - 5} more</div>`;
-            }
-            html += '</div>';
-        }
-
-        if (readRelays.length > 0) {
-            html += `<div><strong style="color: var(--secondary);">Additional Read Relays (${readRelays.length}):</strong><br/>`;
-            readRelays.slice(0, 10).forEach(url => {
-                html += `<div style="font-size: 11px; margin-left: 10px;">• ${url}</div>`;
-            });
-            if (readRelays.length > 10) {
-                html += `<div style="font-size: 11px; margin-left: 10px; color: var(--text-dim);">... and ${readRelays.length - 10} more</div>`;
-            }
-            html += '</div>';
-        }
-
-        html += `<div style="margin-top: 10px; font-size: 12px; color: var(--text-bright);">Total Connected: ${this.relayPool.size} relays (${totalReadable} readable)</div>`;
+        html += `<div style="margin-top: 10px; font-size: 12px; color: var(--text-bright);">Total Connected: ${this.relayPool.size} relays</div>`;
 
         listEl.innerHTML = html || '<div style="color: var(--text-dim); font-size: 12px;">No relays connected</div>';
     }
@@ -5462,25 +4923,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // We have some connections, but update status to reflect actual count
             this.updateConnectionStatus();
 
-            // If we're missing some broadcast relays, try to restore them
-            // In low data mode, only check the 5 defaults (reconnectToBroadcastRelays also respects this)
-            const relaysToCheck = this.settings && this.settings.lowDataMode
-                ? this.defaultRelays
-                : this.broadcastRelays;
-            const missingBroadcast = relaysToCheck.filter(url => !this.relayPool.has(url));
-            if (missingBroadcast.length > 0) {
+            // If we're missing default relays, try to restore them
+            const missingDefaults = this.defaultRelays.filter(url => !this.relayPool.has(url));
+            if (missingDefaults.length > 0) {
                 this.reconnectToBroadcastRelays();
             }
 
-            // Check for missing discovered relays (skipped in low data mode)
+            // Retry any disconnected relays from allRelayUrls (skipped in low data mode)
             if (!this.settings || !this.settings.lowDataMode) {
-                const missingDiscovered = Array.from(this.discoveredRelays).filter(url =>
+                const missingRelays = [...this.allRelayUrls].filter(url =>
                     !this.relayPool.has(url) &&
-                    !this.broadcastRelays.includes(url) &&
                     url !== 'wss://sendit.nosflare.com'
                 );
 
-                if (missingDiscovered.length > 0) {
+                if (missingRelays.length > 0) {
                     setTimeout(() => {
                         this.retryDiscoveredRelays();
                     }, 1000);
@@ -5510,7 +4966,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Low data mode: only reconnect to the 5 defaults + DM relays
         const relaysToConnect = this.settings && this.settings.lowDataMode
             ? [...this.defaultRelays, ...(this.bitchatDMRelays || [])]
-            : [...this.broadcastRelays];
+            : [...this.defaultRelays];
         if (this.previouslyConnectedRelays && this.previouslyConnectedRelays.size > 0) {
             relaysToConnect.sort((a, b) => {
                 const aWasConnected = this.previouslyConnectedRelays.has(a);
@@ -5526,7 +4982,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 (this.relayPool.get(relayUrl).ws &&
                     this.relayPool.get(relayUrl).ws.readyState !== WebSocket.OPEN)) {
 
-                await this.connectToRelay(relayUrl, 'broadcast');
+                await this.connectToRelay(relayUrl, 'relay');
                 const r = this.relayPool.get(relayUrl);
                 if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                     this.subscribeToSingleRelay(relayUrl);
@@ -5595,9 +5051,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.isReconnecting = false;
 
             // Attempt to reconnect to all broadcast relays
-            this.broadcastRelays.forEach(relayUrl => {
+            this.defaultRelays.forEach(relayUrl => {
                 if (!this.relayPool.has(relayUrl)) {
-                    this.connectToRelay(relayUrl, 'broadcast').then(() => {
+                    this.connectToRelay(relayUrl, 'relay').then(() => {
                             const r = this.relayPool.get(relayUrl);
                             if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                                 this.subscribeToSingleRelay(relayUrl);
@@ -5739,7 +5195,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // In low data mode, only try the 5 defaults
             const reconnectCandidates = this.settings && this.settings.lowDataMode
                 ? this.defaultRelays
-                : this.broadcastRelays;
+                : this.defaultRelays;
             let connected = false;
             for (const relayUrl of reconnectCandidates) {
                 if (this.relayPool.has(relayUrl)) {
@@ -5750,7 +5206,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 }
 
-                await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 3000);
+                await this.connectToRelayWithTimeout(relayUrl, 'relay', 3000);
                 const relay = this.relayPool.get(relayUrl);
                 if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                     this.subscribeToSingleRelay(relayUrl);
@@ -6601,11 +6057,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 return;
             }
 
-            // Check if we're already connected to ANY broadcast relay from pre-connection
+            // Check if we're already connected to ANY default relay from pre-connection
             let initialConnected = false;
             let connectedRelayUrl = null;
 
-            for (const relayUrl of this.broadcastRelays) {
+            for (const relayUrl of this.defaultRelays) {
                 if (this.relayPool.has(relayUrl)) {
                     const relay = this.relayPool.get(relayUrl);
                     if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
@@ -6616,17 +6072,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
-            // If not already connected, try to connect to broadcast relays in parallel for speed
+            // If not already connected, try to connect to default relays in parallel for speed
             if (!initialConnected) {
                 // Get first 5 available relays for parallel connection attempt
-                const initialRelays = this.broadcastRelays
+                const initialRelays = this.defaultRelays
                     .filter(url => this.shouldRetryRelay(url))
                     .slice(0, 5);
 
                 if (initialRelays.length > 0) {
                     // Create connection promises that resolve with relay URL on success
                     const connectionPromises = initialRelays.map(relayUrl =>
-                        this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000).then(() => {
+                        this.connectToRelayWithTimeout(relayUrl, 'relay', 2000).then(() => {
                                 const relay = this.relayPool.get(relayUrl);
                                 if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                                     return relayUrl;
@@ -6657,13 +6113,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 // If parallel attempt failed, fall back to sequential for remaining relays
                 if (!initialConnected) {
-                    const remainingRelays = this.broadcastRelays.slice(5);
+                    const remainingRelays = this.defaultRelays.slice(5);
                     for (const relayUrl of remainingRelays) {
                         if (!this.shouldRetryRelay(relayUrl)) {
                             continue;
                         }
 
-                        await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 2000);
+                        await this.connectToRelayWithTimeout(relayUrl, 'relay', 2000);
                         const relay = this.relayPool.get(relayUrl);
                         if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                             initialConnected = true;
@@ -6675,7 +6131,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
 
             if (!initialConnected) {
-                throw new Error('Could not connect to any broadcast relay');
+                throw new Error('Could not connect to any relay');
             }
 
             // Enable input immediately after first relay connects
@@ -6726,28 +6182,32 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }, 100);
 
-            // Now connect to remaining broadcast relays in background
-            // In low data mode, only connect to the 5 default relays + DM relays
-            const broadcastRelaysToConnect = this.settings.lowDataMode
-                ? this.defaultRelays
-                : this.broadcastRelays;
-            broadcastRelaysToConnect.forEach(relayUrl => {
+            // Connect to sendit.nosflare.com for write-only (no subscriptions)
+            const senditRelay = 'wss://sendit.nosflare.com';
+            if (this.shouldRetryRelay(senditRelay)) {
+                this.connectToRelay(senditRelay, 'write').then(() => {
+                    this.updateConnectionStatus();
+                });
+            }
+
+            // Connect to remaining default relays in background
+            this.defaultRelays.forEach(relayUrl => {
                 if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                    this.connectToRelay(relayUrl, 'broadcast').then(() => {
-                            const r = this.relayPool.get(relayUrl);
-                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                this.subscribeToSingleRelay(relayUrl);
-                                this.updateConnectionStatus();
-                            }
-                        });
+                    this.connectToRelay(relayUrl, 'relay').then(() => {
+                        const r = this.relayPool.get(relayUrl);
+                        if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                            this.subscribeToSingleRelay(relayUrl);
+                            this.updateConnectionStatus();
+                        }
+                    });
                 }
             });
 
-            // In low data mode, also connect to DM relays so PMs work
+            // In low data mode, also connect to DM relays so PMs work, skip rest
             if (this.settings.lowDataMode && this.bitchatDMRelays) {
                 this.bitchatDMRelays.forEach(relayUrl => {
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                        this.connectToRelay(relayUrl, 'read').then(() => {
+                        this.connectToRelay(relayUrl, 'relay').then(() => {
                             const r = this.relayPool.get(relayUrl);
                             if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                                 this.subscribeToSingleRelay(relayUrl);
@@ -6758,59 +6218,35 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 });
             }
 
-            // Connect to sendit.nosflare.com for write-only (no subscriptions)
-            const senditRelay = 'wss://sendit.nosflare.com';
-            if (this.shouldRetryRelay(senditRelay)) {
-                this.connectToRelay(senditRelay, 'nosflare').then(() => {
-                    this.updateConnectionStatus();
-                });
-            }
-
-            // Connect to geo relays at startup in the background (staggered)
-            // In low data mode, skip this - geo relays connect on-demand when entering channels
+            // Connect to all relays from bitchat CSV + NIP-66 discovery (staggered)
+            // In low data mode, skip - only use defaults + DM relays
             if (!this.settings.lowDataMode) {
-                this.geoRelays.forEach((relay, index) => {
-                    const relayUrl = relay.url;
-                    if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                        setTimeout(() => {
-                            this.connectToRelayWithTimeout(relayUrl, 'geo', 3000).then(() => {
+                // Wait for CSV to load, then connect to all unified relays
+                (this._geoRelaysReady || Promise.resolve()).then(() => {
+                    // Discover NIP-66 relays too
+                    this.discoverRelays().then(() => {
+                        // Add discovered relays to unified set
+                        for (const url of this.discoveredRelays) {
+                            this.allRelayUrls.add(url);
+                        }
+
+                        // Connect to all relays not yet connected (staggered)
+                        const relaysToConnect = [...this.allRelayUrls]
+                            .filter(url => !this.relayPool.has(url) && this.shouldRetryRelay(url));
+
+                        relaysToConnect.forEach((relayUrl, index) => {
+                            setTimeout(() => {
+                                this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
                                     const r = this.relayPool.get(relayUrl);
                                     if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                                         this.subscribeRelayToChannel(r, relayUrl);
                                         this.updateConnectionStatus();
                                     }
                                 });
-                        }, index * 50); // 50ms stagger to avoid overwhelming browser
-                    }
-                });
-            }
-
-            // Discover additional relays in the background
-            // In low data mode, skip relay discovery to save bandwidth
-            if (!this.settings.lowDataMode) {
-                setTimeout(() => {
-                this.discoverRelays().then(() => {
-                    // Connect to discovered relays for additional reading sources
-                    const relaysToConnect = Array.from(this.discoveredRelays)
-                        .filter(url => !this.relayPool.has(url) && this.shouldRetryRelay(url))
-                        .slice(0, this.maxRelaysForReq);
-
-                    if (relaysToConnect.length > 0) {
-                        // Stagger connections to avoid overwhelming the browser
-                        relaysToConnect.forEach((relayUrl, index) => {
-                            setTimeout(() => {
-                                this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout).then(() => {
-                                        const r = this.relayPool.get(relayUrl);
-                                        if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                            this.subscribeRelayToChannel(r, relayUrl);
-                                            this.updateConnectionStatus();
-                                        }
-                                    });
-                            }, index * 100);
+                            }, index * 50); // 50ms stagger
                         });
-                    }
+                    });
                 });
-            }, 100);
             }
 
         } catch (error) {
@@ -6841,13 +6277,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         }
 
-        // Try broadcast relays in order with very short timeout
-        for (const relayUrl of this.broadcastRelays) {
+        // Try default relays in order with very short timeout
+        for (const relayUrl of this.defaultRelays) {
             if (!this.shouldRetryRelay(relayUrl)) {
                 continue;
             }
 
-            await this.connectToRelayWithTimeout(relayUrl, 'broadcast', 1500);
+            await this.connectToRelayWithTimeout(relayUrl, 'relay', 1500);
             const relay = this.relayPool.get(relayUrl);
             if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                 // Enable input immediately
@@ -6874,7 +6310,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         this.relayPool.forEach((relay, url) => {
-            if (relay.type === 'nosflare') return; // write-only
+            if (relay.type === 'write') return; // write-only
             if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
             // Close existing subscriptions before resubscribing
@@ -6888,7 +6324,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
         // Never send subscriptions to nosflare (write-only)
-        if (relay.type === 'nosflare') return;
+        if (relay.type === 'write') return;
 
         // Close all active subscriptions for this relay
         if (relay.subscriptions) {
@@ -6907,7 +6343,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
         // Never send REQ to nosflare (write-only)
-        if (relay.type === 'nosflare') return;
+        if (relay.type === 'write') return;
 
         const ws = relay.ws;
 
@@ -7035,7 +6471,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const closestRelays = this.getClosestRelaysForGeohash(channelKey);
             for (const r of closestRelays) {
                 const relay = this.relayPool.get(r.url);
-                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                     if (!relay.subscriptions) relay.subscriptions = new Set();
                     relay.subscriptions.add(subId);
                     relay.ws.send(reqStr);
@@ -7047,7 +6483,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Then all other readable relays
         this.relayPool.forEach((relay, url) => {
             if (!sentUrls.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                relay.type !== 'nosflare') {
+                relay.type !== 'write') {
                 if (!relay.subscriptions) relay.subscriptions = new Set();
                 relay.subscriptions.add(subId);
                 relay.ws.send(reqStr);
@@ -7126,7 +6562,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 for (const r of closest) {
                     if (sentUrls.has(r.url)) continue;
                     const relay = this.relayPool.get(r.url);
-                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                         if (!relay.subscriptions) relay.subscriptions = new Set();
                         relay.subscriptions.add(subId);
                         relay.ws.send(reqStr);
@@ -7139,7 +6575,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Then all other readable relays
         this.relayPool.forEach((relay, url) => {
             if (!sentUrls.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                relay.type !== 'nosflare') {
+                relay.type !== 'write') {
                 if (!relay.subscriptions) relay.subscriptions = new Set();
                 relay.subscriptions.add(subId);
                 relay.ws.send(reqStr);
@@ -7319,7 +6755,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 clearTimeout(timeout);
                 this.poolReady = false; // not ready until RELAYS sent
 
-                // Gather relays to connect to
+                // Gather relays to connect to (unified: all relays are read/write)
                 const blocked = ['wss://relay.nosflare.com', 'wss://relay.nostraddress.com'];
                 const writeOnly = ['wss://sendit.nosflare.com'];
                 let allRelays;
@@ -7330,12 +6766,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         ...(this.bitchatDMRelays || [])
                     ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
                 } else {
-                    const geoRelayUrls = this.geoRelays ? this.geoRelays.map(r => r.url) : [];
-                    allRelays = [...new Set([
-                        ...this.broadcastRelays,
-                        ...Array.from(this.discoveredRelays || []),
-                        ...geoRelayUrls
-                    ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
+                    // Unified relay set: defaults + bitchat CSV + NIP-66 discovered
+                    allRelays = [...this.allRelayUrls, ...Array.from(this.discoveredRelays || [])]
+                        .filter(r => !writeOnly.includes(r) && !blocked.includes(r));
+                    allRelays = [...new Set(allRelays)];
                 }
 
                 // Send RELAYS config to proxy
@@ -7404,30 +6838,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             }
                         }
 
-                        // Store per-relay type info from proxy
-                        if (status.relayTypes) {
-                            if (!this.poolRelayTypes) this.poolRelayTypes = {};
-                            Object.assign(this.poolRelayTypes, status.relayTypes);
-                        }
-
                         // Sync relayPool map for UI status tracking
                         this.relayPool.clear();
                         for (const url of this.poolConnectedRelays) {
-                            // Determine correct type from proxy info, falling back to heuristic
-                            let relayType = (this.poolRelayTypes && this.poolRelayTypes[url]) || 'read';
-                            // Map proxy types to client display types
-                            if (relayType === 'write') {
-                                relayType = 'nosflare';
-                            } else if (relayType === 'read') {
-                                // Distinguish broadcast vs discovered read relays
-                                if (this.broadcastRelays.includes(url)) {
-                                    relayType = 'broadcast';
-                                } else if (this.geoRelays && this.geoRelays.some(g => g.url === url)) {
-                                    relayType = 'geo';
-                                } else {
-                                    relayType = 'read';
-                                }
-                            }
+                            // All relays are read/write except sendit.nosflare.com (write-only)
+                            const relayType = url === 'wss://sendit.nosflare.com' ? 'write' : 'relay';
                             this.relayPool.set(url, {
                                 ws: this.poolSocket,
                                 type: relayType,
@@ -7543,8 +6958,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Low data mode: only default relays + DM relays + active geo relays
         if (this.settings && this.settings.lowDataMode) {
             const relays = [...this.defaultRelays];
-            // DM relays must be in the relay list (not just dmRelays field)
-            // so the proxy actually connects to them for reading gift wraps
             if (this.bitchatDMRelays) {
                 for (const url of this.bitchatDMRelays) {
                     if (!relays.includes(url)) relays.push(url);
@@ -7562,21 +6975,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
-        const geoRelayUrls = this.geoRelays.map(r => r.url);
-        const allRelays = [
-            ...this.broadcastRelays,
-            ...Array.from(this.discoveredRelays),
-            ...geoRelayUrls
-        ].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
-        const unique = [...new Set(allRelays)];
+        // Unified relay set: defaults + bitchat CSV + NIP-66 discovered (deduped)
+        const allRelays = [...new Set([
+            ...this.allRelayUrls,
+            ...Array.from(this.discoveredRelays)
+        ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
         this._poolSend(['RELAYS', {
-            relays: unique,
+            relays: allRelays,
             writeOnly: writeOnly,
             dmRelays: this.bitchatDMRelays || []
         }]);
     }
 
-    async connectToRelay(relayUrl, type = 'read') {
+    async connectToRelay(relayUrl, type = 'relay') {
         // Block known-bad relays entirely - never connect
         if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com') {
             return; // Silently skip blocked relays
@@ -7636,41 +7047,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     });
 
                     this.clearRelayFailure(relayUrl);
-
-                    // For broadcast/nosflare/geo relays, just resolve
-                    if (type === 'broadcast' || type === 'nosflare' || type === 'geo') {
-                        resolve();
-                        return;
-                    }
-
-                    // For read relays, set up verification timeout
-                    if (type === 'read') {
-                        // Initialize kinds tracking for this relay
-                        if (!this.relayKinds.has(relayUrl)) {
-                            this.relayKinds.set(relayUrl, new Set());
-                        }
-
-                        // Set timeout to check if relay sends our required kinds
-                        verificationTimeout = setTimeout(() => {
-                            const receivedKinds = this.relayKinds.get(relayUrl);
-                            const hasRequiredKinds =
-                                receivedKinds && (
-                                    receivedKinds.has(20000) ||
-                                    receivedKinds.has(7) ||
-                                    receivedKinds.has(1059)
-                                );
-
-                            if (!hasRequiredKinds) {
-                                ws.close();
-                                this.relayPool.delete(relayUrl);
-                                this.relayKinds.delete(relayUrl);
-                                this.blacklistedRelays.add(relayUrl);
-                                this.blacklistTimestamps.set(relayUrl, Date.now());
-                                this.updateConnectionStatus();
-                            }
-                        }, this.relayVerificationTimeout);
-                    }
-
                     resolve();
                 };
 
@@ -7780,17 +7156,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                         const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
                                         if (isConnected) {
-                                            // Re-subscribe after reconnection for ALL relay types (except nosflare which is write-only)
-                                            if (type === 'broadcast' || type === 'read' || type === 'geo') {
+                                            // Re-subscribe after reconnection (except write-only relays)
+                                            if (type !== 'write') {
                                                 this.subscribeToSingleRelay(relayUrl);
                                             }
                                             this.updateConnectionStatus();
                                             this.reconnectingRelays.delete(relayUrl);
 
                                             if (this.reconnectingRelays.size === 0) {
-                                                if (type === 'broadcast') {
-                                                    setTimeout(() => this.retryDiscoveredRelays(), 2000);
-                                                }
                                                 setTimeout(() => this.retryPendingDMsOnReconnect(), 1000);
                                             }
                                         } else {
@@ -7837,10 +7210,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const blacklistedAt = this.blacklistTimestamps.get(relayUrl);
         const now = Date.now();
 
-        // Reduce blacklist duration from 5 minutes to 2 minutes
-        const blacklistDuration = 120000; // 2 minutes instead of 5
-
-        if (now - blacklistedAt > blacklistDuration) {
+        if (now - blacklistedAt > this.blacklistDuration) {
             // Expired, remove from blacklist
             this.blacklistedRelays.delete(relayUrl);
             this.blacklistTimestamps.delete(relayUrl);
@@ -7865,14 +7235,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.isBlacklistExpired(relayUrl);
         }
 
-        // Try to connect to any discovered relays we're not connected to
+        // Try to connect to any relays in allRelayUrls that we're not connected to
         const relaysToTry = [];
 
-        // From previously discovered relays (this is the main source)
+        // From unified relay set (CSV + NIP-66 + defaults)
+        for (const relay of this.allRelayUrls) {
+            if (!this.relayPool.has(relay) &&
+                !this.blacklistedRelays.has(relay) &&
+                relay !== 'wss://sendit.nosflare.com' &&
+                this.shouldRetryRelay(relay)) {
+                relaysToTry.push(relay);
+            }
+        }
+        // Also include any discovered relays not yet in allRelayUrls
         for (const relay of this.discoveredRelays) {
             if (!this.relayPool.has(relay) &&
                 !this.blacklistedRelays.has(relay) &&
-                !this.broadcastRelays.includes(relay) &&
                 relay !== 'wss://sendit.nosflare.com' &&
                 !relaysToTry.includes(relay) &&
                 this.shouldRetryRelay(relay)) {
@@ -7886,7 +7264,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             for (let i = 0; i < Math.min(relaysToTry.length, 20); i++) { // Try up to 20 relays
                 const relayUrl = relaysToTry[i];
                 setTimeout(() => {
-                    this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout).then(() => {
+                    this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
                             const r = this.relayPool.get(relayUrl);
                             if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                                 this.subscribeRelayToChannel(r, relayUrl);
@@ -7903,7 +7281,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const newRelaysToTry = Array.from(this.discoveredRelays)
                     .filter(url => !this.relayPool.has(url) &&
                         !this.blacklistedRelays.has(url) &&
-                        !this.broadcastRelays.includes(url) &&
+                        !this.defaultRelays.includes(url) &&
                         url !== 'wss://sendit.nosflare.com' &&
                         this.shouldRetryRelay(url))
                     .slice(0, 10);
@@ -7911,7 +7289,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (newRelaysToTry.length > 0) {
                     newRelaysToTry.forEach((relayUrl, index) => {
                         setTimeout(() => {
-                            this.connectToRelayWithTimeout(relayUrl, 'read', this.relayTimeout).then(() => {
+                            this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
                                     const r = this.relayPool.get(relayUrl);
                                     if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                                         this.subscribeRelayToChannel(r, relayUrl);
@@ -9236,7 +8614,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 tags: [
                     ['p', this.currentZapTarget.recipientPubkey], // Recipient of zap
                     ['amount', (parseInt(amountSats) * 1000).toString()], // Amount in millisats
-                    ['relays', ...this.broadcastRelays.slice(0, 5)] // Limit to 5 relays
+                    ['relays', ...this.defaultRelays.slice(0, 5)] // Limit to 5 relays
                 ],
                 content: comment || '',
                 pubkey: this.pubkey
@@ -9831,7 +9209,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Fall back to broadcast relays if nothing was discovered
         if (this.discoveredRelays.size === 0) {
-            this.broadcastRelays.forEach(relay => this.discoveredRelays.add(relay));
+            this.defaultRelays.forEach(relay => this.discoveredRelays.add(relay));
+        }
+
+        // Add discovered relays to unified set
+        for (const url of this.discoveredRelays) {
+            this.allRelayUrls.add(url);
         }
 
         // Cache if we found new relays
@@ -10328,7 +9711,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Send REQ to all connected relays EXCEPT nosflare (write-only)
         this.relayPool.forEach((relay, url) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                 relay.ws.send(msg);
             }
         });
@@ -10345,10 +9728,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         let sent = 0;
 
         // Prefer broadcast relays (more likely to have profiles)
-        for (const url of this.broadcastRelays) {
+        for (const url of this.defaultRelays) {
             if (sent >= maxRelays) break;
             const relay = this.relayPool.get(url);
-            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                 relay.ws.send(msg);
                 sent++;
             }
@@ -10358,8 +9741,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (sent < maxRelays) {
             for (const [url, relay] of this.relayPool) {
                 if (sent >= maxRelays) break;
-                if (this.broadcastRelays.includes(url)) continue; // already sent
-                if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+                if (this.defaultRelays.includes(url)) continue; // already sent
+                if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                     relay.ws.send(msg);
                     sent++;
                 }
@@ -10424,7 +9807,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             });
         } else {
             // Broadcast relays + nosflare
-            this.broadcastRelays.forEach(relayUrl => {
+            this.defaultRelays.forEach(relayUrl => {
                 const relay = this.relayPool.get(relayUrl);
                 if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                     relay.ws.send(msg);
@@ -10450,7 +9833,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Send REQ to all connected relays EXCEPT nosflare
         this.relayPool.forEach((relay, url) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'nosflare') {
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                 relay.ws.send(msg);
             }
         });
@@ -10469,7 +9852,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Get all relays except nosflare
         const readableRelays = Array.from(this.relayPool.entries())
-            .filter(([url, relay]) => relay.type !== 'nosflare' && relay.ws && relay.ws.readyState === WebSocket.OPEN);
+            .filter(([url, relay]) => relay.type !== 'write' && relay.ws && relay.ws.readyState === WebSocket.OPEN);
 
         if (readableRelays.length === 0) {
             return;
@@ -10688,7 +10071,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const now = Date.now();
 
         this.relayPool.forEach((relay, url) => {
-            if (relay.type === 'read') {
+            if (relay.type === 'relay') {
                 const kinds = this.relayKinds.get(url);
 
                 // Check if relay has sent any of our required kinds
@@ -22684,14 +22067,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Check actual WebSocket connection states, not just pool size
             let actuallyConnected = 0;
-            let geoRelaysConnected = 0;
 
             this.relayPool.forEach((relay, url) => {
                 if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                     actuallyConnected++;
-                    if (relay.type === 'geo') {
-                        geoRelaysConnected++;
-                    }
                 } else {
                     // Clean up dead connections from pool
                     this.relayPool.delete(url);
@@ -25132,7 +24511,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.188 ═══<br/>
+═══ Nymchat v3.49.189 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -26469,8 +25848,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Pre-connect to a broadcast relay for instant connection
     async function preConnect() {
-        for (const relayUrl of nym.broadcastRelays) {
-            await nym.connectToRelay(relayUrl, 'broadcast');
+        for (const relayUrl of nym.defaultRelays) {
+            await nym.connectToRelay(relayUrl, 'relay');
             const r = nym.relayPool.get(relayUrl);
             if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                 nym.updateConnectionStatus('Ready');
@@ -26658,8 +26037,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Try to reconnect to expired blacklisted relays
             expiredRelays.forEach(relayUrl => {
-                if (nym.broadcastRelays.includes(relayUrl) && !nym.relayPool.has(relayUrl)) {
-                    nym.connectToRelay(relayUrl, 'broadcast').then(() => {
+                if (nym.defaultRelays.includes(relayUrl) && !nym.relayPool.has(relayUrl)) {
+                    nym.connectToRelay(relayUrl, 'relay').then(() => {
                             const r = nym.relayPool.get(relayUrl);
                             if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                                 nym.subscribeToSingleRelay(relayUrl);
@@ -27016,24 +26395,18 @@ function renderRelayList(pool, stats) {
     const listEl = document.getElementById('rsRelayList');
     if (!listEl) return;
 
-    // Build sorted relay entries
+    // Build sorted relay entries (no type labels - all relays are read/write)
     const entries = [];
 
     if (typeof nym !== 'undefined' && nym.useRelayProxy && nym.poolSocket) {
-        // Pool mode: build entries from poolConnectedRelays + stats
+        // Pool mode: only show actually connected relays
         const connectedSet = new Set(nym.poolConnectedRelays);
-
-        // Include all relays we have stats for, plus connected ones
-        const allUrls = new Set([...connectedSet, ...stats.eventsPerRelay.keys(), ...stats.latencyPerRelay.keys()]);
-        allUrls.forEach(url => {
+        connectedSet.forEach(url => {
             if (url === 'relay-pool') return;
-            // Use the correct type from the relay pool map
-            const poolEntry = nym.relayPool.get(url);
-            const relayType = (poolEntry && poolEntry.type) || 'read';
             entries.push({
                 url,
-                type: relayType,
-                open: connectedSet.has(url),
+                write: url === 'wss://sendit.nosflare.com',
+                open: true,
                 events: stats.eventsPerRelay.get(url) || 0,
                 latency: stats.latencyPerRelay.get(url) || null
             });
@@ -27043,7 +26416,7 @@ function renderRelayList(pool, stats) {
             const isOpen = relay.ws && relay.ws.readyState === WebSocket.OPEN;
             entries.push({
                 url,
-                type: relay.type || 'read',
+                write: relay.type === 'write',
                 open: isOpen,
                 events: stats.eventsPerRelay.get(url) || 0,
                 latency: stats.latencyPerRelay.get(url) || null
@@ -27071,7 +26444,7 @@ function renderRelayList(pool, stats) {
             html += `<div class="relay-stats-row" data-rs-idx="${i}">` +
                 `<span class="relay-stats-dot ${e.open ? 'open' : 'closed'}"></span>` +
                 `<span class="relay-stats-url" title="${e.url}">${shortUrl}</span>` +
-                `<span class="relay-stats-type ${e.type}">${e.type}</span>` +
+                (e.write ? `<span class="relay-stats-type write">write</span>` : '') +
                 `<span class="relay-stats-latency">${e.latency !== null ? e.latency + 'ms' : '--'}</span>` +
                 `<span class="relay-stats-events">${e.events} evt</span>` +
                 `</div>`;

@@ -1,5 +1,6 @@
 // Cloudflare Pages Function: Multiplexed WebSocket relay pool proxy
-// Single WebSocket from client, fans out to many upstream Nostr relays
+// Single WebSocket from client, fans out to many upstream Nostr relays.
+// Uses string-based deduplication (no JSON.parse) to minimize CPU usage.
 //
 // Client connects to: wss://<host>/api/relay-pool
 //
@@ -11,6 +12,13 @@
 //   ["REQ", subId, ...filters]   - fans out to read relays only
 //   ["GEO_REQ", ["wss://geo1",...], subId, ...filters] - geo relays first, then all other read relays
 //   ["CLOSE", subId]             - fans out to read relays only
+//
+// Protocol (proxy → client):
+//   ["EVENT", subId, eventObj]   - deduplicated via string extraction (no JSON.parse)
+//   ["OK", eventId, bool, msg]   - first OK per event ID
+//   ["EOSE", subId]              - forwarded as-is (client handles multiples)
+//   ["NOTICE", msg]              - forwarded as-is
+//   ["POOL:STATUS", { connected, failed, count, latency, events, relayTypes }]
 
 export async function onRequest(context) {
   const { request } = context;
@@ -59,7 +67,7 @@ export async function onRequest(context) {
     }
   }
 
-  // Keepalive to send periodic ping to prevent Cloudflare idle timeout
+  // Keepalive: send periodic POOL:PING to prevent Cloudflare idle timeout
   let keepaliveTimer = setInterval(() => {
     try {
       if (serverOpen && server.readyState === 1) {
@@ -116,25 +124,23 @@ export async function onRequest(context) {
 
   function sendPoolStatus() {
     const connected = [];
-    const failed = [];
     const latency = {};
     const events = {};
-    const relayTypes = {};
     upstreams.forEach((info, url) => {
-      if (info.status === 'connected') connected.push(url);
-      else if (info.status === 'failed') failed.push(url);
-      relayTypes[url] = info.type;
-      events[url] = info.eventCount;
+      if (info.status === 'connected') {
+        connected.push(url);
+        events[url] = info.eventCount;
+      }
     });
-    relayLatency.forEach((ms, url) => { latency[url] = ms; });
+    // Only include latency for connected relays
+    relayLatency.forEach((ms, url) => {
+      if (connected.includes(url)) latency[url] = ms;
+    });
     sendToClient(JSON.stringify(['POOL:STATUS', {
       connected,
-      failed,
       count: connected.length,
       latency,
-      events,
-      relayTypes,
-      skippedFailed: failedRelays.size
+      events
     }]));
   }
 
@@ -167,7 +173,10 @@ export async function onRequest(context) {
     }
   }
 
-  // Extract Nostr event ID from raw JSON string
+  // Extract Nostr event ID from raw JSON string without JSON.parse.
+  // Searches for "id":" AFTER the first '{' (start of the event object)
+  // to avoid false matches in subscription IDs or other envelope fields.
+  // Validates the extracted ID is exactly 64 characters (Nostr event ID length).
   function extractEventId(raw) {
     const braceIdx = raw.indexOf('{');
     if (braceIdx === -1) return null;

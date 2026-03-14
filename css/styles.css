@@ -7695,22 +7695,7 @@ body.chat-bubbles .message.supporter-style .bubble-time-inner {
     flex-shrink: 0;
 }
 
-.relay-stats-type.broadcast {
-    background: rgb(from var(--primary) r g b / 0.12);
-    color: var(--primary);
-}
-
-.relay-stats-type.read {
-    background: rgb(from var(--secondary) r g b / 0.12);
-    color: var(--secondary);
-}
-
-.relay-stats-type.geo {
-    background: rgb(from var(--warning) r g b / 0.12);
-    color: var(--warning);
-}
-
-.relay-stats-type.nosflare {
+.relay-stats-type.write {
     background: rgb(from var(--purple) r g b / 0.12);
     color: var(--purple);
 }
