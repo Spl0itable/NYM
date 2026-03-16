@@ -546,7 +546,7 @@ class NYM {
             currentEndIndex: 0,
             suppressAutoScroll: false
         };
-        this._suppressInputButtonHide = false;
+
         this.userScrolledUp = false;
         this._scrollRAF = null;
         this.pmMessages = new Map();
@@ -14398,11 +14398,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Scroll to bottom
             if (this.settings.autoscroll) {
-                this._suppressInputButtonHide = true;
+
                 setTimeout(() => {
                     container.scrollTop = container.scrollHeight;
                     setTimeout(() => {
-                        this._suppressInputButtonHide = false;
+                
                     }, 300);
                 }, 0);
             }
@@ -16662,8 +16662,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const domMessages = container.querySelectorAll('[data-message-id]');
             if (domMessages.length > this.channelMessageLimit) {
                 const toRemove = domMessages.length - this.channelMessageLimit;
+                let removedHeight = 0;
                 for (let i = 0; i < toRemove; i++) {
+                    removedHeight += domMessages[i].offsetHeight;
                     domMessages[i].remove();
+                }
+                if (this.userScrolledUp && removedHeight > 0) {
+                    container.scrollTop = Math.max(0, container.scrollTop - removedHeight);
                 }
             }
         }
@@ -21241,11 +21246,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Scroll to bottom
             if (this.settings.autoscroll) {
-                this._suppressInputButtonHide = true;
+
                 requestAnimationFrame(() => {
                     container.scrollTop = container.scrollHeight;
                     setTimeout(() => {
-                        this._suppressInputButtonHide = false;
+                
                     }, 300);
                 });
             }
@@ -21376,9 +21381,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Render all messages sorted by timestamp
         this.virtualScroll.suppressAutoScroll = true;
 
-        // Suppress input-button hiding during initial render + scroll-to-bottom
-        // so that the programmatic scroll doesn't trigger the hide logic
-        this._suppressInputButtonHide = true;
+
 
         // Suppress notification sounds during bulk rendering of stored messages
         // (e.g. when opening a conversation) to avoid replaying sounds
@@ -21397,13 +21400,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 container.scrollTop = container.scrollHeight;
                 // Clear the suppression after the scroll-to-bottom settles
                 setTimeout(() => {
-                    this._suppressInputButtonHide = false;
+            
                 }, 300);
             });
         } else {
             // Clear suppression after a brief delay if not scrolling
             setTimeout(() => {
-                this._suppressInputButtonHide = false;
+        
             }, 300);
         }
     }
@@ -24502,7 +24505,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.189 ═══<br/>
+═══ Nymchat v3.49.190 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -26045,12 +26048,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const messageInput = document.getElementById('messageInput');
     const messagesContainer = document.getElementById('messagesContainer');
     const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
-    const inputButtons = document.querySelector('.input-buttons');
-
     if (messagesContainer && scrollToBottomBtn) {
-        let mobileScrollTimer = null;
-        let isExpandingButtons = false;
-
         messagesContainer.addEventListener('scroll', () => {
             const distanceFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
 
@@ -26082,38 +26080,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 scrollToBottomBtn.classList.add('visible');
             } else {
                 scrollToBottomBtn.classList.remove('visible');
-            }
-
-            // On mobile, hide input buttons while scrolling up
-            if (window.innerWidth <= 768 && inputButtons) {
-                // Skip hiding buttons if they are currently expanding back into view,
-                // or if we're in the middle of an initial channel render/scroll-to-bottom
-                if (distanceFromBottom > 200 && !isExpandingButtons && !nym._suppressInputButtonHide) {
-                    inputButtons.classList.add('hidden-on-scroll');
-                    scrollToBottomBtn.classList.add('controls-hidden');
-                }
-
-                // Show buttons again after scrolling stops
-                if (!isExpandingButtons) {
-                    if (mobileScrollTimer) clearTimeout(mobileScrollTimer);
-                    mobileScrollTimer = setTimeout(() => {
-                        const wasNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 200;
-                        isExpandingButtons = true;
-                        inputButtons.classList.remove('hidden-on-scroll');
-                        scrollToBottomBtn.classList.remove('controls-hidden');
-                        // Clear the flag after the CSS transition completes (250ms + buffer)
-                        setTimeout(() => {
-                            isExpandingButtons = false;
-                        }, 300);
-                        // When buttons expand back and user is near bottom, auto-scroll
-                        // so the expanding input area doesn't overlap the last message
-                        if (wasNearBottom && !nym.userScrolledUp) {
-                            setTimeout(() => {
-                                nym._scheduleScrollToBottom();
-                            }, 270);
-                        }
-                    }, 800);
-                }
             }
         }, { passive: true });
     }

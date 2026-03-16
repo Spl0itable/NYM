@@ -3714,12 +3714,6 @@ body.light-mode .verified-badge::before {
         opacity: 1;
     }
 
-    .input-buttons.hidden-on-scroll {
-        max-height: 0;
-        opacity: 0;
-        margin-top: 0;
-        pointer-events: none;
-    }
 
     .icon-btn.input-btn {
         flex: 1;
@@ -3736,12 +3730,10 @@ body.light-mode .verified-badge::before {
         right: 16px;
         width: 36px;
         height: 36px;
-        transition: all var(--transition), bottom 0.25s ease;
+        transition: all var(--transition);
     }
 
-    .scroll-to-bottom-btn.controls-hidden {
-        bottom: 80px;
-    }
+
 
     .zap-amounts {
         grid-template-columns: repeat(2, 1fr);
