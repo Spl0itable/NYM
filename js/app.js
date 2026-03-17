@@ -13324,23 +13324,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
                 }
             } else if (!isOwn) {
+                const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.isNymBlocked(msg.author);
                 if (!msg.isHistorical) {
                     // Live message: full notification with sound/popup
                     this.updateUnreadCount(conversationKey);
-                    this.showNotification(`PM from ${msg.author}`, messageContent, {
-                        type: 'pm',
-                        nym: msg.author,
-                        pubkey: peerPubkey,
-                        id: conversationKey
-                    });
+                    if (!pmSenderBlocked) {
+                        this.showNotification(`PM from ${msg.author}`, messageContent, {
+                            type: 'pm',
+                            nym: msg.author,
+                            pubkey: peerPubkey,
+                            id: conversationKey
+                        });
+                    }
                 } else {
                     // Historical message: silently add to notification history
-                    this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, {
-                        type: 'pm',
-                        nym: msg.author,
-                        pubkey: peerPubkey,
-                        id: conversationKey
-                    }, msg.timestamp.getTime());
+                    if (!pmSenderBlocked) {
+                        this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, {
+                            type: 'pm',
+                            nym: msg.author,
+                            pubkey: peerPubkey,
+                            id: conversationKey
+                        }, msg.timestamp.getTime());
+                    }
                 }
             }
         } catch (err) {
@@ -22713,6 +22718,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     showNotification(title, body, channelInfo = null) {
         const baseTitle = this.parseNymFromDisplay(title);
 
+        // Skip notifications from blocked users
+        const senderPubkey = channelInfo?.pubkey || '';
+        if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
+        if (this.isNymBlocked(baseTitle)) return;
+
         // If this is a PM notification (we have a pubkey), append plain suffix for readability
         let titleToShow = baseTitle;
         if (channelInfo && channelInfo.pubkey) {
@@ -22808,6 +22818,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Used for historical messages from relays that match notification criteria.
     _addNotificationToHistory(title, body, channelInfo, timestamp) {
         const baseTitle = this.parseNymFromDisplay(title);
+
+        // Skip notifications from blocked users
+        const senderPubkey = channelInfo?.pubkey || '';
+        if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
+        if (this.isNymBlocked(baseTitle)) return;
+
         let titleToShow = baseTitle;
         if (channelInfo && channelInfo.pubkey) {
             const suffix = this.getPubkeySuffix(channelInfo.pubkey);
@@ -22855,9 +22871,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     _updateNotificationBadge() {
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-        const unreadCount = this.notificationHistory.filter(
-            n => n.timestamp > cutoff24h && n.timestamp > this.notificationLastReadTime
-        ).length;
+        const unreadCount = this.notificationHistory.filter(n => {
+            if (n.timestamp <= cutoff24h || n.timestamp <= this.notificationLastReadTime) return false;
+            const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
+            if (pubkey && this.blockedUsers.has(pubkey)) return false;
+            if (n.senderNym && this.isNymBlocked(n.senderNym)) return false;
+            return true;
+        }).length;
 
         const desktopBadge = document.getElementById('notifBadgeDesktop');
         const mobileBadge = document.getElementById('notifBadgeMobile');
@@ -22882,9 +22902,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const body = document.getElementById('notificationsModalBody');
         if (!modal || !body) return;
 
-        // Filter to last 24 hours
+        // Filter to last 24 hours and exclude blocked users
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-        const recent = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
+        const recent = this.notificationHistory.filter(n => {
+            if (n.timestamp <= cutoff24h) return false;
+            const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
+            if (pubkey && this.blockedUsers.has(pubkey)) return false;
+            if (n.senderNym && this.isNymBlocked(n.senderNym)) return false;
+            return true;
+        });
 
         if (recent.length === 0) {
             body.innerHTML = '<div class="notifications-empty">No notifications in the last 24 hours</div>';
@@ -25088,7 +25114,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.196 ═══<br/>
+═══ Nymchat v3.51.197 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
