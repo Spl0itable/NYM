@@ -47,7 +47,7 @@
             },
             {
                 title: 'Channels',
-                body: 'Browse and switch regular or geohash channels. Use the search feature to find and join regular or geohash channels. Geohash is location-based chat rooms using geohash codes (e.g., #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location.',
+                body: 'Browse and switch regular or geohash channels. Use the search feature to find and join regular or geohash channels. Geohash is for location-based chat using geohash codes (e.g., #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location.',
                 selector: '#channelList',
                 onBefore: ensureSidebarOpenOnMobile
             },
