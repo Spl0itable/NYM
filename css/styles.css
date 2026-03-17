@@ -2614,11 +2614,11 @@ body.chat-bubbles .edited-indicator-irc {
     border-color: rgba(255, 255, 255, 0.2);
 }
 
-.mobile-menu-toggle {
+.mobile-menu-toggle,
+.mobile-notif-toggle {
     display: none;
     position: fixed;
     top: 12px;
-    right: 12px;
     z-index: 10000;
     background: rgba(20, 20, 35, 0.8);
     backdrop-filter: blur(20px);
@@ -2626,10 +2626,26 @@ body.chat-bubbles .edited-indicator-irc {
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm);
     color: var(--primary);
-    padding: 8px 12px;
+    width: 40px;
+    height: 40px;
+    padding: 0;
     cursor: pointer;
     font-size: 20px;
     transition: all var(--transition);
+    align-items: center;
+    justify-content: center;
+}
+
+.mobile-menu-toggle {
+    right: 12px;
+}
+
+.mobile-notif-toggle {
+    right: 58px;
+}
+
+.mobile-notif-toggle svg {
+    display: block;
 }
 
 .nick-edit-modal {
@@ -2806,6 +2822,121 @@ body.chat-bubbles .edited-indicator-irc {
     color: var(--text-dim);
     font-size: 10px;
     margin-top: 5px;
+}
+
+.notifications-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.notifications-btn svg {
+    vertical-align: middle;
+}
+
+.notification-count-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: var(--danger);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.notifications-modal-body {
+    overflow-y: auto;
+    padding: 12px 24px 24px;
+    max-height: 60vh;
+}
+
+.notifications-empty {
+    text-align: center;
+    color: var(--text-dim);
+    padding: 40px 20px;
+    font-size: 14px;
+}
+
+.notification-item {
+    padding: 10px 12px;
+    border-radius: var(--radius-xs);
+    transition: background var(--transition);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.notification-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.notification-item:last-child {
+    border-bottom: none;
+}
+
+.notification-item-header {
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+}
+
+.notification-item-header .avatar-message {
+    margin-top: 2px;
+}
+
+.notification-item-meta {
+    flex: 1;
+    min-width: 0;
+}
+
+.notification-item-title {
+    font-size: 13px;
+    margin-bottom: 2px;
+}
+
+.notification-item-author {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.notification-item-body {
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.4;
+    word-break: break-word;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    margin-bottom: 2px;
+}
+
+.notification-item-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.notification-item-context {
+    color: var(--text-dim);
+    font-size: 11px;
+    font-weight: 400;
+}
+
+.notification-item-time {
+    color: var(--text-dim);
+    font-size: 11px;
+    font-weight: 400;
+    white-space: nowrap;
 }
 
 .file-input {
@@ -3595,8 +3726,9 @@ body.light-mode .verified-badge::before {
         display: flex;
     }
 
-    .mobile-menu-toggle {
-        display: block;
+    .mobile-menu-toggle,
+    .mobile-notif-toggle {
+        display: flex;
         top: 20px;
     }
 
@@ -4745,7 +4877,8 @@ body.light-mode .image-modal-close {
     border-color: rgba(0, 0, 0, 0.08);
 }
 
-body.light-mode .mobile-menu-toggle {
+body.light-mode .mobile-menu-toggle,
+body.light-mode .mobile-notif-toggle {
     background: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);

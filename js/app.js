@@ -659,6 +659,9 @@ class NYM {
         this._typingSendInterval = 3000;
         this._typingExpireMs = 5000;
         this._typingStopTimer = null;
+        this.notificationHistory = this._loadNotificationHistory();
+        this.notificationLastReadTime = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
+        this.closedPMs = new Set(JSON.parse(localStorage.getItem('nym_closed_pms') || '[]'));
         this.recentEmojis = [];
         this.allEmojis = {
             'smileys': ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '☺️', '😚', '😙', '🥲', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🫢', '🫣', '🤫', '🤔', '🫡', '🤐', '🤨', '😐', '😑', '😶', '🫥', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '😵‍💫', '🤯', '🤠', '🥳', '🥸', '😎', '🤓', '🧐', '😕', '🫤', '😟', '☹️', '🙁', '😮', '😯', '😲', '😳', '🥺', '🥹', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'],
@@ -8194,14 +8197,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const links = messageEl.querySelectorAll('.message-content a[href^="http"]');
         if (links.length === 0) return;
 
-        // Limit to first 3 links per message
-        const linksToUnfurl = Array.from(links).slice(0, 3);
+        // Unfurl all links in the message
+        const linksToUnfurl = Array.from(links);
         for (const link of linksToUnfurl) {
             const href = link.getAttribute('href');
-            // Skip media URLs (already embedded)
+            // Skip media URLs (already embedded as inline images/videos)
             if (/\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?.*)?$/i.test(href)) continue;
-            // Skip Nymchat app links
-            if (/app\.nym\.bar/i.test(href)) continue;
 
             const meta = await this.unfurlUrl(href);
             if (meta && (meta.title || meta.description)) {
@@ -10274,9 +10275,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         type: 'geohash',
                         channel: geohash,
                         geohash: geohash,
-                        id: event.id
+                        id: event.id,
+                        pubkey: event.pubkey
                     };
                     this.showNotification(nym, message.content, channelInfo);
+                }
+
+                // Silently track historical mentions in notification history
+                if (isHistorical && !message.isOwn && this.isMentioned(message.content) && !this.isNymBlocked(nym)) {
+                    this._addNotificationToHistory(nym, message.content, {
+                        type: 'geohash',
+                        channel: geohash,
+                        geohash: geohash,
+                        id: event.id,
+                        pubkey: event.pubkey
+                    }, message.timestamp.getTime());
                 }
             }
         } else if (event.kind === 30078) {
@@ -10974,12 +10987,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Even if no reactions, update zaps display
             this.updateMessageZaps(messageId);
             return;
-        }
-
-        // Hide the hover reaction button since we have reactions
-        const hoverReactionBtn = messageEl.querySelector('.reaction-btn');
-        if (hoverReactionBtn) {
-            hoverReactionBtn.style.display = 'none';
         }
 
         // Remove existing reactions display but preserve zap badges
@@ -12989,15 +12996,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (!isOwn && nymMsgId && this.nymUsers.has(senderPubkey)) {
                     this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
                 }
-            } else if (!msg.isHistorical && !isOwn) {
-                // Only notify for messages from others
-                this.updateUnreadCount(conversationKey);
-                this.showNotification(`PM from ${msg.author}`, messageContent, {
-                    type: 'pm',
-                    nym: msg.author,
-                    pubkey: peerPubkey,   // open the correct thread
-                    id: conversationKey
-                });
+            } else if (!isOwn) {
+                if (!msg.isHistorical) {
+                    // Live message: full notification with sound/popup
+                    this.updateUnreadCount(conversationKey);
+                    this.showNotification(`PM from ${msg.author}`, messageContent, {
+                        type: 'pm',
+                        nym: msg.author,
+                        pubkey: peerPubkey,
+                        id: conversationKey
+                    });
+                } else {
+                    // Historical message: silently add to notification history
+                    this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, {
+                        type: 'pm',
+                        nym: msg.author,
+                        pubkey: peerPubkey,
+                        id: conversationKey
+                    }, msg.timestamp.getTime());
+                }
             }
         } catch (err) {
             // Log decryption failures for debugging
@@ -13318,14 +13335,29 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Force auto-scroll to bottom for group messages
             this._scheduleScrollToBottom();
         } else {
-            // Always notify for non-own, non-historical, non-blocked messages
-            if (!msg.isHistorical && !isOwn && !senderBlocked) {
-                this.updateUnreadCount(groupConvKey);
-                this.showNotification(`${groupName}: ${msg.author}`, messageContent, {
-                    type: 'group',
-                    groupId,
-                    id: groupConvKey
-                });
+            if (!isOwn && !senderBlocked) {
+                if (!msg.isHistorical) {
+                    // Always update sidebar unread count for all group messages
+                    this.updateUnreadCount(groupConvKey);
+                }
+                // Only add to notification history/bell when mentioned
+                if (this.isMentioned(messageContent)) {
+                    if (!msg.isHistorical) {
+                        this.showNotification(`${groupName}: ${msg.author}`, messageContent, {
+                            type: 'group',
+                            groupId,
+                            id: groupConvKey,
+                            pubkey: senderPubkey
+                        });
+                    } else {
+                        this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, {
+                            type: 'group',
+                            groupId,
+                            id: groupConvKey,
+                            pubkey: senderPubkey
+                        }, msg.timestamp.getTime());
+                    }
+                }
             }
         }
 
@@ -14183,6 +14215,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             : this.parseNymFromDisplay(nym);
 
         if (!this.pmConversations.has(pubkey)) {
+            // Don't re-show PMs the user previously closed
+            if (this.closedPMs.has(pubkey)) return;
+
             this.pmConversations.set(pubkey, {
                 nym: baseNym,
                 lastMessageTime: timestamp
@@ -14275,6 +14310,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Remove messages
             const conversationKey = this.getPMConversationKey(pubkey);
             this.pmMessages.delete(conversationKey);
+
+            // Persist closed state so PM doesn't reappear on reload
+            this.closedPMs.add(pubkey);
+            try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
 
             // Remove from UI
             const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
@@ -14434,6 +14473,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Extract base nym if it has a suffix
         const baseNym = this.stripPubkeySuffix(nym);
+
+        // Clear closed state so user can re-open a previously closed PM
+        if (this.closedPMs.has(pubkey)) {
+            this.closedPMs.delete(pubkey);
+            try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+        }
 
         // Add to PM conversations if not exists
         this.addPMConversation(baseNym, pubkey);
@@ -16768,9 +16813,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Attach rich link previews for URLs in the message (async, non-blocking)
-        if (!message.isHistorical) {
-            this._attachLinkPreviews(messageEl);
-        }
+        this._attachLinkPreviews(messageEl);
     }
 
 
@@ -22322,6 +22365,21 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             titleToShow = `${baseTitle}#${suffix}`;
         }
 
+        // Track notification in history for the notifications modal
+        this.notificationHistory.push({
+            title: titleToShow,
+            body: body,
+            channelInfo: channelInfo,
+            timestamp: Date.now(),
+            senderNym: baseTitle,
+            senderPubkey: channelInfo?.pubkey || ''
+        });
+        // Prune notifications older than 24 hours and persist
+        const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+        this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
+        this._saveNotificationHistory();
+        this._updateNotificationBadge();
+
         // Sound
         if (this.settings.sound !== 'none') {
             this.playSound(this.settings.sound);
@@ -22389,6 +22447,176 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             notifEl.style.animation = 'slideIn 0.3s reverse';
             setTimeout(() => notifEl.remove(), 300);
         }, 3000);
+    }
+
+    // Silently add a notification to history without triggering sound/popup/browser notification.
+    // Used for historical messages from relays that match notification criteria.
+    _addNotificationToHistory(title, body, channelInfo, timestamp) {
+        const baseTitle = this.parseNymFromDisplay(title);
+        let titleToShow = baseTitle;
+        if (channelInfo && channelInfo.pubkey) {
+            const suffix = this.getPubkeySuffix(channelInfo.pubkey);
+            titleToShow = `${baseTitle}#${suffix}`;
+        }
+        const ts = timestamp || Date.now();
+        const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+        // Only track if within the last 24 hours
+        if (ts < cutoff24h) return;
+        // Deduplicate by checking for same title + body + similar timestamp
+        const isDupe = this.notificationHistory.some(
+            n => n.title === titleToShow && n.body === body && Math.abs(n.timestamp - ts) < 2000
+        );
+        if (isDupe) return;
+        this.notificationHistory.push({
+            title: titleToShow,
+            body: body,
+            channelInfo: channelInfo,
+            timestamp: ts,
+            senderNym: baseTitle,
+            senderPubkey: channelInfo?.pubkey || ''
+        });
+        this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
+        this._saveNotificationHistory();
+        this._updateNotificationBadge();
+    }
+
+    _loadNotificationHistory() {
+        try {
+            const raw = localStorage.getItem('nym_notification_history');
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+            return parsed.filter(n => n.timestamp > cutoff24h);
+        } catch { return []; }
+    }
+
+    _saveNotificationHistory() {
+        try {
+            const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+            const recent = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
+            localStorage.setItem('nym_notification_history', JSON.stringify(recent));
+        } catch {}
+    }
+
+    _updateNotificationBadge() {
+        const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+        const unreadCount = this.notificationHistory.filter(
+            n => n.timestamp > cutoff24h && n.timestamp > this.notificationLastReadTime
+        ).length;
+
+        const desktopBadge = document.getElementById('notifBadgeDesktop');
+        const mobileBadge = document.getElementById('notifBadgeMobile');
+        [desktopBadge, mobileBadge].forEach(badge => {
+            if (!badge) return;
+            if (unreadCount > 0) {
+                badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+                badge.style.display = '';
+            } else {
+                badge.style.display = 'none';
+            }
+        });
+    }
+
+    openNotificationsModal() {
+        // Mark all as read
+        this.notificationLastReadTime = Date.now();
+        try { localStorage.setItem('nym_notification_last_read', String(this.notificationLastReadTime)); } catch {}
+        this._updateNotificationBadge();
+
+        const modal = document.getElementById('notificationsModal');
+        const body = document.getElementById('notificationsModalBody');
+        if (!modal || !body) return;
+
+        // Filter to last 24 hours
+        const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+        const recent = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
+
+        if (recent.length === 0) {
+            body.innerHTML = '<div class="notifications-empty">No notifications in the last 24 hours</div>';
+        } else {
+            body.innerHTML = '';
+            // Show newest first
+            for (let i = recent.length - 1; i >= 0; i--) {
+                const n = recent[i];
+                const item = document.createElement('div');
+                item.className = 'notification-item';
+                if (n.channelInfo) item.style.cursor = 'pointer';
+                const dt = new Date(n.timestamp);
+                const time = dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+                // Build avatar + nym + flair like channel messages
+                const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
+                let avatarHtml = '';
+                let authorHtml = '';
+                if (pubkey) {
+                    const avatarSrc = this.getAvatarUrl(pubkey);
+                    avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">`;
+                    // Use live profile lookup, fall back to stored senderNym
+                    const user = this.users.get(pubkey);
+                    const baseNym = user
+                        ? this.parseNymFromDisplay(user.nym)
+                        : this.parseNymFromDisplay(this.getNymFromPubkey(pubkey));
+                    const suffix = this.getPubkeySuffix(pubkey);
+                    const flairHtml = this.getFlairForUser(pubkey);
+                    const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+                        ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
+                    authorHtml = `<span class="notification-item-author">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>&gt;${flairHtml} ${verifiedBadge}</span>`;
+                }
+
+                // Channel/context label
+                let contextHtml = '';
+                if (n.channelInfo) {
+                    if (n.channelInfo.type === 'geohash') {
+                        contextHtml = `<span class="notification-item-context">in #${this.escapeHtml(n.channelInfo.geohash)}</span>`;
+                    } else if (n.channelInfo.type === 'group') {
+                        const groupName = n.title.split(':')[0] || 'Group';
+                        contextHtml = `<span class="notification-item-context">in ${this.escapeHtml(groupName)}</span>`;
+                    } else if (n.channelInfo.type === 'pm') {
+                        contextHtml = `<span class="notification-item-context">PM</span>`;
+                    }
+                }
+
+                // Strip quoted lines (> prefixed) to show only the new message
+                const rawBody = n.body || '';
+                const newMessageLines = rawBody.split('\n').filter(line => !line.startsWith('>'));
+                const displayBody = newMessageLines.join(' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+
+                item.innerHTML = `
+                    <div class="notification-item-header">
+                        ${avatarHtml}
+                        <div class="notification-item-meta">
+                            <div class="notification-item-title">${authorHtml}</div>
+                            <div class="notification-item-body">${this.escapeHtml(displayBody)}</div>
+                            <div class="notification-item-footer">${contextHtml} <span class="notification-item-time">${time}</span></div>
+                        </div>
+                    </div>
+                `;
+                if (n.channelInfo) {
+                    const info = n.channelInfo;
+                    item.onclick = () => {
+                        if (info.type === 'pm') {
+                            this.openUserPM(n.title, info.pubkey);
+                        } else if (info.type === 'group') {
+                            this.openGroup(info.groupId);
+                        } else if (info.type === 'geohash') {
+                            this.switchChannel(info.channel, info.geohash);
+                        }
+                        this.closeNotificationsModal();
+                    };
+                }
+                body.appendChild(item);
+            }
+        }
+
+        modal.classList.add('active');
+    }
+
+    closeNotificationsModal() {
+        const modal = document.getElementById('notificationsModal');
+        if (modal) {
+            modal.classList.remove('active');
+            modal.style.display = '';
+        }
     }
 
     playSound(type) {
@@ -24505,7 +24733,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.49.190 ═══<br/>
+═══ Nymchat v3.50.190 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -25181,6 +25409,9 @@ function applyNostrLogin(pubkey, secretKey, method) {
 
     // Restore persisted groups for this identity before relay history arrives
     nym._loadGroupConversations();
+
+    // Update notification badge from persisted history
+    nym._updateNotificationBadge();
 
     // Update isOwn for messages that were loaded before this identity was applied
     nym.messages.forEach(channelMessages => {

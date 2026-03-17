@@ -50,6 +50,13 @@
     </script>
     <div id="wallpaperLayer"></div>
     <div class="mobile-overlay" id="mobileOverlay" onclick="nym.closeSidebar()"></div>
+    <button class="mobile-notif-toggle" onclick="nym.openNotificationsModal()" title="Notifications">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+        </svg>
+        <span class="notification-count-badge" id="notifBadgeMobile" style="display:none">0</span>
+    </button>
     <button class="mobile-menu-toggle" onclick="toggleSidebar()">☰</button>
 
     <!-- Context Menu Overlay -->
@@ -433,6 +440,13 @@
                     </div>
                 </div>
                 <div class="header-actions">
+                    <button class="icon-btn notifications-btn" onclick="nym.openNotificationsModal()" title="Notifications">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                        </svg>
+                        <span class="notification-count-badge" id="notifBadgeDesktop" style="display:none">0</span>
+                    </button>
                     <button class="icon-btn" onclick="nym.openShop()">Flair</button>
                     <button class="icon-btn" onclick="showSettings()">Settings</button>
                     <button class="icon-btn" onclick="showAbout()">About</button>
@@ -1571,6 +1585,17 @@
 
     <!-- WebTorrent for P2P torrent-based file sharing -->
     <script src="https://cdn.jsdelivr.net/npm/webtorrent@2.5.1/webtorrent.min.js"></script>
+
+    <!-- Notifications Modal -->
+    <div class="modal" id="notificationsModal">
+        <div class="modal-content" style="padding: 0;">
+            <button class="modal-close" onclick="nym.closeNotificationsModal()">&#x2715;</button>
+            <div class="modal-header" style="margin-bottom: 0; padding: 32px 32px 14px;">Notifications</div>
+            <div class="notifications-modal-body" id="notificationsModalBody">
+                <div class="notifications-empty">No notifications in the last 24 hours</div>
+            </div>
+        </div>
+    </div>
 
     <!-- Three.js and Globe libraries -->
     <script type="importmap">
