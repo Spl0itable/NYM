@@ -4226,11 +4226,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (closestRelays.length === 0) return;
         const geoUrls = new Set(closestRelays.map(r => r.url));
 
-        // Multiplexed pool mode: retry with GEO_EVENT so proxy prioritizes geo relays
+        // Multiplexed pool mode: retry with GEO_EVENT to geo workers only
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             setTimeout(() => {
                 if (this._isAnyPoolOpen()) {
-                    this._poolSend(['GEO_EVENT', signedEvent, closestRelays.map(r => r.url)]);
+                    this._poolSendToRole('geo', ['GEO_EVENT', signedEvent, closestRelays.map(r => r.url)]);
                 }
             }, 2000);
             return;
@@ -6852,23 +6852,42 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!this.useRelayProxy) return;
         const shardId = shard.id;
 
+        // Prevent concurrent reconnect attempts for the same shard
+        if (!this._shardReconnecting) this._shardReconnecting = new Set();
+        if (this._shardReconnecting.has(shardId)) return;
+        this._shardReconnecting.add(shardId);
+
         const attempt = (retries) => {
             // Check if this shard already reconnected
             const existing = this.poolSockets.find(p => p.id === shardId);
-            if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) return;
-            if (!navigator.onLine) return;
+            if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
+                this._shardReconnecting.delete(shardId);
+                return;
+            }
+            if (!navigator.onLine) {
+                this._shardReconnecting.delete(shardId);
+                return;
+            }
 
             const delay = Math.min(3000 * Math.pow(2, retries), 30000);
             setTimeout(() => {
                 const stillDown = this.poolSockets.find(p => p.id === shardId);
-                if (stillDown && stillDown.ws && stillDown.ws.readyState === WebSocket.OPEN) return;
+                if (stillDown && stillDown.ws && stillDown.ws.readyState === WebSocket.OPEN) {
+                    this._shardReconnecting.delete(shardId);
+                    return;
+                }
 
                 this._connectSinglePoolWorker(shard)
                     .then(() => {
+                        this._shardReconnecting.delete(shardId);
                         this._poolSubscribeOnWorker(shard.id);
                     })
                     .catch(() => {
-                        if (retries < 9) attempt(retries + 1);
+                        if (retries < 9) {
+                            attempt(retries + 1);
+                        } else {
+                            this._shardReconnecting.delete(shardId);
+                        }
                     });
             }, delay);
         };
@@ -6903,12 +6922,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.bitchatDMRelays
         );
 
-        // Close any existing pool sockets
-        for (const p of this.poolSockets) {
-            try { if (p.ws) p.ws.close(); } catch (_) {}
-        }
+        // Close any existing pool sockets (mark as intentional to prevent reconnect loops)
+        const oldSockets = this.poolSockets;
         this.poolSockets = [];
         this.poolSocket = null;
+        for (const p of oldSockets) {
+            p._closing = true;
+            try { if (p.ws) p.ws.close(); } catch (_) {}
+        }
 
         // Connect all shards in parallel, resolve when at least one opens
         const workerPromises = shards.map(shard => this._connectSinglePoolWorker(shard));
@@ -6957,7 +6978,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Add to poolSockets array (replace if same id exists)
             const existingIdx = this.poolSockets.findIndex(p => p.id === shard.id);
             if (existingIdx >= 0) {
-                try { if (this.poolSockets[existingIdx].ws) this.poolSockets[existingIdx].ws.close(); } catch (_) {}
+                const old = this.poolSockets[existingIdx];
+                old._closing = true;
+                try { if (old.ws) old.ws.close(); } catch (_) {}
                 this.poolSockets[existingIdx] = poolEntry;
             } else {
                 this.poolSockets.push(poolEntry);
@@ -7036,6 +7059,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             ws.onclose = () => {
                 clearTimeout(timeout);
+
+                // Skip reconnect logic if this socket was intentionally closed
+                if (poolEntry._closing) return;
 
                 // Clear this worker's connected relays and re-merge
                 poolEntry.connectedRelays = [];
@@ -7118,6 +7144,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const msg = typeof data === 'string' ? data : JSON.stringify(data);
         for (const p of this.poolSockets) {
             if (p.ws && p.ws.readyState === WebSocket.OPEN) {
+                try { p.ws.send(msg); } catch (_) {}
+            }
+        }
+    }
+
+    // Send data only to pool workers matching a specific role
+    _poolSendToRole(role, data) {
+        const msg = typeof data === 'string' ? data : JSON.stringify(data);
+        for (const p of this.poolSockets) {
+            if (p.role === role && p.ws && p.ws.readyState === WebSocket.OPEN) {
                 try { p.ws.send(msg); } catch (_) {}
             }
         }
@@ -7232,8 +7268,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Close workers for shards that no longer exist (e.g., all discovered relays removed)
         for (const p of this.poolSockets) {
-            if (!newShardIds.has(p.id) && p.ws && p.ws.readyState === WebSocket.OPEN) {
-                p.ws.close();
+            if (!newShardIds.has(p.id)) {
+                p._closing = true;
+                if (p.ws && p.ws.readyState === WebSocket.OPEN) p.ws.close();
             }
         }
 
@@ -10018,7 +10055,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (geohashTag && geohashTag[1]) {
                 const closestRelays = this.getClosestRelaysForGeohash(geohashTag[1]);
                 if (closestRelays.length > 0) {
-                    this._poolSend(['GEO_EVENT', evt, closestRelays.map(r => r.url)]);
+                    // Send GEO_EVENT to geo workers, plain EVENT to the rest
+                    const geoMsg = ['GEO_EVENT', evt, closestRelays.map(r => r.url)];
+                    const plainMsg = message;
+                    for (const p of this.poolSockets) {
+                        if (p.ws && p.ws.readyState === WebSocket.OPEN) {
+                            try {
+                                p.ws.send(JSON.stringify(p.role === 'geo' ? geoMsg : plainMsg));
+                            } catch (_) {}
+                        }
+                    }
                     return;
                 }
             }
@@ -13161,6 +13207,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 return;
             }
 
+            // Block blank/empty PM content
+            if (!messageContent || !messageContent.trim()) return;
+
             // Check if this is an edit of a previous message (has 'edit' tag in rumor)
             const pmEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
             if (pmEditTag) {
@@ -13308,6 +13357,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     async sendPM(content, recipientPubkey) {
         try {
             if (!this.connected) throw new Error('Not connected to relay');
+            if (!content || !content.trim()) return false;
 
             const wrapped = await this.sendNIP17PM(content, recipientPubkey);
             return !!wrapped;
@@ -13810,6 +13860,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     // Send a message to a group (one gift wrap per member)
     async sendGroupMessage(content, groupId) {
+        if (!content || !content.trim()) return false;
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Group messages require a logged-in account');
             return false;
@@ -25037,7 +25088,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.195 ═══<br/>
+═══ Nymchat v3.51.196 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
