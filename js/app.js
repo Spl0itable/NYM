@@ -6903,8 +6903,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.bitchatDMRelays
         );
 
-        console.log(`[RelayPool] Connecting ${shards.length} workers: ${shards.map(s => `${s.id}(${s.relays.length})`).join(', ')}`);
-
         // Close any existing pool sockets
         for (const p of this.poolSockets) {
             try { if (p.ws) p.ws.close(); } catch (_) {}
@@ -6985,7 +6983,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 poolEntry.lastMessage = Date.now();
                 this._syncLegacyPoolSocket();
 
-                console.log(`[RelayPool] Worker ${shard.id} connected (${shard.relays.length} relays)`);
                 resolve();
             };
 
@@ -7039,7 +7036,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             ws.onclose = () => {
                 clearTimeout(timeout);
-                console.log(`[RelayPool] Worker ${shard.id} disconnected`);
 
                 // Clear this worker's connected relays and re-merge
                 poolEntry.connectedRelays = [];
@@ -7110,7 +7106,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (p.ws && p.ws.readyState === WebSocket.OPEN) {
                     const silenceSec = (now - (p.lastMessage || 0)) / 1000;
                     if (silenceSec > 90) {
-                        console.log(`[RelayPool] Worker ${p.id} silent for ${Math.round(silenceSec)}s, closing`);
                         p.ws.close();
                     }
                 }
@@ -7231,24 +7226,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // New shard — connect a new worker
                 this._connectSinglePoolWorker(shard).then(() => {
                     this._poolSubscribeOnWorker(shard.id);
-                }).catch(() => {
-                    console.warn(`[RelayPool] Failed to connect new worker ${shard.id}`);
-                });
+                }).catch(() => {});
             }
         }
 
         // Close workers for shards that no longer exist (e.g., all discovered relays removed)
         for (const p of this.poolSockets) {
             if (!newShardIds.has(p.id) && p.ws && p.ws.readyState === WebSocket.OPEN) {
-                console.log(`[RelayPool] Closing removed worker ${p.id}`);
                 p.ws.close();
             }
         }
 
         // Remove closed entries
         this.poolSockets = this.poolSockets.filter(p => newShardIds.has(p.id));
-
-        console.log(`[RelayPool] Config updated: ${shards.length} workers, ${shards.reduce((n, s) => n + s.relays.length, 0)} total relays`);
     }
 
     async connectToRelay(relayUrl, type = 'relay') {
@@ -22405,9 +22395,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Multiplexed pool mode: use pool-reported count across all workers
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 const count = this.poolConnectedRelays.length;
-                const workers = this._getOpenPoolSockets().length;
                 if (count > 0) {
-                    statusEl.textContent = `Connected (${count} relays, ${workers} worker${workers !== 1 ? 's' : ''})`;
+                    statusEl.textContent = `Connected (${count} relays)`;
                     dot.style.background = 'var(--primary)';
                     this.connected = true;
                 } else {
