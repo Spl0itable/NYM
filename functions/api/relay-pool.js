@@ -102,6 +102,10 @@ export async function onRequest(context) {
   const reconnectTimers = new Map();
   const intentionallyClosed = new Set();
 
+  // Buffered GEO_EVENTs waiting for geo relays to connect
+  // Map<relayUrl, Array<geoMsg string>>
+  const pendingGeoEvents = new Map();
+
   // Throttle pool status updates
   let statusTimer = null;
   function schedulePoolStatus() {
@@ -295,6 +299,14 @@ export async function onRequest(context) {
         reconnectAttempts.delete(relayUrl);
         relayLatency.set(relayUrl, Date.now() - connectStartTime);
         replaySubscriptions(relayUrl, ws);
+        // Flush any buffered GEO_EVENTs that were waiting for this relay
+        const buffered = pendingGeoEvents.get(relayUrl);
+        if (buffered && buffered.length > 0) {
+          for (const geoMsg of buffered) {
+            try { ws.send(geoMsg); } catch { /* noop */ }
+          }
+          pendingGeoEvents.delete(relayUrl);
+        }
         schedulePoolStatus();
       });
 
@@ -434,12 +446,33 @@ export async function onRequest(context) {
             sendToUpstreams(event.data);
           } else if (msgType === 'GEO_EVENT') {
             const geoMsg = JSON.stringify(['EVENT', msg[1]]);
-            const geoSet = new Set(msg[2] || []);
+            const geoUrls = msg[2] || [];
+            const geoSet = new Set(geoUrls);
+            const sentGeo = new Set();
+            // Send to connected geo relays first
             upstreams.forEach((info, url) => {
               if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-                try { info.ws.send(geoMsg); } catch { /* noop */ }
+                try { info.ws.send(geoMsg); sentGeo.add(url); } catch { /* noop */ }
               }
             });
+            // For geo relays that aren't connected yet, ensure they get connected
+            // and buffer the event so it gets sent when they open
+            // (critical for ephemeral kind 20000 which relays don't store)
+            for (const url of geoUrls) {
+              if (sentGeo.has(url)) continue;
+              const info = upstreams.get(url);
+              if (info && info.status === 'connecting') {
+                // Relay is connecting — buffer this event for delivery on open
+                if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
+                pendingGeoEvents.get(url).push(geoMsg);
+              } else if (!info && validateRelayUrl(url)) {
+                // Relay not in upstreams at all — queue connection and buffer
+                queueConnection(url, 'read');
+                if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
+                pendingGeoEvents.get(url).push(geoMsg);
+              }
+            }
+            // Then send to all other connected relays
             upstreams.forEach((info, url) => {
               if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
                 try { info.ws.send(geoMsg); } catch { /* noop */ }
@@ -466,6 +499,12 @@ export async function onRequest(context) {
             const subId = msg[2];
             activeSubscriptions.set(subId, reqMsg);
             const geoSet = new Set(geoList);
+            // Ensure geo relays are connected (they'll get subscription via replaySubscriptions)
+            for (const url of geoList) {
+              if (!upstreams.has(url) && validateRelayUrl(url)) {
+                queueConnection(url, 'read');
+              }
+            }
             // Geo relays first
             upstreams.forEach((info, url) => {
               if (geoSet.has(url) && info.type !== 'write' && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {

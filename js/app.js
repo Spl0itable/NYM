@@ -6965,15 +6965,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const writeOnly = ['wss://sendit.nosflare.com'];
 
         // Low data mode: only default relays + DM relays + active geo relays
+        // Geo relays go FIRST for priority connection (ephemeral events need them connected)
         if (this.settings && this.settings.lowDataMode) {
-            const relays = [...this.defaultRelays];
+            const relays = [];
+            // Geo relays first — critical for bitchat interop
+            for (const url of this.currentGeoRelays) {
+                if (!relays.includes(url)) relays.push(url);
+            }
+            for (const url of this.defaultRelays) {
+                if (!relays.includes(url)) relays.push(url);
+            }
             if (this.bitchatDMRelays) {
                 for (const url of this.bitchatDMRelays) {
                     if (!relays.includes(url)) relays.push(url);
                 }
-            }
-            for (const url of this.currentGeoRelays) {
-                if (!relays.includes(url)) relays.push(url);
             }
             const filtered = relays.filter(r => !writeOnly.includes(r) && !blocked.includes(r));
             this._poolSend(['RELAYS', {
@@ -6985,10 +6990,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         // Unified relay set: defaults + bitchat CSV + NIP-66 discovered (deduped)
-        const allRelays = [...new Set([
+        // Put current geo relays FIRST so the proxy prioritizes connecting to them —
+        // critical for ephemeral kind 20000 events that aren't stored by relays.
+        const geoFirst = [...this.currentGeoRelays].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
+        const geoSet = new Set(geoFirst);
+        const rest = [...new Set([
             ...this.allRelayUrls,
             ...Array.from(this.discoveredRelays)
-        ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
+        ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r) && !geoSet.has(r));
+        const allRelays = [...geoFirst, ...rest];
         this._poolSend(['RELAYS', {
             relays: allRelays,
             writeOnly: writeOnly,
@@ -21135,6 +21145,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Connect to nearby relays for geohash channels (async, non-blocking)
+        // connectToGeoRelays handles its own subscription internally after
+        // geo relays are configured. The proxy buffers GEO_EVENTs for relays
+        // still connecting, so no need to block the channel switch.
         if (geohash) {
             this.connectToGeoRelays(geohash);
         }
@@ -21142,7 +21155,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Always ensure default relays (first 5 broadcast) stay connected
         this.ensureDefaultRelaysConnected();
 
-        // This ensures we get more messages even with few relays connected
+        // Load channel messages from relays (immediate, uses whatever relays are connected)
         const channelType = (geohash && this.isValidGeohash(geohash)) ? 'geohash' : 'ephemeral';
         const channelKey = geohash || channel;
         this.loadChannelFromRelays(channelKey, channelType);
@@ -24749,7 +24762,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.192 ═══<br/>
+═══ Nymchat v3.51.193 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
