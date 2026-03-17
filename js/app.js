@@ -448,12 +448,14 @@ class NYM {
     constructor() {
         this.relayPool = new Map();
         this.useRelayProxy = this._detectCloudflareHost();
+        this.poolSockets = [];
         this.poolSocket = null;
         this.poolConnectedRelays = [];
         this.poolRelayTypes = {};
         this.poolReady = false;
         this._poolReconnecting = false;
         this._poolReconnectRetries = 0;
+        this.RELAYS_PER_WORKER = 25;
         this.blacklistedRelays = new Set();
         this.relayKinds = new Map();
         this.relayStats = {
@@ -4182,7 +4184,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     console.log(`[GeoRelays] Loaded ${parsed.length} relays from georelays CSV (${this.allRelayUrls.size} total relays)`);
                     // If the relay pool proxy is already connected, update
                     // its config so it connects to the full CSV relay set
-                    if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+                    if (this.useRelayProxy && this._isAnyPoolOpen()) {
                         this._poolSendRelayConfig();
                     }
                 }
@@ -4225,9 +4227,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const geoUrls = new Set(closestRelays.map(r => r.url));
 
         // Multiplexed pool mode: retry with GEO_EVENT so proxy prioritizes geo relays
-        if (this.useRelayProxy && this.poolSocket) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             setTimeout(() => {
-                if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+                if (this._isAnyPoolOpen()) {
                     this._poolSend(['GEO_EVENT', signedEvent, closestRelays.map(r => r.url)]);
                 }
             }, 2000);
@@ -4268,7 +4270,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         // Multiplexed pool mode: add geo relays to the pool config
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             const closestRelays = this.getClosestRelaysForGeohash(geohash, this.geoRelayCount);
             if (closestRelays.length > 0) {
                 const geoRelayUrls = new Set(closestRelays.map(r => r.url));
@@ -4444,7 +4446,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     applyLowDataMode(enabled) {
         if (enabled) {
-            if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+            if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 // Pool mode: _poolSendRelayConfig respects lowDataMode
                 // and sends only defaults + DM relays + active geo relays
                 this._poolSendRelayConfig();
@@ -4962,7 +4964,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async reconnectToBroadcastRelays() {
         // Multiplexed pool mode: just reconnect the single pool socket
         if (this.useRelayProxy) {
-            if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) return;
+            if (this._isAnyPoolOpen()) return;
             this._schedulePoolReconnect();
             return;
         }
@@ -6006,6 +6008,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (this.useRelayProxy) {
                 await this._connectToRelayPool();
                 this.connected = true;
+                this._startPoolKeepalive();
                 document.getElementById('messageInput').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
                 this.updateConnectionStatus();
@@ -6269,10 +6272,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async quickConnect() {
-        // Pool mode: connect via pool
+        // Pool mode: connect via pool workers
         if (this.useRelayProxy) {
             try {
                 await this._connectToRelayPool();
+                this._startPoolKeepalive();
                 document.getElementById('messageInput').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
                 this.connected = true;
@@ -6311,7 +6315,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     resubscribeAllRelays() {
         // Multiplexed pool mode: re-subscribe through proxy
-        if (this.useRelayProxy && this.poolSocket) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSubscribe();
             return;
         }
@@ -6453,7 +6457,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (filters.length === 0) return;
 
         // Multiplexed pool mode: send REQ through single socket
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             // For geohash channels, use GEO_REQ so geo relays get the
             // subscription first — they have the most relevant data
             if (channelType === 'geohash' && channelKey) {
@@ -6541,7 +6545,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const subId = "nym-batch-" + Math.random().toString(36).substring(7);
 
         // Multiplexed pool mode
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             // Collect geo relays for all channels in the batch
             if (geohashChannels.length > 0) {
                 const geoUrls = new Set();
@@ -6620,7 +6624,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const existingSubId = this.channelSubscriptions.get(channelKey);
         if (existingSubId) {
             // Multiplexed pool mode
-            if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+            if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 this._poolSend(["CLOSE", existingSubId]);
             }
             this.relayPool.forEach((relay, url) => {
@@ -6685,10 +6689,112 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return `${proto}//${window.location.host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
     }
 
-    // Multiplexed relay pool (single WebSocket to proxy)
+    // Multiplexed relay pool (multi-worker WebSocket proxy)
     _getRelayPoolUrl() {
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         return `${proto}//${window.location.host}/api/relay-pool`;
+    }
+
+    // Returns true if any pool worker socket is open
+    _isAnyPoolOpen() {
+        return this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.OPEN);
+    }
+
+    // Returns array of open pool socket entries
+    _getOpenPoolSockets() {
+        return this.poolSockets.filter(p => p.ws && p.ws.readyState === WebSocket.OPEN);
+    }
+
+    // Shard relays into role-based worker groups, splitting large groups into chunks
+    _shardRelaysByRole(allRelays, geoRelayUrls, discoveredRelayUrls, dmRelays) {
+        const blocked = new Set(['wss://relay.nosflare.com', 'wss://relay.nostraddress.com']);
+        const writeOnly = new Set(['wss://sendit.nosflare.com']);
+        const isValid = (url) => !blocked.has(url) && !writeOnly.has(url);
+
+        // Categorize relays by role
+        const defaultSet = new Set(this.defaultRelays);
+        const dmSet = new Set(dmRelays || this.bitchatDMRelays || []);
+        const geoSet = new Set(geoRelayUrls || []);
+        const discoveredSet = new Set(discoveredRelayUrls || []);
+
+        // Critical = defaults + DM relays (deduplicated)
+        const critical = [...new Set([...this.defaultRelays, ...(dmRelays || this.bitchatDMRelays || [])])]
+            .filter(isValid);
+
+        // Geo = CSV relays not already in critical
+        const criticalSet = new Set(critical);
+        const geo = [...geoSet].filter(url => isValid(url) && !criticalSet.has(url));
+
+        // Discovered = NIP-66 relays not already in critical or geo
+        const geoAndCritical = new Set([...criticalSet, ...geo]);
+        const discovered = [...discoveredSet].filter(url => isValid(url) && !geoAndCritical.has(url));
+
+        // Split each category into chunks of RELAYS_PER_WORKER
+        const chunkArray = (arr, size) => {
+            const chunks = [];
+            for (let i = 0; i < arr.length; i += size) {
+                chunks.push(arr.slice(i, i + size));
+            }
+            return chunks.length > 0 ? chunks : [[]];
+        };
+
+        const shards = [];
+        const criticalChunks = chunkArray(critical, this.RELAYS_PER_WORKER);
+        criticalChunks.forEach((chunk, i) => {
+            shards.push({
+                id: `critical-${i}`,
+                role: 'critical',
+                relays: chunk,
+                dmRelays: i === 0 ? (dmRelays || this.bitchatDMRelays || []) : []
+            });
+        });
+
+        const geoChunks = chunkArray(geo, this.RELAYS_PER_WORKER);
+        if (geo.length > 0) {
+            geoChunks.forEach((chunk, i) => {
+                shards.push({
+                    id: `geo-${i}`,
+                    role: 'geo',
+                    relays: chunk,
+                    dmRelays: []
+                });
+            });
+        }
+
+        const discoveredChunks = chunkArray(discovered, this.RELAYS_PER_WORKER);
+        if (discovered.length > 0) {
+            discoveredChunks.forEach((chunk, i) => {
+                shards.push({
+                    id: `discovered-${i}`,
+                    role: 'discovered',
+                    relays: chunk,
+                    dmRelays: []
+                });
+            });
+        }
+
+        // Write-only relays go to the first critical shard
+        if (shards.length > 0) {
+            shards[0].writeOnly = [...writeOnly];
+        }
+
+        return shards;
+    }
+
+    // Add a message listener to all open pool sockets
+    _poolAddMessageListener(handler) {
+        for (const p of this.poolSockets) {
+            if (p.ws) p.ws.addEventListener('message', handler);
+        }
+    }
+
+    // Remove a message listener from all pool sockets
+    _poolRemoveMessageListener(handler) {
+        for (const p of this.poolSockets) {
+            if (p.ws) {
+                try { p.ws.removeEventListener('message', handler); } catch (_) {}
+            }
+        }
     }
 
     // Schedule a pool reconnection with exponential backoff, preventing concurrent attempts.
@@ -6697,7 +6803,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!this.useRelayProxy) return;
 
         const attempt = (retries) => {
-            if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+            if (this._isAnyPoolOpen()) {
                 this._poolReconnecting = false;
                 return;
             }
@@ -6714,7 +6820,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             setTimeout(() => {
                 // Re-check: another path may have reconnected while we waited
-                if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+                if (this._isAnyPoolOpen()) {
                     this._poolReconnecting = false;
                     return;
                 }
@@ -6741,81 +6847,153 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         attempt(this._poolReconnectRetries || 0);
     }
 
+    // Reconnect a single failed pool worker shard
+    _reconnectPoolShard(shard) {
+        if (!this.useRelayProxy) return;
+        const shardId = shard.id;
+
+        const attempt = (retries) => {
+            // Check if this shard already reconnected
+            const existing = this.poolSockets.find(p => p.id === shardId);
+            if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) return;
+            if (!navigator.onLine) return;
+
+            const delay = Math.min(3000 * Math.pow(2, retries), 30000);
+            setTimeout(() => {
+                const stillDown = this.poolSockets.find(p => p.id === shardId);
+                if (stillDown && stillDown.ws && stillDown.ws.readyState === WebSocket.OPEN) return;
+
+                this._connectSinglePoolWorker(shard)
+                    .then(() => {
+                        this._poolSubscribeOnWorker(shard.id);
+                    })
+                    .catch(() => {
+                        if (retries < 9) attempt(retries + 1);
+                    });
+            }, delay);
+        };
+
+        attempt(0);
+    }
+
     _connectToRelayPool() {
         // Prevent concurrent connection attempts
-        if (this.poolSocket && this.poolSocket.readyState === WebSocket.CONNECTING) {
+        if (this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.CONNECTING)) {
             return Promise.reject(new Error('Connection already in progress'));
         }
 
+        // Gather all relay URLs
+        let geoRelayUrls = [];
+        let discoveredRelayUrls = [];
+
+        if (this.settings && this.settings.lowDataMode) {
+            // Low data: only defaults + DM relays (geo added on-demand)
+            // Single critical worker is sufficient
+            geoRelayUrls = [];
+            discoveredRelayUrls = [];
+        } else {
+            geoRelayUrls = (this.geoRelays || []).map(r => r.url || r).filter(Boolean);
+            discoveredRelayUrls = [...(this.discoveredRelays || [])];
+        }
+
+        const shards = this._shardRelaysByRole(
+            [...this.allRelayUrls],
+            geoRelayUrls,
+            discoveredRelayUrls,
+            this.bitchatDMRelays
+        );
+
+        console.log(`[RelayPool] Connecting ${shards.length} workers: ${shards.map(s => `${s.id}(${s.relays.length})`).join(', ')}`);
+
+        // Close any existing pool sockets
+        for (const p of this.poolSockets) {
+            try { if (p.ws) p.ws.close(); } catch (_) {}
+        }
+        this.poolSockets = [];
+        this.poolSocket = null;
+
+        // Connect all shards in parallel, resolve when at least one opens
+        const workerPromises = shards.map(shard => this._connectSinglePoolWorker(shard));
+
+        return new Promise((resolve, reject) => {
+            let resolved = false;
+            let failures = 0;
+
+            for (const p of workerPromises) {
+                p.then(() => {
+                    if (!resolved) {
+                        resolved = true;
+                        this.poolReady = true;
+                        this.connected = true;
+                        // Set legacy poolSocket to first open socket for external compat
+                        this._syncLegacyPoolSocket();
+                        resolve();
+                    }
+                }).catch(() => {
+                    failures++;
+                    if (failures === workerPromises.length && !resolved) {
+                        reject(new Error('All relay pool workers failed to connect'));
+                    }
+                });
+            }
+        });
+    }
+
+    // Connect a single pool worker for a shard of relays
+    _connectSinglePoolWorker(shard) {
         return new Promise((resolve, reject) => {
             const url = this._getRelayPoolUrl();
             const ws = new WebSocket(url);
-            this.poolSocket = ws;
+
+            const poolEntry = {
+                id: shard.id,
+                ws: ws,
+                role: shard.role,
+                relays: shard.relays,
+                dmRelays: shard.dmRelays || [],
+                writeOnly: shard.writeOnly || [],
+                connectedRelays: [],
+                lastMessage: Date.now()
+            };
+
+            // Add to poolSockets array (replace if same id exists)
+            const existingIdx = this.poolSockets.findIndex(p => p.id === shard.id);
+            if (existingIdx >= 0) {
+                try { if (this.poolSockets[existingIdx].ws) this.poolSockets[existingIdx].ws.close(); } catch (_) {}
+                this.poolSockets[existingIdx] = poolEntry;
+            } else {
+                this.poolSockets.push(poolEntry);
+            }
 
             const timeout = setTimeout(() => {
                 if (ws.readyState !== WebSocket.OPEN) {
                     ws.close();
-                    reject(new Error('Relay pool connection timeout'));
+                    reject(new Error(`Pool worker ${shard.id} connection timeout`));
                 }
             }, 10000);
 
             ws.onopen = () => {
                 clearTimeout(timeout);
-                this.poolReady = false; // not ready until RELAYS sent
 
-                // Gather relays to connect to (unified: all relays are read/write)
-                const blocked = ['wss://relay.nosflare.com', 'wss://relay.nostraddress.com'];
-                const writeOnly = ['wss://sendit.nosflare.com'];
-                let allRelays;
-                if (this.settings && this.settings.lowDataMode) {
-                    // Low data: only defaults + DM relays (geo added on-demand)
-                    allRelays = [...new Set([
-                        ...this.defaultRelays,
-                        ...(this.bitchatDMRelays || [])
-                    ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
-                } else {
-                    // Unified relay set: defaults + bitchat CSV + NIP-66 discovered
-                    allRelays = [...this.allRelayUrls, ...Array.from(this.discoveredRelays || [])]
-                        .filter(r => !writeOnly.includes(r) && !blocked.includes(r));
-                    allRelays = [...new Set(allRelays)];
-                }
-
-                // Send RELAYS config to proxy
+                // Send RELAYS config for this shard
                 ws.send(JSON.stringify(['RELAYS', {
-                    relays: allRelays,
-                    writeOnly: writeOnly,
-                    dmRelays: this.bitchatDMRelays || []
+                    relays: shard.relays,
+                    writeOnly: shard.writeOnly || [],
+                    dmRelays: shard.dmRelays || []
                 }]));
 
-                this.poolReady = true;
-                this.connected = true;
-                this._poolLastMessage = Date.now();
+                poolEntry.lastMessage = Date.now();
+                this._syncLegacyPoolSocket();
 
-                // Start client-side keepalive: detect stale connections
-                // If no message received for 90s, the proxy likely died silently
-                if (this._poolKeepaliveTimer) clearInterval(this._poolKeepaliveTimer);
-                this._poolKeepaliveTimer = setInterval(() => {
-                    if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) {
-                        clearInterval(this._poolKeepaliveTimer);
-                        this._poolKeepaliveTimer = null;
-                        return;
-                    }
-                    const silenceSec = (Date.now() - (this._poolLastMessage || 0)) / 1000;
-                    if (silenceSec > 90) {
-                        // No data from proxy for 90s — connection is likely dead
-                        this.poolSocket.close();
-                    }
-                }, 30000);
-
+                console.log(`[RelayPool] Worker ${shard.id} connected (${shard.relays.length} relays)`);
                 resolve();
             };
 
             ws.onmessage = (event) => {
                 try {
-                    // Track total bytes received and keepalive timestamp
                     const dataLen = typeof event.data === 'string' ? event.data.length : (event.data.byteLength || 0);
                     this.relayStats.bytesReceived += dataLen;
-                    this._poolLastMessage = Date.now();
+                    poolEntry.lastMessage = Date.now();
 
                     const msg = JSON.parse(event.data);
                     if (!Array.isArray(msg)) return;
@@ -6823,51 +7001,35 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const msgType = msg[0];
 
                     if (msgType === 'POOL:PING') {
-                        // Keepalive from proxy — update last-seen timestamp
-                        this._poolLastMessage = Date.now();
+                        poolEntry.lastMessage = Date.now();
                         return;
                     }
 
                     if (msgType === 'POOL:STATUS') {
                         const status = msg[1];
-                        this.poolConnectedRelays = status.connected || [];
+                        poolEntry.connectedRelays = status.connected || [];
 
-                        // Update per-relay latency from proxy
+                        // Update per-relay latency from this worker
                         if (status.latency) {
                             for (const [url, ms] of Object.entries(status.latency)) {
                                 this.relayStats.latencyPerRelay.set(url, ms);
                             }
                         }
 
-                        // Update per-relay event counts from proxy
+                        // Update per-relay event counts from this worker
                         if (status.events) {
                             for (const [url, count] of Object.entries(status.events)) {
                                 this.relayStats.eventsPerRelay.set(url, count);
                             }
                         }
 
-                        // Sync relayPool map for UI status tracking
-                        this.relayPool.clear();
-                        for (const url of this.poolConnectedRelays) {
-                            // All relays are read/write except sendit.nosflare.com (write-only)
-                            const relayType = url === 'wss://sendit.nosflare.com' ? 'write' : 'relay';
-                            this.relayPool.set(url, {
-                                ws: this.poolSocket,
-                                type: relayType,
-                                status: 'connected',
-                                connectedAt: Date.now()
-                            });
-                        }
-                        this.updateConnectionStatus();
+                        // Merge connected relays from ALL workers
+                        this._mergePoolStatus();
                     } else if (msgType === 'EVENT') {
-                        // Track event stats (throughput + total)
                         this.relayStats.totalEvents++;
                         this.relayStats.eventsThisSecond++;
-
-                        // Proxy forwards raw upstream messages — no sourceRelay appended
                         this.handleRelayMessage(msg, 'relay-pool');
                     } else {
-                        // OK, EOSE, NOTICE — handle as if from a relay
                         this.handleRelayMessage(msg, 'relay-pool');
                     }
                 } catch {
@@ -6877,132 +7039,216 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             ws.onclose = () => {
                 clearTimeout(timeout);
-                if (this._poolKeepaliveTimer) {
-                    clearInterval(this._poolKeepaliveTimer);
-                    this._poolKeepaliveTimer = null;
-                }
-                // Only clean up if this is still the active socket
-                if (this.poolSocket === ws) {
-                    this.poolSocket = null;
+                console.log(`[RelayPool] Worker ${shard.id} disconnected`);
+
+                // Clear this worker's connected relays and re-merge
+                poolEntry.connectedRelays = [];
+                poolEntry.ws = null;
+                this._mergePoolStatus();
+                this._syncLegacyPoolSocket();
+
+                // If ALL workers are down, update status and trigger full reconnect
+                if (!this._isAnyPoolOpen()) {
                     this.poolReady = false;
-                    this.poolConnectedRelays = [];
-                    this.poolRelayTypes = {};
-                    this.relayPool.clear();
                     this.connected = false;
                     this.updateConnectionStatus('Disconnected');
+                    this._schedulePoolReconnect();
+                } else {
+                    // Only this worker died — reconnect just this shard
+                    this._reconnectPoolShard(shard);
                 }
-
-                // Reconnect with exponential backoff, guarded against concurrent attempts
-                this._schedulePoolReconnect();
             };
 
             ws.onerror = () => {
                 clearTimeout(timeout);
-                reject(new Error('Relay pool connection error'));
+                reject(new Error(`Pool worker ${shard.id} connection error`));
             };
         });
     }
 
+    // Merge POOL:STATUS from all workers into unified state
+    _mergePoolStatus() {
+        const allConnected = [];
+        for (const p of this.poolSockets) {
+            if (p.connectedRelays) {
+                allConnected.push(...p.connectedRelays);
+            }
+        }
+        this.poolConnectedRelays = [...new Set(allConnected)];
+
+        // Sync relayPool map for UI status tracking
+        this.relayPool.clear();
+        for (const url of this.poolConnectedRelays) {
+            const relayType = url === 'wss://sendit.nosflare.com' ? 'write' : 'relay';
+            this.relayPool.set(url, {
+                ws: this.poolSocket,
+                type: relayType,
+                status: 'connected',
+                connectedAt: Date.now()
+            });
+        }
+        this.updateConnectionStatus();
+    }
+
+    // Keep legacy this.poolSocket pointing to first open socket for external compat
+    _syncLegacyPoolSocket() {
+        const open = this.poolSockets.find(p => p.ws && p.ws.readyState === WebSocket.OPEN);
+        this.poolSocket = open ? open.ws : null;
+    }
+
+    // Start client-side keepalive: detect stale worker connections
+    _startPoolKeepalive() {
+        if (this._poolKeepaliveTimer) clearInterval(this._poolKeepaliveTimer);
+        this._poolKeepaliveTimer = setInterval(() => {
+            if (!this._isAnyPoolOpen()) {
+                clearInterval(this._poolKeepaliveTimer);
+                this._poolKeepaliveTimer = null;
+                return;
+            }
+            const now = Date.now();
+            for (const p of this.poolSockets) {
+                if (p.ws && p.ws.readyState === WebSocket.OPEN) {
+                    const silenceSec = (now - (p.lastMessage || 0)) / 1000;
+                    if (silenceSec > 90) {
+                        console.log(`[RelayPool] Worker ${p.id} silent for ${Math.round(silenceSec)}s, closing`);
+                        p.ws.close();
+                    }
+                }
+            }
+        }, 30000);
+    }
+
+    // Send data to ALL open pool worker sockets
     _poolSend(data) {
-        if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            this.poolSocket.send(typeof data === 'string' ? data : JSON.stringify(data));
+        const msg = typeof data === 'string' ? data : JSON.stringify(data);
+        for (const p of this.poolSockets) {
+            if (p.ws && p.ws.readyState === WebSocket.OPEN) {
+                try { p.ws.send(msg); } catch (_) {}
+            }
         }
     }
 
-    _poolSubscribe() {
-        if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) return;
+    // Subscribe on a specific worker (by shard id) after reconnection
+    _poolSubscribeOnWorker(shardId) {
+        const p = this.poolSockets.find(w => w.id === shardId);
+        if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) return;
 
         const subId = "nym-" + Math.random().toString(36).substring(7);
         const since1h = Math.floor(Date.now() / 1000) - 3600;
+        const filters = this._buildPoolFilters(since1h);
+        const msg = JSON.stringify(["REQ", subId, ...filters]);
+        try { p.ws.send(msg); } catch (_) {}
+    }
 
+    // Build the standard subscription filters used for pool subscriptions
+    _buildPoolFilters(since1h) {
         const filters = [];
 
         // Skip geohash channel subscriptions in group chat & PM only mode
         if (!this.settings.groupChatPMOnlyMode) {
-            // Messages in geohash channels (past 1hr)
             filters.push({ kinds: [20000], since: since1h, limit: 100 });
-            // Polls and poll votes (kind 30078 with t-tag)
             filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 });
-            // Reactions for geohash channels
             filters.push({ kinds: [7], "#k": ["20000"], since: since1h, limit: 100 });
-            // Delete events (scoped to NYM kinds: geohash channels + DM gift wraps)
             filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since1h, limit: 100 });
         }
 
-        // Presence broadcasts (needed even in PM-only mode for user list)
         filters.push({ kinds: [20001], limit: 100 });
-        // Reactions for PMs
         filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
-        // User shop items
         filters.push({ kinds: [30078], "#d": ["nym-shop-active"], limit: 100 });
-        // Zap receipts
         filters.push({ kinds: [9735], limit: 100 });
 
         if (this.pubkey) {
             filters.push(
-                // Gift wraps addressed to me
                 { kinds: [1059], "#p": [this.pubkey], limit: 500 },
-                // Any reactions with #p = my pubkey
                 { kinds: [7], "#p": [this.pubkey], limit: 100 },
-                // My shop purchases & active items
                 { kinds: [30078], authors: [this.pubkey], "#d": ["nym-shop-purchases", "nym-shop-active"], limit: 100 },
-                // Shop items tagged to me
                 { kinds: [30078], "#p": [this.pubkey], limit: 50 },
-                // P2P signaling events addressed to me (recent 2 min)
                 { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
-                // P2P connection announcements (recent 24hr)
                 { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 }
             );
         }
 
+        return filters;
+    }
+
+    _poolSubscribe() {
+        if (!this._isAnyPoolOpen()) return;
+
+        const subId = "nym-" + Math.random().toString(36).substring(7);
+        const since1h = Math.floor(Date.now() / 1000) - 3600;
+        const filters = this._buildPoolFilters(since1h);
+
+        // Send subscription to ALL open workers — each will query its relay shard
         this._poolSend(["REQ", subId, ...filters]);
     }
 
+    // Re-shard and update relay config across all workers.
+    // Called after NIP-66 discovery adds new relays or geo relays change.
     _poolSendRelayConfig() {
-        if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) return;
-        const blocked = ['wss://relay.nosflare.com', 'wss://relay.nostraddress.com'];
-        const writeOnly = ['wss://sendit.nosflare.com'];
+        if (!this._isAnyPoolOpen()) return;
 
-        // Low data mode: only default relays + DM relays + active geo relays
-        // Geo relays go FIRST for priority connection (ephemeral events need them connected)
+        // Gather current relay sets
+        let geoRelayUrls = [];
+        let discoveredRelayUrls = [];
+
         if (this.settings && this.settings.lowDataMode) {
-            const relays = [];
-            // Geo relays first — critical for bitchat interop
+            // Low data: include current geo relays + defaults + DM
+            geoRelayUrls = [...this.currentGeoRelays];
+        } else {
+            geoRelayUrls = (this.geoRelays || []).map(r => r.url || r).filter(Boolean);
+            // Include current geo relays for priority
             for (const url of this.currentGeoRelays) {
-                if (!relays.includes(url)) relays.push(url);
+                if (!geoRelayUrls.includes(url)) geoRelayUrls.unshift(url);
             }
-            for (const url of this.defaultRelays) {
-                if (!relays.includes(url)) relays.push(url);
-            }
-            if (this.bitchatDMRelays) {
-                for (const url of this.bitchatDMRelays) {
-                    if (!relays.includes(url)) relays.push(url);
-                }
-            }
-            const filtered = relays.filter(r => !writeOnly.includes(r) && !blocked.includes(r));
-            this._poolSend(['RELAYS', {
-                relays: filtered,
-                writeOnly: writeOnly,
-                dmRelays: this.bitchatDMRelays || []
-            }]);
-            return;
+            discoveredRelayUrls = [...(this.discoveredRelays || [])];
         }
 
-        // Unified relay set: defaults + bitchat CSV + NIP-66 discovered (deduped)
-        // Put current geo relays FIRST so the proxy prioritizes connecting to them —
-        // critical for ephemeral kind 20000 events that aren't stored by relays.
-        const geoFirst = [...this.currentGeoRelays].filter(r => !writeOnly.includes(r) && !blocked.includes(r));
-        const geoSet = new Set(geoFirst);
-        const rest = [...new Set([
-            ...this.allRelayUrls,
-            ...Array.from(this.discoveredRelays)
-        ])].filter(r => !writeOnly.includes(r) && !blocked.includes(r) && !geoSet.has(r));
-        const allRelays = [...geoFirst, ...rest];
-        this._poolSend(['RELAYS', {
-            relays: allRelays,
-            writeOnly: writeOnly,
-            dmRelays: this.bitchatDMRelays || []
-        }]);
+        const shards = this._shardRelaysByRole(
+            [...this.allRelayUrls],
+            geoRelayUrls,
+            discoveredRelayUrls,
+            this.bitchatDMRelays
+        );
+
+        // Determine which shards are new vs existing
+        const existingIds = new Set(this.poolSockets.map(p => p.id));
+        const newShardIds = new Set(shards.map(s => s.id));
+
+        // Update existing workers with new relay configs
+        for (const shard of shards) {
+            const existing = this.poolSockets.find(p => p.id === shard.id);
+            if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
+                // Update relay list for this worker
+                existing.relays = shard.relays;
+                existing.dmRelays = shard.dmRelays || [];
+                existing.writeOnly = shard.writeOnly || [];
+                existing.ws.send(JSON.stringify(['RELAYS', {
+                    relays: shard.relays,
+                    writeOnly: shard.writeOnly || [],
+                    dmRelays: shard.dmRelays || []
+                }]));
+            } else if (!existingIds.has(shard.id)) {
+                // New shard — connect a new worker
+                this._connectSinglePoolWorker(shard).then(() => {
+                    this._poolSubscribeOnWorker(shard.id);
+                }).catch(() => {
+                    console.warn(`[RelayPool] Failed to connect new worker ${shard.id}`);
+                });
+            }
+        }
+
+        // Close workers for shards that no longer exist (e.g., all discovered relays removed)
+        for (const p of this.poolSockets) {
+            if (!newShardIds.has(p.id) && p.ws && p.ws.readyState === WebSocket.OPEN) {
+                console.log(`[RelayPool] Closing removed worker ${p.id}`);
+                p.ws.close();
+            }
+        }
+
+        // Remove closed entries
+        this.poolSockets = this.poolSockets.filter(p => newShardIds.has(p.id));
+
+        console.log(`[RelayPool] Config updated: ${shards.length} workers, ${shards.reduce((n, s) => n + s.relays.length, 0)} total relays`);
     }
 
     async connectToRelay(relayUrl, type = 'relay') {
@@ -9300,7 +9546,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Discover relays from NIP-65 kind 10002 events via the already-connected pool
     fetchRelayListsFromPool() {
         return new Promise((resolve) => {
-            if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) {
+            if (!this._isAnyPoolOpen()) {
                 return resolve();
             }
 
@@ -9507,7 +9753,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     sendToRelay(message) {
         // Multiplexed pool mode: send everything through the single socket
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             // For EVENT messages, route through broadcastEvent so geohash-tagged
             // events use GEO_EVENT (geo relay prioritization) instead of plain EVENT.
             if (Array.isArray(message) && message[0] === 'EVENT') {
@@ -9539,7 +9785,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Send DM events (kind 1059) with priority to bitchat's hardcoded relays
     sendDMToRelays(message) {
         // Multiplexed pool mode: proxy handles DM relay prioritization
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             const eventObj = Array.isArray(message) && message[0] === 'EVENT' ? message[1] : message;
             this._poolSend(['DM_EVENT', eventObj]);
             return this.poolConnectedRelays.length;
@@ -9719,7 +9965,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     sendRequestToAllRelaysExceptNosflare(message) {
         // Multiplexed pool mode: proxy already excludes write-only relays from REQ
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSend(message);
             return;
         }
@@ -9736,7 +9982,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     sendRequestToFewRelays(message, maxRelays = 5) {
         // Multiplexed pool mode: proxy handles dedup
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSend(message);
             return;
         }
@@ -9769,7 +10015,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     broadcastEvent(message) {
         // Multiplexed pool mode: proxy handles fan-out to all relays
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             // For geohash channel events, use GEO_EVENT so the proxy
             // sends to geo relays first (same priority as DM_EVENT).
             let evt = null;
@@ -9841,7 +10087,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     sendRequestToAllRelays(message) {
         // Multiplexed pool mode
-        if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSend(message);
             return;
         }
@@ -9857,8 +10103,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     subscribeToAllRelays() {
-        // Multiplexed pool mode: single subscription through proxy
-        if (this.useRelayProxy && this.poolSocket) {
+        // Multiplexed pool mode: subscription through all pool workers
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSubscribe();
             this.discoverChannels();
             setTimeout(() => {
@@ -22156,11 +22402,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 dot.style.background = 'var(--danger)';
             }
         } else {
-            // Multiplexed pool mode: use pool-reported count
-            if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
+            // Multiplexed pool mode: use pool-reported count across all workers
+            if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 const count = this.poolConnectedRelays.length;
+                const workers = this._getOpenPoolSockets().length;
                 if (count > 0) {
-                    statusEl.textContent = `Connected (${count} relays)`;
+                    statusEl.textContent = `Connected (${count} relays, ${workers} worker${workers !== 1 ? 's' : ''})`;
                     dot.style.background = 'var(--primary)';
                     this.connected = true;
                 } else {
@@ -24801,7 +25048,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.194 ═══<br/>
+═══ Nymchat v3.51.195 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -25619,8 +25866,8 @@ function nostrPurchasesLoad() {
 
     let received = false;
 
-    // Pool mode: send REQ through the multiplexed pool socket
-    if (nym.useRelayProxy && nym.poolSocket && nym.poolSocket.readyState === WebSocket.OPEN) {
+    // Pool mode: send REQ through the multiplexed pool workers
+    if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
         const handler = (evt) => {
             try {
                 const msg = JSON.parse(evt.data);
@@ -25633,7 +25880,7 @@ function nostrPurchasesLoad() {
                     } catch (_) {}
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
-                    nym.poolSocket.removeEventListener('message', handler);
+                    nym._poolRemoveMessageListener(handler);
                     try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
 
                     if (!received && localPurchases) {
@@ -25643,12 +25890,12 @@ function nostrPurchasesLoad() {
                 }
             } catch (_) {}
         };
-        nym.poolSocket.addEventListener('message', handler);
+        nym._poolAddMessageListener(handler);
         nym._poolSend(['REQ', subId, filter]);
 
         // Cleanup after 10s
         setTimeout(() => {
-            nym.poolSocket.removeEventListener('message', handler);
+            nym._poolRemoveMessageListener(handler);
             try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
         }, 10000);
         return;
@@ -25826,8 +26073,8 @@ function nostrSettingsLoad() {
 
     let received = false;
 
-    // Pool mode: send REQ through the multiplexed pool socket
-    if (nym.useRelayProxy && nym.poolSocket && nym.poolSocket.readyState === WebSocket.OPEN) {
+    // Pool mode: send REQ through the multiplexed pool workers
+    if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
         const handler = (evt) => {
             try {
                 const msg = JSON.parse(evt.data);
@@ -25840,17 +26087,17 @@ function nostrSettingsLoad() {
                     } catch (_) {}
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
-                    nym.poolSocket.removeEventListener('message', handler);
+                    nym._poolRemoveMessageListener(handler);
                     try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
                 }
             } catch (_) {}
         };
-        nym.poolSocket.addEventListener('message', handler);
+        nym._poolAddMessageListener(handler);
         nym._poolSend(['REQ', subId, filter]);
 
         // Cleanup after 10s
         setTimeout(() => {
-            nym.poolSocket.removeEventListener('message', handler);
+            nym._poolRemoveMessageListener(handler);
             try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
         }, 10000);
         return;
@@ -26532,7 +26779,7 @@ function renderRelayStats() {
 
     // Count connected — pool mode uses poolConnectedRelays count
     let connected = 0;
-    if (nym.useRelayProxy && nym.poolSocket) {
+    if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
         connected = nym.poolConnectedRelays.length;
     } else {
         pool.forEach((relay) => {
@@ -26654,7 +26901,7 @@ function renderRelayList(pool, stats) {
     // Build sorted relay entries (no type labels - all relays are read/write)
     const entries = [];
 
-    if (typeof nym !== 'undefined' && nym.useRelayProxy && nym.poolSocket) {
+    if (typeof nym !== 'undefined' && nym.useRelayProxy && nym._isAnyPoolOpen()) {
         // Pool mode: only show actually connected relays
         const connectedSet = new Set(nym.poolConnectedRelays);
         connectedSet.forEach(url => {
