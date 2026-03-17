@@ -1472,7 +1472,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
 
         const evt = {
             kind: 30078,
-            created_at: Date.now() / 1000,
+            created_at: Math.floor(Date.now() / 1000),
             tags: [
                 ['d', 'nym-shop-active'],
                 ['title', 'Nymchat Shop Active Items']
@@ -2098,7 +2098,7 @@ TRANSFER TO PUBKEY
         try {
             const zapRequest = {
                 kind: 9734,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ['p', 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df'], // Shop is the recipient
                     ['amount', (parseInt(amountSats) * 1000).toString()], // Amount in millisats
@@ -2410,7 +2410,7 @@ TRANSFER TO PUBKEY
 
             const purchaseEvent = {
                 kind: 30078,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ["d", "nym-shop-purchases"],
                     ["title", "Nymchat Shop Purchases"]
@@ -2761,7 +2761,7 @@ ${code}
 
             const transferEvent = {
                 kind: 30078,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ['d', `nym-shop-transfer-${itemId}-${recipientPubkey}`],
                     ['title', 'Nymchat Shop Item Transfer'],
@@ -2900,7 +2900,7 @@ ${code}
 
             const transferEvent = {
                 kind: 30078,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ['d', `nym-settings-transfer-${this.pubkey}-${recipientPubkey}`],
                     ['title', 'Nymchat Settings Transfer'],
@@ -5548,7 +5548,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Create NIP-56 kind 1984 report event
             const event = {
                 kind: 1984,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: [],
                 content: reportDetails || '',
                 pubkey: this.pubkey
@@ -6371,7 +6371,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         // Presence broadcasts (needed even in PM-only mode for user list)
-        filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
+        filters.push({ kinds: [20001], limit: 100 });
         // Reactions for PMs
         filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
         // User shop items
@@ -6921,7 +6921,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         // Presence broadcasts (needed even in PM-only mode for user list)
-        filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
+        filters.push({ kinds: [20001], limit: 100 });
         // Reactions for PMs
         filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
         // User shop items
@@ -7564,7 +7564,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             const profileEvent = {
                 kind: 0,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: [],
                 content: JSON.stringify(profileToSave),
                 pubkey: this.pubkey
@@ -8244,14 +8244,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
             // Create and sign Nostr event for blossom upload auth
-            const now = Date.now() / 1000;
+            const now = Math.floor(Date.now() / 1000);
             const uploadEvent = {
                 kind: 24242,
                 created_at: now,
                 tags: [
                     ['t', 'upload'],
                     ['x', hashHex],
-                    ['expiration', String(Math.floor(now) + 600)]
+                    ['expiration', String(now + 600)]
                 ],
                 content: 'Uploading blob with SHA-256 hash',
                 pubkey: this.pubkey
@@ -8325,14 +8325,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const hashArray = Array.from(new Uint8Array(hashBuffer));
             const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
-            const now = Date.now() / 1000;
+            const now = Math.floor(Date.now() / 1000);
             const uploadEvent = {
                 kind: 24242,
                 created_at: now,
                 tags: [
                     ['t', 'upload'],
                     ['x', hashHex],
-                    ['expiration', String(Math.floor(now) + 600)]
+                    ['expiration', String(now + 600)]
                 ],
                 content: 'Uploading blob with SHA-256 hash',
                 pubkey: this.pubkey
@@ -8410,14 +8410,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
             // Create and sign Nostr event for blossom upload auth
-            const now = Date.now() / 1000;
+            const now = Math.floor(Date.now() / 1000);
             const uploadEvent = {
                 kind: 24242,
                 created_at: now,
                 tags: [
                     ['t', 'upload'],
                     ['x', hashHex],
-                    ['expiration', String(Math.floor(now) + 600)]
+                    ['expiration', String(now + 600)]
                 ],
                 content: 'Uploading blob with SHA-256 hash',
                 pubkey: this.pubkey
@@ -8602,7 +8602,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             const zapRequest = {
                 kind: 9734,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ['p', this.currentZapTarget.recipientPubkey], // Recipient of zap
                     ['amount', (parseInt(amountSats) * 1000).toString()], // Amount in millisats
@@ -9385,7 +9385,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 const settingsEvent = {
                     kind: 30078,
-                    created_at: Date.now() / 1000,
+                    created_at: Math.floor(Date.now() / 1000),
                     tags: [
                         ["d", "nym-settings"],
                         ["title", "Nymchat Settings"],
@@ -9437,7 +9437,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             const settingsEvent = {
                 kind: 30078,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ["d", "nym-settings"],
                     ["title", "Nymchat Settings"],
@@ -9774,8 +9774,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         } catch (_) { }
 
-        const is30078Fanout = evt && evt.kind === 30078 && evt.tags && evt.tags.some(t => t[0] === 't' && ['nym-poll', 'nym-poll-vote', 'nym-presence'].includes(t[1]));
-        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
+        const is30078Fanout = evt && evt.kind === 30078 && evt.tags && evt.tags.some(t => t[0] === 't' && ['nym-poll', 'nym-poll-vote'].includes(t[1]));
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 20001 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
 
         if (wideFanout) {
             const sent = new Set();
@@ -10515,6 +10515,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } else if (dTag[1] === 'nym-settings') {
                 this.handleSyncedSettings(event);
             }
+        } else if (event.kind === 20001) {
+            // Handle presence events (ephemeral)
+            this.handlePresenceEvent(event);
         } else if (event.kind === 7) {
             // Handle reactions (NIP-25)
             this.handleReaction(event);
@@ -11488,7 +11491,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const event = {
                 kind: 7,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ['e', messageId],
                     ['p', targetPubkey],
@@ -11503,7 +11506,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
                 if (group) {
-                    const now = Date.now() / 1000;
+                    const now = Math.floor(Date.now() / 1000);
                     const reactionRumor = {
                         kind: 7,
                         created_at: now,
@@ -11519,7 +11522,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // For 1:1 PM messages: send reaction as gift wrap to the peer so it stays private
             if (messageEl.dataset.isPM === '1' && !groupId && this._canSendGiftWraps() && this.currentPM) {
-                const now = Date.now() / 1000;
+                const now = Math.floor(Date.now() / 1000);
                 const reactionRumor = {
                     kind: 7,
                     created_at: now,
@@ -11859,7 +11862,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const receiptContent = this.encodeBitchatReceipt(messageId, receiptType, recipientPubkey);
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const rumor = {
             kind: 14,
             created_at: now,
@@ -11884,7 +11887,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const rumor = {
             kind: 69420,
             created_at: now,
@@ -11960,7 +11963,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     async _sendTypingEvent(status) {
         if (!this._canSendGiftWraps()) return;
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const tags = [['typing', status]];
 
         if (this.currentGroup) {
@@ -12154,7 +12157,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const NT = window.NostrTools;
 
         // Rumor (unsigned) with computed id
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const rumor = {
             created_at: now,
             content: '',
@@ -12194,7 +12197,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const NT = window.NostrTools;
 
         // Rumor (unsigned) with computed id
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const rumor = {
             created_at: now,
             content: '',
@@ -12252,7 +12255,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     // Send PM using NIP-17 (GiftWrap 1059) and optional forward secrecy
     async sendNIP17PM(content, recipientPubkey) {
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
 
         // Generate message ID for delivery receipts (Nymchat format)
         const nymMessageId = this.generateUUID();
@@ -12867,7 +12870,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             let list = this.pmMessages.get(conversationKey);
             if (list.some(m => m.id === event.id)) return;
 
-            const tsSec = rumor.created_at || Date.now() / 1000;
+            const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
 
             // Parse bitchat1: format if present to extract actual message
             const parsed = parseBitchatMessage(rumor.content);
@@ -12945,7 +12948,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 conversationKey,
                 conversationPubkey: peerPubkey,
                 eventKind: 1059,
-                isHistorical: (Date.now() / 1000 - tsSec) > 10,
+                isHistorical: (Math.floor(Date.now() / 1000) - tsSec) > 10,
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
                 nymMessageId: nymMsgId  // For sending Nymchat read receipts
             };
@@ -13208,7 +13211,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const memberPubkeys = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
                 .map(t => t[1]);
-            this.addGroupConversation(groupId, groupName, memberPubkeys, (rumor.created_at || Date.now() / 1000) * 1000);
+            this.addGroupConversation(groupId, groupName, memberPubkeys, (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000);
             this._saveGroupConversations();
             if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
                 this.openGroup(groupId);
@@ -13268,7 +13271,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (list.some(m => m.id === event.id)) return;
 
         const messageContent = rumor.content;
-        const tsSec = rumor.created_at || Date.now() / 1000;
+        const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
 
         // Check if this is an edit of a previous group message (has 'edit' tag in rumor)
         const groupEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
@@ -13302,7 +13305,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             conversationKey: groupConvKey,
             conversationPubkey: null,
             eventKind: 1059,
-            isHistorical: (Date.now() / 1000 - tsSec) > 10,
+            isHistorical: (Math.floor(Date.now() / 1000) - tsSec) > 10,
             nymMessageId: nymMsgId,
             deliveryStatus: isOwn ? 'sent' : undefined
         };
@@ -13377,7 +13380,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Always include self as a member
         const allMembers = [...new Set([...memberPubkeys, this.pubkey])];
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this.generateUUID();
         const inviteContent = `You've been added to group "${name}" (${allMembers.length} members).`;
 
@@ -13389,7 +13392,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const rumor = { kind: 14, created_at: now, tags, content: inviteContent, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
-            ? Math.floor(now) + this.settings.dmTTLSeconds : null;
+            ? now + this.settings.dmTTLSeconds : null;
 
         await this._sendGiftWrapsAsync(allMembers, rumor, expirationTs);
 
@@ -13422,7 +13425,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         group.members = [...group.members, newMemberPubkey];
         this.groupConversations.set(groupId, group);
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this.generateUUID();
         const newMemberName = this.getNymFromPubkey(newMemberPubkey);
         const inviterName = this.getNymFromPubkey(this.pubkey);
@@ -13436,7 +13439,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const rumor = { kind: 14, created_at: now, tags, content: addContent, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
-            ? Math.floor(now) + this.settings.dmTTLSeconds : null;
+            ? now + this.settings.dmTTLSeconds : null;
 
         await this._sendGiftWrapsAsync(group.members, rumor, expirationTs);
 
@@ -13531,7 +13534,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const group = this.groupConversations.get(groupId);
         if (!group) return false;
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this.generateUUID();
 
         const tags = group.members.map(pk => ['p', pk]);
@@ -13541,7 +13544,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
-            ? Math.floor(now) + this.settings.dmTTLSeconds : null;
+            ? now + this.settings.dmTTLSeconds : null;
 
         // Always display optimistically — the relay send check (WebSocket.OPEN) is handled
         // inside _sendGiftWraps → sendDMToRelays. Gating display on this.connected causes
@@ -13611,7 +13614,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (group && this._canSendGiftWraps()) {
             const otherMembers = group.members.filter(pk => pk !== this.pubkey);
             if (otherMembers.length > 0) {
-                const now = Date.now() / 1000;
+                const now = Math.floor(Date.now() / 1000);
                 const leaveContent = `${this.nym} left the group.`;
                 const tags = group.members.map(pk => ['p', pk]);
                 tags.push(['g', groupId]);
@@ -13660,7 +13663,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (!group || group.createdBy !== this.pubkey) return;
         if (!group.members.includes(pubkey)) return;
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const kickedName = this.getNymFromPubkey(pubkey);
         const kickerName = this.getNymFromPubkey(this.pubkey);
         const content = `${kickedName} was removed by ${kickerName}.`;
@@ -14556,7 +14559,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
             const event = {
                 kind: 5,
-                created_at: Date.now() / 1000,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: tags,
                 content: '',
                 pubkey: this.pubkey
@@ -14864,14 +14867,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 throw new Error('Not connected to relay');
             }
 
-            const now = Date.now() / 1000;
+            const now = Math.floor(Date.now() / 1000);
             const tags = [
                 ['n', this.nym]
             ];
 
             const kind = 20000; // Geohash channels use kind 20000
             tags.push(['g', geohash || 'nym']);
-            tags.push(['expiration', String(Math.floor(now) + 3600)]); // Expire after 1 hour
 
             let event = {
                 kind: kind,
@@ -14965,14 +14967,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 anonNym = `${adj}_${noun}`;
             }
 
-            const now = Date.now() / 1000;
+            const now = Math.floor(Date.now() / 1000);
             const tags = [
                 ['n', anonNym]
             ];
 
             const kind = 20000;
             tags.push(['g', geohash || 'nym']);
-            tags.push(['expiration', String(Math.floor(now) + 3600)]);
 
             let event = {
                 kind: kind,
@@ -15024,8 +15025,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!this.connected) return;
 
             const tags = [
-                ['d', 'nym-presence'],
-                ['t', 'nym-presence'],
                 ['n', this.nym],
                 ['status', status]
             ];
@@ -15034,8 +15033,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             let event = {
-                kind: 30078,
-                created_at: Date.now() / 1000,
+                kind: 20001,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: tags,
                 content: '',
                 pubkey: this.pubkey
@@ -15053,16 +15052,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!this.connected) return;
 
             const tags = [
-                ['d', 'nym-presence'],
-                ['t', 'nym-presence'],
                 ['n', this.nym],
                 ['status', 'online'],
                 ['avatar-update', avatarUrl]
             ];
 
             let event = {
-                kind: 30078,
-                created_at: Date.now() / 1000,
+                kind: 20001,
+                created_at: Math.floor(Date.now() / 1000),
                 tags: tags,
                 content: '',
                 pubkey: this.pubkey
@@ -15102,14 +15099,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             progressFill.style.width = '40%';
 
             // Create and sign Nostr event
-            const now = Date.now() / 1000;
+            const now = Math.floor(Date.now() / 1000);
             const uploadEvent = {
                 kind: 24242,
                 created_at: now,
                 tags: [
                     ['t', 'upload'],
                     ['x', hashHex],
-                    ['expiration', String(Math.floor(now) + 600)] // 10 minutes from now
+                    ['expiration', String(now + 600)] // 10 minutes from now
                 ],
                 content: 'Uploading blob with SHA-256 hash',
                 pubkey: this.pubkey
@@ -15279,7 +15276,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         let kind;
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
 
         if (this.currentGeohash) {
             kind = 20000; // Geohash channel kind
@@ -15288,8 +15285,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displaySystemMessage('No channel selected for file sharing');
             return;
         }
-
-        tags.push(['expiration', String(Math.floor(now) + 3600)]); // Expire after 1 hour
 
         // Create and sign the file offer event
         const event = {
@@ -15727,7 +15722,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     async sendP2PSignal(targetPubkey, data) {
         const event = {
             kind: this.P2P_SIGNALING_KIND,
-            created_at: Date.now() / 1000,
+            created_at: Math.floor(Date.now() / 1000),
             tags: [
                 ['p', targetPubkey]
             ],
@@ -15893,7 +15888,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                 const event = {
                     kind: this.P2P_FILE_STATUS_KIND,
-                    created_at: Date.now() / 1000,
+                    created_at: Math.floor(Date.now() / 1000),
                     tags: tags,
                     content: JSON.stringify({ offerId, name: offer.name, status: 'unseeded' }),
                     pubkey: this.pubkey
@@ -16022,12 +16017,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.p2pFileOffers.set(offerId, fileOffer);
 
         // Build tags for the Nostr event
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const tags = [
             ['n', this.nym],
             ['offer', JSON.stringify(fileOffer)],
-            ['g', this.currentGeohash],
-            ['expiration', String(Math.floor(now) + 3600)] // Expire after 1 hour
+            ['g', this.currentGeohash]
         ];
 
         // Create and broadcast the file offer event
@@ -18698,11 +18692,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const geohash = this.currentGeohash || 'nym';
 
-            const now = Date.now() / 1000;
+            const now = Math.floor(Date.now() / 1000);
             const tags = [
                 ['n', this.nym],
                 ['g', geohash],
-                ['expiration', String(Math.floor(now) + 3600)],
                 ['edit', originalEventId] // Tag referencing the original message being edited
             ];
 
@@ -18761,7 +18754,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         try {
             if (!this.connected) throw new Error('Not connected to relay');
 
-            const now = Date.now() / 1000;
+            const now = Math.floor(Date.now() / 1000);
             const nymMessageId = this.generateUUID();
 
             const rumor = {
@@ -18777,7 +18770,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             };
 
             const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
-                ? Math.floor(now) + this.settings.dmTTLSeconds : null;
+                ? now + this.settings.dmTTLSeconds : null;
 
             if (this.privkey) {
                 const NT = window.NostrTools;
@@ -18867,7 +18860,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const group = this.groupConversations.get(groupId);
             if (!group) return false;
 
-            const now = Date.now() / 1000;
+            const now = Math.floor(Date.now() / 1000);
             const nymMessageId = this.generateUUID();
 
             const tags = group.members.map(pk => ['p', pk]);
@@ -18878,7 +18871,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const rumor = { kind: 14, created_at: now, tags, content: newContent, pubkey: this.pubkey };
             const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
-                ? Math.floor(now) + this.settings.dmTTLSeconds : null;
+                ? now + this.settings.dmTTLSeconds : null;
 
             // Track edit locally
             const lookupId = originalNymMessageId || originalMessageId;
@@ -20578,14 +20571,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const pollUniqueId = Math.random().toString(36).substring(2, 10);
         const tags = [
             ['d', `nym-poll-${pollUniqueId}`],
             ['t', 'nym-poll'],
             ['n', this.nym],
             ['g', this.currentGeohash],
-            ['expiration', String(Math.floor(now) + 3600)],
             ['poll_question', question],
         ];
         options.forEach((opt, i) => {
@@ -20633,14 +20625,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        const now = Date.now() / 1000;
+        const now = Math.floor(Date.now() / 1000);
         const tags = [
             ['d', `nym-poll-vote-${pollId}`],
             ['t', 'nym-poll-vote'],
             ['e', pollId],
             ['n', this.nym],
             ['g', poll.geohash],
-            ['expiration', String(Math.floor(now) + 3600)],
             ['response', String(optionIndex)]
         ];
 
@@ -24733,7 +24724,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.50.191 ═══<br/>
+═══ Nymchat v3.50.192 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -25509,7 +25500,7 @@ async function nostrSettingsSave() {
 
         const event = {
             kind: 30078,
-            created_at: Date.now() / 1000,
+            created_at: Math.floor(Date.now() / 1000),
             tags: [['d', 'nymchat-settings']],
             content: JSON.stringify(settingsPayload),
             pubkey: pubkey
