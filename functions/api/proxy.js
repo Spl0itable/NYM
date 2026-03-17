@@ -186,8 +186,8 @@ async function handleUnfurl(targetUrl) {
 
   const resp = await fetch(targetUrl, {
     headers: {
-      'User-Agent': 'NymchatBot/1.0 (link preview)',
-      'Accept': 'text/html',
+      'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+      'Accept': 'text/html,application/xhtml+xml',
     },
     redirect: 'follow',
   });
