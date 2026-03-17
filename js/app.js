@@ -508,8 +508,6 @@ class NYM {
             'wss://offchain.pub',
             'wss://nostr21.com'
         ];
-        // Unified relay set: all relays from all sources (deduped)
-        // Built from defaultRelays + bitchat CSV + NIP-66 discovery
         this.allRelayUrls = new Set(this.defaultRelays);
         this.discoveredRelays = new Set();
         this.pendingConnections = new Map();
@@ -522,7 +520,7 @@ class NYM {
         this.reconnectingRelays = new Set();
         this.blacklistedRelays = new Set();
         this.blacklistTimestamps = new Map();
-        this.blacklistDuration = 120000; // 2 minutes before retrying failed relays
+        this.blacklistDuration = 120000;
         this.pubkey = null;
         this.privkey = null;
         this.nym = null;
@@ -539,6 +537,7 @@ class NYM {
         this._navigating = false;
         try { history.replaceState({ _nym_nav: -1 }, ''); } catch {}
         this.messages = new Map();
+        this._msgSeq = 0;
         this.channelDOMCache = new Map();
         this.virtualScroll = {
             windowSize: 100,
@@ -10271,7 +10270,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 author: nym,
                 pubkey: event.pubkey,
                 content: event.content,
-                timestamp: new Date(Math.min(event.created_at * 1000, Date.now())),
+                created_at: event.created_at,
+                _seq: ++this._msgSeq,
+                timestamp: new Date(event.created_at * 1000),
                 channel: geohash ? geohash : 'unknown',
                 geohash: geohash,
                 isOwn: event.pubkey === this.pubkey,
@@ -12360,12 +12361,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Show locally
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+            const _now1 = Math.floor(Date.now() / 1000);
             this.pmMessages.get(conversationKey).push({
                 id: wrapped.id,
                 author: this.nym,
                 pubkey: this.pubkey,
                 content,
-                timestamp: new Date(),
+                created_at: _now1,
+                _seq: ++this._msgSeq,
+                timestamp: new Date(_now1 * 1000),
                 isOwn: true,
                 isPM: true,
                 conversationKey,
@@ -12463,12 +12467,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Show locally
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+            const _now2 = Math.floor(Date.now() / 1000);
             this.pmMessages.get(conversationKey).push({
                 id: wrapped.id,
                 author: this.nym,
                 pubkey: this.pubkey,
                 content,
-                timestamp: new Date(),
+                created_at: _now2,
+                _seq: ++this._msgSeq,
+                timestamp: new Date(_now2 * 1000),
                 isOwn: true,
                 isPM: true,
                 conversationKey,
@@ -12968,7 +12975,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 author: isOwn ? this.nym : senderName,
                 pubkey: senderPubkey,
                 content: messageContent,
-                timestamp: new Date(Math.min(tsSec * 1000, Date.now())),
+                created_at: tsSec,
+                _seq: ++this._msgSeq,
+                timestamp: new Date(tsSec * 1000),
                 isOwn,
                 isPM: true,
                 conversationKey,
@@ -12980,7 +12989,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             };
 
             list.push(msg);
-            list.sort((a, b) => a.timestamp - b.timestamp);
+            list.sort((a, b) => {
+                const dt = (a.created_at || 0) - (b.created_at || 0);
+                if (dt !== 0) return dt;
+                return (a._seq || 0) - (b._seq || 0);
+            });
             // Cap PM conversations at 100 messages to prevent memory bloat
             if (list.length > 100) {
                 list = list.slice(-100);
@@ -13067,12 +13080,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
             const failedId = 'failed-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+            const _nowFail = Math.floor(Date.now() / 1000);
             const failedMsg = {
                 id: failedId,
                 author: this.nym,
                 pubkey: this.pubkey,
                 content,
-                timestamp: new Date(),
+                created_at: _nowFail,
+                _seq: ++this._msgSeq,
+                timestamp: new Date(_nowFail * 1000),
                 isOwn: true,
                 isPM: true,
                 conversationKey,
@@ -13323,7 +13339,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             author: isOwn ? this.nym : senderName,
             pubkey: senderPubkey,
             content: messageContent,
-            timestamp: new Date(Math.min(tsSec * 1000, Date.now())),
+            created_at: tsSec,
+            _seq: ++this._msgSeq,
+            timestamp: new Date(tsSec * 1000),
             isOwn,
             isPM: true,
             isGroup: true,
@@ -13337,7 +13355,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         };
 
         list.push(msg);
-        list.sort((a, b) => a.timestamp - b.timestamp);
+        list.sort((a, b) => {
+            const dt = (a.created_at || 0) - (b.created_at || 0);
+            if (dt !== 0) return dt;
+            return (a._seq || 0) - (b._seq || 0);
+        });
         if (list.length > 100) list = list.slice(-100);
         this.pmMessages.set(groupConvKey, list);
 
@@ -13578,12 +13600,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // app-level this.connected flag hasn't been set yet (e.g. right after group creation).
         const groupConvKey = this.getGroupConversationKey(groupId);
         if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
+        const _nowGrp = Math.floor(Date.now() / 1000);
         const msg = {
             id: nymMessageId,
             author: this.nym,
             pubkey: this.pubkey,
             content,
-            timestamp: new Date(),
+            created_at: _nowGrp,
+            _seq: ++this._msgSeq,
+            timestamp: new Date(_nowGrp * 1000),
             isOwn: true,
             isPM: true,
             isGroup: true,
@@ -14922,6 +14947,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 content: content,
                 author: this.nym,
                 pubkey: this.pubkey,
+                created_at: signedEvent.created_at,
+                _seq: ++this._msgSeq,
                 timestamp: new Date(signedEvent.created_at * 1000),
                 channel: channel,
                 geohash: geohash,
@@ -15022,6 +15049,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 content: content,
                 author: anonNym,
                 pubkey: ephPk,
+                created_at: signedEvent.created_at,
+                _seq: ++this._msgSeq,
                 timestamp: new Date(signedEvent.created_at * 1000),
                 channel: channel,
                 geohash: geohash,
@@ -15329,6 +15358,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             author: this.nym,
             pubkey: this.pubkey,
             content: event.content,
+            created_at: event.created_at,
+            _seq: ++this._msgSeq,
             timestamp: new Date(event.created_at * 1000),
             channel: this.currentChannel,
             geohash: this.currentGeohash || '',
@@ -16065,6 +16096,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 author: this.nym,
                 pubkey: this.pubkey,
                 content: event.content,
+                created_at: event.created_at,
+                _seq: ++this._msgSeq,
                 timestamp: new Date(event.created_at * 1000),
                 channel: this.currentChannel,
                 geohash: this.currentGeohash || '',
@@ -16306,13 +16339,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Check if message already exists
             const exists = this.messages.get(storageKey).some(m => m.id === message.id);
             if (!exists) {
-                // Add message and sort by created_at timestamp (sub-second precision),
-                // using event ID as tiebreaker only when timestamps are identical
+                // Add message and sort by raw created_at (integer seconds) for
+                // deterministic ordering across relays; arrival sequence breaks ties
+                // within the same second (best proxy for actual send order).
                 this.messages.get(storageKey).push(message);
                 this.messages.get(storageKey).sort((a, b) => {
-                    const dt = a.timestamp.getTime() - b.timestamp.getTime();
+                    const dt = (a.created_at || 0) - (b.created_at || 0);
                     if (dt !== 0) return dt;
-                    return (a.id || '').localeCompare(b.id || '');
+                    return (a._seq || 0) - (b._seq || 0);
                 });
 
                 // Prune in-memory messages if exceeding limit (100 max)
@@ -16391,6 +16425,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             messageEl.className = 'action-message';
             messageEl.dataset.messageId = message.id;
             messageEl.dataset.timestamp = displayTimestamp.getTime();
+            messageEl.dataset.createdAt = message.created_at || 0;
+            messageEl.dataset.seq = message._seq || 0;
 
             // Get clean author name and flair
             const cleanAuthor = this.parseNymFromDisplay(message.author);
@@ -16437,6 +16473,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             messageEl.dataset.pubkey = message.pubkey;
             messageEl.dataset.rawContent = message.content;
             messageEl.dataset.timestamp = displayTimestamp.getTime();
+            messageEl.dataset.createdAt = message.created_at || 0;
+            messageEl.dataset.seq = message._seq || 0;
             if (message.isPM) messageEl.dataset.isPM = '1';
             if (message.isGroup && message.groupId) messageEl.dataset.groupId = message.groupId;
 
@@ -16685,24 +16723,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             });
         }
 
-        // Always insert messages in correct created_at timestamp order to prevent out-of-order display.
-        // Sub-second precision ensures accurate chronological placement; event ID is only
-        // used as tiebreaker when timestamps are identical.
+        // Always insert messages in correct created_at order to prevent out-of-order display.
+        // Uses raw created_at (integer seconds) consistent with the in-memory sort;
+        // arrival sequence (_seq) breaks ties within the same second.
         {
-            const existingMessages = Array.from(container.querySelectorAll('[data-timestamp]'));
-            const messageTimestamp = displayTimestamp.getTime();
-            const messageId = (message.isPM && message.nymMessageId) ? message.nymMessageId : (message.id || '');
+            const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
+            const msgCreatedAt = message.created_at || 0;
+            const msgSeq = message._seq || 0;
 
             let insertBefore = null;
             for (const existing of existingMessages) {
-                const existingTimestamp = parseInt(existing.dataset.timestamp);
-                if (messageTimestamp < existingTimestamp) {
+                const existingCreatedAt = parseInt(existing.dataset.createdAt) || 0;
+                if (msgCreatedAt < existingCreatedAt) {
                     insertBefore = existing;
                     break;
                 }
-                if (messageTimestamp === existingTimestamp) {
-                    const existingId = existing.dataset.messageId || '';
-                    if (messageId.localeCompare(existingId) < 0) {
+                if (msgCreatedAt === existingCreatedAt) {
+                    const existingSeq = parseInt(existing.dataset.seq) || 0;
+                    if (msgSeq < existingSeq) {
                         insertBefore = existing;
                         break;
                     }
@@ -20794,6 +20832,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const now = new Date();
         const displayTimestamp = timestamp > now ? now : timestamp;
         messageEl.dataset.timestamp = displayTimestamp.getTime();
+        messageEl.dataset.createdAt = created_at || 0;
 
         const timeStr = displayTimestamp.toLocaleTimeString([], {
             hour: '2-digit',
@@ -21399,9 +21438,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.isSpamMessage(msg.content)) return false;
             return true;
         }).sort((a, b) => {
-            const dt = a.timestamp - b.timestamp;
+            const dt = (a.created_at || 0) - (b.created_at || 0);
             if (dt !== 0) return dt;
-            return (a.id || '').localeCompare(b.id || '');
+            return (a._seq || 0) - (b._seq || 0);
         });
     }
 
@@ -21422,9 +21461,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!msg.isGroup && msg.pubkey !== this.pubkey && msg.pubkey !== this.currentPM) return false;
             return true;
         }).sort((a, b) => {
-            const dt = a.timestamp - b.timestamp;
+            const dt = (a.created_at || 0) - (b.created_at || 0);
             if (dt !== 0) return dt;
-            return (a.id || '').localeCompare(b.id || '');
+            return (a._seq || 0) - (b._seq || 0);
         });
     }
 
@@ -24762,7 +24801,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.193 ═══<br/>
+═══ Nymchat v3.51.194 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

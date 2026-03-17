@@ -91,12 +91,6 @@ export async function onRequest(context) {
   const reconnectAttempts = new Map();
   const MAX_RECONNECT_ATTEMPTS = 5;
 
-  // Connection staggering for large relay sets
-  let connectionQueue = [];
-  let connectionTimer = null;
-  const CONNECTION_STAGGER_MS = 200;
-  const MAX_CONCURRENT = 6;
-
   // Track relays pending reconnection
   const pendingReconnect = new Set();
   const reconnectTimers = new Map();
@@ -202,33 +196,10 @@ export async function onRequest(context) {
     return raw.substring(start, end);
   }
 
-  // Stagger relay connections to avoid overwhelming the worker
+  // Connect to a relay immediately (no staggering)
   function queueConnection(relayUrl, type) {
     if (upstreams.has(relayUrl)) return;
-    if (connectionQueue.some(item => item.url === relayUrl)) return;
-    connectionQueue.push({ url: relayUrl, type });
-    drainConnectionQueue();
-  }
-
-  function drainConnectionQueue() {
-    if (connectionTimer) return;
-    if (connectionQueue.length === 0) return;
-
-    let connecting = 0;
-    upstreams.forEach(info => { if (info.status === 'connecting') connecting++; });
-    if (connecting >= MAX_CONCURRENT) {
-      connectionTimer = setTimeout(() => { connectionTimer = null; drainConnectionQueue(); }, CONNECTION_STAGGER_MS);
-      return;
-    }
-
-    const next = connectionQueue.shift();
-    if (next) {
-      connectUpstream(next.url, next.type);
-    }
-
-    if (connectionQueue.length > 0) {
-      connectionTimer = setTimeout(() => { connectionTimer = null; drainConnectionQueue(); }, CONNECTION_STAGGER_MS);
-    }
+    connectUpstream(relayUrl, type);
   }
 
   function scheduleReconnect(relayUrl, type) {
@@ -427,11 +398,9 @@ export async function onRequest(context) {
               clearTimeout(timerId);
             }
             reconnectTimers.clear();
-            connectionQueue = [];
             pendingReconnect.clear();
-            if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
 
-            // Connect new relays with staggering
+            // Connect all relays immediately (geo relays first in the array)
             for (const url of requestedRelays) {
               if (!upstreams.has(url)) {
                 queueConnection(url, writeOnlyRelays.has(url) ? 'write' : 'read');
