@@ -3235,6 +3235,14 @@ ${code}
             this.switchChannel(channelName, channelName);
             this.userJoinedChannels.add(channelName);
             this.saveUserChannels();
+        } else if (channelName) {
+            // Non-geohash channel
+            if (!this.channels.has(channelName)) {
+                this.addChannel(channelName, channelName);
+            }
+            this.switchChannel(channelName, channelName);
+            this.userJoinedChannels.add(channelName);
+            this.saveUserChannels();
         }
     }
 
@@ -3789,6 +3797,8 @@ ${code}
     }
 
     addGeohashChannelToGlobe(geohash) {
+        // Only add valid geohashes to the globe
+        if (!this.isValidGeohash(geohash)) return;
         // If globe is active, update it
         if (this.globe && this.globeAnimationActive) {
             this.globe.updatePoints();
@@ -3804,9 +3814,9 @@ ${code}
         // From common geohashes
         this.commonGeohashes.forEach(g => allGeohashes.add(g.toLowerCase()));
 
-        // From user's channels
+        // From user's channels (only valid geohashes)
         this.channels.forEach((value, key) => {
-            if (value.geohash) {
+            if (value.geohash && this.isValidGeohash(value.geohash)) {
                 allGeohashes.add(value.geohash.toLowerCase());
             }
         });
@@ -4215,11 +4225,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (closestRelays.length === 0) return;
         const geoUrls = new Set(closestRelays.map(r => r.url));
 
-        // Multiplexed pool mode: the proxy fans out EVENTs to every connected
+        // Multiplexed pool mode: retry with GEO_EVENT so proxy prioritizes geo relays
         if (this.useRelayProxy && this.poolSocket) {
             setTimeout(() => {
                 if (this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-                    this._poolSend(['EVENT', signedEvent]);
+                    this._poolSend(['GEO_EVENT', signedEvent, closestRelays.map(r => r.url)]);
                 }
             }, 2000);
             return;
@@ -4661,7 +4671,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     handleChannelSearch(searchTerm) {
-        const term = searchTerm.toLowerCase();
+        const term = searchTerm.toLowerCase().trim();
         const resultsDiv = document.getElementById('channelSearchResults');
 
         // Filter existing channels
@@ -4669,51 +4679,50 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Show create/join prompt if search term exists
         if (term.length > 0) {
-            // Sanitize the search term for geohash (only valid geohash chars)
-            const sanitized = term.replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
-
-            if (!sanitized) {
-                resultsDiv.innerHTML = '<div class="search-create-prompt" style="color: var(--danger);">Invalid geohash. Valid characters are: 0-9, b-z (except a, i, l, o).</div>';
-                return;
-            }
-
-            const isGeohash = this.isValidGeohash(sanitized);
-            const exists = Array.from(this.channels.keys()).some(k => k.toLowerCase() === sanitized);
+            // Check if the term as-is is a valid geohash (don't sanitize — treat the exact input)
+            const isGeohash = this.isValidGeohash(term);
+            const exists = Array.from(this.channels.keys()).some(k => k.toLowerCase() === term);
 
             // Clear previous results
             resultsDiv.innerHTML = '';
 
-            // Show geohash option if valid
             if (isGeohash && !exists) {
-                const location = this.getGeohashLocation(sanitized) || 'Unknown location';
+                // Valid geohash — offer to join as geohash channel
+                const location = this.getGeohashLocation(term) || 'Unknown location';
                 const prompt = document.createElement('div');
                 prompt.className = 'search-create-prompt';
                 prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
                 prompt.innerHTML = `
-        <span>Join geohash channel "${sanitized}" (${location})</span>
+        <span>Join geohash channel "${term}" (${location})</span>
     `;
                 prompt.onclick = async () => {
-                    this.addChannel(sanitized, sanitized);
-                    this.switchChannel(sanitized, sanitized);
-                    this.userJoinedChannels.add(sanitized);
+                    this.addChannel(term, term);
+                    this.switchChannel(term, term);
+                    this.userJoinedChannels.add(term);
                     document.getElementById('channelSearch').value = '';
                     resultsDiv.innerHTML = '';
                     this.filterChannels('');
                     this.saveUserChannels();
                 };
                 resultsDiv.appendChild(prompt);
-            } else if (!isGeohash) {
-                resultsDiv.innerHTML = '<div class="search-create-prompt" style="color: var(--text-dim);">Enter a valid geohash code to join a channel.</div>';
-            }
-
-            // Show warning if original term had invalid characters
-            if (term !== sanitized) {
-                const warning = document.createElement('div');
-                warning.className = 'search-create-prompt';
-                warning.style.cssText = 'color: var(--text-dim); font-size: 11px; margin-top: 5px; cursor: default;';
-                warning.innerHTML = `Note: Spaces and special characters removed. Using "${sanitized}"`;
-                warning.onclick = null;
-                resultsDiv.appendChild(warning);
+            } else if (!isGeohash && !exists) {
+                // Not a valid geohash — offer to join as non-geohash channel
+                const prompt = document.createElement('div');
+                prompt.className = 'search-create-prompt';
+                prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
+                prompt.innerHTML = `
+        <span>Join channel "${term}"</span>
+    `;
+                prompt.onclick = async () => {
+                    this.addChannel(term, term);
+                    this.switchChannel(term, term);
+                    this.userJoinedChannels.add(term);
+                    document.getElementById('channelSearch').value = '';
+                    resultsDiv.innerHTML = '';
+                    this.filterChannels('');
+                    this.saveUserChannels();
+                };
+                resultsDiv.appendChild(prompt);
             }
         } else {
             resultsDiv.innerHTML = '';
@@ -6414,7 +6423,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const since1h = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
         let filters = [];
 
-        // Only geohash channels supported
+        // Subscribe to channel messages (geohash and non-geohash both use the g tag)
         filters = [
             {
                 kinds: [20000],
@@ -6590,7 +6599,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         // Check if we have few messages for this channel (under 50)
-        const storageKey = channelType === 'geohash' ? `#${channelKey}` : channelKey;
+        // Storage key uses #prefix for channels with a geohash/g-tag (both geohash and non-geohash)
+        const storageKey = `#${channelKey}`;
         const currentMessages = this.messages.get(storageKey) || [];
 
         // If we have very few messages, send a targeted request
@@ -9489,7 +9499,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     sendToRelay(message) {
         // Multiplexed pool mode: send everything through the single socket
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
-            this._poolSend(message);
+            // For EVENT messages, route through broadcastEvent so geohash-tagged
+            // events use GEO_EVENT (geo relay prioritization) instead of plain EVENT.
+            if (Array.isArray(message) && message[0] === 'EVENT') {
+                this.broadcastEvent(message);
+            } else {
+                this._poolSend(message);
+            }
             return;
         }
 
@@ -16995,33 +17011,41 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Restore video placeholders
         formatted = formatted.replace(/__VID_(\d+)__/g, (m, idx) => videoPlaceholders[idx]);
 
-        // Process mentions and geohash channel references in one pass
+        // Process mentions and channel references (both geohash and non-geohash) in one pass
         formatted = formatted.replace(
-            /(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[0-9bcdefghjkmnpqrstuvwxyz]+)(?=\s|$|[.,!?])/gi,
+            /(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?])/gi,
             (match, mentionWithSuffix, simpleMention, whitespace, channel) => {
                 if (mentionWithSuffix) {
                     return `<span style="color: var(--secondary)">${mentionWithSuffix}</span>`;
                 } else if (simpleMention) {
                     return `<span style="color: var(--secondary)">${simpleMention}</span>`;
                 } else if (channel) {
-                    const channelName = channel.substring(1).trim();
-                    const sanitized = channelName.toLowerCase().replace(/[^0-9bcdefghjkmnpqrstuvwxyz]/g, '');
+                    const channelName = channel.substring(1).trim().toLowerCase();
 
-                    if (!sanitized || !this.isValidGeohash(sanitized)) {
+                    if (!channelName) {
                         return match;
                     }
 
-                    const isActive = this.currentGeohash === sanitized;
-                    const classes = ['channel-reference', 'geohash-reference'];
+                    const isGeohash = this.isValidGeohash(channelName);
+                    const isActive = isGeohash
+                        ? this.currentGeohash === channelName
+                        : this.currentChannel === channelName;
+                    const classes = ['channel-reference'];
+                    if (isGeohash) classes.push('geohash-reference');
                     if (isActive) classes.push('active-channel');
 
-                    const location = this.getGeohashLocation(sanitized);
-                    let title = `Geohash channel`;
-                    if (location) {
-                        title += `: ${location}`;
+                    let title;
+                    if (isGeohash) {
+                        const location = this.getGeohashLocation(channelName);
+                        title = `Geohash channel`;
+                        if (location) {
+                            title += `: ${location}`;
+                        }
+                    } else {
+                        title = `Channel: #${channelName}`;
                     }
 
-                    return `${whitespace || ''}<span class="${classes.join(' ')}" style="text-decoration: underline;" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('g:${sanitized}', event); return false;">${channel}</span>`;
+                    return `${whitespace || ''}<span class="${classes.join(' ')}" style="text-decoration: underline;" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('g:${channelName}', event); return false;">${channel}</span>`;
                 }
             }
         );
@@ -19218,7 +19242,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     async cmdJoin(args) {
         if (!args) {
-            this.displaySystemMessage('Usage: /join #geohash (e.g., /join #9q5 or /join nym)');
+            this.displaySystemMessage('Usage: /join #channel (e.g., /join #9q5, /join #nymchat, or /join nym)');
             return;
         }
 
@@ -19229,9 +19253,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             channel = channel.substring(1);
         }
 
-        // Validate geohash
-        if (!this.isValidGeohash(channel)) {
-            this.displaySystemMessage('Invalid geohash format. Use only valid geohash characters (0-9, b-z excluding a, i, l, o).');
+        if (!channel) {
+            this.displaySystemMessage('Please provide a channel name.');
             return;
         }
 
@@ -19880,12 +19903,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 return;
             }
 
-            // Block geohash channel
+            // Block channel (geohash or non-geohash)
+            this.blockChannel(channelName, channelName);
             if (this.isValidGeohash(channelName)) {
-                this.blockChannel(channelName, channelName);
                 this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
             } else {
-                this.displaySystemMessage(`Invalid geohash: ${channelName}`);
+                this.displaySystemMessage(`Blocked channel #${channelName}`);
             }
 
             this.updateBlockedChannelsList();
@@ -21120,7 +21143,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.ensureDefaultRelaysConnected();
 
         // This ensures we get more messages even with few relays connected
-        const channelType = geohash ? 'geohash' : 'ephemeral';
+        const channelType = (geohash && this.isValidGeohash(geohash)) ? 'geohash' : 'ephemeral';
         const channelKey = geohash || channel;
         this.loadChannelFromRelays(channelKey, channelType);
 
@@ -21130,12 +21153,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             shareBtn.style.display = 'block';
         }
 
+        const isGeo = geohash && this.isValidGeohash(geohash);
         const displayName = geohash ? `#${geohash}` : `#${channel}`;
         let fullTitle = displayName;
 
         // Add channel type label
-        if (geohash) {
-            // Geohash channel - add location info and label
+        if (isGeo) {
+            // Valid geohash channel - add location info and label
             const location = this.getGeohashLocation(geohash);
 
             if (location) {
@@ -21156,6 +21180,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // No location info available, just add label
                 fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span>`;
             }
+        } else if (geohash) {
+            // Non-geohash channel (g tag with non-geohash name)
+            fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Non-Geohash)</span>`;
         } else {
             // Standard ephemeral channel
             fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Ephemeral)</span>`;
@@ -21468,11 +21495,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 item.classList.add('active');
             }
 
+            const isGeo = geohash && this.isValidGeohash(geohash);
             const displayName = geohash ? `#${geohash}` : `#${channel}`;
 
             // Get location information for geohash channels
             let locationHint = '';
-            if (geohash) {
+            if (isGeo) {
                 const location = this.getGeohashLocation(geohash);
                 if (location) {
                     locationHint = ` title="${location}"`;
@@ -21793,11 +21821,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const userChannels = JSON.parse(saved);
 
                 userChannels.forEach(({ key, channel, geohash }) => {
-                    // Only restore geohash channels
-                    if (geohash && this.isValidGeohash(geohash)) {
-                        if (!this.channels.has(key)) {
-                            this.addChannel(channel, geohash);
-                        }
+                    // Restore both geohash and non-geohash channels
+                    if (key && !this.channels.has(key)) {
+                        this.addChannel(channel, geohash);
+                    }
+                    if (key) {
                         this.userJoinedChannels.add(key);
                     }
                 });
@@ -21805,7 +21833,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Sort channels after loading
                 this.sortChannelsByActivity();
 
-                const channelCount = userChannels.filter(c => c.geohash).length;
+                const channelCount = userChannels.filter(c => c.key).length;
                 if (channelCount > 0) {
                     this.displaySystemMessage(`Restored ${channelCount} previously joined channels`);
                 }
@@ -21928,13 +21956,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (aPinned && !bPinned) return -1;
             if (!aPinned && bPinned) return 1;
 
-            // Check if these are geohash channels
-            const aIsGeo = !!a.dataset.geohash && a.dataset.geohash !== '';
-            const bIsGeo = !!b.dataset.geohash && b.dataset.geohash !== '';
+            // Check if these are valid geohash channels (not just any channel with a geohash field)
+            const aIsGeo = !!a.dataset.geohash && a.dataset.geohash !== '' && this.isValidGeohash(a.dataset.geohash);
+            const bIsGeo = !!b.dataset.geohash && b.dataset.geohash !== '' && this.isValidGeohash(b.dataset.geohash);
 
-            // If proximity sorting is enabled, sort ALL geohash channels by distance first
+            // If proximity sorting is enabled, sort valid geohash channels by distance
             if (this.settings.sortByProximity && this.userLocation) {
-                // If both are geohash, sort by distance
+                // If both are valid geohash, sort by distance
                 if (aIsGeo && bIsGeo) {
                     try {
                         const coordsA = this.decodeGeohash(a.dataset.geohash);
@@ -21955,10 +21983,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         // Fall through to unread count if error
                     }
                 }
-
-                // If only one is geo, put geo channels first when proximity sorting is on
-                if (aIsGeo && !bIsGeo) return -1;
-                if (!aIsGeo && bIsGeo) return 1;
+                // Non-geohash channels mix in with geohash by unread count — no forced grouping
             }
 
             // Default: sort by unread count
@@ -24724,7 +24749,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.50.192 ═══<br/>
+═══ Nymchat v3.51.192 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
