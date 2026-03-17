@@ -47,13 +47,13 @@
             },
             {
                 title: 'Channels',
-                body: 'Browse and switch geohash channels. Use the search feature to find and join geohash channels.',
+                body: 'Browse and switch regular or geohash channels. Use the search feature to find and join regular or geohash channels. Geohash is location-based chat rooms using geohash codes (e.g., #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location.',
                 selector: '#channelList',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Explore Geohash',
-                body: 'Tap the globe to explore geohash channels on a 3D globe.',
+                body: 'Tap the globe to explore geohash-only channels on a 3D globe.',
                 selector: '.discover-icon',
                 onBefore: ensureSidebarOpenOnMobile
             },
