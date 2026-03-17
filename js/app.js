@@ -448,6 +448,7 @@ class NYM {
     constructor() {
         this.relayPool = new Map();
         this.useRelayProxy = this._detectCloudflareHost();
+        this.relayPoolDOUrl = 'wss://relay.nymchat.app';
         this.poolSocket = null;
         this.poolConnectedRelays = [];
         this.poolRelayTypes = {};
@@ -6224,35 +6225,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 });
             }
 
-            // Connect to all relays from bitchat CSV + NIP-66 discovery (staggered)
+            // Connect to all relays from bitchat CSV + NIP-66 discovery
             // In low data mode, skip - only use defaults + DM relays
             if (!this.settings.lowDataMode) {
-                // Wait for CSV to load, then connect to all unified relays
+                const connectNewRelays = () => {
+                    const relaysToConnect = [...this.allRelayUrls]
+                        .filter(url => !this.relayPool.has(url) && this.shouldRetryRelay(url));
+                    for (const relayUrl of relaysToConnect) {
+                        this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
+                            const r = this.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                this.subscribeRelayToChannel(r, relayUrl);
+                                this.updateConnectionStatus();
+                            }
+                        });
+                    }
+                };
+
+                // Connect CSV geo relays as soon as CSV loads (don't wait for NIP-66)
                 (this._geoRelaysReady || Promise.resolve()).then(() => {
-                    // Discover NIP-66 relays too
-                    this.discoverRelays().then(() => {
-                        // Add discovered relays to unified set
-                        for (const url of this.discoveredRelays) {
-                            this.allRelayUrls.add(url);
-                        }
+                    connectNewRelays();
+                });
 
-                        // Connect to all relays not yet connected in concurrent batches
-                        const relaysToConnect = [...this.allRelayUrls]
-                            .filter(url => !this.relayPool.has(url) && this.shouldRetryRelay(url));
-
-                        // Fire all connections concurrently — the browser limits
-                        // parallel WebSocket handshakes natively so no artificial
-                        // stagger is needed.
-                        for (const relayUrl of relaysToConnect) {
-                            this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
-                                const r = this.relayPool.get(relayUrl);
-                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                    this.subscribeRelayToChannel(r, relayUrl);
-                                    this.updateConnectionStatus();
-                                }
-                            });
-                        }
-                    });
+                // Discover NIP-66 relays independently (don't wait for CSV)
+                this.discoverRelays().then(() => {
+                    for (const url of this.discoveredRelays) {
+                        this.allRelayUrls.add(url);
+                    }
+                    connectNewRelays();
                 });
             }
 
@@ -6685,8 +6685,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return `${proto}//${window.location.host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
     }
 
-    // Multiplexed relay pool (single WebSocket to proxy)
+    // Multiplexed relay pool (single WebSocket to proxy or Durable Object worker)
     _getRelayPoolUrl() {
+        // Durable Object worker URL — persistent relay connections shared across clients.
+        // Deploy the worker from workers/relay-pool-do/ and set this to its URL.
+        // e.g., 'wss://pool.nymchat.app' or 'wss://nym-relay-pool.<account>.workers.dev'
+        if (this.relayPoolDOUrl) {
+            return this.relayPoolDOUrl;
+        }
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         return `${proto}//${window.location.host}/api/relay-pool`;
     }
@@ -24801,7 +24807,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.194 ═══<br/>
+═══ Nymchat v3.52.193 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
