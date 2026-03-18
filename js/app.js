@@ -960,6 +960,9 @@ class NYM {
         this.shopItemsLoaded = false;
         this.shopPurchasesTimestamp = 0;
         this.zaps = new Map();
+        this._zapReceiptEventIds = new Set();
+        this._zapResubscribeTimer = null;
+        this._zapReceiptSubId = null;
         this.currentZapTarget = null;
         this.currentZapInvoice = null;
         this.pendingLightningWaiters = new Map();
@@ -4181,7 +4184,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     for (const r of parsed) {
                         this.allRelayUrls.add(r.url);
                     }
-                    console.log(`[GeoRelays] Loaded ${parsed.length} relays from georelays CSV (${this.allRelayUrls.size} total relays)`);
                     // If the relay pool proxy is already connected, update
                     // its config so it connects to the full CSV relay set
                     if (this.useRelayProxy && this._isAnyPoolOpen()) {
@@ -6349,6 +6351,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
+    // Determine if a relay URL is a geo or discovered relay (not a default/DM relay)
+    _isGeoOrDiscoveredRelay(relayUrl) {
+        const defaultSet = new Set(this.defaultRelays || []);
+        const dmSet = new Set(this.bitchatDMRelays || []);
+        return !defaultSet.has(relayUrl) && !dmSet.has(relayUrl);
+    }
+
     subscribeToSingleRelay(relayUrl) {
         const relay = this.relayPool.get(relayUrl);
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
@@ -6357,7 +6366,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (relay.type === 'write') return;
 
         const ws = relay.ws;
+        const since1h = Math.floor(Date.now() / 1000) - 3600;
+        const isGeo = this._isGeoOrDiscoveredRelay(relayUrl);
 
+        // Geo/discovered relays only get kinds 20000 + 20001
+        if (isGeo) {
+            const subId = "nym-geo-" + Math.random().toString(36).substring(7);
+            if (!relay.subscriptions) relay.subscriptions = new Set();
+            relay.subscriptions.add(subId);
+            const filters = this._buildGeoFilters(since1h);
+            ws.send(JSON.stringify(["REQ", subId, ...filters]));
+            return;
+        }
+
+        // Critical (default + DM) relays get the full subscription set
         const subId = "nym-" + Math.random().toString(36).substring(7);
 
         // Track this subscription
@@ -6366,47 +6388,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         relay.subscriptions.add(subId);
 
-        const since1h = Math.floor(Date.now() / 1000) - 3600;
-
-        const filters = [];
-
-        // Skip geohash channel subscriptions in group chat & PM only mode
-        if (!this.settings.groupChatPMOnlyMode) {
-            // Messages in geohash channels (past 1hr)
-            filters.push({ kinds: [20000], since: since1h, limit: 100 });
-            // Polls and poll votes (kind 30078 with t-tag)
-            filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 });
-            // Reactions for geohash channels
-            filters.push({ kinds: [7], "#k": ["20000"], since: since1h, limit: 100 });
-            // Delete events (scoped to NYM kinds: geohash channels + DM gift wraps)
-            filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since1h, limit: 100 });
-        }
-
-        // Presence broadcasts (needed even in PM-only mode for user list)
-        filters.push({ kinds: [20001], limit: 100 });
-        // Reactions for PMs
-        filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
-        // User shop items
-        filters.push({ kinds: [30078], "#d": ["nym-shop-active"], limit: 100 });
-        // Zap receipts
-        filters.push({ kinds: [9735], limit: 100 });
-
-        if (this.pubkey) {
-            filters.push(
-                // Gift wraps addressed to me
-                { kinds: [1059], "#p": [this.pubkey], limit: 500 },
-                // Any reactions with #p = my pubkey
-                { kinds: [7], "#p": [this.pubkey], limit: 100 },
-                // My shop purchases & active items
-                { kinds: [30078], authors: [this.pubkey], "#d": ["nym-shop-purchases", "nym-shop-active"], limit: 100 },
-                // Shop items tagged to me
-                { kinds: [30078], "#p": [this.pubkey], limit: 50 },
-                // P2P signaling events addressed to me (recent 2 min)
-                { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
-                // P2P connection announcements (recent 24hr)
-                { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 }
-            );
-        }
+        const filters = this._buildCriticalFilters(since1h);
 
         // Send single REQ with all filters
         ws.send(JSON.stringify(["REQ", subId, ...filters]));
@@ -6997,10 +6979,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 clearTimeout(timeout);
 
                 // Send RELAYS config for this shard
+                // Geo/discovered shards get probeRelays so the worker tests
+                // each relay for kind 20000 support before keeping it connected
+                const isGeoShard = shard.role === 'geo' || shard.role === 'discovered';
                 ws.send(JSON.stringify(['RELAYS', {
                     relays: shard.relays,
                     writeOnly: shard.writeOnly || [],
-                    dmRelays: shard.dmRelays || []
+                    dmRelays: shard.dmRelays || [],
+                    probeRelays: isGeoShard ? shard.relays : []
                 }]));
 
                 poolEntry.lastMessage = Date.now();
@@ -7164,15 +7150,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const p = this.poolSockets.find(w => w.id === shardId);
         if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) return;
 
-        const subId = "nym-" + Math.random().toString(36).substring(7);
         const since1h = Math.floor(Date.now() / 1000) - 3600;
-        const filters = this._buildPoolFilters(since1h);
+
+        // Geo/discovered shards only get kinds 20000 + 20001
+        const isGeoOrDiscovered = p.role === 'geo' || p.role === 'discovered';
+        const filters = isGeoOrDiscovered
+            ? this._buildGeoFilters(since1h)
+            : this._buildCriticalFilters(since1h);
+
+        const subId = isGeoOrDiscovered
+            ? "nym-geo-" + Math.random().toString(36).substring(7)
+            : "nym-" + Math.random().toString(36).substring(7);
+
         const msg = JSON.stringify(["REQ", subId, ...filters]);
         try { p.ws.send(msg); } catch (_) {}
     }
 
-    // Build the standard subscription filters used for pool subscriptions
-    _buildPoolFilters(since1h) {
+    // Build geo-only filters (kinds 20000 + 20001) for geo/discovered relay shards
+    _buildGeoFilters(since1h) {
+        const filters = [];
+        if (!this.settings.groupChatPMOnlyMode) {
+            filters.push({ kinds: [20000], since: since1h, limit: 100 });
+        }
+        filters.push({ kinds: [20001], limit: 100 });
+        return filters;
+    }
+
+    // Build full subscription filters for critical (default + DM) relay shards
+    _buildCriticalFilters(since1h) {
         const filters = [];
 
         // Skip geohash channel subscriptions in group chat & PM only mode
@@ -7186,7 +7191,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         filters.push({ kinds: [20001], limit: 100 });
         filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
         filters.push({ kinds: [30078], "#d": ["nym-shop-active"], limit: 100 });
-        filters.push({ kinds: [9735], limit: 100 });
+
+        // Zap receipts: scope to visible message event IDs if available
+        const zapFilter = this._buildZapReceiptFilter();
+        if (zapFilter) filters.push(zapFilter);
 
         if (this.pubkey) {
             filters.push(
@@ -7202,15 +7210,96 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return filters;
     }
 
+    // Build the standard subscription filters used for pool subscriptions
+    // (kept for backward compat with _poolSubscribeOnWorker — delegates to role-based filters)
+    _buildPoolFilters(since1h) {
+        return this._buildCriticalFilters(since1h);
+    }
+
+    // Build a zap receipt filter scoped to visible message event IDs.
+    // Returns null if no event IDs are available (caller should skip zap filter).
+    _buildZapReceiptFilter() {
+        this._collectVisibleEventIds();
+        if (this._zapReceiptEventIds.size === 0) return null;
+        // Limit to 500 event IDs to stay within relay filter size limits
+        const ids = [...this._zapReceiptEventIds].slice(0, 500);
+        return { kinds: [9735], "#e": ids, limit: 100 };
+    }
+
+    // Collect event IDs from all currently stored channel messages (max 100 per channel)
+    _collectVisibleEventIds() {
+        this._zapReceiptEventIds.clear();
+        this.messages.forEach((msgs) => {
+            for (const msg of msgs) {
+                if (msg.id) this._zapReceiptEventIds.add(msg.id);
+            }
+        });
+        // Also include PM message IDs if any
+        if (this.pmMessages) {
+            this.pmMessages.forEach((msgs) => {
+                for (const msg of msgs) {
+                    if (msg.id) this._zapReceiptEventIds.add(msg.id);
+                }
+            });
+        }
+    }
+
+    // Debounced update of the zap receipt subscription (called when messages change)
+    _scheduleZapResubscribe() {
+        if (this._zapResubscribeTimer) return; // already scheduled
+        this._zapResubscribeTimer = setTimeout(() => {
+            this._zapResubscribeTimer = null;
+            this._updateZapReceiptSubscription();
+        }, 10000); // 10-second debounce
+    }
+
+    // Send an updated zap receipt subscription to critical relays only
+    _updateZapReceiptSubscription() {
+        const zapFilter = this._buildZapReceiptFilter();
+        if (!zapFilter) return;
+
+        const newSubId = "nym-zap-" + Math.random().toString(36).substring(7);
+
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            // Close previous zap subscription
+            if (this._zapReceiptSubId) {
+                this._poolSendToRole('critical', ["CLOSE", this._zapReceiptSubId]);
+            }
+            this._zapReceiptSubId = newSubId;
+            this._poolSendToRole('critical', ["REQ", newSubId, zapFilter]);
+        } else {
+            // Direct mode: send to default + DM relays only
+            const msg = JSON.stringify(["REQ", newSubId, zapFilter]);
+            const closeMsg = this._zapReceiptSubId ? JSON.stringify(["CLOSE", this._zapReceiptSubId]) : null;
+            this._zapReceiptSubId = newSubId;
+
+            this.relayPool.forEach((relay, url) => {
+                if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
+                    relay.type !== 'write' && !this._isGeoOrDiscoveredRelay(url)) {
+                    if (closeMsg) try { relay.ws.send(closeMsg); } catch (_) {}
+                    if (!relay.subscriptions) relay.subscriptions = new Set();
+                    relay.subscriptions.add(newSubId);
+                    try { relay.ws.send(msg); } catch (_) {}
+                }
+            });
+        }
+    }
+
     _poolSubscribe() {
         if (!this._isAnyPoolOpen()) return;
 
-        const subId = "nym-" + Math.random().toString(36).substring(7);
         const since1h = Math.floor(Date.now() / 1000) - 3600;
-        const filters = this._buildPoolFilters(since1h);
 
-        // Send subscription to ALL open workers — each will query its relay shard
-        this._poolSend(["REQ", subId, ...filters]);
+        // Critical shards (default + DM relays): full subscription set
+        const criticalSubId = "nym-" + Math.random().toString(36).substring(7);
+        const criticalFilters = this._buildCriticalFilters(since1h);
+        this._poolSendToRole('critical', ["REQ", criticalSubId, ...criticalFilters]);
+
+        // Geo + discovered shards: only kinds 20000 and 20001
+        const geoSubId = "nym-geo-" + Math.random().toString(36).substring(7);
+        const geoFilters = this._buildGeoFilters(since1h);
+        this._poolSendToRole('geo', ["REQ", geoSubId, ...geoFilters]);
+        this._poolSendToRole('discovered', ["REQ", geoSubId, ...geoFilters]);
     }
 
     // Re-shard and update relay config across all workers.
@@ -7253,10 +7342,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 existing.relays = shard.relays;
                 existing.dmRelays = shard.dmRelays || [];
                 existing.writeOnly = shard.writeOnly || [];
+                const isGeoShard = shard.role === 'geo' || shard.role === 'discovered';
                 existing.ws.send(JSON.stringify(['RELAYS', {
                     relays: shard.relays,
                     writeOnly: shard.writeOnly || [],
-                    dmRelays: shard.dmRelays || []
+                    dmRelays: shard.dmRelays || [],
+                    probeRelays: isGeoShard ? shard.relays : []
                 }]));
             } else if (!existingIds.has(shard.id)) {
                 // New shard — connect a new worker
@@ -10364,7 +10455,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     cleanupNonResponsiveRelays() {
-        // Pool mode: proxy handles relay health
+        // Pool mode: proxy handles relay health via probing
         if (this.useRelayProxy) return;
 
         const now = Date.now();
@@ -10372,14 +10463,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.relayPool.forEach((relay, url) => {
             if (relay.type === 'relay') {
                 const kinds = this.relayKinds.get(url);
+                const isGeo = this._isGeoOrDiscoveredRelay(url);
 
                 // Check if relay has sent any of our required kinds
                 if (kinds && kinds.size > 0) {
-                    const hasRequiredKinds =
-                        kinds.has(20000) || // geohash channels
-                        kinds.has(7) ||     // reactions (already filtered for our k tags)
-                        kinds.has(1059) ||  // PMs
-                        kinds.has(30078);   // polls, presence, shop (NIP-78)
+                    // Geo/discovered relays must support kind 20000 or 20001
+                    // Critical relays can support any of the app's kinds
+                    const hasRequiredKinds = isGeo
+                        ? (kinds.has(20000) || kinds.has(20001))
+                        : (kinds.has(20000) || kinds.has(7) || kinds.has(1059) || kinds.has(30078));
 
                     if (!hasRequiredKinds) {
                         relay.ws.close();
@@ -16646,6 +16738,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (messages && messages.length > 100) {
                     this.messages.set(storageKey, messages.slice(-100));
                 }
+
+                // Schedule zap receipt subscription update with new event IDs
+                this._scheduleZapResubscribe();
             }
 
             // Check if this is for current channel
@@ -25114,7 +25209,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.197 ═══<br/>
+═══ Nymchat v3.51.198 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

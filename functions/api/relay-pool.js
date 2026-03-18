@@ -5,7 +5,7 @@
 // Client connects to: wss://<host>/api/relay-pool
 //
 // Protocol (client → proxy):
-//   ["RELAYS", { relays: ["wss://relay1.com", ...], writeOnly: ["wss://sendit.nosflare.com"], dmRelays: ["wss://relay.damus.io", ...] }]
+//   ["RELAYS", { relays: [...], writeOnly: [...], dmRelays: [...], probeRelays: [...] }]
 //   ["EVENT", eventObj]          - fans out to all connected relays
 //   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
 //   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
@@ -16,7 +16,7 @@
 // Protocol (proxy → client):
 //   ["EVENT", subId, eventObj]   - deduplicated via string extraction (no JSON.parse)
 //   ["OK", eventId, bool, msg]   - first OK per event ID
-//   ["EOSE", subId]              - forwarded as-is (client handles multiples)
+//   ["EOSE", subId]              - deduplicated (first per subscription ID)
 //   ["NOTICE", msg]              - forwarded as-is
 //   ["POOL:STATUS", { connected, failed, count, latency, events, relayTypes }]
 
@@ -36,17 +36,18 @@ export async function onRequest(context) {
   const activeSubscriptions = new Map(); // subId -> raw JSON string of the REQ message
   const seenEvents = new Map();      // eventId -> 1 (string-based dedup, no JSON.parse)
   const seenOKs = new Set();         // eventId (only forward first OK per event)
+  const seenEOSE = new Set();        // subId (only forward first EOSE per subscription)
   const relayLatency = new Map();    // relayUrl -> latency ms
   let writeOnlyRelays = new Set();
   let dmRelays = [];
   let serverOpen = true;
 
-  // Dedup housekeeping
-  const DEDUP_MAX = 5000;
+  // Dedup housekeeping — increased capacity for high relay counts
+  const DEDUP_MAX = 50000;
   let dedupCounter = 0;
 
   function trimDedup() {
-    if (++dedupCounter < 200) return;
+    if (++dedupCounter < 500) return;
     dedupCounter = 0;
     if (seenEvents.size > DEDUP_MAX) {
       const toDelete = seenEvents.size - DEDUP_MAX;
@@ -57,11 +58,19 @@ export async function onRequest(context) {
         deleted++;
       }
     }
-    if (seenOKs.size > 1000) {
+    if (seenOKs.size > 2000) {
       let deleted = 0;
       for (const key of seenOKs) {
-        if (deleted >= 500) break;
+        if (deleted >= 1000) break;
         seenOKs.delete(key);
+        deleted++;
+      }
+    }
+    if (seenEOSE.size > 500) {
+      let deleted = 0;
+      for (const key of seenEOSE) {
+        if (deleted >= 250) break;
+        seenEOSE.delete(key);
         deleted++;
       }
     }
@@ -99,6 +108,39 @@ export async function onRequest(context) {
   // Buffered GEO_EVENTs waiting for geo relays to connect
   // Map<relayUrl, Array<geoMsg string>>
   const pendingGeoEvents = new Map();
+
+  // Kind 20000 capability probing for non-critical relays
+  // When enabled, newly connected relays get a probe REQ for kind 20000.
+  // If they respond with EOSE and zero events, they are disconnected.
+  const probeRelays = new Set();    // relayUrls that should be probed
+  const probeSubIds = new Map();    // probeSubId -> relayUrl
+  const probeEventCounts = new Map(); // probeSubId -> event count
+  const PROBE_TIMEOUT = 15000;      // 15 seconds to respond with events
+
+  function probeRelay(relayUrl, ws) {
+    const probeSubId = 'probe-' + Math.random().toString(36).substring(2, 10);
+    probeSubIds.set(probeSubId, relayUrl);
+    probeEventCounts.set(probeSubId, 0);
+    const since1h = Math.floor(Date.now() / 1000) - 3600;
+    const probeReq = JSON.stringify(['REQ', probeSubId, { kinds: [20000], since: since1h, limit: 1 }]);
+    try { ws.send(probeReq); } catch { /* noop */ }
+
+    // Timeout: if no events arrived, disconnect relay
+    setTimeout(() => {
+      const count = probeEventCounts.get(probeSubId) || 0;
+      probeSubIds.delete(probeSubId);
+      probeEventCounts.delete(probeSubId);
+      // Close probe subscription
+      try { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(['CLOSE', probeSubId])); } catch { /* noop */ }
+      if (count === 0) {
+        // Relay doesn't support kind 20000 — disconnect it
+        intentionallyClosed.add(relayUrl);
+        try { ws.close(); } catch { /* noop */ }
+        upstreams.delete(relayUrl);
+        schedulePoolStatus();
+      }
+    }, PROBE_TIMEOUT);
+  }
 
   // Throttle pool status updates
   let statusTimer = null;
@@ -278,6 +320,10 @@ export async function onRequest(context) {
           }
           pendingGeoEvents.delete(relayUrl);
         }
+        // Probe non-critical relays for kind 20000 support
+        if (probeRelays.has(relayUrl)) {
+          probeRelay(relayUrl, ws);
+        }
         schedulePoolStatus();
       });
 
@@ -289,6 +335,14 @@ export async function onRequest(context) {
         // Detect message type from raw string prefix (avoids JSON.parse)
         // EVENT: ["EVENT","subId",{...}]
         if (raw.charCodeAt(2) === 69 && raw.startsWith('["EVENT"')) {
+          // Check if this is a probe subscription event (don't forward to client)
+          const probeMatch = raw.match(/^\["EVENT","(probe-[a-z0-9]+)"/);
+          if (probeMatch && probeSubIds.has(probeMatch[1])) {
+            const count = probeEventCounts.get(probeMatch[1]) || 0;
+            probeEventCounts.set(probeMatch[1], count + 1);
+            return; // Don't forward probe events
+          }
+
           const eventId = extractEventId(raw);
           if (eventId) {
             if (seenEvents.has(eventId)) return; // Dedup
@@ -307,8 +361,21 @@ export async function onRequest(context) {
           }
           sendToClient(raw);
 
-        // EOSE, NOTICE, or anything else — forward as-is
+        // EOSE, NOTICE, or anything else
         } else {
+          // Suppress EOSE for probe subscriptions
+          if (raw.startsWith('["EOSE","probe-')) return;
+
+          // Deduplicate EOSE: only forward the first EOSE per subscription ID
+          if (raw.charCodeAt(2) === 69 && raw.startsWith('["EOSE"')) {
+            const eoseMatch = raw.match(/^\["EOSE","([^"]+)"/);
+            if (eoseMatch) {
+              const eoseSubId = eoseMatch[1];
+              if (seenEOSE.has(eoseSubId)) return;
+              seenEOSE.add(eoseSubId);
+            }
+          }
+
           sendToClient(raw);
         }
       });
@@ -382,6 +449,11 @@ export async function onRequest(context) {
             writeOnlyRelays = new Set(writeOnly);
 
             const requestedRelays = config.relays || [];
+
+            // Mark relays for kind 20000 capability probing
+            const probeList = config.probeRelays || [];
+            probeRelays.clear();
+            for (const url of probeList) probeRelays.add(url);
 
             // Disconnect relays no longer in the list
             const newRelaySet = new Set([...requestedRelays, ...writeOnly]);
@@ -493,6 +565,7 @@ export async function onRequest(context) {
           } else if (msgType === 'CLOSE') {
             const subId = msg[1];
             activeSubscriptions.delete(subId);
+            seenEOSE.delete(subId); // Allow EOSE for future subscriptions with same pattern
             sendToUpstreams(event.data, (url, info) => info.type !== 'write');
           }
     } catch {
