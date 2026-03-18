@@ -17703,10 +17703,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const avatarUpdateTag = event.tags.find(t => t[0] === 'avatar-update');
         const gTag = event.tags.find(t => t[0] === 'g');
 
+        if (!statusTag) return;
+
         const pubkey = event.pubkey;
-        // Default to 'online' when no status tag (e.g. bitchat presence events
-        // which only carry a geohash 'g' tag per the Geohash Presence Spec)
-        const status = statusTag ? statusTag[1] : 'online';
+        const status = statusTag[1];
         const nym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : null;
         const eventTime = event.created_at || 0;
         const eventTimeMs = eventTime * 1000;
@@ -17746,10 +17746,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Create or update user from presence event (users can be online
-        // even if they haven't posted a message yet).
-        // Bitchat presence events only carry a 'g' tag with no nym — use
-        // a truncated pubkey as a fallback display name.
-        const displayNym = nym || `anon-${pubkey.slice(0, 8)}`;
+        // even if they haven't posted a message yet)
         const channelKey = gTag ? gTag[1] : null;
         if (this.users.has(pubkey)) {
             const user = this.users.get(pubkey);
@@ -17759,12 +17756,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             user.status = status;
             if (nym) user.nym = nym;
             if (channelKey) user.channels.add(channelKey);
-        } else {
+        } else if (nym) {
             // New user discovered via presence — they're online but haven't messaged
             const channels = new Set();
             if (channelKey) channels.add(channelKey);
             this.users.set(pubkey, {
-                nym: displayNym,
+                nym: nym,
                 pubkey: pubkey,
                 lastSeen: eventTimeMs,
                 lastMessageAt: 0, // no messages yet
@@ -17778,9 +17775,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 }
                 this.channelUsers.get(channelKey).add(pubkey);
             }
-            // Fetch kind 0 profile to resolve display name and avatar
-            // (e.g. bitchat presence events carry no nym, only a pubkey)
-            this.queueProfileFetch(pubkey);
         }
 
         this.updateUserList();
