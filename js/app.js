@@ -457,7 +457,6 @@ class NYM {
         this._poolReconnectRetries = 0;
         this.RELAYS_PER_WORKER = 25;
         this.blacklistedRelays = new Set();
-        this.relayKinds = new Map();
         this.relayStats = {
             eventsPerRelay: new Map(),
             bytesReceived: 0,
@@ -469,7 +468,6 @@ class NYM {
         };
         this._relayStatsInterval = null;
         this._relayStatsAnimFrame = null;
-        this.relayVerificationTimeout = 10000;
         // NIP-66 relay monitor relays and known monitor pubkeys
         this.monitorRelays = ['wss://relay.nostr.watch', 'wss://history.nostr.watch', 'wss://relaypag.es'];
         // nostr.watch Amsterdam monitor pubkey (publishes kind 30166 liveness events)
@@ -4901,7 +4899,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Clean up dead relays
         deadRelays.forEach(url => {
             this.relayPool.delete(url);
-            this.relayKinds.delete(url);
         });
 
         // If we have no actual connections, force reconnect
@@ -5050,7 +5047,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.relayPool.forEach((relay, url) => {
                 if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) {
                     this.relayPool.delete(url);
-                    this.relayKinds.delete(url);
+
                 }
             });
 
@@ -5092,7 +5089,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 }
                 this.relayPool.delete(url);
-                this.relayKinds.delete(url);
             });
 
             this.connected = false;
@@ -5197,7 +5193,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.relayPool.forEach((relay, url) => {
                 if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) {
                     this.relayPool.delete(url);
-                    this.relayKinds.delete(url);
+
                 }
             });
 
@@ -7485,7 +7481,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                     // Immediately remove from pool and update status
                     this.relayPool.delete(relayUrl);
-                    this.relayKinds.delete(relayUrl);
 
                     // Force status update after disconnect
                     this.updateConnectionStatus();
@@ -10317,25 +10312,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             case 'EVENT':
                 const [subscriptionId, event] = data;
 
-                // Track what kinds this relay is sending us
-                if (event && event.kind) {
-                    if (!this.relayKinds.has(relayUrl)) {
-                        this.relayKinds.set(relayUrl, new Set());
-                    }
-                    const relayKindTracker = this.relayKinds.get(relayUrl);
-
-                    // For reactions (kind 7), only count them if they have the right k tags
-                    if (event.kind === 7) {
-                        const kTag = event.tags?.find(t => t[0] === 'k');
-                        if (kTag && ['20000', '1059'].includes(kTag[1])) {
-                            relayKindTracker.add(7);
-                        }
-                    } else {
-                        // For other kinds, add them directly
-                        relayKindTracker.add(event.kind);
-                    }
-                }
-
                 // Handle profile events (kind 0) for lightning addresses and avatars
                 if (event && event.kind === 0) {
                     try {
@@ -10451,44 +10427,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const notice = data[0];
                 break;
         }
-    }
-
-    cleanupNonResponsiveRelays() {
-        // Pool mode: proxy handles relay health via probing
-        if (this.useRelayProxy) return;
-
-        const now = Date.now();
-
-        this.relayPool.forEach((relay, url) => {
-            if (relay.type === 'relay') {
-                const kinds = this.relayKinds.get(url);
-                const isGeo = this._isGeoOrDiscoveredRelay(url);
-
-                // Check if relay has sent any of our required kinds
-                if (kinds && kinds.size > 0) {
-                    // Geo/discovered relays must support kind 20000
-                    // Critical relays can support any of the app's kinds
-                    const hasRequiredKinds = isGeo
-                        ? kinds.has(20000)
-                        : (kinds.has(20000) || kinds.has(7) || kinds.has(1059) || kinds.has(30078));
-
-                    if (!hasRequiredKinds) {
-                        relay.ws.close();
-                        this.relayPool.delete(url);
-                        this.relayKinds.delete(url);
-                        this.blacklistedRelays.add(url);
-                        this.updateConnectionStatus();
-                    }
-                } else if (now - relay.connectedAt > this.relayVerificationTimeout) {
-                    // No kinds received within timeout
-                    relay.ws.close();
-                    this.relayPool.delete(url);
-                    this.relayKinds.delete(url);
-                    this.blacklistedRelays.add(url);
-                    this.updateConnectionStatus();
-                }
-            }
-        });
     }
 
     async handleEvent(event) {
@@ -22566,7 +22504,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 } else {
                     // Clean up dead connections from pool
                     this.relayPool.delete(url);
-                    this.relayKinds.delete(url);
+
                 }
             });
 
@@ -25209,7 +25147,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.198 ═══<br/>
+═══ Nymchat v3.51.199 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -26591,13 +26529,6 @@ document.addEventListener('DOMContentLoaded', () => {
             );
         }
     }, 1000);
-
-    // Periodically clean up non-responsive relays
-    setInterval(() => {
-        if (nym.connected) {
-            nym.cleanupNonResponsiveRelays();
-        }
-    }, 5000);
 
     // Periodically update connection status (skip during initial connection)
     setInterval(() => {
