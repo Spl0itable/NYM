@@ -6369,7 +6369,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const since1h = Math.floor(Date.now() / 1000) - 3600;
         const isGeo = this._isGeoOrDiscoveredRelay(relayUrl);
 
-        // Geo/discovered relays only get kinds 20000 + 20001
+        // Geo/discovered relays only get kind 20000
         if (isGeo) {
             const subId = "nym-geo-" + Math.random().toString(36).substring(7);
             if (!relay.subscriptions) relay.subscriptions = new Set();
@@ -7152,7 +7152,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const since1h = Math.floor(Date.now() / 1000) - 3600;
 
-        // Geo/discovered shards only get kinds 20000 + 20001
+        // Geo/discovered shards only get kind 20000
         const isGeoOrDiscovered = p.role === 'geo' || p.role === 'discovered';
         const filters = isGeoOrDiscovered
             ? this._buildGeoFilters(since1h)
@@ -7166,13 +7166,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         try { p.ws.send(msg); } catch (_) {}
     }
 
-    // Build geo-only filters (kinds 20000 + 20001) for geo/discovered relay shards
+    // Build geo-only filters (kind 20000) for geo/discovered relay shards
     _buildGeoFilters(since1h) {
         const filters = [];
         if (!this.settings.groupChatPMOnlyMode) {
             filters.push({ kinds: [20000], since: since1h, limit: 100 });
         }
-        filters.push({ kinds: [20001], limit: 100 });
         return filters;
     }
 
@@ -7188,7 +7187,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since1h, limit: 100 });
         }
 
-        filters.push({ kinds: [20001], limit: 100 });
+        filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
         filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
         filters.push({ kinds: [30078], "#d": ["nym-shop-active"], limit: 100 });
 
@@ -7295,7 +7294,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const criticalFilters = this._buildCriticalFilters(since1h);
         this._poolSendToRole('critical', ["REQ", criticalSubId, ...criticalFilters]);
 
-        // Geo + discovered shards: only kinds 20000 and 20001
+        // Geo + discovered shards: only kind 20000
         const geoSubId = "nym-geo-" + Math.random().toString(36).substring(7);
         const geoFilters = this._buildGeoFilters(since1h);
         this._poolSendToRole('geo', ["REQ", geoSubId, ...geoFilters]);
@@ -10173,7 +10172,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } catch (_) { }
 
         const is30078Fanout = evt && evt.kind === 30078 && evt.tags && evt.tags.some(t => t[0] === 't' && ['nym-poll', 'nym-poll-vote'].includes(t[1]));
-        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 20001 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
 
         if (wideFanout) {
             const sent = new Set();
@@ -10467,10 +10466,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                 // Check if relay has sent any of our required kinds
                 if (kinds && kinds.size > 0) {
-                    // Geo/discovered relays must support kind 20000 or 20001
+                    // Geo/discovered relays must support kind 20000
                     // Critical relays can support any of the app's kinds
                     const hasRequiredKinds = isGeo
-                        ? (kinds.has(20000) || kinds.has(20001))
+                        ? kinds.has(20000)
                         : (kinds.has(20000) || kinds.has(7) || kinds.has(1059) || kinds.has(30078));
 
                     if (!hasRequiredKinds) {
@@ -10916,9 +10915,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } else if (dTag[1] === 'nym-settings') {
                 this.handleSyncedSettings(event);
             }
-        } else if (event.kind === 20001) {
-            // Handle presence events (ephemeral)
-            this.handlePresenceEvent(event);
         } else if (event.kind === 7) {
             // Handle reactions (NIP-25)
             this.handleReaction(event);
@@ -15464,6 +15460,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!this.connected) return;
 
             const tags = [
+                ['d', 'nym-presence'],
+                ['t', 'nym-presence'],
                 ['n', this.nym],
                 ['status', status]
             ];
@@ -15472,7 +15470,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             let event = {
-                kind: 20001,
+                kind: 30078,
                 created_at: Math.floor(Date.now() / 1000),
                 tags: tags,
                 content: '',
@@ -15491,13 +15489,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!this.connected) return;
 
             const tags = [
+                ['d', 'nym-presence'],
+                ['t', 'nym-presence'],
                 ['n', this.nym],
                 ['status', 'online'],
                 ['avatar-update', avatarUrl]
             ];
 
             let event = {
-                kind: 20001,
+                kind: 30078,
                 created_at: Math.floor(Date.now() / 1000),
                 tags: tags,
                 content: '',
