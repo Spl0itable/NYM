@@ -5,7 +5,7 @@
 // Client connects to: wss://<host>/api/relay-pool
 //
 // Protocol (client → proxy):
-//   ["RELAYS", { relays: [...], writeOnly: [...], dmRelays: [...], probeRelays: [...] }]
+//   ["RELAYS", { relays: [...], writeOnly: [...], dmRelays: [...] }]
 //   ["EVENT", eventObj]          - fans out to all connected relays
 //   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
 //   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
@@ -108,39 +108,6 @@ export async function onRequest(context) {
   // Buffered GEO_EVENTs waiting for geo relays to connect
   // Map<relayUrl, Array<geoMsg string>>
   const pendingGeoEvents = new Map();
-
-  // Kind 20000 capability probing for non-critical relays
-  // When enabled, newly connected relays get a probe REQ for kind 20000.
-  // If they respond with EOSE and zero events, they are disconnected.
-  const probeRelays = new Set();    // relayUrls that should be probed
-  const probeSubIds = new Map();    // probeSubId -> relayUrl
-  const probeEventCounts = new Map(); // probeSubId -> event count
-  const PROBE_TIMEOUT = 15000;      // 15 seconds to respond with events
-
-  function probeRelay(relayUrl, ws) {
-    const probeSubId = 'probe-' + Math.random().toString(36).substring(2, 10);
-    probeSubIds.set(probeSubId, relayUrl);
-    probeEventCounts.set(probeSubId, 0);
-    const since1h = Math.floor(Date.now() / 1000) - 3600;
-    const probeReq = JSON.stringify(['REQ', probeSubId, { kinds: [20000], since: since1h, limit: 1 }]);
-    try { ws.send(probeReq); } catch { /* noop */ }
-
-    // Timeout: if no events arrived, disconnect relay
-    setTimeout(() => {
-      const count = probeEventCounts.get(probeSubId) || 0;
-      probeSubIds.delete(probeSubId);
-      probeEventCounts.delete(probeSubId);
-      // Close probe subscription
-      try { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(['CLOSE', probeSubId])); } catch { /* noop */ }
-      if (count === 0) {
-        // Relay doesn't support kind 20000 — disconnect it
-        intentionallyClosed.add(relayUrl);
-        try { ws.close(); } catch { /* noop */ }
-        upstreams.delete(relayUrl);
-        schedulePoolStatus();
-      }
-    }, PROBE_TIMEOUT);
-  }
 
   // Throttle pool status updates
   let statusTimer = null;
@@ -320,10 +287,6 @@ export async function onRequest(context) {
           }
           pendingGeoEvents.delete(relayUrl);
         }
-        // Probe non-critical relays for kind 20000 support
-        if (probeRelays.has(relayUrl)) {
-          probeRelay(relayUrl, ws);
-        }
         schedulePoolStatus();
       });
 
@@ -335,14 +298,6 @@ export async function onRequest(context) {
         // Detect message type from raw string prefix (avoids JSON.parse)
         // EVENT: ["EVENT","subId",{...}]
         if (raw.charCodeAt(2) === 69 && raw.startsWith('["EVENT"')) {
-          // Check if this is a probe subscription event (don't forward to client)
-          const probeMatch = raw.match(/^\["EVENT","(probe-[a-z0-9]+)"/);
-          if (probeMatch && probeSubIds.has(probeMatch[1])) {
-            const count = probeEventCounts.get(probeMatch[1]) || 0;
-            probeEventCounts.set(probeMatch[1], count + 1);
-            return; // Don't forward probe events
-          }
-
           const eventId = extractEventId(raw);
           if (eventId) {
             if (seenEvents.has(eventId)) return; // Dedup
@@ -363,9 +318,6 @@ export async function onRequest(context) {
 
         // EOSE, NOTICE, or anything else
         } else {
-          // Suppress EOSE for probe subscriptions
-          if (raw.startsWith('["EOSE","probe-')) return;
-
           // Deduplicate EOSE: only forward the first EOSE per subscription ID
           if (raw.charCodeAt(2) === 69 && raw.startsWith('["EOSE"')) {
             const eoseMatch = raw.match(/^\["EOSE","([^"]+)"/);
@@ -449,11 +401,6 @@ export async function onRequest(context) {
             writeOnlyRelays = new Set(writeOnly);
 
             const requestedRelays = config.relays || [];
-
-            // Mark relays for kind 20000 capability probing
-            const probeList = config.probeRelays || [];
-            probeRelays.clear();
-            for (const url of probeList) probeRelays.add(url);
 
             // Disconnect relays no longer in the list
             const newRelaySet = new Set([...requestedRelays, ...writeOnly]);

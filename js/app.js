@@ -6975,14 +6975,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 clearTimeout(timeout);
 
                 // Send RELAYS config for this shard
-                // Geo/discovered shards get probeRelays so the worker tests
-                // each relay for kind 20000 support before keeping it connected
-                const isGeoShard = shard.role === 'geo' || shard.role === 'discovered';
                 ws.send(JSON.stringify(['RELAYS', {
                     relays: shard.relays,
                     writeOnly: shard.writeOnly || [],
-                    dmRelays: shard.dmRelays || [],
-                    probeRelays: isGeoShard ? shard.relays : []
+                    dmRelays: shard.dmRelays || []
                 }]));
 
                 poolEntry.lastMessage = Date.now();
@@ -7337,12 +7333,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 existing.relays = shard.relays;
                 existing.dmRelays = shard.dmRelays || [];
                 existing.writeOnly = shard.writeOnly || [];
-                const isGeoShard = shard.role === 'geo' || shard.role === 'discovered';
                 existing.ws.send(JSON.stringify(['RELAYS', {
                     relays: shard.relays,
                     writeOnly: shard.writeOnly || [],
-                    dmRelays: shard.dmRelays || [],
-                    probeRelays: isGeoShard ? shard.relays : []
+                    dmRelays: shard.dmRelays || []
                 }]));
             } else if (!existingIds.has(shard.id)) {
                 // New shard — connect a new worker
