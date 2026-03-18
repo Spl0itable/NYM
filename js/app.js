@@ -10099,9 +10099,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     sendRequestToFewRelays(message, maxRelays = 5) {
-        // Multiplexed pool mode: proxy handles dedup
+        // Multiplexed pool mode: route to critical shards only (profiles don't need geo/discovered)
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            this._poolSend(message);
+            this._poolSendToRole('critical', message);
             return;
         }
 
