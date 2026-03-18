@@ -64,8 +64,8 @@
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
-                title: 'Active Nyms',
-                body: 'See who is currently active. Tap a nym to PM them and more.',
+                title: 'Online Nyms',
+                body: 'See who is currently online. Tap a nym to PM them and more.',
                 selector: '#userList',
                 onBefore: ensureSidebarOpenOnMobile
             },
@@ -4184,6 +4184,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     for (const r of parsed) {
                         this.allRelayUrls.add(r.url);
                     }
+                    console.log(`[GeoRelays] Loaded ${parsed.length} relays from georelays CSV (${this.allRelayUrls.size} total relays)`);
                     // If the relay pool proxy is already connected, update
                     // its config so it connects to the full CSV relay set
                     if (this.useRelayProxy && this._isAnyPoolOpen()) {
@@ -4813,9 +4814,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                     // Always refresh subscriptions when we come back to foreground
                     setTimeout(() => this.resubscribeAllRelays(), 250);
+                    // Restart presence heartbeat
+                    this.startPresenceHeartbeat();
                 }, delay);
             } else {
                 // Stop monitoring when app goes to background
+                this.stopPresenceHeartbeat();
                 if (this.reconnectionInterval) {
                     clearInterval(this.reconnectionInterval);
                     this.reconnectionInterval = null;
@@ -10099,9 +10103,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     sendRequestToFewRelays(message, maxRelays = 5) {
-        // Multiplexed pool mode: proxy handles dedup
+        // Multiplexed pool mode: send only to critical shards (default + DM relays)
+        // Profile lookups and other one-shot requests don't need geo/discovered relays
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            this._poolSend(message);
+            this._poolSendToRole('critical', message);
             return;
         }
 
@@ -10230,6 +10235,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     subscribeToAllRelays() {
+        // Start presence heartbeat so other users see us as online
+        this.startPresenceHeartbeat();
+
         // Multiplexed pool mode: subscription through all pool workers
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSubscribe();
@@ -15470,6 +15478,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (status === 'away' && awayMessage) {
                 tags.push(['away', awayMessage]);
             }
+            // Include geohash tag for location-based presence tracking
+            const geohash = this.currentGeohash;
+            if (geohash) {
+                tags.push(['g', geohash]);
+            }
 
             let event = {
                 kind: 20001,
@@ -15483,6 +15496,35 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.sendToRelay(["EVENT", signedEvent]);
         } catch (error) {
             // Silently fail - presence is best-effort
+        }
+    }
+
+    // Start periodic presence heartbeat (randomized 40-80s interval)
+    // so other users can see us as online even when not actively messaging
+    startPresenceHeartbeat() {
+        this.stopPresenceHeartbeat();
+        const scheduleNext = () => {
+            // Randomized interval between 40-80 seconds to prevent temporal correlation
+            const interval = 40000 + Math.random() * 40000;
+            this._presenceHeartbeatTimer = setTimeout(async () => {
+                if (this.connected && this.pubkey) {
+                    const status = this.awayMessages.has(this.pubkey) ? 'away' : 'online';
+                    await this.publishPresence(status);
+                }
+                scheduleNext();
+            }, interval);
+        };
+        // Publish immediately on start, then schedule recurring
+        if (this.connected && this.pubkey) {
+            this.publishPresence('online');
+        }
+        scheduleNext();
+    }
+
+    stopPresenceHeartbeat() {
+        if (this._presenceHeartbeatTimer) {
+            clearTimeout(this._presenceHeartbeatTimer);
+            this._presenceHeartbeatTimer = null;
         }
     }
 
@@ -17659,6 +17701,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const statusTag = event.tags.find(t => t[0] === 'status');
         const awayTag = event.tags.find(t => t[0] === 'away');
         const avatarUpdateTag = event.tags.find(t => t[0] === 'avatar-update');
+        const gTag = event.tags.find(t => t[0] === 'g');
 
         if (!statusTag) return;
 
@@ -17666,6 +17709,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const status = statusTag[1];
         const nym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : null;
         const eventTime = event.created_at || 0;
+        const eventTimeMs = eventTime * 1000;
 
         // Ignore our own presence events
         if (pubkey === this.pubkey) return;
@@ -17701,13 +17745,39 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.awayMessages.delete(pubkey);
         }
 
-        // Update user status if we know this user
+        // Create or update user from presence event (users can be online
+        // even if they haven't posted a message yet)
+        const channelKey = gTag ? gTag[1] : null;
         if (this.users.has(pubkey)) {
             const user = this.users.get(pubkey);
+            if (eventTimeMs > user.lastSeen) {
+                user.lastSeen = eventTimeMs;
+            }
             user.status = status;
             if (nym) user.nym = nym;
-            this.updateUserList();
+            if (channelKey) user.channels.add(channelKey);
+        } else if (nym) {
+            // New user discovered via presence — they're online but haven't messaged
+            const channels = new Set();
+            if (channelKey) channels.add(channelKey);
+            this.users.set(pubkey, {
+                nym: nym,
+                pubkey: pubkey,
+                lastSeen: eventTimeMs,
+                lastMessageAt: 0, // no messages yet
+                status: status,
+                channels: channels
+            });
+            // Track in channel user list
+            if (channelKey) {
+                if (!this.channelUsers.has(channelKey)) {
+                    this.channelUsers.set(channelKey, new Set());
+                }
+                this.channelUsers.get(channelKey).add(pubkey);
+            }
         }
+
+        this.updateUserList();
     }
 
     updateUserPresence(nym, pubkey, channel, geohash, createdAt) {
@@ -17735,6 +17805,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 nym: nym,
                 pubkey: pubkey,
                 lastSeen: eventTime,
+                lastMessageAt: eventTime, // message activity
                 status: baseStatus,
                 channels: new Set([channelKey])
             });
@@ -17743,6 +17814,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Only update lastSeen if this event is more recent
             if (eventTime > user.lastSeen) {
                 user.lastSeen = eventTime;
+                user.lastMessageAt = eventTime;
                 user.status = baseStatus;
             }
             user.nym = nym; // Update nym in case it changed
@@ -17886,15 +17958,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         this.updateViewMoreButton('userListContent');
 
-        const activeCount = allUsers.filter(u => u.effectiveStatus !== 'offline').length;
+        const onlineCount = allUsers.filter(u => u.effectiveStatus !== 'offline').length;
         const userListTitle = document.querySelector('#userList .nav-title-text');
         if (userListTitle) {
-            userListTitle.textContent = `Nyms (${this.abbreviateNumber(activeCount)} active)`;
+            userListTitle.textContent = `Nyms (${this.abbreviateNumber(onlineCount)} online)`;
         }
 
         if (!this.inPMMode) {
             const meta = document.getElementById('channelMeta');
-            if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} active nyms`;
+            if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} online nyms`;
         }
 
         // Refresh mention menu if it's currently open so it reflects latest presence
@@ -18640,7 +18712,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '/j': { desc: 'Shortcut for /join', fn: (args) => this.cmdJoin(args) },
             '/pm': { desc: 'Send private message', fn: (args) => this.cmdPM(args) },
             '/nick': { desc: 'Change your nym', fn: (args) => this.cmdNick(args) },
-            '/who': { desc: 'List active nyms', fn: () => this.cmdWho() },
+            '/who': { desc: 'List online nyms', fn: () => this.cmdWho() },
             '/w': { desc: 'Shortcut for /who', fn: () => this.cmdWho() },
             '/clear': { desc: 'Clear chat messages', fn: () => this.cmdClear() },
             '/block': { desc: 'Block a user or #channel', fn: (args) => this.cmdBlock(args) },
@@ -23402,7 +23474,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.loadJoinedChannelsFromRelays();
         }
 
-        // Update active nyms list
+        // Update online nyms list
         this.updateUserList();
     }
 
