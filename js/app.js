@@ -475,21 +475,17 @@ class NYM {
             'wss://relay.primal.net',
             'wss://nos.lol',
             'wss://nostr21.com',
-            'wss://a.nos.lol',
+            'wss://relay.coinos.io',
             'wss://relay.snort.social',
             'wss://relay.nostr.net',
             'wss://nostr-pub.wellorder.net',
-            'wss://relay.wellorder.net',
             'wss://relay1.nostrchat.io',
             'wss://nostr-01.yakihonne.com',
+            'wss://nostr-02.yakihonne.com',
             'wss://relay.0xchat.com',
-            'wss://premium.primal.net',
             'wss://relay.satlantis.io',
             'wss://relay.fountain.fm',
-            'wss://nostr.mom',
-            'wss://relay.hasenpfeffr.com',
-            'wss://nostrue.com',
-            'wss://relay.nosto.re'
+            'wss://nostr.mom'
         ];
         // Geo-located relays populated from bitchat CSV (fallback empty)
         this.geoRelays = [];
@@ -502,6 +498,7 @@ class NYM {
             'wss://nos.lol',
             'wss://relay.primal.net',
             'wss://offchain.pub',
+            'wss://relay.0xchat.com',
             'wss://nostr21.com'
         ];
         this.allRelayUrls = new Set(this.defaultRelays);
