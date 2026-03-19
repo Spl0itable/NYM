@@ -14156,11 +14156,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const subId = 'follow-list-' + Math.random().toString(36).slice(2);
         const req = ["REQ", subId, { kinds: [3], authors: [pubkey], limit: 1 }];
 
-        try { this.sendRequestToFewRelays(req); } catch (_) { return; }
+        try { this.sendRequestToFewRelays(req); } catch (_) {
+            // Send failed — allow retry on next call
+            this._followListFetched = false;
+            return;
+        }
 
         // Listen for the response via a one-time handler
+        let received = false;
         const handleFollowList = (event) => {
             if (event.kind !== 3 || event.pubkey !== pubkey) return;
+            received = true;
             const followPubkeys = (event.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string' && t[1].length === 64)
                 .map(t => t[1]);
@@ -14187,6 +14193,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         setTimeout(() => {
             try { this.sendToRelay(["CLOSE", subId]); } catch (_) {}
             this._pendingFollowListHandler = null;
+            // If no response was received, allow retry on next call
+            if (!received) {
+                this._followListFetched = false;
+            }
         }, 6000);
     }
 
@@ -14333,7 +14343,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
             item.innerHTML = `
-<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">
+<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}</span>
 <div class="channel-badges">
 <span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
@@ -19746,6 +19756,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Show follow list suggestions when Nostr-logged-in user opens the modal
             if (this.nostrFollowList.length > 0) {
                 this._showFollowListSuggestions('');
+            } else if (this.pubkey) {
+                // Follow list not loaded yet — retry fetch and show when ready
+                this.fetchNostrFollowList(this.pubkey);
             }
         }, 80);
         if (window.innerWidth <= 768) this.closeSidebar();
@@ -24865,7 +24878,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.200 ═══<br/>
+═══ Nymchat v3.51.201 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
