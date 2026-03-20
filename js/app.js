@@ -4414,7 +4414,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Pool mode: proxy manages all connections
         if (this.useRelayProxy) return;
 
-        for (const relayUrl of this.defaultRelays) {
+        // Check defaults AND DM relays so PMs/groups stay reachable
+        const essentialRelays = [...new Set([...this.defaultRelays, ...(this.bitchatDMRelays || [])])];
+        for (const relayUrl of essentialRelays) {
             const relay = this.relayPool.get(relayUrl);
             const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
@@ -4913,9 +4915,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // We have some connections, but update status to reflect actual count
             this.updateConnectionStatus();
 
-            // If we're missing default relays, try to restore them
-            const missingDefaults = this.defaultRelays.filter(url => !this.relayPool.has(url));
-            if (missingDefaults.length > 0) {
+            // If we're missing default or DM relays, try to restore them
+            const essentialRelays = [...new Set([...this.defaultRelays, ...(this.bitchatDMRelays || [])])];
+            const missingEssential = essentialRelays.filter(url => !this.relayPool.has(url));
+            if (missingEssential.length > 0) {
                 this.reconnectToBroadcastRelays();
             }
 
@@ -4953,10 +4956,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         let connectedCount = 0;
 
-        // Low data mode: only reconnect to the 5 defaults + DM relays
-        const relaysToConnect = this.settings && this.settings.lowDataMode
-            ? [...this.defaultRelays, ...(this.bitchatDMRelays || [])]
-            : [...this.defaultRelays];
+        // Always reconnect defaults + DM relays so PMs/groups stay reachable
+        const relaysToConnect = [...new Set([...this.defaultRelays, ...(this.bitchatDMRelays || [])])];
         if (this.previouslyConnectedRelays && this.previouslyConnectedRelays.size > 0) {
             relaysToConnect.sort((a, b) => {
                 const aWasConnected = this.previouslyConnectedRelays.has(a);
@@ -10317,12 +10318,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.updateUserPresence(nym, event.pubkey, message.channel, geohash, event.created_at);
 
                 // Show notification if mentioned and not blocked
+                const _notifStorageKey = geohash ? `#${geohash}` : message.channel;
+                const _notifCurrentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                const _isViewingChannel = !this.inPMMode && _notifStorageKey === _notifCurrentKey;
+                if (_isViewingChannel && !document.querySelector(`[data-message-id="${message.id}"]`)) {
+                    const container = document.getElementById('messagesContainer');
+                    if (container) {
+                        container.dataset.lastChannel = ''; // invalidate cache guard
+                        this.loadChannelMessages(this.currentChannel);
+                    }
+                }
+
                 const shouldNotify = !message.isOwn &&
                     this.isMentioned(message.content) &&
                     !this.isNymBlocked(nym) &&
                     !isHistorical &&
                     !alreadyNotified &&
-                    (document.hidden || this.currentChannel !== geohash || this.currentGeohash !== geohash);
+                    (document.hidden || !_isViewingChannel);
 
                 if (shouldNotify) {
                     // Mark as notified
@@ -22510,6 +22522,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
         if (this.isNymBlocked(baseTitle)) return;
 
+        // Skip bot digest messages that mass-mention users
+        if (body && body.includes('10 recent messages:')) return;
+
         // If this is a PM notification (we have a pubkey), append plain suffix for readability
         let titleToShow = baseTitle;
         if (channelInfo && channelInfo.pubkey) {
@@ -22610,6 +22625,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
         if (this.isNymBlocked(baseTitle)) return;
+
+        // Skip bot digest messages that mass-mention users
+        if (body && body.includes('10 recent messages:')) return;
 
         let titleToShow = baseTitle;
         if (channelInfo && channelInfo.pubkey) {
@@ -24901,7 +24919,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.202 ═══<br/>
+═══ Nymchat v3.51.203 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
