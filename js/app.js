@@ -10294,14 +10294,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 return;
             }
 
+            const eventCreatedAt = Math.floor(event.created_at) || 0;
             const message = {
                 id: event.id,
                 author: nym,
                 pubkey: event.pubkey,
                 content: event.content,
-                created_at: event.created_at,
+                created_at: eventCreatedAt,
                 _seq: ++this._msgSeq,
-                timestamp: new Date(event.created_at * 1000),
+                timestamp: new Date(eventCreatedAt * 1000),
                 channel: geohash ? geohash : 'unknown',
                 geohash: geohash,
                 isOwn: event.pubkey === this.pubkey,
@@ -12384,18 +12385,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.sendDMToRelays(['EVENT', selfWrapped]);
             }
 
-            // Show locally
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
-            const _now1 = Math.floor(Date.now() / 1000);
-            this.pmMessages.get(conversationKey).push({
+            const pmList = this.pmMessages.get(conversationKey);
+            pmList.push({
                 id: wrapped.id,
                 author: this.nym,
                 pubkey: this.pubkey,
                 content,
-                created_at: _now1,
+                created_at: now,
                 _seq: ++this._msgSeq,
-                timestamp: new Date(_now1 * 1000),
+                timestamp: new Date(now * 1000),
                 isOwn: true,
                 isPM: true,
                 conversationKey,
@@ -12405,10 +12405,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 nymMessageId,  // Always store for reaction matching (peer may react using nymMessageId from x tag)
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
+            pmList.sort((a, b) => {
+                const dt = (a.created_at || 0) - (b.created_at || 0);
+                if (dt !== 0) return dt;
+                return (a._seq || 0) - (b._seq || 0);
+            });
             // Cap PM conversations at 100 messages
-            const sentPmList = this.pmMessages.get(conversationKey);
-            if (sentPmList && sentPmList.length > 100) {
-                this.pmMessages.set(conversationKey, sentPmList.slice(-100));
+            if (pmList.length > 100) {
+                this.pmMessages.set(conversationKey, pmList.slice(-100));
             }
 
             // Track for automatic retry if delivery receipt not received
@@ -12490,18 +12494,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 } catch (_) { /* Self-wrap failed — non-critical */ }
             }
 
-            // Show locally
+            // Show locally — reuse the rumor's created_at (now) so the local
+            // message sorts identically to how the recipient sees it.
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
-            const _now2 = Math.floor(Date.now() / 1000);
-            this.pmMessages.get(conversationKey).push({
+            const extPmList = this.pmMessages.get(conversationKey);
+            extPmList.push({
                 id: wrapped.id,
                 author: this.nym,
                 pubkey: this.pubkey,
                 content,
-                created_at: _now2,
+                created_at: now,
                 _seq: ++this._msgSeq,
-                timestamp: new Date(_now2 * 1000),
+                timestamp: new Date(now * 1000),
                 isOwn: true,
                 isPM: true,
                 conversationKey,
@@ -12510,10 +12515,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 nymMessageId,  // For tracking Nymchat delivery/read receipts
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
+            extPmList.sort((a, b) => {
+                const dt = (a.created_at || 0) - (b.created_at || 0);
+                if (dt !== 0) return dt;
+                return (a._seq || 0) - (b._seq || 0);
+            });
             // Cap PM conversations at 100 messages
-            const sentPmList2 = this.pmMessages.get(conversationKey);
-            if (sentPmList2 && sentPmList2.length > 100) {
-                this.pmMessages.set(conversationKey, sentPmList2.slice(-100));
+            if (extPmList.length > 100) {
+                this.pmMessages.set(conversationKey, extPmList.slice(-100));
             }
 
             // Track for automatic retry if delivery receipt not received
@@ -12929,7 +12938,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             let list = this.pmMessages.get(conversationKey);
             if (list.some(m => m.id === event.id)) return;
 
-            const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
+            const tsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
 
             // Parse bitchat1: format if present to extract actual message
             const parsed = parseBitchatMessage(rumor.content);
@@ -13348,7 +13357,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (list.some(m => m.id === event.id)) return;
 
         const messageContent = rumor.content;
-        const tsSec = rumor.created_at || Math.floor(Date.now() / 1000);
+        const tsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
 
         // Check if this is an edit of a previous group message (has 'edit' tag in rumor)
         const groupEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
@@ -13636,15 +13645,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // app-level this.connected flag hasn't been set yet (e.g. right after group creation).
         const groupConvKey = this.getGroupConversationKey(groupId);
         if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
-        const _nowGrp = Math.floor(Date.now() / 1000);
         const msg = {
             id: nymMessageId,
             author: this.nym,
             pubkey: this.pubkey,
             content,
-            created_at: _nowGrp,
+            created_at: now,
             _seq: ++this._msgSeq,
-            timestamp: new Date(_nowGrp * 1000),
+            timestamp: new Date(now * 1000),
             isOwn: true,
             isPM: true,
             isGroup: true,
@@ -13658,6 +13666,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const groupList = this.pmMessages.get(groupConvKey);
         groupList.push(msg);
+        groupList.sort((a, b) => {
+            const dt = (a.created_at || 0) - (b.created_at || 0);
+            if (dt !== 0) return dt;
+            return (a._seq || 0) - (b._seq || 0);
+        });
         if (groupList.length > 100) this.pmMessages.set(groupConvKey, groupList.slice(-100));
         this.channelDOMCache.delete(groupConvKey);
         this.moveGroupToTop(groupId);
@@ -20883,12 +20896,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const suffix = this.getPubkeySuffix(pubkey);
         const baseNym = this.stripPubkeySuffix(nym);
 
-        const timestamp = new Date(created_at * 1000);
+        const pollCreatedAt = Math.floor(created_at) || 0;
+        const timestamp = new Date(pollCreatedAt * 1000);
         // Clamp timestamp to now so polls never appear in the future
         const now = new Date();
         const displayTimestamp = timestamp > now ? now : timestamp;
         messageEl.dataset.timestamp = displayTimestamp.getTime();
-        messageEl.dataset.createdAt = created_at || 0;
+        messageEl.dataset.createdAt = pollCreatedAt;
+        messageEl.dataset.seq = 0; // polls have no arrival sequence; use 0 for consistent tiebreaking
 
         const timeStr = displayTimestamp.toLocaleTimeString([], {
             hour: '2-digit',
@@ -20975,29 +20990,34 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             });
         }
 
-        // Insert in correct chronological order using created_at timestamp (sub-second precision)
-        const messageTimestamp = displayTimestamp.getTime();
-        const existingMessages = Array.from(container.querySelectorAll('[data-timestamp]'));
-        let insertBefore = null;
-        for (const existing of existingMessages) {
-            const existingTimestamp = parseInt(existing.dataset.timestamp);
-            if (messageTimestamp < existingTimestamp) {
-                insertBefore = existing;
-                break;
-            }
-            if (messageTimestamp === existingTimestamp) {
-                const existingId = existing.dataset.messageId || existing.dataset.pollId || '';
-                if ((pollId || '').localeCompare(existingId) < 0) {
+        // Insert in correct chronological order using created_at (integer seconds),
+        // consistent with regular message DOM insertion in displayMessage().
+        {
+            const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
+            const msgCreatedAt = pollCreatedAt;
+
+            let insertBefore = null;
+            for (const existing of existingMessages) {
+                const existingCreatedAt = parseInt(existing.dataset.createdAt) || 0;
+                if (msgCreatedAt < existingCreatedAt) {
                     insertBefore = existing;
                     break;
                 }
+                if (msgCreatedAt === existingCreatedAt) {
+                    const existingSeq = parseInt(existing.dataset.seq) || 0;
+                    // Polls use seq=0, so they sort before same-second messages
+                    if (0 < existingSeq) {
+                        insertBefore = existing;
+                        break;
+                    }
+                }
             }
-        }
 
-        if (insertBefore) {
-            container.insertBefore(messageEl, insertBefore);
-        } else {
-            container.appendChild(messageEl);
+            if (insertBefore) {
+                container.insertBefore(messageEl, insertBefore);
+            } else {
+                container.appendChild(messageEl);
+            }
         }
         this._scheduleScrollToBottom();
     }
@@ -21372,11 +21392,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     // Compute a lightweight fingerprint of messages for cache invalidation.
     // Detects changes in count, message IDs, delivery status, and edit state.
+    // Includes both head and tail so mid-array insertions also invalidate.
     _computeMessageFingerprint(messages) {
         if (!messages || messages.length === 0) return '';
+        const first = messages[0];
+        const head = `${first.id}:${first.created_at || 0}`;
         // Use last 10 messages for efficiency — most changes happen at the tail
         const tail = messages.slice(-10);
-        return tail.map(m => `${m.id}:${m.deliveryStatus || ''}:${m.isEdited ? 'e' : ''}`).join('|');
+        return head + '|' + tail.map(m => `${m.id}:${m.deliveryStatus || ''}:${m.isEdited ? 'e' : ''}`).join('|');
     }
 
     loadChannelMessages(displayName) {
@@ -24878,7 +24901,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.201 ═══<br/>
+═══ Nymchat v3.51.202 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
