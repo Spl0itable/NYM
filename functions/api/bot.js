@@ -3318,7 +3318,20 @@ async function handleNews() {
 var FETCH_RELAYS = [
   "wss://relay.damus.io",
   "wss://nos.lol",
-  "wss://relay.primal.net"
+  "wss://relay.primal.net",
+  "wss://offchain.pub",
+  "wss://nostr21.com",
+  "wss://relay.coinos.io",
+  "wss://relay.snort.social",
+  "wss://relay.nostr.net",
+  "wss://nostr-pub.wellorder.net",
+  "wss://relay1.nostrchat.io",
+  "wss://nostr-01.yakihonne.com",
+  "wss://nostr-02.yakihonne.com",
+  "wss://relay.0xchat.com",
+  "wss://relay.satlantis.io",
+  "wss://relay.fountain.fm",
+  "wss://nostr.mom"
 ];
 
 function fetchEventsFromRelay(relayUrl, filter, timeoutMs) {
@@ -3405,15 +3418,12 @@ function isHumanMessage(evt) {
   var content = evt.content.trim();
   // Skip raw JSON objects (system/relay messages)
   if (content.charAt(0) === "{" || content.charAt(0) === "[") return false;
-  // Must have a geohash g-tag (real Nymchat channel messages)
-  var hasGeohash = false;
+  // Skip bot messages
   var tags = evt.tags || [];
   for (var i = 0; i < tags.length; i++) {
-    if (tags[i][0] === "g" && tags[i][1]) hasGeohash = true;
-    // Skip bot messages
     if (tags[i][0] === "bot") return false;
   }
-  return hasGeohash;
+  return true;
 }
 
 async function handleTop() {
@@ -3460,7 +3470,8 @@ async function handleLast(args) {
   for (var i = 0; i < recent.length; i++) {
     var evt = recent[i];
     var nym = extractNym(evt) || "anon";
-    var geo = extractGeohash(evt) || "nym";
+    var geo = extractGeohash(evt);
+    if (!geo) continue;
     var preview = (evt.content || "").trim();
     if (preview.length > 80) preview = preview.slice(0, 80) + "...";
     lines.push("[#" + geo + "] " + nym + " (" + timeAgo(evt.created_at) + "): " + preview);
@@ -3483,7 +3494,8 @@ async function handleSeen(nickname) {
     var nym = extractNym(events[i]);
     if (nym && nym.toLowerCase().replace(/#.*$/, "").trim() === target) {
       if (!foundNym) foundNym = nym;
-      var geo = extractGeohash(events[i]) || "nym";
+      var geo = extractGeohash(events[i]);
+      if (!geo) continue;
       if (!channels[geo]) channels[geo] = { count: 0, lastSeen: 0 };
       channels[geo].count++;
       if (events[i].created_at > channels[geo].lastSeen) {
@@ -3507,17 +3519,15 @@ async function handleSeen(nickname) {
 }
 
 async function handleWho(geohash) {
-  var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
-  var filter = { kinds: [20000], since: since, limit: 500 };
-  if (geohash) {
-    filter["#g"] = [geohash];
+  if (!geohash) {
+    return "Could not determine your current channel.";
   }
+  var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
+  var filter = { kinds: [20000], since: since, limit: 500, "#g": [geohash] };
   var events = await fetchRecentEvents(filter, 6000);
   events = events.filter(isHumanMessage);
   if (events.length === 0) {
-    return geohash
-      ? "No active users in #" + geohash + " in the last 10 minutes."
-      : "No active users in the last 10 minutes.";
+    return "No active users in #" + geohash + " in the last 10 minutes.";
   }
   var nyms = {};
   for (var i = 0; i < events.length; i++) {
@@ -3527,20 +3537,16 @@ async function handleWho(geohash) {
     if (!nyms[key] || events[i].created_at > nyms[key].lastSeen) {
       nyms[key] = {
         nym: nym,
-        lastSeen: events[i].created_at,
-        channel: extractGeohash(events[i]) || "nym"
+        lastSeen: events[i].created_at
       };
     }
   }
   var sorted = Object.values(nyms).sort(function(a, b) { return b.lastSeen - a.lastSeen; });
-  var header = geohash
-    ? "Active in #" + geohash + " (last 10 min): " + sorted.length
-    : "Active users (last 10 min): " + sorted.length;
-  var lines = [header];
+  var lines = ["Active in #" + geohash + " (last 10 min): " + sorted.length];
   var limit = Math.min(sorted.length, 20);
   for (var j = 0; j < limit; j++) {
     var info = sorted[j];
-    lines.push("\u2022 " + info.nym + " in #" + info.channel + " (" + timeAgo(info.lastSeen) + ")");
+    lines.push("\u2022 " + info.nym + " (" + timeAgo(info.lastSeen) + ")");
   }
   if (sorted.length > 20) {
     lines.push("...and " + (sorted.length - 20) + " more");
