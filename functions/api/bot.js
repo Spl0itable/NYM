@@ -15,7 +15,7 @@
 //   +time              - Current UTC time
 //   +about             - About Nymchat
 //   +nostr             - Nostr protocol tips
-//   @Nymbot <question>  - Mention-based alias for +ask
+//   @Nymbot <question> - Mention-based alias for +ask
 
 // node_modules/@noble/hashes/esm/crypto.js
 var crypto = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
