@@ -6656,7 +6656,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Shard relays into role-based worker groups, splitting large groups into chunks
     _shardRelaysByRole(allRelays, geoRelayUrls, dmRelays) {
-        const blocked = new Set(['wss://relay.nosflare.com', 'wss://relay.nostraddress.com']);
+        const blocked = new Set(['wss://relay.nosflare.com', 'wss://relay.nostraddress.com', 'wss://nostr-server-production.up.railway.app']);
         const writeOnly = new Set(['wss://sendit.nosflare.com']);
         const isValid = (url) => !blocked.has(url) && !writeOnly.has(url);
 
@@ -7304,7 +7304,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     async connectToRelay(relayUrl, type = 'relay') {
         // Block known-bad relays entirely - never connect
-        if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com') {
+        if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com' || relayUrl === 'wss://nostr-server-production.up.railway.app') {
             return; // Silently skip blocked relays
         }
 
