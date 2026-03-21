@@ -2813,7 +2813,7 @@ async function handleAsk(question, context) {
     return "AI is not configured. To enable +ask, add a Workers AI binding named \"AI\" in your Cloudflare Pages project settings (Settings > Functions > AI bindings).";
   }
   try {
-    var result = await ai.run("@cf/qwen/qwen3-30b-a3b-fp8", {
+    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
       messages: [
         { role: "system", content: NYMBOT_SYSTEM_PROMPT },
         { role: "user", content: question }
@@ -2821,10 +2821,7 @@ async function handleAsk(question, context) {
       max_tokens: 512
     });
     if (result && result.response) {
-      // Qwen3 thinking mode may wrap reasoning in <think>...</think> tags — strip them
-      var response = result.response;
-      response = response.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-      return response || "(Nymbot had no response)";
+      return result.response;
     }
     return "(Nymbot returned an empty response)";
   } catch (e) {
