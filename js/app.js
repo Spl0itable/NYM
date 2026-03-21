@@ -7137,7 +7137,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.pubkey) {
             filters.push(
                 { kinds: [1059], "#p": [this.pubkey], limit: 500 },
-                { kinds: [7], "#p": [this.pubkey], limit: 100 },
+                { kinds: [7], "#p": [this.pubkey], "#k": ["20000"], limit: 100 },
                 { kinds: [30078], authors: [this.pubkey], "#d": ["nym-shop-purchases", "nym-shop-active"], limit: 100 },
                 { kinds: [30078], "#p": [this.pubkey], limit: 50 },
                 { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
@@ -11042,6 +11042,26 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         const messageId = eTag[1];
+
+        // When no kTag is present, verify this reaction targets a known Nymchat message
+        // to avoid showing notifications for reactions from other Nostr apps
+        if (!kTag) {
+            const inDom = !!document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+            let inMessages = false;
+            if (!inDom) {
+                for (const msgs of this.messages.values()) {
+                    if (msgs.some(m => m.id === messageId)) { inMessages = true; break; }
+                }
+            }
+            let inPMs = false;
+            if (!inDom && !inMessages) {
+                for (const msgs of this.pmMessages.values()) {
+                    if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) { inPMs = true; break; }
+                }
+            }
+            if (!inDom && !inMessages && !inPMs) return;
+        }
+
         const reactorNym = this.getNymFromPubkey(event.pubkey);
 
         // Store reaction with pubkey and nym
@@ -24976,7 +24996,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.204 ═══<br/>
+═══ Nymchat v3.51.205 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
