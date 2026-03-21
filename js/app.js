@@ -650,6 +650,7 @@ class NYM {
         this._typingStopTimer = null;
         this.notificationHistory = this._loadNotificationHistory();
         this.notificationLastReadTime = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
+        this.notificationsEnabled = localStorage.getItem('nym_notifications_enabled') !== 'false';
         this.closedPMs = new Set(JSON.parse(localStorage.getItem('nym_closed_pms') || '[]'));
         this.recentEmojis = [];
         this.allEmojis = {
@@ -5460,7 +5461,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const data = this.contextMenuData;
             this.closeContextMenu();
             if (data && data.content) {
-                await this.translateMessage(data.content, data.messageId || data.reactionId);
+                // Strip quoted lines (> prefixed) to translate only the user's reply
+                const nonQuotedContent = data.content.split('\n')
+                    .filter(line => !line.startsWith('>'))
+                    .join('\n').trim();
+                await this.translateMessage(nonQuotedContent || data.content, data.messageId || data.reactionId);
             } else {
                 this.displaySystemMessage('No message content to translate');
             }
@@ -8170,8 +8175,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const messageId = msgEl.getAttribute('data-message-id');
         const contentEl = msgEl.querySelector('.message-content');
         if (!contentEl) return;
-        const content = contentEl.textContent.trim();
+        // Extract only the non-quoted text (skip blockquote content)
+        const content = this._extractNonQuotedText(contentEl);
         if (content) this.translateMessage(content, messageId);
+    }
+
+    // Extract only the user's own reply text from a message element,
+    // excluding any quoted/blockquoted content.
+    _extractNonQuotedText(contentEl) {
+        const clone = contentEl.cloneNode(true);
+        // Remove all blockquote elements (quoted replies)
+        clone.querySelectorAll('blockquote').forEach(bq => bq.remove());
+        // Remove bubble-time-inner elements (timestamp inside bubble)
+        clone.querySelectorAll('.bubble-time-inner').forEach(bt => bt.remove());
+        return clone.textContent.trim();
     }
 
     async _translateDirect(text, targetLang) {
@@ -11015,6 +11032,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const reactionContent = event.content;
         const eTag = event.tags.find(t => t[0] === 'e');
         const kTag = event.tags.find(t => t[0] === 'k');
+        const pTag = event.tags.find(t => t[0] === 'p');
 
         if (!eTag) return;
 
@@ -11041,6 +11059,55 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Update UI if message is visible
         this.updateMessageReactions(messageId);
+
+        // Notify if someone reacted to OUR message (not our own reaction)
+        if (pTag && pTag[1] === this.pubkey && event.pubkey !== this.pubkey) {
+            const messageAge = Date.now() - (event.created_at * 1000);
+            const isHistorical = messageAge > 10000;
+            const channelInfo = {
+                type: 'reaction',
+                id: event.id,
+                pubkey: event.pubkey,
+                messageId: messageId
+            };
+            // Try to find a preview of the original message
+            let msgPreview = '';
+            const msgEl = document.querySelector(`[data-message-id="${messageId}"]`);
+            if (msgEl) {
+                const raw = msgEl.dataset.rawContent;
+                if (raw) {
+                    msgPreview = raw.split('\n').filter(l => !l.startsWith('>')).join(' ').trim();
+                }
+            }
+            if (!msgPreview) {
+                // Search in-memory message stores
+                for (const msgs of this.messages.values()) {
+                    const found = msgs.find(m => m.id === messageId);
+                    if (found) {
+                        msgPreview = found.content.split('\n').filter(l => !l.startsWith('>')).join(' ').trim();
+                        break;
+                    }
+                }
+            }
+            if (!msgPreview) {
+                for (const msgs of this.pmMessages.values()) {
+                    const found = msgs.find(m => m.id === messageId || m.nymMessageId === messageId);
+                    if (found) {
+                        msgPreview = found.content.split('\n').filter(l => !l.startsWith('>')).join(' ').trim();
+                        break;
+                    }
+                }
+            }
+            if (msgPreview && msgPreview.length > 80) msgPreview = msgPreview.slice(0, 80) + '…';
+            const body = msgPreview
+                ? `reacted ${reactionContent} to: "${msgPreview}"`
+                : `reacted ${reactionContent} to your message`;
+            if (isHistorical) {
+                this._addNotificationToHistory(reactorNym, body, channelInfo, event.created_at * 1000);
+            } else {
+                this.showNotification(reactorNym, body, channelInfo);
+            }
+        }
     }
 
     updateMessageReactions(messageId) {
@@ -18227,7 +18294,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 removeCloseListeners();
                 const contentEl = msgEl.querySelector('.message-content');
                 if (!contentEl) return;
-                const content = contentEl.textContent.trim();
+                // Extract only the non-quoted text (skip blockquote content)
+                const content = this._extractNonQuotedText(contentEl);
                 if (content) this.translateMessage(content, messageId);
             };
             translateBubble.addEventListener('click', doTranslate);
@@ -21402,16 +21470,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    // Compute a lightweight fingerprint of messages for cache invalidation.
-    // Detects changes in count, message IDs, delivery status, and edit state.
-    // Includes both head and tail so mid-array insertions also invalidate.
+    // Compute a fingerprint of messages for cache invalidation.
+    // Includes ALL message IDs in order so any insertion, deletion, or
+    // reordering is detected — prevents stale DOM cache from being restored.
     _computeMessageFingerprint(messages) {
         if (!messages || messages.length === 0) return '';
-        const first = messages[0];
-        const head = `${first.id}:${first.created_at || 0}`;
-        // Use last 10 messages for efficiency — most changes happen at the tail
-        const tail = messages.slice(-10);
-        return head + '|' + tail.map(m => `${m.id}:${m.deliveryStatus || ''}:${m.isEdited ? 'e' : ''}`).join('|');
+        return messages.map(m => `${m.id}:${m.created_at || 0}:${m.deliveryStatus || ''}:${m.isEdited ? 'e' : ''}`).join('|');
     }
 
     loadChannelMessages(displayName) {
@@ -22515,6 +22579,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     showNotification(title, body, channelInfo = null) {
+        if (!this.notificationsEnabled) return;
+
         const baseTitle = this.parseNymFromDisplay(title);
 
         // Skip notifications from blocked users
@@ -22583,42 +22649,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
-        // In-app notification (fallback)
-        const notifEl = document.createElement('div');
-        notifEl.className = 'notification';
-        if (channelInfo && channelInfo.pubkey) {
-            notifEl.dataset.pubkey = channelInfo.pubkey;
-        }
-        notifEl.innerHTML = `
-<div class="notification-title">${this.escapeHtml(titleToShow)}</div>
-<div class="notification-body">${this.escapeHtml(body)}</div>
-<div class="notification-time">${new Date().toLocaleTimeString()}</div>
-`;
-
-        if (channelInfo) {
-            notifEl.style.cursor = 'pointer';
-            notifEl.onclick = () => {
-                if (channelInfo.type === 'pm') {
-                    this.openUserPM(baseTitle, channelInfo.pubkey);
-                } else if (channelInfo.type === 'group') {
-                    this.openGroup(channelInfo.groupId);
-                } else if (channelInfo.type === 'geohash') {
-                    this.switchChannel(channelInfo.channel, channelInfo.geohash);
-                }
-                notifEl.remove();
-            };
-        }
-
-        document.body.appendChild(notifEl);
-        setTimeout(() => {
-            notifEl.style.animation = 'slideIn 0.3s reverse';
-            setTimeout(() => notifEl.remove(), 300);
-        }, 3000);
     }
 
     // Silently add a notification to history without triggering sound/popup/browser notification.
     // Used for historical messages from relays that match notification criteria.
     _addNotificationToHistory(title, body, channelInfo, timestamp) {
+        if (!this.notificationsEnabled) return;
+
         const baseTitle = this.parseNymFromDisplay(title);
 
         // Skip notifications from blocked users
@@ -22675,6 +22712,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     _updateNotificationBadge() {
+        const desktopBadge = document.getElementById('notifBadgeDesktop');
+        const mobileBadge = document.getElementById('notifBadgeMobile');
+
+        if (!this.notificationsEnabled) {
+            [desktopBadge, mobileBadge].forEach(badge => {
+                if (badge) badge.style.display = 'none';
+            });
+            return;
+        }
+
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         const unreadCount = this.notificationHistory.filter(n => {
             if (n.timestamp <= cutoff24h || n.timestamp <= this.notificationLastReadTime) return false;
@@ -22684,8 +22731,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return true;
         }).length;
 
-        const desktopBadge = document.getElementById('notifBadgeDesktop');
-        const mobileBadge = document.getElementById('notifBadgeMobile');
         [desktopBadge, mobileBadge].forEach(badge => {
             if (!badge) return;
             if (unreadCount > 0) {
@@ -22697,6 +22742,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         });
     }
 
+    toggleNotificationsEnabled(enabled) {
+        this.notificationsEnabled = enabled;
+        localStorage.setItem('nym_notifications_enabled', String(enabled));
+        this._updateNotificationBadge();
+    }
+
     openNotificationsModal() {
         // Mark all as read
         this.notificationLastReadTime = Date.now();
@@ -22706,6 +22757,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const modal = document.getElementById('notificationsModal');
         const body = document.getElementById('notificationsModalBody');
         if (!modal || !body) return;
+
+        // Sync checkbox state
+        const checkbox = document.getElementById('enableNotificationsCheckbox');
+        if (checkbox) checkbox.checked = this.notificationsEnabled;
 
         // Filter to last 24 hours and exclude blocked users
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
@@ -22759,6 +22814,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         contextHtml = `<span class="notification-item-context">in ${this.escapeHtml(groupName)}</span>`;
                     } else if (n.channelInfo.type === 'pm') {
                         contextHtml = `<span class="notification-item-context">PM</span>`;
+                    } else if (n.channelInfo.type === 'reaction') {
+                        contextHtml = `<span class="notification-item-context">Reaction</span>`;
                     }
                 }
 
@@ -24919,7 +24976,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.203 ═══<br/>
+═══ Nymchat v3.51.204 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

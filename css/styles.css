@@ -2776,53 +2776,6 @@ body.chat-bubbles .edited-indicator-irc {
     font-size: 12px;
 }
 
-.notification {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: rgba(20, 20, 35, 0.85);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
-    border: 1px solid var(--glass-border);
-    border-radius: var(--radius-md);
-    padding: 16px 20px;
-    max-width: 350px;
-    animation: slideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-    z-index: 2000;
-    box-shadow: var(--shadow-lg);
-}
-
-@keyframes slideIn {
-    from {
-        transform: translateX(120%);
-        opacity: 0;
-    }
-
-    to {
-        transform: translateX(0);
-        opacity: 1;
-    }
-}
-
-.notification-title {
-    color: var(--primary);
-    margin-bottom: 5px;
-    font-weight: bold;
-    text-transform: uppercase;
-    font-size: 12px;
-    letter-spacing: 1px;
-}
-
-.notification-body {
-    color: var(--text);
-    font-size: 13px;
-}
-
-.notification-time {
-    color: var(--text-dim);
-    font-size: 10px;
-    margin-top: 5px;
-}
 
 .notifications-btn {
     position: relative;
@@ -4771,12 +4724,6 @@ body.light-mode .has-banner .avatar-context {
     border-color: rgba(255, 255, 255, 0.95);
 }
 
-body.light-mode .notification {
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(30px) saturate(1.5);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-    border-color: rgba(0, 0, 0, 0.08);
-}
 
 body.light-mode .channel-item:hover,
 body.light-mode .pm-item:hover {

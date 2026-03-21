@@ -1591,6 +1591,12 @@
         <div class="modal-content" style="padding: 0;">
             <button class="modal-close" onclick="nym.closeNotificationsModal()">&#x2715;</button>
             <div class="modal-header" style="margin-bottom: 0; padding: 32px 32px 14px;">Notifications</div>
+            <div style="padding: 0 32px 8px;">
+                <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim);">
+                    <input type="checkbox" id="enableNotificationsCheckbox" checked onchange="nym.toggleNotificationsEnabled(this.checked)" style="accent-color: var(--primary); cursor: pointer;">
+                    Enable notifications
+                </label>
+            </div>
             <div class="notifications-modal-body" id="notificationsModalBody">
                 <div class="notifications-empty">No notifications in the last 24 hours</div>
             </div>
