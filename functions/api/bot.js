@@ -2935,7 +2935,16 @@ function handlePick(args) {
 
 function handleTime() {
   var now = new Date();
-  var utc = now.toUTCString();
+  var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var day = days[now.getUTCDay()];
+  var date = now.getUTCDate();
+  var month = months[now.getUTCMonth()];
+  var year = now.getUTCFullYear();
+  var h = String(now.getUTCHours()).padStart(2, "0");
+  var m = String(now.getUTCMinutes()).padStart(2, "0");
+  var s = String(now.getUTCSeconds()).padStart(2, "0");
+  var utc = day + ", " + date + " " + month + " " + year + " " + h + ":" + m + ":" + s + " UTC";
   var unix = Math.floor(now.getTime() / 1000);
   return "\u{1F552} " + utc + "\nUnix: " + unix;
 }
@@ -3278,8 +3287,10 @@ async function handleNews() {
           var itemXml = match[1];
           var titleMatch = itemXml.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
           var title = titleMatch ? titleMatch[1].trim().replace(/<[^>]+>/g, "") : null;
+          var linkMatch = itemXml.match(/<link>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/link>/i);
+          var link = linkMatch ? linkMatch[1].trim() : "";
           if (title) {
-            items.push({ title: title, source: feed.name });
+            items.push({ title: title, source: feed.name, link: link });
           }
         }
         return items;
@@ -3309,7 +3320,11 @@ async function handleNews() {
 
   var output = "\u{1F4F0} BREAKING NEWS\n";
   for (var i = 0; i < headlines.length; i++) {
-    output += (i + 1) + ". " + headlines[i].title + " [" + headlines[i].source + "]\n";
+    var line = (i + 1) + ". " + headlines[i].title + " [" + headlines[i].source + "]";
+    if (headlines[i].link) {
+      line += "\n   " + headlines[i].link;
+    }
+    output += line + "\n";
   }
   return output.trim();
 }
