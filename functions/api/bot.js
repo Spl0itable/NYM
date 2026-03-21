@@ -2809,23 +2809,27 @@ async function handleAsk(question, context) {
     return "Usage: +ask <your question> (or @Nymbot <your question>)";
   }
   var ai = context.env.AI || null;
-  if (ai) {
-    try {
-      var result = await ai.run("@cf/qwen/qwen3-30b-a3b-fp8", {
-        messages: [
-          { role: "system", content: NYMBOT_SYSTEM_PROMPT },
-          { role: "user", content: question }
-        ],
-        max_tokens: 512
-      });
-      if (result && result.response) {
-        return result.response;
-      }
-    } catch (e) {
-      // fall through
-    }
+  if (!ai) {
+    return "AI is not configured. To enable +ask, add a Workers AI binding named \"AI\" in your Cloudflare Pages project settings (Settings > Functions > AI bindings).";
   }
-  return "AI is not configured. To enable +ask, add a Workers AI binding named \"AI\" in your Cloudflare Pages project settings (Settings > Functions > AI bindings).";
+  try {
+    var result = await ai.run("@cf/qwen/qwen3-30b-a3b-fp8", {
+      messages: [
+        { role: "system", content: NYMBOT_SYSTEM_PROMPT },
+        { role: "user", content: question }
+      ],
+      max_tokens: 512
+    });
+    if (result && result.response) {
+      // Qwen3 thinking mode may wrap reasoning in <think>...</think> tags — strip them
+      var response = result.response;
+      response = response.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+      return response || "(Nymbot had no response)";
+    }
+    return "(Nymbot returned an empty response)";
+  } catch (e) {
+    return "Nymbot error: " + (e.message || String(e));
+  }
 }
 
 function handleRoll(args) {
