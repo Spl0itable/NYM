@@ -10291,10 +10291,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
-            // Fetch kind 0 profile for channel message senders we haven't seen,
-            // or re-fetch if the cached profile is stale (older than 5 minutes).
-            // Uses batched queue so rapid message bursts produce a single REQ.
-            // The kind 0 handler updates rendered avatars/names retroactively.
+            // Fetch kind 0 profile for channel message senders we haven't seen
             if (event.pubkey !== this.pubkey) {
                 const lastFetch = this.profileFetchedAt.get(event.pubkey) || 0;
                 const stale = Date.now() - lastFetch > 5 * 60 * 1000;
@@ -10313,14 +10310,29 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
 
             const eventCreatedAt = Math.floor(event.created_at) || 0;
+            const nowSec = Math.floor(Date.now() / 1000);
+
+            // Guard against clock skew if the sender's device clock is wrong.
+            let correctedCreatedAt = Math.min(eventCreatedAt, nowSec);
+            if (!isHistorical) {
+                const _channelKey = geohash ? `#${geohash}` : 'unknown';
+                const existing = this.messages.get(_channelKey) || [];
+                if (existing.length > 0) {
+                    const latestTs = existing[existing.length - 1].created_at || 0;
+                    if (correctedCreatedAt < latestTs) {
+                        correctedCreatedAt = latestTs + 1;
+                    }
+                }
+            }
+
             const message = {
                 id: event.id,
                 author: nym,
                 pubkey: event.pubkey,
                 content: event.content,
-                created_at: eventCreatedAt,
+                created_at: correctedCreatedAt,
                 _seq: ++this._msgSeq,
-                timestamp: new Date(eventCreatedAt * 1000),
+                timestamp: new Date(correctedCreatedAt * 1000),
                 channel: geohash ? geohash : 'unknown',
                 geohash: geohash,
                 isOwn: event.pubkey === this.pubkey,
@@ -13037,7 +13049,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             let list = this.pmMessages.get(conversationKey);
             if (list.some(m => m.id === event.id)) return;
 
-            const tsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
+            const nowSec = Math.floor(Date.now() / 1000);
+            let tsSec = Math.floor(rumor.created_at) || nowSec;
+
+            // Guard against clock skew: cap at current time (no future messages)
+            // and ensure new messages sort after existing ones in this conversation.
+            tsSec = Math.min(tsSec, nowSec);
+            if (list.length > 0) {
+                const latestTs = list[list.length - 1].created_at || 0;
+                if (tsSec < latestTs) {
+                    tsSec = latestTs + 1;
+                }
+            }
 
             // Parse bitchat1: format if present to extract actual message
             const parsed = parseBitchatMessage(rumor.content);
@@ -13175,28 +13198,33 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (!isOwn && nymMsgId && this.nymUsers.has(senderPubkey)) {
                     this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
                 }
-            } else if (!isOwn) {
-                const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.isNymBlocked(msg.author);
-                if (!msg.isHistorical) {
-                    // Live message: full notification with sound/popup
-                    this.updateUnreadCount(conversationKey);
-                    if (!pmSenderBlocked) {
-                        this.showNotification(`PM from ${msg.author}`, messageContent, {
-                            type: 'pm',
-                            nym: msg.author,
-                            pubkey: peerPubkey,
-                            id: conversationKey
-                        });
-                    }
-                } else {
-                    // Historical message: silently add to notification history
-                    if (!pmSenderBlocked) {
-                        this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, {
-                            type: 'pm',
-                            nym: msg.author,
-                            pubkey: peerPubkey,
-                            id: conversationKey
-                        }, msg.timestamp.getTime());
+            } else {
+                // Not viewing this conversation — invalidate DOM cache so it
+                // re-renders fresh when the user opens this PM.
+                this.channelDOMCache.delete(conversationKey);
+                if (!isOwn) {
+                    const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.isNymBlocked(msg.author);
+                    if (!msg.isHistorical) {
+                        // Live message: full notification with sound/popup
+                        this.updateUnreadCount(conversationKey);
+                        if (!pmSenderBlocked) {
+                            this.showNotification(`PM from ${msg.author}`, messageContent, {
+                                type: 'pm',
+                                nym: msg.author,
+                                pubkey: peerPubkey,
+                                id: conversationKey
+                            });
+                        }
+                    } else {
+                        // Historical message: silently add to notification history
+                        if (!pmSenderBlocked) {
+                            this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, {
+                                type: 'pm',
+                                nym: msg.author,
+                                pubkey: peerPubkey,
+                                id: conversationKey
+                            }, msg.timestamp.getTime());
+                        }
                     }
                 }
             }
@@ -13456,7 +13484,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (list.some(m => m.id === event.id)) return;
 
         const messageContent = rumor.content;
-        const tsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
+        const nowSec = Math.floor(Date.now() / 1000);
+        let tsSec = Math.floor(rumor.created_at) || nowSec;
+
+        // Guard against clock skew: cap at current time (no future messages)
+        // and ensure new messages sort after existing ones in this group.
+        tsSec = Math.min(tsSec, nowSec);
+        if (list.length > 0) {
+            const latestTs = list[list.length - 1].created_at || 0;
+            if (tsSec < latestTs) {
+                tsSec = latestTs + 1;
+            }
+        }
 
         // Check if this is an edit of a previous group message (has 'edit' tag in rumor)
         const groupEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
@@ -13529,6 +13568,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Force auto-scroll to bottom for group messages
             this._scheduleScrollToBottom();
         } else {
+            // Not viewing this group — invalidate DOM cache so it
+            // re-renders fresh when the user opens this group.
+            this.channelDOMCache.delete(groupConvKey);
             if (!isOwn && !senderBlocked) {
                 if (!msg.isHistorical) {
                     // Always update sidebar unread count for all group messages
@@ -16486,14 +16528,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         } else {
             // Regular geohash channel message
-            if (this.inPMMode) {
-                // In PM mode, don't display channel messages
-                return;
-            }
-
             const storageKey = message.geohash ? `#${message.geohash}` : message.channel;
 
-            // Store message if not already exists
+            // Always store channel messages in memory regardless of current view
             if (!this.messages.has(storageKey)) {
                 this.messages.set(storageKey, []);
             }
@@ -16521,10 +16558,23 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this._scheduleZapResubscribe();
             }
 
+            // Now check if we should actually render this message
+            if (this.inPMMode) {
+                // In PM mode — message is stored but don't render channel messages.
+                // Invalidate DOM cache so it re-renders when user switches back.
+                this.channelDOMCache.delete(storageKey);
+                if (!message.isOwn && !exists && !message.isHistorical) {
+                    this.updateUnreadCount(storageKey);
+                }
+                return;
+            }
+
             // Check if this is for current channel
             const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
             if (storageKey !== currentKey) {
-                // Message is for different channel, update unread count but don't display
+                // Message is for different channel, update unread count but don't display.
+                // Invalidate DOM cache so the channel re-renders when user switches to it.
+                if (!exists) this.channelDOMCache.delete(storageKey);
                 if (!message.isOwn && !exists && !message.isHistorical) {
                     this.updateUnreadCount(storageKey);
                 }
@@ -24996,7 +25046,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.205 ═══<br/>
+═══ Nymchat v3.51.206 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
