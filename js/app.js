@@ -6644,6 +6644,28 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return false;
     }
 
+    _activateBot() {
+        if (!this.useRelayProxy || this._botSocket) return;
+        try {
+            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${proto}//${window.location.host}/api/bot`);
+            this._botSocket = ws;
+            ws.addEventListener('open', () => {
+                console.log('[nymbot] Bot activated');
+            });
+            ws.addEventListener('close', () => {
+                this._botSocket = null;
+                // Reconnect after 10s
+                setTimeout(() => this._activateBot(), 10000);
+            });
+            ws.addEventListener('error', () => {
+                this._botSocket = null;
+            });
+        } catch {
+            this._botSocket = null;
+        }
+    }
+
     _getProxiedRelayUrl(relayUrl) {
         if (!this.useRelayProxy) return relayUrl;
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -25458,6 +25480,9 @@ async function initializeNym() {
 
         // Connect to relays
         await nym.connectToRelays();
+
+        // Activate the nymbot (Cloudflare Pages only)
+        nym._activateBot();
 
         // Apply cached shop items (styles/flairs) to the new ephemeral identity
         nym.applyCachedShopItemsToNewIdentity();
