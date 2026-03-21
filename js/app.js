@@ -6648,7 +6648,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async _handleBotCommand(content, geohash) {
         if (!this.useRelayProxy) return;
         // Support @Nymbot mentions as an alias for +ask
-        const mentionMatch = content.match(/^@nymbot\s+([\s\S]*)/i);
+        // The mentions modal auto-suggests @nymbot#4bb2 (with pubkey suffix)
+        const mentionMatch = content.match(/^@nymbot(?:#[a-f0-9]{4})?\s+([\s\S]*)/i);
         if (mentionMatch) {
             content = '+ask ' + mentionMatch[1];
         }
@@ -19497,7 +19498,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Send to geohash channel (kind 20000)
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
                 // Check for bot commands (+ prefix or @Nymbot mention)
-                if (content.startsWith('+') || /^@nymbot\s/i.test(content)) {
+                if (content.startsWith('+') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(content)) {
                     this._handleBotCommand(content, this.currentGeohash);
                 }
             }
@@ -19547,7 +19548,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Send via ephemeral keypair (anonymous)
                 await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash);
                 // Check for bot commands (+ prefix or @Nymbot mention)
-                if (content.startsWith('+') || /^@nymbot\s/i.test(content)) {
+                if (content.startsWith('+') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(content)) {
                     this._handleBotCommand(content, this.currentGeohash);
                 }
             }
@@ -25133,7 +25134,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.206 ═══<br/>
+═══ Nymchat v3.52.207 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
