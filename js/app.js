@@ -972,6 +972,7 @@ class NYM {
             pubkey: 'fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2',
             title: 'Nymchat Bot'
         };
+        this.verifiedBotPubkeys = new Set([this.verifiedBot.pubkey]);
         this.isFlutterWebView = navigator.userAgent.includes('NYMApp') ||
             navigator.userAgent.includes('Flutter');
 
