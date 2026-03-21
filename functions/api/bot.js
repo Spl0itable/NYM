@@ -1,21 +1,21 @@
 // Nymchat Bot
 //
 // Commands:
-//   +help              - List available commands
-//   +top               - Top channels by message activity
-//   +last [N]          - Last N messages across channels
-//   +seen <nickname>   - Where was someone last seen
-//   +who               - Who's active in this channel
-//   +ask <question>    - Ask the AI a question
-//   +roll [NdN]        - Roll dice (e.g., +roll 2d6)
-//   +flip              - Flip a coin
-//   +8ball <question>  - Magic 8-ball
-//   +pick <options>    - Pick randomly from a list
-//   +math <expr>       - Calculate math expression
-//   +time              - Current UTC time
-//   +about             - About Nymchat
-//   +nostr             - Nostr protocol tips
-//   @Nymbot <question> - Mention-based alias for +ask
+//   ?help              - List available commands
+//   ?top               - Top channels by message activity
+//   ?last [N]          - Last N messages across channels
+//   ?seen <nickname>   - Where was someone last seen
+//   ?who               - Who's active in this channel
+//   ?ask <question>    - Ask the AI a question
+//   ?roll [NdN]        - Roll dice (e.g., ?roll 2d6)
+//   ?flip              - Flip a coin
+//   ?8ball <question>  - Magic 8-ball
+//   ?pick <options>    - Pick randomly from a list
+//   ?math <expr>       - Calculate math expression
+//   ?time              - Current UTC time
+//   ?about             - About Nymchat
+//   ?nostr             - Nostr protocol tips
+//   @Nymbot <question> - Mention-based alias for ?ask
 
 // node_modules/@noble/hashes/esm/crypto.js
 var crypto = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
@@ -2470,7 +2470,11 @@ function signEvent(evt, privkeyHex) {
   return evt;
 }
 var BOT_NYM = "Nymbot";
-var COMMAND_PREFIX = "+";
+var BOT_AVATAR = "https://nymchat.com/images/NYM-favicon.png";
+var BOT_BANNER = "https://nymchat.com/images/NYM-icon.png";
+var BOT_ABOUT = "Nymchat bot — type ?help for commands";
+var BOT_LUD16 = "69420@wallet.yakihonne.com";
+var COMMAND_PREFIX = "?";
 
 // HTTP POST handler
 async function onRequest(context) {
@@ -2629,7 +2633,26 @@ async function onRequest(context) {
 
   var signed = signEvent(event, privkey);
 
-  return new Response(JSON.stringify({ event: signed }), {
+  // Build kind 0 profile event so the client can publish it
+  var profileContent = JSON.stringify({
+    name: BOT_NYM,
+    display_name: BOT_NYM,
+    about: BOT_ABOUT,
+    picture: BOT_AVATAR,
+    banner: BOT_BANNER,
+    lud16: BOT_LUD16,
+    bot: true
+  });
+  var profileEvent = {
+    kind: 0,
+    created_at: now,
+    tags: [],
+    content: profileContent,
+    pubkey: pubkey
+  };
+  var signedProfile = signEvent(profileEvent, privkey);
+
+  return new Response(JSON.stringify({ event: signed, profile: signedProfile }), {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
@@ -2639,32 +2662,32 @@ async function onRequest(context) {
 function handleHelp() {
   return [
     "Nymbot commands:",
-    "+help \u2014 List available commands",
-    "+top \u2014 Top channels by message activity",
-    "+last [N] \u2014 Last N messages across channels",
-    "+seen <nickname> \u2014 Where was someone last seen",
-    "+who \u2014 Who's active in this channel",
-    "+ask <question> \u2014 Ask the AI a question",
-    "+roll [NdN] \u2014 Roll dice (e.g. +roll 2d6)",
-    "+flip \u2014 Flip a coin",
-    "+8ball <question> \u2014 Magic 8-ball",
-    "+pick <options> \u2014 Pick randomly (e.g. +pick pizza tacos burgers)",
-    "+math <expr> \u2014 Calculate math (e.g. +math 2+2*3)",
-    "+time \u2014 Current UTC time",
-    "+about \u2014 About Nymchat",
-    "+nostr \u2014 Nostr protocol tips",
+    "?help \u2014 List available commands",
+    "?top \u2014 Top channels by message activity",
+    "?last [N] \u2014 Last N messages across channels",
+    "?seen <nickname> \u2014 Where was someone last seen",
+    "?who \u2014 Who's active in this channel",
+    "?ask <question> \u2014 Ask the AI a question",
+    "?roll [NdN] \u2014 Roll dice (e.g. ?roll 2d6)",
+    "?flip \u2014 Flip a coin",
+    "?8ball <question> \u2014 Magic 8-ball",
+    "?pick <options> \u2014 Pick randomly (e.g. ?pick pizza tacos burgers)",
+    "?math <expr> \u2014 Calculate math (e.g. ?math 2+2*3)",
+    "?time \u2014 Current UTC time",
+    "?about \u2014 About Nymchat",
+    "?nostr \u2014 Nostr protocol tips",
     "",
     "Trivia & Fun:",
-    "+trivia [category] \u2014 Trivia question (general, history, science, crypto, nostr)",
-    "+joke \u2014 Tell a joke",
-    "+riddle \u2014 Give a riddle",
-    "+wordplay [mode] \u2014 Word game (anagram, scramble, wordle)",
-    "+news \u2014 Latest breaking news headlines",
+    "?trivia [category] \u2014 Trivia question (general, history, science, crypto, nostr)",
+    "?joke \u2014 Tell a joke",
+    "?riddle \u2014 Give a riddle",
+    "?wordplay [mode] \u2014 Word game (anagram, scramble, wordle)",
+    "?news \u2014 Latest breaking news headlines",
     "",
     "Miscellaneous:",
-    "+define <word> \u2014 Define a word",
-    "+translate <text> \u2014 Translate text",
-    "+units <value> <from> to <to> \u2014 Convert units (e.g. +units 10 km to mi)",
+    "?define <word> \u2014 Define a word",
+    "?translate <text> \u2014 Translate text",
+    "?units <value> <from> to <to> \u2014 Convert units (e.g. ?units 10 km to mi)",
     "",
     "Tip: You can also @Nymbot <question> (or use the mentions modal) to ask the AI directly!"
   ].join("\n");
@@ -2814,18 +2837,18 @@ var NYMBOT_SYSTEM_PROMPT = [
   "/quit — Disconnect, /poll — Create poll.",
   "",
   "=== BOT COMMANDS (+ prefix) ===",
-  "+help — List bot commands, +ask <question> — Ask the AI (that's me!),",
-  "+roll [NdN] — Roll dice (e.g. +roll 2d6), +flip — Coin flip, +8ball — Magic 8-ball,",
-  "+pick <options> — Random pick, +math <expr> — Calculate, +time — UTC time,",
-  "+about — About Nymchat, +nostr — Nostr tips,",
-  "+top — Top channels by activity, +last [N] — Recent messages,",
-  "+seen <nym> — Where was someone last seen, +who — Active nyms in channel,",
-  "+trivia [category] — Trivia question (general, history, science, crypto, nostr),",
-  "+joke — Tell a joke, +riddle — Give a riddle,",
-  "+wordplay [mode] — Word game (anagram, scramble, wordle),",
-  "+news — Latest breaking news headlines,",
-  "+define <word> — Define a word, +translate <text> — Translate text,",
-  "+units <value> <from> to <to> — Convert units (e.g. +units 10 km to mi).",
+  "?help — List bot commands, ?ask <question> — Ask the AI (that's me!),",
+  "?roll [NdN] — Roll dice (e.g. ?roll 2d6), ?flip — Coin flip, ?8ball — Magic 8-ball,",
+  "?pick <options> — Random pick, ?math <expr> — Calculate, ?time — UTC time,",
+  "?about — About Nymchat, ?nostr — Nostr tips,",
+  "?top — Top channels by activity, ?last [N] — Recent messages,",
+  "?seen <nym> — Where was someone last seen, ?who — Active nyms in channel,",
+  "?trivia [category] — Trivia question (general, history, science, crypto, nostr),",
+  "?joke — Tell a joke, ?riddle — Give a riddle,",
+  "?wordplay [mode] — Word game (anagram, scramble, wordle),",
+  "?news — Latest breaking news headlines,",
+  "?define <word> — Define a word, ?translate <text> — Translate text,",
+  "?units <value> <from> to <to> — Convert units (e.g. ?units 10 km to mi).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "",
   "=== NOSTR PROTOCOL ===",
@@ -2848,14 +2871,14 @@ var NYMBOT_SYSTEM_PROMPT = [
 
 async function handleAsk(question, context) {
   if (!question.trim()) {
-    return "Usage: +ask <your question> (or @Nymbot <your question>)";
+    return "Usage: ?ask <your question> (or @Nymbot <your question>)";
   }
   var ai = context.env.AI || null;
   if (!ai) {
-    return "AI is not configured. To enable +ask, add a Workers AI binding named \"AI\" in your Cloudflare Pages project settings (Settings > Functions > AI bindings).";
+    return "AI is not configured. To enable ?ask, add a Workers AI binding named \"AI\" in your Cloudflare Pages project settings (Settings > Functions > AI bindings).";
   }
   try {
-    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
+    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fp8-fast", {
       messages: [
         { role: "system", content: NYMBOT_SYSTEM_PROMPT },
         { role: "user", content: question }
@@ -2887,7 +2910,7 @@ function handleRoll(args) {
     }
   }
   if (numDice < 1 || sides < 2) {
-    return "Usage: +roll [NdN] (e.g., +roll 2d6)";
+    return "Usage: ?roll [NdN] (e.g., ?roll 2d6)";
   }
   var rolls = [];
   var total = 0;
@@ -2908,7 +2931,7 @@ function handleFlip() {
 
 function handleEightBall(question) {
   if (!question.trim()) {
-    return "Usage: +8ball <your question>";
+    return "Usage: ?8ball <your question>";
   }
   var responses = [
     "It is certain.", "It is decidedly so.", "Without a doubt.",
@@ -2927,7 +2950,7 @@ function handleEightBall(question) {
 function handlePick(args) {
   var options = args.trim().split(/[\s,]+/).filter(function(s) { return s.length > 0; });
   if (options.length < 2) {
-    return "Usage: +pick <option1> <option2> [option3...] (e.g. +pick pizza tacos burgers)";
+    return "Usage: ?pick <option1> <option2> [option3...] (e.g. ?pick pizza tacos burgers)";
   }
   var choice = options[Math.floor(Math.random() * options.length)];
   return "\u{1F3AF} I pick: " + choice;
@@ -2951,7 +2974,7 @@ function handleTime() {
 
 function handleMath(expr) {
   if (!expr.trim()) {
-    return "Usage: +math <expression> (e.g. +math 2+2*3)";
+    return "Usage: ?math <expression> (e.g. ?math 2+2*3)";
   }
   // Only allow safe math characters
   var sanitized = expr.replace(/\s/g, "");
@@ -3055,7 +3078,7 @@ function handleTrivia(args) {
   var category = (args || "").trim().toLowerCase();
   var categories = Object.keys(TRIVIA_QUESTIONS);
   if (category && !TRIVIA_QUESTIONS[category]) {
-    return "Unknown category! Available: " + categories.join(", ") + "\nUsage: +trivia [category]";
+    return "Unknown category! Available: " + categories.join(", ") + "\nUsage: ?trivia [category]";
   }
   if (!category) {
     category = categories[Math.floor(Math.random() * categories.length)];
@@ -3144,7 +3167,7 @@ function handleWordplay(args) {
     var hint = word[0] + "____";
     return "\u{1F7E9} WORDLE CHALLENGE!\nI'm thinking of a 5-letter word.\nHint: it starts with \"" + word[0].toUpperCase() + "\"\n" +
       "Pattern: " + hint + "\n\n" +
-      "Try to guess! Type: +ask wordle guess <your word>\n" +
+      "Try to guess! Type: ?ask wordle guess <your word>\n" +
       "\u{1F4A1} Answer: ||" + word.toUpperCase() + "||";
   }
 
@@ -3177,11 +3200,11 @@ function handleWordplay(args) {
 
 // Miscellaneous Commands (AI-powered)
 async function handleDefine(word, context) {
-  if (!word.trim()) return "Usage: +define <word>";
+  if (!word.trim()) return "Usage: ?define <word>";
   var ai = context.env.AI || null;
   if (!ai) return "AI is not configured.";
   try {
-    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
+    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fp8-fast", {
       messages: [
         { role: "system", content: "You are a concise dictionary. Define the word given. Include: 1) Part of speech 2) Short definition 3) Example sentence. Keep it under 200 characters total. No preamble." },
         { role: "user", content: "Define: " + word.trim() }
@@ -3196,11 +3219,11 @@ async function handleDefine(word, context) {
 }
 
 async function handleTranslate(text, context) {
-  if (!text.trim()) return "Usage: +translate <text> (translates to English)";
+  if (!text.trim()) return "Usage: ?translate <text> (translates to English)";
   var ai = context.env.AI || null;
   if (!ai) return "AI is not configured.";
   try {
-    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
+    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fp8-fast", {
       messages: [
         { role: "system", content: "You are a translator. Detect the language of the input and translate it to English. If it's already English, translate to Spanish. Format: [detected language] -> [target language]: translation. Keep it concise. No preamble." },
         { role: "user", content: text.trim() }
@@ -3236,9 +3259,9 @@ var UNIT_CONVERSIONS = {
 };
 
 function handleUnits(args) {
-  if (!args.trim()) return "Usage: +units <value> <from> to <to>\nExample: +units 10 km to miles\nSupported: km, mi, m, ft, cm, in, kg, lb, g, oz, c, f, k, l, gal, ml, sats, btc";
+  if (!args.trim()) return "Usage: ?units <value> <from> to <to>\nExample: ?units 10 km to miles\nSupported: km, mi, m, ft, cm, in, kg, lb, g, oz, c, f, k, l, gal, ml, sats, btc";
   var match = args.trim().match(/^([\d.]+)\s*([a-z]+)\s+(?:to\s+)?([a-z]+)$/i);
-  if (!match) return "Usage: +units <value> <from> to <to>\nExample: +units 10 km to mi";
+  if (!match) return "Usage: ?units <value> <from> to <to>\nExample: ?units 10 km to mi";
   var value = parseFloat(match[1]);
   var from = match[2].toLowerCase();
   var to = match[3].toLowerCase();
@@ -3299,9 +3322,14 @@ async function handleNews() {
   });
 
   var results = await Promise.all(feedPromises);
+  var seenTitles = {};
   for (var i = 0; i < results.length; i++) {
     for (var j = 0; j < results[i].length; j++) {
-      headlines.push(results[i][j]);
+      var key = results[i][j].title.toLowerCase().trim();
+      if (!seenTitles[key]) {
+        seenTitles[key] = true;
+        headlines.push(results[i][j]);
+      }
     }
   }
 
@@ -3496,7 +3524,7 @@ async function handleLast(args) {
 
 async function handleSeen(nickname) {
   if (!nickname.trim()) {
-    return "Usage: +seen <nickname>";
+    return "Usage: ?seen <nickname>";
   }
   var target = nickname.trim().toLowerCase().replace(/#.*$/, "");
   var since = Math.floor(Date.now() / 1000) - 86400; // last 24h

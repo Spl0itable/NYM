@@ -6647,13 +6647,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     async _handleBotCommand(content, geohash) {
         if (!this.useRelayProxy) return;
-        // Support @Nymbot mentions as an alias for +ask
+        // Support @Nymbot mentions as an alias for ?ask
         // The mentions modal auto-suggests @nymbot#4bb2 (with pubkey suffix)
         const mentionMatch = content.match(/^@nymbot(?:#[a-f0-9]{4})?\s+([\s\S]*)/i);
         if (mentionMatch) {
-            content = '+ask ' + mentionMatch[1];
+            content = '?ask ' + mentionMatch[1];
         }
-        const prefix = '+';
+        const prefix = '?';
         if (!content.startsWith(prefix)) return;
         const parts = content.slice(prefix.length).trim().split(/\s+/);
         const command = parts[0];
@@ -6668,18 +6668,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (!resp.ok) return;
             const data = await resp.json();
             if (data.event) {
-                // Publish the signed bot event to all connected relays
-                const msg = JSON.stringify(['EVENT', data.event]);
-                if (this.useRelayProxy && this.poolSockets.length > 0) {
-                    for (const pool of this.poolSockets) {
-                        if (pool.ws && pool.ws.readyState === WebSocket.OPEN) {
-                            try { pool.ws.send(msg); } catch {}
+                // Publish the signed bot event (and profile if present) to all connected relays
+                const events = [data.event];
+                if (data.profile) events.unshift(data.profile);
+                for (const evt of events) {
+                    const msg = JSON.stringify(['EVENT', evt]);
+                    if (this.useRelayProxy && this.poolSockets.length > 0) {
+                        for (const pool of this.poolSockets) {
+                            if (pool.ws && pool.ws.readyState === WebSocket.OPEN) {
+                                try { pool.ws.send(msg); } catch {}
+                            }
                         }
-                    }
-                } else {
-                    for (const [, ws] of this.relayPool) {
-                        if (ws.readyState === WebSocket.OPEN) {
-                            try { ws.send(msg); } catch {}
+                    } else {
+                        for (const [, ws] of this.relayPool) {
+                            if (ws.readyState === WebSocket.OPEN) {
+                                try { ws.send(msg); } catch {}
+                            }
                         }
                     }
                 }
@@ -19498,7 +19502,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Send to geohash channel (kind 20000)
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
                 // Check for bot commands (+ prefix or @Nymbot mention)
-                if (content.startsWith('+') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(content)) {
+                if (content.startsWith('?') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(content)) {
                     this._handleBotCommand(content, this.currentGeohash);
                 }
             }
@@ -19547,8 +19551,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             } else if (this.currentGeohash) {
                 // Send via ephemeral keypair (anonymous)
                 await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash);
-                // Check for bot commands (+ prefix or @Nymbot mention)
-                if (content.startsWith('+') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(content)) {
+                // Check for bot commands (? prefix or @Nymbot mention)
+                if (content.startsWith('?') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(content)) {
                     this._handleBotCommand(content, this.currentGeohash);
                 }
             }
@@ -25134,7 +25138,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.207 ═══<br/>
+═══ Nymchat v3.52.208 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
