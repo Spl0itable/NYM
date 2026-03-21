@@ -1,18 +1,22 @@
-// Nymchat Bot
-// A Nostr bot that connects to relays, subscribes to kind 20000 events,
-// and responds to commands from nymchat clients.
+// Nymchat Bot — HTTP POST API
+// Client detects +commands, POSTs to /api/bot, and publishes
+// the signed response event to connected Nostr relays.
 //
 // Commands:
 //   +help              - List available commands
 //   +top               - Top channels by message activity
-//   +last              - Last 10 messages across all channels
+//   +last [N]          - Last N messages across channels
+//   +seen <nickname>   - Where was someone last seen
+//   +who               - Who's active in this channel
 //   +ask <question>    - Ask the AI a question
-//   +seen <nickname>   - Where was a person last seen
-//   +who               - Who's been active recently
-//   +stats             - Bot uptime and statistics
-//   +roll [NdN]        - Roll dice (e.g., !roll 2d6)
+//   +roll [NdN]        - Roll dice (e.g., +roll 2d6)
 //   +flip              - Flip a coin
 //   +8ball <question>  - Magic 8-ball
+//   +pick <options>    - Pick randomly from a list
+//   +math <expr>       - Calculate math expression
+//   +time              - Current UTC time
+//   +about             - About Nymchat
+//   +nostr             - Nostr protocol tips
 
 // node_modules/@noble/hashes/esm/crypto.js
 var crypto = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
@@ -2548,6 +2552,33 @@ async function onRequest(context) {
       case "8ball":
         response = handleEightBall(args || "");
         break;
+      case "pick":
+        response = handlePick(args || "");
+        break;
+      case "time":
+        response = handleTime();
+        break;
+      case "math":
+        response = handleMath(args || "");
+        break;
+      case "about":
+        response = handleAbout();
+        break;
+      case "nostr":
+        response = handleNostr();
+        break;
+      case "top":
+        response = await handleTop();
+        break;
+      case "last":
+        response = await handleLast(args || "");
+        break;
+      case "seen":
+        response = await handleSeen(args || "");
+        break;
+      case "who":
+        response = await handleWho(geohash || "");
+        break;
       default:
         return new Response(JSON.stringify({ error: "Unknown command" }), {
           status: 400,
@@ -2585,10 +2616,20 @@ async function onRequest(context) {
 function handleHelp() {
   return [
     "Nymbot commands:",
-    "+ask <question> \u2014 Ask the AI",
-    "+roll [NdN] \u2014 Roll dice (e.g. 2d6)",
+    "+help \u2014 List available commands",
+    "+top \u2014 Top channels by message activity",
+    "+last [N] \u2014 Last N messages across channels",
+    "+seen <nickname> \u2014 Where was someone last seen",
+    "+who \u2014 Who's active in this channel",
+    "+ask <question> \u2014 Ask the AI a question",
+    "+roll [NdN] \u2014 Roll dice (e.g. +roll 2d6)",
     "+flip \u2014 Flip a coin",
-    "+8ball <question> \u2014 Magic 8-ball"
+    "+8ball <question> \u2014 Magic 8-ball",
+    "+pick <options> \u2014 Pick randomly (e.g. +pick pizza tacos burgers)",
+    "+math <expr> \u2014 Calculate math (e.g. +math 2+2*3)",
+    "+time \u2014 Current UTC time",
+    "+about \u2014 About Nymchat",
+    "+nostr \u2014 Nostr protocol tips"
   ].join("\n");
 }
 
@@ -2670,6 +2711,279 @@ function handleEightBall(question) {
   ];
   var idx = Math.floor(Math.random() * responses.length);
   return "\u{1F3B1} " + responses[idx];
+}
+
+function handlePick(args) {
+  var options = args.trim().split(/[\s,]+/).filter(function(s) { return s.length > 0; });
+  if (options.length < 2) {
+    return "Usage: +pick <option1> <option2> [option3...] (e.g. +pick pizza tacos burgers)";
+  }
+  var choice = options[Math.floor(Math.random() * options.length)];
+  return "\u{1F3AF} I pick: " + choice;
+}
+
+function handleTime() {
+  var now = new Date();
+  var utc = now.toUTCString();
+  var unix = Math.floor(now.getTime() / 1000);
+  return "\u{1F552} " + utc + "\nUnix: " + unix;
+}
+
+function handleMath(expr) {
+  if (!expr.trim()) {
+    return "Usage: +math <expression> (e.g. +math 2+2*3)";
+  }
+  // Only allow safe math characters
+  var sanitized = expr.replace(/\s/g, "");
+  if (!/^[0-9+\-*/.()%^]+$/.test(sanitized)) {
+    return "Only numbers and operators (+, -, *, /, %, ^, parentheses) are allowed.";
+  }
+  // Replace ^ with ** for exponentiation
+  sanitized = sanitized.replace(/\^/g, "**");
+  try {
+    var result = Function('"use strict"; return (' + sanitized + ')')();
+    if (typeof result !== "number" || !isFinite(result)) {
+      return "Result is not a finite number.";
+    }
+    return "\u{1F9EE} " + expr.trim() + " = " + result;
+  } catch (e) {
+    return "Could not evaluate expression: " + e.message;
+  }
+}
+
+function handleAbout() {
+  return [
+    "Nymchat \u2014 Anonymous, decentralized chat",
+    "Protocol: Nostr (kind 20000 geohash channels)",
+    "No accounts, no tracking, no censorship.",
+    "Your messages are signed with ephemeral keys",
+    "and broadcast to Nostr relays worldwide.",
+    "https://nymchat.app"
+  ].join("\n");
+}
+
+function handleNostr() {
+  var tips = [
+    "Nostr is a simple, open protocol for decentralized social networking. Your identity is a keypair \u2014 no server owns your account.",
+    "Nostr events are signed with your private key and broadcast to relays. Anyone can run a relay, and clients choose which relays to use.",
+    "Nymchat uses kind 20000 (ephemeral events) with geohash tags for location-based channels. Messages aren't stored permanently by relays.",
+    "Your nym (nickname) is just a tag on your messages. The #suffix comes from your public key, making each identity unique.",
+    "Nostr keypairs: your npub is your public identity, your nsec is your secret key. Never share your nsec!",
+    "Want to learn more? Check out nostr.com, or try other Nostr clients like Damus, Primal, or Amethyst."
+  ];
+  var tip = tips[Math.floor(Math.random() * tips.length)];
+  return "\u{1F4E1} " + tip;
+}
+
+// Relay Fetcher
+var FETCH_RELAYS = [
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.primal.net"
+];
+
+function fetchEventsFromRelay(relayUrl, filter, timeoutMs) {
+  return new Promise(function(resolve) {
+    var events = [];
+    var done = false;
+    function finish() {
+      if (done) return;
+      done = true;
+      try { ws.close(); } catch (e) {}
+      resolve(events);
+    }
+    var ws;
+    try {
+      ws = new WebSocket(relayUrl);
+    } catch (e) {
+      resolve(events);
+      return;
+    }
+    var timer = setTimeout(finish, timeoutMs);
+    ws.addEventListener("open", function() {
+      var subId = "nymbot-" + Math.random().toString(36).slice(2, 8);
+      ws.send(JSON.stringify(["REQ", subId, filter]));
+    });
+    ws.addEventListener("message", function(msg) {
+      try {
+        var data = JSON.parse(msg.data);
+        if (Array.isArray(data)) {
+          if (data[0] === "EVENT" && data[2]) {
+            events.push(data[2]);
+          } else if (data[0] === "EOSE") {
+            clearTimeout(timer);
+            finish();
+          }
+        }
+      } catch (e) {}
+    });
+    ws.addEventListener("error", function() { clearTimeout(timer); finish(); });
+    ws.addEventListener("close", function() { clearTimeout(timer); finish(); });
+  });
+}
+
+async function fetchRecentEvents(filter, timeoutMs) {
+  // Query multiple relays in parallel, dedupe by event id
+  var results = await Promise.all(
+    FETCH_RELAYS.map(function(url) { return fetchEventsFromRelay(url, filter, timeoutMs || 4000); })
+  );
+  var seen = new Set();
+  var events = [];
+  for (var i = 0; i < results.length; i++) {
+    for (var j = 0; j < results[i].length; j++) {
+      var evt = results[i][j];
+      if (evt.id && !seen.has(evt.id)) {
+        seen.add(evt.id);
+        events.push(evt);
+      }
+    }
+  }
+  return events;
+}
+
+function extractNym(event) {
+  var nTag = event.tags ? event.tags.find(function(t) { return t[0] === "n"; }) : null;
+  return nTag ? nTag[1] : null;
+}
+
+function extractGeohash(event) {
+  var gTag = event.tags ? event.tags.find(function(t) { return t[0] === "g"; }) : null;
+  return gTag ? gTag[1] : null;
+}
+
+function timeAgo(unixTs) {
+  var seconds = Math.floor(Date.now() / 1000) - unixTs;
+  if (seconds < 60) return seconds + "s ago";
+  if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+  if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
+  return Math.floor(seconds / 86400) + "d ago";
+}
+
+// Relay-backed Commands
+async function handleTop() {
+  var since = Math.floor(Date.now() / 1000) - 3600;
+  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 5000);
+  if (events.length === 0) {
+    return "No channel activity in the last hour.";
+  }
+  var channels = {};
+  for (var i = 0; i < events.length; i++) {
+    var geo = extractGeohash(events[i]);
+    if (geo) {
+      if (!channels[geo]) channels[geo] = { count: 0, lastActive: 0 };
+      channels[geo].count++;
+      if (events[i].created_at > channels[geo].lastActive) {
+        channels[geo].lastActive = events[i].created_at;
+      }
+    }
+  }
+  var sorted = Object.entries(channels).sort(function(a, b) { return b[1].count - a[1].count; }).slice(0, 10);
+  var lines = ["Top channels (last hour):"];
+  for (var k = 0; k < sorted.length; k++) {
+    lines.push((k + 1) + ". #" + sorted[k][0] + " \u2014 " + sorted[k][1].count + " msgs (" + timeAgo(sorted[k][1].lastActive) + ")");
+  }
+  return lines.join("\n");
+}
+
+async function handleLast(args) {
+  var count = Math.min(Math.max(parseInt(args) || 10, 1), 25);
+  var since = Math.floor(Date.now() / 1000) - 3600;
+  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 200 }, 5000);
+  if (events.length === 0) {
+    return "No messages found in the last hour.";
+  }
+  events.sort(function(a, b) { return a.created_at - b.created_at; });
+  var recent = events.slice(-count);
+  var lines = ["Last " + recent.length + " messages:"];
+  for (var i = 0; i < recent.length; i++) {
+    var evt = recent[i];
+    var nym = extractNym(evt) || "anon";
+    var geo = extractGeohash(evt) || "?";
+    var preview = (evt.content || "").trim();
+    if (preview.length > 80) preview = preview.slice(0, 80) + "...";
+    lines.push("[#" + geo + "] " + nym + " (" + timeAgo(evt.created_at) + "): " + preview);
+  }
+  return lines.join("\n");
+}
+
+async function handleSeen(nickname) {
+  if (!nickname.trim()) {
+    return "Usage: +seen <nickname>";
+  }
+  var target = nickname.trim().toLowerCase();
+  var since = Math.floor(Date.now() / 1000) - 86400; // last 24h
+  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 5000);
+  // Collect all channels this nym has been seen in
+  var channels = {};
+  var foundNym = null;
+  var latestTime = 0;
+  for (var i = 0; i < events.length; i++) {
+    var nym = extractNym(events[i]);
+    if (nym && nym.toLowerCase().replace(/#.*$/, "").trim() === target) {
+      if (!foundNym) foundNym = nym;
+      var geo = extractGeohash(events[i]) || "?";
+      if (!channels[geo]) channels[geo] = { count: 0, lastSeen: 0 };
+      channels[geo].count++;
+      if (events[i].created_at > channels[geo].lastSeen) {
+        channels[geo].lastSeen = events[i].created_at;
+      }
+      if (events[i].created_at > latestTime) {
+        latestTime = events[i].created_at;
+        foundNym = nym;
+      }
+    }
+  }
+  if (!foundNym) {
+    return "Haven't seen \"" + nickname.trim() + "\" in the last 24 hours.";
+  }
+  var sorted = Object.entries(channels).sort(function(a, b) { return b[1].lastSeen - a[1].lastSeen; });
+  var lines = [foundNym + " seen in " + sorted.length + " channel" + (sorted.length !== 1 ? "s" : "") + " (last 24h):"];
+  for (var j = 0; j < sorted.length; j++) {
+    lines.push("\u2022 #" + sorted[j][0] + " \u2014 " + sorted[j][1].count + " msgs (last: " + timeAgo(sorted[j][1].lastSeen) + ")");
+  }
+  return lines.join("\n");
+}
+
+async function handleWho(geohash) {
+  var since = Math.floor(Date.now() / 1000) - 3600;
+  var filter = { kinds: [20000], since: since, limit: 500 };
+  if (geohash) {
+    filter["#g"] = [geohash];
+  }
+  var events = await fetchRecentEvents(filter, 5000);
+  if (events.length === 0) {
+    return geohash
+      ? "No active users in #" + geohash + " in the last hour."
+      : "No active users in the last hour.";
+  }
+  // Collect unique nyms with most recent activity
+  var nyms = {};
+  for (var i = 0; i < events.length; i++) {
+    var nym = extractNym(events[i]);
+    if (!nym) continue;
+    var key = nym.toLowerCase().replace(/#.*$/, "").trim();
+    if (!nyms[key] || events[i].created_at > nyms[key].lastSeen) {
+      nyms[key] = {
+        nym: nym,
+        lastSeen: events[i].created_at,
+        channel: extractGeohash(events[i]) || "?"
+      };
+    }
+  }
+  var sorted = Object.values(nyms).sort(function(a, b) { return b.lastSeen - a.lastSeen; });
+  var header = geohash
+    ? "Active in #" + geohash + " (last hour): " + sorted.length
+    : "Active users (last hour): " + sorted.length;
+  var lines = [header];
+  var limit = Math.min(sorted.length, 20);
+  for (var j = 0; j < limit; j++) {
+    var info = sorted[j];
+    lines.push("\u2022 " + info.nym + " in #" + info.channel + " (" + timeAgo(info.lastSeen) + ")");
+  }
+  if (sorted.length > 20) {
+    lines.push("...and " + (sorted.length - 20) + " more");
+  }
+  return lines.join("\n");
 }
 
 export {
