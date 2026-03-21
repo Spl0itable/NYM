@@ -6645,25 +6645,41 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return false;
     }
 
-    _activateBot() {
-        if (!this.useRelayProxy || this._botSocket) return;
+    async _handleBotCommand(content, geohash) {
+        if (!this.useRelayProxy) return;
+        const prefix = '+';
+        if (!content.startsWith(prefix)) return;
+        const parts = content.slice(prefix.length).trim().split(/\s+/);
+        const command = parts[0];
+        const args = parts.slice(1).join(' ');
+        if (!command) return;
         try {
-            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const ws = new WebSocket(`${proto}//${window.location.host}/api/bot`);
-            this._botSocket = ws;
-            ws.addEventListener('open', () => {
-                console.log('[nymbot] Bot activated');
+            const resp = await fetch('/api/bot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command, args, geohash })
             });
-            ws.addEventListener('close', () => {
-                this._botSocket = null;
-                // Reconnect after 10s
-                setTimeout(() => this._activateBot(), 10000);
-            });
-            ws.addEventListener('error', () => {
-                this._botSocket = null;
-            });
-        } catch {
-            this._botSocket = null;
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (data.event) {
+                // Publish the signed bot event to all connected relays
+                const msg = JSON.stringify(['EVENT', data.event]);
+                if (this.useRelayProxy && this.poolSockets.length > 0) {
+                    for (const pool of this.poolSockets) {
+                        if (pool.ws && pool.ws.readyState === WebSocket.OPEN) {
+                            try { pool.ws.send(msg); } catch {}
+                        }
+                    }
+                } else {
+                    for (const [, ws] of this.relayPool) {
+                        if (ws.readyState === WebSocket.OPEN) {
+                            try { ws.send(msg); } catch {}
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('[nymbot] Command failed:', e);
         }
     }
 
@@ -19475,6 +19491,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             } else if (this.currentGeohash) {
                 // Send to geohash channel (kind 20000)
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+                // Check for bot commands (+ prefix)
+                if (content.startsWith('+')) {
+                    this._handleBotCommand(content, this.currentGeohash);
+                }
             }
         }
 
@@ -19521,6 +19541,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             } else if (this.currentGeohash) {
                 // Send via ephemeral keypair (anonymous)
                 await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash);
+                // Check for bot commands (+ prefix)
+                if (content.startsWith('+')) {
+                    this._handleBotCommand(content, this.currentGeohash);
+                }
             }
         }
 
@@ -25481,9 +25505,6 @@ async function initializeNym() {
 
         // Connect to relays
         await nym.connectToRelays();
-
-        // Activate the nymbot (Cloudflare Pages only)
-        nym._activateBot();
 
         // Apply cached shop items (styles/flairs) to the new ephemeral identity
         nym.applyCachedShopItemsToNewIdentity();
