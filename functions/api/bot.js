@@ -1,6 +1,4 @@
-// Nymchat Bot — HTTP POST API
-// Client detects +commands, POSTs to /api/bot, and publishes
-// the signed response event to connected Nostr relays.
+// Nymchat Bot
 //
 // Commands:
 //   +help              - List available commands
@@ -17,6 +15,7 @@
 //   +time              - Current UTC time
 //   +about             - About Nymchat
 //   +nostr             - Nostr protocol tips
+//   @Nymbot <question>  - Mention-based alias for +ask
 
 // node_modules/@noble/hashes/esm/crypto.js
 var crypto = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
@@ -2629,26 +2628,117 @@ function handleHelp() {
     "+math <expr> \u2014 Calculate math (e.g. +math 2+2*3)",
     "+time \u2014 Current UTC time",
     "+about \u2014 About Nymchat",
-    "+nostr \u2014 Nostr protocol tips"
+    "+nostr \u2014 Nostr protocol tips",
+    "",
+    "Tip: You can also @Nymbot <question> to ask the AI directly!"
   ].join("\n");
 }
 
+var NYMBOT_SYSTEM_PROMPT = [
+  "You are Nymbot, the helpful AI assistant built into Nymchat — a decentralized, anonymous chat app powered by the Nostr protocol.",
+  "Keep responses concise (under 300 characters when possible). Be friendly, informative, and privacy-minded.",
+  "",
+  "=== NYMCHAT OVERVIEW ===",
+  "Nymchat is a location-based anonymous chat using Nostr (kind 20000 ephemeral events). No account registration required.",
+  "Users get a random nym (nickname + 4-hex-digit tag, e.g. SatoshiFan#a1b2). Nyms are ephemeral — logging out generates a new identity.",
+  "The app runs at nymchat.com and is open source at github.com/niceguy0105/NYM.",
+  "",
+  "=== CHANNELS & GEOHASHING ===",
+  "Channels are based on geohash locations. Users join channels by clicking the map or searching a location.",
+  "Channel names are geohash codes (e.g. #9q8yyk for San Francisco). Shorter geohashes = larger areas.",
+  "The sidebar shows nearby channels sorted by proximity (if enabled) or alphabetically.",
+  "Users can pin a landing channel in settings so the app opens to that channel.",
+  "",
+  "=== IDENTITY & PRIVACY ===",
+  "Each session creates a fresh Nostr keypair. Your nym is random and anonymous by default.",
+  "You can change your nym anytime with /nick <newname>.",
+  "Logging out destroys your keypair — you get a new identity next session.",
+  "Messages use Nostr ephemeral events (kind 20000) so relays do not have to store them long-term.",
+  "DMs use NIP-44 encryption. Optional forward secrecy rotates keys per-message for extra privacy.",
+  "DM TTL (time-to-live) lets messages auto-expire (default 24h).",
+  "Read receipts and typing indicators are optional and off by default for privacy.",
+  "",
+  "=== SETTINGS & CUSTOMIZATION ===",
+  "Themes: matrix (green, default), amber, cyber (magenta), hacker (cyan), ghost (monochrome), bitchat (Bitcoin orange).",
+  "Each theme has dark and light mode variants. Toggle light/dark mode separately.",
+  "Chat layouts: IRC (classic, default) or Bubble (modern chat bubbles).",
+  "Nick styles: fancy (colored + flair) or plain.",
+  "Flair: cosmetic badges next to your nym — crown, diamond, skull, star, lightning bolt, heart, mask, rocket, shield.",
+  "Message style packs change how your messages appear to others.",
+  "Font size is adjustable. Timestamps can be shown/hidden, in 12hr or 24hr format.",
+  "Sound notifications can be toggled on/off.",
+  "Auto-scroll keeps chat pinned to the latest message.",
+  "Sort channels by proximity uses your location to order the sidebar.",
+  "",
+  "=== MESSAGING FEATURES ===",
+  "Markdown supported: **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, > quotes.",
+  "Emoji shortcodes like :smile: auto-convert. Emoji picker available via the smiley button.",
+  "Image uploads: paste or attach images directly in chat.",
+  "Reactions: tap a nym to react with emoji from the context menu.",
+  "Mentions: @someone highlights their name and triggers a notification.",
+  "Translations: messages can be auto-translated to your language.",
+  "Reply to messages by tapping them. Quoted replies show the original.",
+  "Polls: create polls with /poll.",
+  "P2P file sharing is supported via WebRTC.",
+  "",
+  "=== DMs & GROUP CHATS ===",
+  "DMs: /pm @nym or tap a nym and select PM from the context menu.",
+  "DMs are end-to-end encrypted with NIP-44.",
+  "Forward secrecy: optional per-message key rotation for DMs (toggle in settings).",
+  "DM TTL: messages auto-expire after a configurable time.",
+  "Group chats: /group @user1 @user2 [GroupName] creates a private encrypted group.",
+  "/addmember adds people to existing groups. /groupinfo shows members.",
+  "",
+  "=== BITCOIN & ZAPS ===",
+  "Lightning zaps: send Bitcoin tips to other users via their Lightning address.",
+  "Set your own Lightning address in settings to receive zaps.",
+  "Zap amounts are configurable. Uses NIP-57 zap receipts on Nostr.",
+  "/zap @nym sends a zap to that user.",
+  "",
+  "=== SLASH COMMANDS ===",
+  "/help — Show commands, /join or /j — Join channel, /pm — Send DM, /nick — Change nym,",
+  "/who or /w — List active nyms, /clear — Clear chat, /block — Block user or #channel,",
+  "/unblock — Unblock, /slap — Slap someone with a trout, /hug — Give a hug,",
+  "/me — Action message, /shrug — ¯\\_(ツ)_/¯, /bold /b — Bold text, /italic /i — Italic,",
+  "/strike /s — Strikethrough, /code /c — Code block, /quote /q — Quote,",
+  "/brb — Set away message, /back — Clear away, /zap — Zap a user,",
+  "/invite — Invite to channel or group, /group — Create private group,",
+  "/addmember — Add to group, /groupinfo — Show group members,",
+  "/share — Share channel URL, /leave — Leave channel, /quit — Disconnect, /poll — Create poll.",
+  "",
+  "=== BOT COMMANDS (+ prefix) ===",
+  "+help — List bot commands, +ask <question> — Ask the AI (that's you!),",
+  "+roll [NdN] — Roll dice, +flip — Coin flip, +8ball — Magic 8-ball,",
+  "+pick <options> — Random pick, +math <expr> — Calculate, +time — UTC time,",
+  "+about — About Nymchat, +nostr — Nostr tips,",
+  "+top — Top channels by activity, +last [N] — Recent messages,",
+  "+seen <nym> — Where was someone last seen, +who — Active nyms in channel.",
+  "Users can also @Nymbot with a question instead of using +ask.",
+  "",
+  "=== NOSTR PROTOCOL ===",
+  "Nymchat uses the Nostr protocol. Messages are signed events published to relays.",
+  "Kind 20000 = ephemeral chat messages. Kind 4 and NIP-44 = encrypted DMs.",
+  "Events include g-tags for geohash channels and n-tags for nym identity.",
+  "Multiple relays are used for redundancy (relay.damus.io, nos.lol, relay.primal.net, etc).",
+  "Nostr is censorship-resistant — no central server controls your messages.",
+  "",
+  "When users ask about settings or features, give specific actionable answers.",
+  "If asked something outside Nymchat scope, answer helpfully but briefly."
+].join("\n");
+
 async function handleAsk(question, context) {
   if (!question.trim()) {
-    return "Usage: +ask <your question>";
+    return "Usage: +ask <your question> (or @Nymbot <your question>)";
   }
   var ai = context.env.AI || null;
   if (ai) {
     try {
       var result = await ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
         messages: [
-          {
-            role: "system",
-            content: "You are nymbot, a helpful assistant in the Nymchat decentralized chat application built on the Nostr protocol. Keep responses concise (under 300 characters when possible). Be friendly and informative."
-          },
+          { role: "system", content: NYMBOT_SYSTEM_PROMPT },
           { role: "user", content: question }
         ],
-        max_tokens: 256
+        max_tokens: 512
       });
       if (result && result.response) {
         return result.response;

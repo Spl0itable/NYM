@@ -6647,6 +6647,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     async _handleBotCommand(content, geohash) {
         if (!this.useRelayProxy) return;
+        // Support @Nymbot mentions as an alias for +ask
+        const mentionMatch = content.match(/^@nymbot\s+([\s\S]*)/i);
+        if (mentionMatch) {
+            content = '+ask ' + mentionMatch[1];
+        }
         const prefix = '+';
         if (!content.startsWith(prefix)) return;
         const parts = content.slice(prefix.length).trim().split(/\s+/);
@@ -19491,8 +19496,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             } else if (this.currentGeohash) {
                 // Send to geohash channel (kind 20000)
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-                // Check for bot commands (+ prefix)
-                if (content.startsWith('+')) {
+                // Check for bot commands (+ prefix or @Nymbot mention)
+                if (content.startsWith('+') || /^@nymbot\s/i.test(content)) {
                     this._handleBotCommand(content, this.currentGeohash);
                 }
             }
@@ -19541,8 +19546,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             } else if (this.currentGeohash) {
                 // Send via ephemeral keypair (anonymous)
                 await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash);
-                // Check for bot commands (+ prefix)
-                if (content.startsWith('+')) {
+                // Check for bot commands (+ prefix or @Nymbot mention)
+                if (content.startsWith('+') || /^@nymbot\s/i.test(content)) {
                     this._handleBotCommand(content, this.currentGeohash);
                 }
             }
