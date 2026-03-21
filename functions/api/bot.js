@@ -2578,6 +2578,30 @@ async function onRequest(context) {
       case "who":
         response = await handleWho(geohash || "");
         break;
+      case "trivia":
+        response = handleTrivia(args || "");
+        break;
+      case "joke":
+        response = handleJoke();
+        break;
+      case "riddle":
+        response = handleRiddle();
+        break;
+      case "wordplay":
+        response = handleWordplay(args || "");
+        break;
+      case "define":
+        response = await handleDefine(args || "", context);
+        break;
+      case "translate":
+        response = await handleTranslate(args || "", context);
+        break;
+      case "units":
+        response = handleUnits(args || "");
+        break;
+      case "news":
+        response = await handleNews();
+        break;
       default:
         return new Response(JSON.stringify({ error: "Unknown command" }), {
           status: 400,
@@ -2629,6 +2653,18 @@ function handleHelp() {
     "+time \u2014 Current UTC time",
     "+about \u2014 About Nymchat",
     "+nostr \u2014 Nostr protocol tips",
+    "",
+    "Trivia & Fun:",
+    "+trivia [category] \u2014 Trivia question (general, history, science, crypto, nostr)",
+    "+joke \u2014 Tell a joke",
+    "+riddle \u2014 Give a riddle",
+    "+wordplay [mode] \u2014 Word game (anagram, scramble, wordle)",
+    "+news \u2014 Latest breaking news headlines",
+    "",
+    "Miscellaneous:",
+    "+define <word> \u2014 Define a word",
+    "+translate <text> \u2014 Translate text",
+    "+units <value> <from> to <to> \u2014 Convert units (e.g. +units 10 km to mi)",
     "",
     "Tip: You can also @Nymbot <question> (or use the mentions modal) to ask the AI directly!"
   ].join("\n");
@@ -2783,7 +2819,13 @@ var NYMBOT_SYSTEM_PROMPT = [
   "+pick <options> — Random pick, +math <expr> — Calculate, +time — UTC time,",
   "+about — About Nymchat, +nostr — Nostr tips,",
   "+top — Top channels by activity, +last [N] — Recent messages,",
-  "+seen <nym> — Where was someone last seen, +who — Active nyms in channel.",
+  "+seen <nym> — Where was someone last seen, +who — Active nyms in channel,",
+  "+trivia [category] — Trivia question (general, history, science, crypto, nostr),",
+  "+joke — Tell a joke, +riddle — Give a riddle,",
+  "+wordplay [mode] — Word game (anagram, scramble, wordle),",
+  "+news — Latest breaking news headlines,",
+  "+define <word> — Define a word, +translate <text> — Translate text,",
+  "+units <value> <from> to <to> — Convert units (e.g. +units 10 km to mi).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "",
   "=== NOSTR PROTOCOL ===",
@@ -2944,6 +2986,334 @@ function handleNostr() {
   return "\u{1F4E1} " + tip;
 }
 
+// Trivia and Fun Commands
+var TRIVIA_QUESTIONS = {
+  general: [
+    { q: "What is the smallest country in the world by area?", a: "Vatican City" },
+    { q: "How many bones does an adult human have?", a: "206" },
+    { q: "What is the chemical symbol for gold?", a: "Au" },
+    { q: "Which planet has the most moons?", a: "Saturn (146 known moons)" },
+    { q: "What year was the internet invented?", a: "1983 (TCP/IP was standardized)" },
+    { q: "What is the hardest natural substance on Earth?", a: "Diamond" },
+    { q: "How many hearts does an octopus have?", a: "Three" },
+    { q: "What is the longest river in the world?", a: "The Nile (about 6,650 km)" },
+    { q: "What temperature is the same in Celsius and Fahrenheit?", a: "-40 degrees" },
+    { q: "Which element has the atomic number 1?", a: "Hydrogen" }
+  ],
+  history: [
+    { q: "In what year did the Berlin Wall fall?", a: "1989" },
+    { q: "Who was the first person to walk on the moon?", a: "Neil Armstrong (1969)" },
+    { q: "What ancient civilization built Machu Picchu?", a: "The Inca Empire" },
+    { q: "What year did World War II end?", a: "1945" },
+    { q: "Who invented the printing press?", a: "Johannes Gutenberg (around 1440)" },
+    { q: "What was the name of the ship that brought the Pilgrims to America?", a: "The Mayflower" },
+    { q: "Which empire was ruled by Genghis Khan?", a: "The Mongol Empire" },
+    { q: "What year was the Declaration of Independence signed?", a: "1776" }
+  ],
+  science: [
+    { q: "What is the speed of light in a vacuum (approx)?", a: "299,792,458 meters per second (~186,000 mi/s)" },
+    { q: "What gas do plants absorb from the atmosphere?", a: "Carbon dioxide (CO2)" },
+    { q: "What is the powerhouse of the cell?", a: "The mitochondria" },
+    { q: "What planet is known as the Red Planet?", a: "Mars" },
+    { q: "What is the most abundant gas in Earth's atmosphere?", a: "Nitrogen (~78%)" },
+    { q: "How many chromosomes do humans have?", a: "46 (23 pairs)" },
+    { q: "What is absolute zero in Celsius?", a: "-273.15\u00B0C" },
+    { q: "What force keeps planets in orbit around the Sun?", a: "Gravity" }
+  ],
+  crypto: [
+    { q: "What year was Bitcoin's whitepaper published?", a: "2008 (by Satoshi Nakamoto)" },
+    { q: "What is the maximum supply of Bitcoin?", a: "21 million BTC" },
+    { q: "What consensus mechanism does Bitcoin use?", a: "Proof of Work (PoW)" },
+    { q: "What does 'HODL' stand for?", a: "Hold On for Dear Life (originally a typo of 'hold')" },
+    { q: "What is the name of the smallest unit of Bitcoin?", a: "A satoshi (0.00000001 BTC)" },
+    { q: "What is a Bitcoin halving?", a: "The block reward is cut in half roughly every 4 years (210,000 blocks)" },
+    { q: "What was the first item purchased with Bitcoin?", a: "Two pizzas for 10,000 BTC (May 22, 2010 \u2014 Bitcoin Pizza Day)" },
+    { q: "What protocol does Nymchat use?", a: "Nostr (Notes and Other Stuff Transmitted by Relays)" }
+  ],
+  nostr: [
+    { q: "What does 'Nostr' stand for?", a: "Notes and Other Stuff Transmitted by Relays" },
+    { q: "What kind number is used for short text notes in Nostr?", a: "Kind 1" },
+    { q: "What NIP defines encrypted direct messages using gift wraps?", a: "NIP-17" },
+    { q: "What is an 'nsec' in Nostr?", a: "Your secret (private) key \u2014 never share it!" },
+    { q: "What is an 'npub' in Nostr?", a: "Your public key \u2014 your identity on Nostr" },
+    { q: "What event kind does Nymchat use for ephemeral messages?", a: "Kind 20000" },
+    { q: "What NIP defines zaps (Lightning tips) on Nostr?", a: "NIP-57" },
+    { q: "What is a Nostr relay?", a: "A server that receives, stores, and forwards Nostr events" }
+  ]
+};
+
+function handleTrivia(args) {
+  var category = (args || "").trim().toLowerCase();
+  var categories = Object.keys(TRIVIA_QUESTIONS);
+  if (category && !TRIVIA_QUESTIONS[category]) {
+    return "Unknown category! Available: " + categories.join(", ") + "\nUsage: +trivia [category]";
+  }
+  if (!category) {
+    category = categories[Math.floor(Math.random() * categories.length)];
+  }
+  var questions = TRIVIA_QUESTIONS[category];
+  var trivia = questions[Math.floor(Math.random() * questions.length)];
+  return "\u2753 [" + category.toUpperCase() + "] " + trivia.q + "\n\n\u{1F4A1} Answer: ||" + trivia.a + "||";
+}
+
+var JOKES = [
+  "Why do programmers prefer dark mode? Because light attracts bugs.",
+  "There are only 10 types of people in the world: those who understand binary and those who don't.",
+  "A SQL query walks into a bar, sees two tables, and asks... 'Can I JOIN you?'",
+  "Why was the JavaScript developer sad? Because he didn't Node how to Express himself.",
+  "What's a Bitcoin maximalist's favorite key on the keyboard? The HODL key.",
+  "How does a computer get drunk? It takes screenshots.",
+  "Why do Java developers wear glasses? Because they can't C#.",
+  "What did the router say to the doctor? 'It hurts when IP.'",
+  "Why did the blockchain go to therapy? It had too many unresolved forks.",
+  "What do you call a group of anonymous chat users? A nym-phony orchestra.",
+  "Why don't scientists trust atoms? Because they make up everything.",
+  "I told my computer I needed a break. Now it won't stop sending me Kit-Kat ads.",
+  "Why did the developer go broke? Because he used up all his cache.",
+  "What's a pirate's favorite programming language? R... but their first love is the C.",
+  "How do trees access the internet? They log in."
+];
+
+function handleJoke() {
+  var joke = JOKES[Math.floor(Math.random() * JOKES.length)];
+  return "\u{1F602} " + joke;
+}
+
+var RIDDLES = [
+  { r: "I have cities, but no houses. I have mountains, but no trees. I have water, but no fish. What am I?", a: "A map" },
+  { r: "The more you take, the more you leave behind. What am I?", a: "Footsteps" },
+  { r: "I speak without a mouth and hear without ears. I have no body, but I come alive with the wind. What am I?", a: "An echo" },
+  { r: "I can be cracked, made, told, and played. What am I?", a: "A joke" },
+  { r: "What has keys but can't open locks?", a: "A piano (or a keyboard)" },
+  { r: "I have a head and a tail but no body. What am I?", a: "A coin" },
+  { r: "The more of me you take, the more you leave behind. What am I?", a: "Footsteps" },
+  { r: "I'm tall when I'm young and short when I'm old. What am I?", a: "A candle" },
+  { r: "What has hands but can't clap?", a: "A clock" },
+  { r: "I can travel around the world while staying in a corner. What am I?", a: "A stamp" },
+  { r: "What gets wetter the more it dries?", a: "A towel" },
+  { r: "I have billions of eyes, yet I live in darkness. I have millions of ears, yet only four lobes. What am I?", a: "The human brain" }
+];
+
+function handleRiddle() {
+  var riddle = RIDDLES[Math.floor(Math.random() * RIDDLES.length)];
+  return "\u{1F9E9} " + riddle.r + "\n\n\u{1F4A1} Answer: ||" + riddle.a + "||";
+}
+
+// Wordplay command with anagram, scramble, and wordle modes
+var WORDPLAY_WORDS = [
+  "bitcoin", "nostr", "relay", "cipher", "wallet", "privacy", "channel",
+  "geohash", "crypto", "protocol", "lightning", "satoshi", "decentralized",
+  "anonymous", "keyboard", "network", "message", "encrypt", "digital", "signal",
+  "bridge", "planet", "rocket", "puzzle", "garden", "castle", "forest", "dragon",
+  "shadow", "crystal", "mystic", "wonder", "breeze", "sunset", "harbor"
+];
+
+var WORDLE_WORDS = [
+  "block", "chain", "relay", "nostr", "crash", "stack", "debug", "query",
+  "cache", "pixel", "badge", "flame", "blaze", "crane", "drift", "frost",
+  "gleam", "ghost", "grain", "haunt", "jelly", "knack", "laser", "manor",
+  "ocean", "plume", "quest", "storm", "trail", "vivid", "world", "youth",
+  "brave", "charm", "dance", "eagle", "fiber", "glint", "haste", "joker"
+];
+
+function shuffleString(str) {
+  var arr = str.split("");
+  for (var i = arr.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var temp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = temp;
+  }
+  return arr.join("");
+}
+
+function handleWordplay(args) {
+  var mode = (args || "").trim().toLowerCase();
+
+  if (mode === "wordle") {
+    var word = WORDLE_WORDS[Math.floor(Math.random() * WORDLE_WORDS.length)];
+    var hint = word[0] + "____";
+    return "\u{1F7E9} WORDLE CHALLENGE!\nI'm thinking of a 5-letter word.\nHint: it starts with \"" + word[0].toUpperCase() + "\"\n" +
+      "Pattern: " + hint + "\n\n" +
+      "Try to guess! Type: +ask wordle guess <your word>\n" +
+      "\u{1F4A1} Answer: ||" + word.toUpperCase() + "||";
+  }
+
+  if (mode === "anagram") {
+    var word = WORDPLAY_WORDS[Math.floor(Math.random() * WORDPLAY_WORDS.length)];
+    var scrambled = shuffleString(word);
+    while (scrambled === word) scrambled = shuffleString(word);
+    return "\u{1F500} ANAGRAM: Rearrange these letters to form a word:\n\"" +
+      scrambled.toUpperCase() + "\" (" + word.length + " letters)\n\n\u{1F4A1} Answer: ||" + word.toUpperCase() + "||";
+  }
+
+  if (mode === "scramble") {
+    var word = WORDPLAY_WORDS[Math.floor(Math.random() * WORDPLAY_WORDS.length)];
+    var revealed = Math.max(1, Math.floor(word.length / 3));
+    var hint = "";
+    var revealPositions = new Set();
+    while (revealPositions.size < revealed) {
+      revealPositions.add(Math.floor(Math.random() * word.length));
+    }
+    for (var i = 0; i < word.length; i++) {
+      hint += revealPositions.has(i) ? word[i].toUpperCase() : "_";
+    }
+    return "\u{1F524} WORD SCRAMBLE: Fill in the blanks!\n" + hint + " (" + word.length + " letters)\n\n\u{1F4A1} Answer: ||" + word.toUpperCase() + "||";
+  }
+
+  // Default: random mode
+  var modes = ["anagram", "scramble", "wordle"];
+  return handleWordplay(modes[Math.floor(Math.random() * modes.length)]);
+}
+
+// Miscellaneous Commands (AI-powered)
+async function handleDefine(word, context) {
+  if (!word.trim()) return "Usage: +define <word>";
+  var ai = context.env.AI || null;
+  if (!ai) return "AI is not configured.";
+  try {
+    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
+      messages: [
+        { role: "system", content: "You are a concise dictionary. Define the word given. Include: 1) Part of speech 2) Short definition 3) Example sentence. Keep it under 200 characters total. No preamble." },
+        { role: "user", content: "Define: " + word.trim() }
+      ],
+      max_tokens: 150
+    });
+    if (result && result.response) return "\u{1F4D6} " + result.response;
+    return "Could not define that word.";
+  } catch (e) {
+    return "Error: " + (e.message || String(e));
+  }
+}
+
+async function handleTranslate(text, context) {
+  if (!text.trim()) return "Usage: +translate <text> (translates to English)";
+  var ai = context.env.AI || null;
+  if (!ai) return "AI is not configured.";
+  try {
+    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
+      messages: [
+        { role: "system", content: "You are a translator. Detect the language of the input and translate it to English. If it's already English, translate to Spanish. Format: [detected language] -> [target language]: translation. Keep it concise. No preamble." },
+        { role: "user", content: text.trim() }
+      ],
+      max_tokens: 200
+    });
+    if (result && result.response) return "\u{1F30D} " + result.response;
+    return "Could not translate that text.";
+  } catch (e) {
+    return "Error: " + (e.message || String(e));
+  }
+}
+
+var UNIT_CONVERSIONS = {
+  km: { mi: 0.621371, m: 1000, ft: 3280.84, yd: 1093.61 },
+  mi: { km: 1.60934, m: 1609.34, ft: 5280, yd: 1760 },
+  m: { ft: 3.28084, km: 0.001, mi: 0.000621371, cm: 100, in: 39.3701, yd: 1.09361 },
+  ft: { m: 0.3048, km: 0.0003048, mi: 0.000189394, cm: 30.48, in: 12, yd: 0.333333 },
+  cm: { in: 0.393701, m: 0.01, ft: 0.0328084, mm: 10 },
+  in: { cm: 2.54, m: 0.0254, ft: 0.0833333, mm: 25.4 },
+  kg: { lb: 2.20462, oz: 35.274, g: 1000 },
+  lb: { kg: 0.453592, oz: 16, g: 453.592 },
+  g: { oz: 0.035274, kg: 0.001, lb: 0.00220462 },
+  oz: { g: 28.3495, kg: 0.0283495, lb: 0.0625 },
+  c: { f: function(v) { return v * 9/5 + 32; }, k: function(v) { return v + 273.15; } },
+  f: { c: function(v) { return (v - 32) * 5/9; }, k: function(v) { return (v - 32) * 5/9 + 273.15; } },
+  k: { c: function(v) { return v - 273.15; }, f: function(v) { return (v - 273.15) * 9/5 + 32; } },
+  l: { gal: 0.264172, ml: 1000, qt: 1.05669, pt: 2.11338 },
+  gal: { l: 3.78541, ml: 3785.41, qt: 4, pt: 8 },
+  ml: { l: 0.001, gal: 0.000264172, oz: 0.033814 },
+  sats: { btc: 0.00000001 },
+  btc: { sats: 100000000 }
+};
+
+function handleUnits(args) {
+  if (!args.trim()) return "Usage: +units <value> <from> to <to>\nExample: +units 10 km to miles\nSupported: km, mi, m, ft, cm, in, kg, lb, g, oz, c, f, k, l, gal, ml, sats, btc";
+  var match = args.trim().match(/^([\d.]+)\s*([a-z]+)\s+(?:to\s+)?([a-z]+)$/i);
+  if (!match) return "Usage: +units <value> <from> to <to>\nExample: +units 10 km to mi";
+  var value = parseFloat(match[1]);
+  var from = match[2].toLowerCase();
+  var to = match[3].toLowerCase();
+
+  // Normalize common aliases
+  var aliases = { miles: "mi", meters: "m", feet: "ft", inches: "in", pounds: "lb", ounces: "oz", grams: "g", kilograms: "kg", kilometers: "km", centimeters: "cm", celsius: "c", fahrenheit: "f", kelvin: "k", liters: "l", litres: "l", gallons: "gal", milliliters: "ml", satoshis: "sats", satoshi: "sats" };
+  from = aliases[from] || from;
+  to = aliases[to] || to;
+
+  if (isNaN(value)) return "Invalid number.";
+  if (!UNIT_CONVERSIONS[from]) return "Unknown unit: " + from + ". Supported: km, mi, m, ft, cm, in, kg, lb, g, oz, c, f, k, l, gal, ml, sats, btc";
+  if (!UNIT_CONVERSIONS[from][to]) return "Can't convert " + from + " to " + to + ". Try: " + Object.keys(UNIT_CONVERSIONS[from]).join(", ");
+
+  var conversion = UNIT_CONVERSIONS[from][to];
+  var result;
+  if (typeof conversion === "function") {
+    result = conversion(value);
+  } else {
+    result = value * conversion;
+  }
+
+  // Format nicely
+  var formatted = result % 1 === 0 ? result.toString() : result.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  return "\u{1F4CF} " + value + " " + from + " = " + formatted + " " + to;
+}
+
+// News Command (fetches from public RSS feeds)
+var NEWS_FEEDS = [
+  { name: "BBC World", url: "https://feeds.bbci.co.uk/news/world/rss.xml" },
+  { name: "Reuters World", url: "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best" },
+  { name: "NPR News", url: "https://feeds.npr.org/1001/rss.xml" },
+  { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml" }
+];
+
+async function handleNews() {
+  var headlines = [];
+  var feedPromises = NEWS_FEEDS.map(function(feed) {
+    return fetch(feed.url, { headers: { "User-Agent": "Nymbot/1.0" } })
+      .then(function(res) { return res.ok ? res.text() : ""; })
+      .then(function(xml) {
+        if (!xml) return [];
+        var items = [];
+        var itemRegex = /<item[\s>]([\s\S]*?)<\/item>/gi;
+        var match;
+        while ((match = itemRegex.exec(xml)) !== null && items.length < 3) {
+          var itemXml = match[1];
+          var titleMatch = itemXml.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
+          var title = titleMatch ? titleMatch[1].trim().replace(/<[^>]+>/g, "") : null;
+          if (title) {
+            items.push({ title: title, source: feed.name });
+          }
+        }
+        return items;
+      })
+      .catch(function() { return []; });
+  });
+
+  var results = await Promise.all(feedPromises);
+  for (var i = 0; i < results.length; i++) {
+    for (var j = 0; j < results[i].length; j++) {
+      headlines.push(results[i][j]);
+    }
+  }
+
+  if (headlines.length === 0) {
+    return "\u{1F4F0} Unable to fetch news right now. Try again later.";
+  }
+
+  // Shuffle and take top 5
+  for (var i = headlines.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var temp = headlines[i];
+    headlines[i] = headlines[j];
+    headlines[j] = temp;
+  }
+  headlines = headlines.slice(0, 5);
+
+  var output = "\u{1F4F0} BREAKING NEWS\n";
+  for (var i = 0; i < headlines.length; i++) {
+    output += (i + 1) + ". " + headlines[i].title + " [" + headlines[i].source + "]\n";
+  }
+  return output.trim();
+}
+
 // Relay Fetcher
 var FETCH_RELAYS = [
   "wss://relay.damus.io",
@@ -3029,37 +3399,60 @@ function timeAgo(unixTs) {
 }
 
 // Relay-backed Commands
+function isHumanMessage(evt) {
+  // Must have content
+  if (!evt.content || !evt.content.trim()) return false;
+  var content = evt.content.trim();
+  // Skip raw JSON objects (system/relay messages)
+  if (content.charAt(0) === "{" || content.charAt(0) === "[") return false;
+  // Must have a geohash g-tag (real Nymchat channel messages)
+  var hasGeohash = false;
+  var tags = evt.tags || [];
+  for (var i = 0; i < tags.length; i++) {
+    if (tags[i][0] === "g" && tags[i][1]) hasGeohash = true;
+    // Skip bot messages
+    if (tags[i][0] === "bot") return false;
+  }
+  return hasGeohash;
+}
+
 async function handleTop() {
-  var since = Math.floor(Date.now() / 1000) - 3600;
-  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 5000);
+  var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
+  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 6000);
+  // Filter to human messages only
+  events = events.filter(isHumanMessage);
   if (events.length === 0) {
-    return "No channel activity in the last hour.";
+    return "No channel activity in the last 10 minutes.";
   }
   var channels = {};
   for (var i = 0; i < events.length; i++) {
     var geo = extractGeohash(events[i]);
-    if (geo) {
-      if (!channels[geo]) channels[geo] = { count: 0, lastActive: 0 };
-      channels[geo].count++;
-      if (events[i].created_at > channels[geo].lastActive) {
-        channels[geo].lastActive = events[i].created_at;
-      }
+    if (!geo) continue;
+    if (!channels[geo]) channels[geo] = { count: 0, lastActive: 0 };
+    channels[geo].count++;
+    if (events[i].created_at > channels[geo].lastActive) {
+      channels[geo].lastActive = events[i].created_at;
     }
   }
   var sorted = Object.entries(channels).sort(function(a, b) { return b[1].count - a[1].count; }).slice(0, 10);
-  var lines = ["Top channels (last hour):"];
+  if (sorted.length === 0) {
+    return "No channel activity in the last 10 minutes.";
+  }
+  var lines = ["Top channels (last 10 min):"];
   for (var k = 0; k < sorted.length; k++) {
-    lines.push((k + 1) + ". #" + sorted[k][0] + " \u2014 " + sorted[k][1].count + " msgs (" + timeAgo(sorted[k][1].lastActive) + ")");
+    lines.push((k + 1) + ". __#" + sorted[k][0] + "__ \u2014 " + sorted[k][1].count + " msgs (" + timeAgo(sorted[k][1].lastActive) + ")");
   }
   return lines.join("\n");
 }
 
 async function handleLast(args) {
   var count = Math.min(Math.max(parseInt(args) || 10, 1), 25);
-  var since = Math.floor(Date.now() / 1000) - 3600;
-  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 200 }, 5000);
+  var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
+  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 200 }, 6000);
+  // Filter to human messages only
+  events = events.filter(isHumanMessage);
   if (events.length === 0) {
-    return "No messages found in the last hour.";
+    return "No messages found in the last 10 minutes.";
   }
   events.sort(function(a, b) { return a.created_at - b.created_at; });
   var recent = events.slice(-count);
@@ -3067,7 +3460,7 @@ async function handleLast(args) {
   for (var i = 0; i < recent.length; i++) {
     var evt = recent[i];
     var nym = extractNym(evt) || "anon";
-    var geo = extractGeohash(evt) || "?";
+    var geo = extractGeohash(evt) || "nym";
     var preview = (evt.content || "").trim();
     if (preview.length > 80) preview = preview.slice(0, 80) + "...";
     lines.push("[#" + geo + "] " + nym + " (" + timeAgo(evt.created_at) + "): " + preview);
@@ -3079,10 +3472,10 @@ async function handleSeen(nickname) {
   if (!nickname.trim()) {
     return "Usage: +seen <nickname>";
   }
-  var target = nickname.trim().toLowerCase();
+  var target = nickname.trim().toLowerCase().replace(/#.*$/, "");
   var since = Math.floor(Date.now() / 1000) - 86400; // last 24h
-  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 5000);
-  // Collect all channels this nym has been seen in
+  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 6000);
+  events = events.filter(isHumanMessage);
   var channels = {};
   var foundNym = null;
   var latestTime = 0;
@@ -3090,7 +3483,7 @@ async function handleSeen(nickname) {
     var nym = extractNym(events[i]);
     if (nym && nym.toLowerCase().replace(/#.*$/, "").trim() === target) {
       if (!foundNym) foundNym = nym;
-      var geo = extractGeohash(events[i]) || "?";
+      var geo = extractGeohash(events[i]) || "nym";
       if (!channels[geo]) channels[geo] = { count: 0, lastSeen: 0 };
       channels[geo].count++;
       if (events[i].created_at > channels[geo].lastSeen) {
@@ -3114,18 +3507,18 @@ async function handleSeen(nickname) {
 }
 
 async function handleWho(geohash) {
-  var since = Math.floor(Date.now() / 1000) - 3600;
+  var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
   var filter = { kinds: [20000], since: since, limit: 500 };
   if (geohash) {
     filter["#g"] = [geohash];
   }
-  var events = await fetchRecentEvents(filter, 5000);
+  var events = await fetchRecentEvents(filter, 6000);
+  events = events.filter(isHumanMessage);
   if (events.length === 0) {
     return geohash
-      ? "No active users in #" + geohash + " in the last hour."
-      : "No active users in the last hour.";
+      ? "No active users in #" + geohash + " in the last 10 minutes."
+      : "No active users in the last 10 minutes.";
   }
-  // Collect unique nyms with most recent activity
   var nyms = {};
   for (var i = 0; i < events.length; i++) {
     var nym = extractNym(events[i]);
@@ -3135,14 +3528,14 @@ async function handleWho(geohash) {
       nyms[key] = {
         nym: nym,
         lastSeen: events[i].created_at,
-        channel: extractGeohash(events[i]) || "?"
+        channel: extractGeohash(events[i]) || "nym"
       };
     }
   }
   var sorted = Object.values(nyms).sort(function(a, b) { return b.lastSeen - a.lastSeen; });
   var header = geohash
-    ? "Active in #" + geohash + " (last hour): " + sorted.length
-    : "Active users (last hour): " + sorted.length;
+    ? "Active in #" + geohash + " (last 10 min): " + sorted.length
+    : "Active users (last 10 min): " + sorted.length;
   var lines = [header];
   var limit = Math.min(sorted.length, 20);
   for (var j = 0; j < limit; j++) {
