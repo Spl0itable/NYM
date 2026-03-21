@@ -968,6 +968,10 @@ class NYM {
             pubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
             title: 'Nymchat Developer'
         };
+        this.verifiedBot = {
+            pubkey: 'fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2',
+            title: 'Nymchat Bot'
+        };
         this.isFlutterWebView = navigator.userAgent.includes('NYMApp') ||
             navigator.userAgent.includes('Flutter');
 
@@ -4557,8 +4561,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     isReservedNick(nick) {
-        const reserved = ['luxas'];
+        const reserved = ['luxas', 'nymbot'];
         return reserved.includes(nick.toLowerCase().replace(/#.*$/, '').trim());
+    }
+
+    isVerifiedBot(pubkey) {
+        return pubkey === this.verifiedBot.pubkey;
     }
 
     verifyDeveloperNsec(nsec) {
@@ -5621,10 +5629,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
             const verifiedBadge = this.isVerifiedDeveloper(pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 4px;">✓</span>`
-                : '';
+                : this.isVerifiedBot(pubkey)
+                    ? '<span class="verified-badge" title="Nymchat Bot" style="margin-left: 4px;">✓</span>'
+                    : '';
             let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}${verifiedBadge}`;
             if (this.isVerifiedDeveloper(pubkey)) {
                 nymHtml += `<div class="context-menu-dev-label">Nymchat Developer</div>`;
+            } else if (this.isVerifiedBot(pubkey)) {
+                nymHtml += `<div class="context-menu-dev-label">Nymchat Bot</div>`;
             }
             // Show "Group Owner" badge when this user is the creator of the current group
             if (this.inPMMode && this.currentGroup) {
@@ -10227,6 +10239,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const nym = rawNym || this.getNymFromPubkey(event.pubkey);
             const geohash = geohashTag ? geohashTag[1] : '';
 
+            // Block impersonation: drop events using reserved nym "nymbot"
+            // unless they come from the verified bot pubkey
+            if (nym.toLowerCase() === 'nymbot' && !this.isVerifiedBot(event.pubkey)) {
+                return;
+            }
+
             // Track discovered geohash for potential batch loading
             if (geohash && !this.discoveredGeohashes.has(geohash)) {
                 this.discoveredGeohashes.add(geohash);
@@ -10338,7 +10356,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 isOwn: event.pubkey === this.pubkey,
                 isHistorical: isHistorical,
                 isFileOffer: !!fileOffer,
-                fileOffer: fileOffer
+                fileOffer: fileOffer,
+                isBot: this.isVerifiedBot(event.pubkey)
             };
 
             // Don't display duplicate of own messages
@@ -15120,7 +15139,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const now = Math.floor(Date.now() / 1000);
             const tags = [
-                ['n', this.nym]
+                ['n', this.nym],
+                ['client', 'nymchat']
             ];
 
             const kind = 20000; // Geohash channels use kind 20000
@@ -15222,7 +15242,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const now = Math.floor(Date.now() / 1000);
             const tags = [
-                ['n', anonNym]
+                ['n', anonNym],
+                ['client', 'nymchat']
             ];
 
             const kind = 20000;
@@ -15530,7 +15551,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Determine channel info and kind for the offer event
         let tags = [
             ['n', this.nym],
-            ['offer', JSON.stringify(fileOffer)]
+            ['offer', JSON.stringify(fileOffer)],
+            ['client', 'nymchat']
         ];
 
         let kind;
@@ -16282,7 +16304,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const tags = [
             ['n', this.nym],
             ['offer', JSON.stringify(fileOffer)],
-            ['g', this.currentGeohash]
+            ['g', this.currentGeohash],
+            ['client', 'nymchat']
         ];
 
         // Create and broadcast the file offer event
@@ -16696,9 +16719,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const authorClass = message.isOwn ? 'self' : '';
             const userColorClass = this.getUserColorClass(message.pubkey);
 
-            // Add verified badge if this is the developer
-            const verifiedBadge = this.isVerifiedDeveloper(message.pubkey) ?
-                `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
+            // Add verified badge if this is the developer or the nymbot
+            const verifiedBadge = this.isVerifiedDeveloper(message.pubkey)
+                ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+                : message.isBot
+                    ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
+                    : '';
 
             // Check if this is a valid event ID (not temporary PM ID)
             // PM messages use nymMessageId (UUID) as the shared reaction key, so accept those too
@@ -17675,7 +17701,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
             const verifiedBadge = this.isVerifiedDeveloper(user.pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>`
-                : '';
+                : this.verifiedBotPubkeys.has(user.pubkey)
+                    ? '<span class="verified-badge" title="Nymchat Bot" style="margin-left: 3px;">✓</span>'
+                    : '';
             const userColorClass = this.settings.theme === 'bitchat' ? this.getUserColorClass(user.pubkey) : '';
             const avatarSrc = this.getAvatarUrl(user.pubkey);
 
@@ -18984,7 +19012,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const tags = [
                 ['n', this.nym],
                 ['g', geohash],
-                ['edit', originalEventId] // Tag referencing the original message being edited
+                ['edit', originalEventId], // Tag referencing the original message being edited
+                ['client', 'nymchat']
             ];
 
             let event = {
@@ -21066,8 +21095,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const flairHtml = this.getFlairForUser(pubkey);
         const supporterBadge = userShopItems?.supporter ?
             '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
-        const verifiedBadge = this.isVerifiedDeveloper(pubkey) ?
-            `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
+        const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+            : this.isVerifiedBot(pubkey)
+                ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
+                : '';
         const userColorClass = this.getUserColorClass(pubkey);
 
         const totalVotes = votes.size;
@@ -22870,7 +22902,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     const suffix = this.getPubkeySuffix(pubkey);
                     const flairHtml = this.getFlairForUser(pubkey);
                     const verifiedBadge = this.isVerifiedDeveloper(pubkey)
-                        ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>` : '';
+                        ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+                        : this.isVerifiedBot(pubkey)
+                            ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
+                            : '';
                     authorHtml = `<span class="notification-item-author">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>&gt;${flairHtml} ${verifiedBadge}</span>`;
                 }
 
@@ -25046,7 +25081,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.51.206 ═══<br/>
+═══ Nymchat v3.52.206 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

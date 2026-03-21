@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "dependencies": {
+    "@noble/curves": "^1.8.0",
+    "@noble/hashes": "^1.7.0"
+  }
+}
