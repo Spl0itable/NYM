@@ -2466,13 +2466,10 @@ function signEvent(evt, privkeyHex) {
   evt.sig = bytesToHex(schnorr.sign(hash, privkeyHex));
   return evt;
 }
-var BOT_NYM = "nymbot";
+var BOT_NYM = "Nymbot";
 var COMMAND_PREFIX = "+";
 
-// ── HTTP POST handler ─────────────────────────────────────────────────
-// Client sends: POST /api/bot { command, args, geohash }
-// Server returns: { event: <signed kind 20000 Nostr event> }
-
+// HTTP POST handler
 async function onRequest(context) {
   const { request } = context;
 
@@ -2584,11 +2581,10 @@ async function onRequest(context) {
   });
 }
 
-// ── Command Handlers ───────────────────────────────────────────────────
-
+// Command Handlers
 function handleHelp() {
   return [
-    "nymbot commands:",
+    "Nymbot commands:",
     "+ask <question> \u2014 Ask the AI",
     "+roll [NdN] \u2014 Roll dice (e.g. 2d6)",
     "+flip \u2014 Flip a coin",
