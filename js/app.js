@@ -24,7 +24,7 @@
         state.steps = [
             {
                 title: 'Nymchat Tutorial',
-                body: 'Take a quick tour so you know where important functionality is across the app. You can skip anytime. And use the /help command in any channel to learn more.',
+                body: 'Take a quick tour so you know where important functionality is across the app. You can skip anytime. And use our helpful chat bot @Nymbot or the /help command in any channel to learn more.',
                 selector: null
             },
             {
@@ -87,7 +87,7 @@
             },
             {
                 title: 'All set!',
-                body: 'That\'s it. Enjoy Nymchat! Check out all of the available commands by typing the /help command in any channel.',
+                body: 'That\'s it. Enjoy Nymchat! Check out all of the available commands by typing ?help to have our chat bot @Nymbot assist you or the /help command in any channel.',
                 selector: null,
                 final: true
             }
