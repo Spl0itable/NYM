@@ -2528,7 +2528,7 @@ async function onRequest(context) {
     });
   }
 
-  const { command, args, geohash, conversation, senderNym } = body;
+  const { command, args, geohash, conversation, senderNym, publishedContent } = body;
   if (!command) {
     return new Response(JSON.stringify({ error: "Missing command" }), {
       status: 400,
@@ -2616,15 +2616,19 @@ async function onRequest(context) {
     response = "Error processing command: " + e.message;
   }
 
-  // Prepend quote-reply so the bot's response threads back to the user's message
-  var quotedContent = args || command;
-  if (senderNym && quotedContent) {
-    var quoteLines = quotedContent.split("\n");
-    var quotePart = "> @" + senderNym + ": " + quoteLines[0];
-    if (quoteLines.length > 1) {
-      quotePart += "\n" + quoteLines.slice(1).map(function(l) { return "> " + l; }).join("\n");
+  // Prepend quote-reply for ?ask commands so the bot's response threads back
+  // Quote the user's full published message (preserves the existing quote chain)
+  // so that when a user swipe-replies to the bot, the thread continues naturally
+  if (command.toLowerCase() === "ask" && senderNym) {
+    var userMsg = publishedContent || args || "";
+    if (userMsg) {
+      var msgLines = userMsg.split("\n");
+      var quotePart = "> @" + senderNym + ": " + msgLines[0];
+      if (msgLines.length > 1) {
+        quotePart += "\n" + msgLines.slice(1).map(function(l) { return "> " + l; }).join("\n");
+      }
+      response = quotePart + "\n\n" + response;
     }
-    response = quotePart + "\n\n" + response;
   }
 
   // Build and sign the Nostr event

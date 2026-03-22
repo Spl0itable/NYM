@@ -6705,7 +6705,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return false;
     }
 
-    async _handleBotCommand(content, geohash, quoteContext) {
+    async _handleBotCommand(content, geohash, quoteContext, publishedContent) {
         if (!this.useRelayProxy) return;
         // Support @Nymbot mentions anywhere in the message as an alias for ?ask
         const mentionRegex = /@nymbot(?:#[a-f0-9]{4})?/i;
@@ -6743,7 +6743,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const resp = await fetch('/api/bot', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym })
+                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent })
             });
             if (!resp.ok) return;
             const data = await resp.json();
@@ -17434,12 +17434,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const formattedCode = code.trim().replace(/\n/g, '<br/>');
             const idx = codePlaceholders.length;
             codePlaceholders.push(`<pre><code>${formattedCode}</code></pre>`);
-            return `\x00CODE_${idx}\x00`;
+            return `\uFDD0${idx}\uFDD1`;
         });
         formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
             const idx = codePlaceholders.length;
             codePlaceholders.push(`<code>${code}</code>`);
-            return `\x00CODE_${idx}\x00`;
+            return `\uFDD0${idx}\uFDD1`;
         });
 
         // Bold **text** or __text__
@@ -17572,7 +17572,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         );
 
         // Restore code placeholders
-        formatted = formatted.replace(/\x00CODE_(\d+)\x00/g, (m, idx) => codePlaceholders[idx]);
+        formatted = formatted.replace(/\uFDD0(\d+)\uFDD1/g, (m, idx) => codePlaceholders[idx]);
 
         // Line breaks
         formatted = formatted.replace(/\n/g, '<br>');
@@ -19666,7 +19666,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
                 const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
                 if (isBotCmd || isNymbotReply) {
-                    this._handleBotCommand(rawInput, this.currentGeohash, savedQuote);
+                    this._handleBotCommand(rawInput, this.currentGeohash, savedQuote, content);
                 }
             }
         }
@@ -19722,7 +19722,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
                 const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
                 if (isBotCmd || isNymbotReply) {
-                    this._handleBotCommand(rawInput, this.currentGeohash, savedQuote);
+                    this._handleBotCommand(rawInput, this.currentGeohash, savedQuote, content);
                 }
             }
         }
