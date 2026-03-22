@@ -35,7 +35,7 @@
             },
             {
                 title: 'Connection',
-                body: 'The current relay connection status. Tap here to view network stats such as the average latency, number of received events, and bandwidth use',
+                body: 'The current relay connection status. Tap here to view network stats such as the average latency, number of received events, and bandwidth use.',
                 selector: '.status-indicator',
                 onBefore: ensureSidebarOpenOnMobile
             },

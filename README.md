@@ -121,6 +121,50 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 **Channel Commands:**
 - `/share` - Share current channel URL
 
+## Nymbot
+
+Nymbot is a built-in AI-powered chat bot available exclusively through the site ([nymchat.app](https://nymchat.app)) and the official iOS/Android apps. It is not available when running the PWA locally, as it relies on Cloudflare Workers AI infrastructure.
+
+Nymbot responds to `?` commands in any channel. You can also mention **@Nymbot** in a message or quote-reply to a Nymbot response to continue a conversation.
+
+### Bot Commands
+
+**AI & Knowledge:**
+- `?ask <question>` - Ask the AI anything (also triggered via `@Nymbot <question>`)
+- `?define <word>` - Look up a word's definition, part of speech, and example usage
+- `?translate <text>` - Translate text (auto-detects language; English text translates to Spanish)
+- `?news` - Latest breaking news headlines
+
+**Games & Fun:**
+- `?trivia [category]` - Trivia questions (categories: general, history, science, crypto, nostr)
+- `?joke` - Random tech/Bitcoin-themed joke
+- `?riddle` - Random riddle with a hidden answer
+- `?wordplay [mode]` - Word games (modes: wordle, anagram, scramble)
+- `?roll [NdN]` - Roll dice (e.g., `?roll 2d6`; default 1d6)
+- `?flip` - Flip a coin
+- `?8ball <question>` - Magic 8-ball
+- `?pick <option1> <option2> ...` - Randomly pick from a list of options
+
+**Utility:**
+- `?math <expression>` - Calculate a math expression
+- `?units <value> <from> to <to>` - Unit converter (e.g., `?units 10 km to mi`)
+- `?time` - Current UTC time and Unix timestamp
+
+**Channel Activity:**
+- `?who` - Who's active in the current channel
+- `?top` - Top channels by recent message activity
+- `?last [N]` - Last N messages across channels (default 10, max 25)
+- `?seen <nym>` - Where and when a nym was last seen
+
+**Info:**
+- `?help` - List all available bot commands
+- `?about` - About Nymchat
+- `?nostr` - Random Nostr protocol tips
+
+### Conversational AI
+
+Quote-reply to any Nymbot response to continue the conversation — the bot automatically carries context from the reply chain (up to 6 messages of history). You can also quote any message and mention `@Nymbot` to ask the AI about it.
+
 ## Running PWA Locally
 
 You can load Nymchat directly on your own machine by opening the `index.html` file in your browser:
