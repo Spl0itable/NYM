@@ -6710,7 +6710,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return false;
     }
 
-    async _handleBotCommand(content, geohash) {
+    async _handleBotCommand(content, geohash, quoteContext) {
         if (!this.useRelayProxy) return;
         // Support @Nymbot mentions as an alias for ?ask
         // The mentions modal auto-suggests @nymbot#4bb2 (with pubkey suffix)
@@ -6718,17 +6718,28 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (mentionMatch) {
             content = '?ask ' + mentionMatch[1];
         }
+        // If replying to a Nymbot message without an explicit command, treat as ?ask
+        if (quoteContext && /^nymbot(?:#[a-f0-9]{4})?$/i.test(quoteContext.author)) {
+            if (!content.startsWith('?')) {
+                content = '?ask ' + content;
+            }
+        }
         const prefix = '?';
         if (!content.startsWith(prefix)) return;
         const parts = content.slice(prefix.length).trim().split(/\s+/);
         const command = parts[0];
         const args = parts.slice(1).join(' ');
         if (!command) return;
+        // Build conversation context from quote chain for ?ask commands
+        let conversation = [];
+        if (quoteContext && command.toLowerCase() === 'ask') {
+            conversation = this._extractQuoteChain(quoteContext);
+        }
         try {
             const resp = await fetch('/api/bot', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command, args, geohash })
+                body: JSON.stringify({ command, args, geohash, conversation })
             });
             if (!resp.ok) return;
             const data = await resp.json();
@@ -6756,6 +6767,48 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } catch (e) {
             console.error('[nymbot] Command failed:', e);
         }
+    }
+
+    // Extract conversation context from a quote chain for bot replies
+    // Parses nested quotes (> @Author: text) into an ordered conversation array
+    _extractQuoteChain(quoteContext) {
+        const conversation = [];
+        if (!quoteContext || !quoteContext.text) return conversation;
+        // Parse the quoted text to extract nested quote layers
+        const lines = quoteContext.text.split('\n');
+        let currentAuthor = null;
+        let currentText = [];
+        for (const line of lines) {
+            // Match quote lines: "> @Author#xxxx: text" or "> continuation"
+            const authorMatch = line.match(/^>\s*@([^:]+):\s*(.*)/);
+            if (authorMatch) {
+                // Save previous entry if exists
+                if (currentAuthor !== null) {
+                    conversation.push({ author: currentAuthor, text: currentText.join('\n').trim() });
+                }
+                currentAuthor = authorMatch[1].trim();
+                currentText = [authorMatch[2]];
+            } else if (line.startsWith('>') && currentAuthor !== null) {
+                // Continuation of current quote
+                currentText.push(line.replace(/^>\s?/, ''));
+            } else if (currentAuthor !== null) {
+                // Non-quoted line after quotes — this is the replier's own text
+                conversation.push({ author: currentAuthor, text: currentText.join('\n').trim() });
+                currentAuthor = null;
+                currentText = [];
+            }
+        }
+        // Push final entry
+        if (currentAuthor !== null) {
+            conversation.push({ author: currentAuthor, text: currentText.join('\n').trim() });
+        }
+        // If quoteContext has non-quoted text remainder, add it as the replier's text
+        // (this is the previous reply before the current user's input)
+        const nonQuotedText = lines.filter(l => !l.startsWith('>')).join('\n').trim();
+        if (nonQuotedText && (conversation.length === 0 || conversation[conversation.length - 1].text !== nonQuotedText)) {
+            conversation.push({ author: quoteContext.author, text: nonQuotedText });
+        }
+        return conversation;
     }
 
     _getProxiedRelayUrl(relayUrl) {
@@ -19546,6 +19599,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
+        // Capture quote context before clearing (for bot reply support)
+        const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text } : null;
+        const rawInput = content; // User's typed text before quote prepend
+
         // Prepend quote if there's a pending quote reply
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
@@ -19571,9 +19628,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             } else if (this.currentGeohash) {
                 // Send to geohash channel (kind 20000)
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-                // Check for bot commands (+ prefix or @Nymbot mention)
-                if (content.startsWith('?') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(content)) {
-                    this._handleBotCommand(content, this.currentGeohash);
+                // Check for bot commands (? prefix or @Nymbot mention)
+                // Use rawInput for trigger detection since quote prepend may hide the prefix
+                const isBotCmd = rawInput.startsWith('?') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(rawInput);
+                const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
+                if (isBotCmd || isNymbotReply) {
+                    this._handleBotCommand(rawInput, this.currentGeohash, savedQuote);
                 }
             }
         }
@@ -19596,6 +19656,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displaySystemMessage('Not connected to relay. Please wait...');
             return;
         }
+
+        // Capture quote context before clearing (for bot reply support)
+        const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text } : null;
+        const rawInput = content;
 
         // Prepend quote if there's a pending quote reply
         if (this.pendingQuote) {
@@ -19622,8 +19686,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Send via ephemeral keypair (anonymous)
                 await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash);
                 // Check for bot commands (? prefix or @Nymbot mention)
-                if (content.startsWith('?') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(content)) {
-                    this._handleBotCommand(content, this.currentGeohash);
+                const isBotCmd = rawInput.startsWith('?') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(rawInput);
+                const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
+                if (isBotCmd || isNymbotReply) {
+                    this._handleBotCommand(rawInput, this.currentGeohash, savedQuote);
                 }
             }
         }
@@ -25206,7 +25272,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.209 ═══<br/>
+═══ Nymchat v3.52.210 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

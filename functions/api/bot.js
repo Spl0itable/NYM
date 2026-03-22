@@ -2528,7 +2528,7 @@ async function onRequest(context) {
     });
   }
 
-  const { command, args, geohash } = body;
+  const { command, args, geohash, conversation } = body;
   if (!command) {
     return new Response(JSON.stringify({ error: "Missing command" }), {
       status: 400,
@@ -2544,7 +2544,7 @@ async function onRequest(context) {
         response = handleHelp();
         break;
       case "ask":
-        response = await handleAsk(args || "", context);
+        response = await handleAsk(args || "", context, conversation);
         break;
       case "roll":
         response = handleRoll(args || "");
@@ -2689,7 +2689,8 @@ function handleHelp() {
     "?translate <text> \u2014 Translate text",
     "?units <value> <from> to <to> \u2014 Convert units (e.g. ?units 10 km to mi)",
     "",
-    "Tip: You can also @Nymbot <question> (or use the mentions modal) to ask the AI directly!"
+    "Tip: You can also @Nymbot <question> (or use the mentions modal) to ask the AI directly!",
+    "Tip: Quote-reply any message and @Nymbot to ask about it, or reply to a Nymbot response to continue the conversation!"
   ].join("\n");
 }
 
@@ -2850,6 +2851,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "?define <word> — Define a word, ?translate <text> — Translate text,",
   "?units <value> <from> to <to> — Convert units (e.g. ?units 10 km to mi).",
   "Users can also type @Nymbot <question> to ask me directly.",
+  "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
   "=== NOSTR PROTOCOL ===",
   "Nymchat uses the Nostr protocol. Messages are cryptographically signed events published to relays.",
@@ -2869,7 +2871,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- When giving navigation help, always specify the exact click path (e.g. 'click your nym in the sidebar > expand Reveal private key > copy your nsec')"
 ].join("\n");
 
-async function handleAsk(question, context) {
+async function handleAsk(question, context, conversation) {
   if (!question.trim()) {
     return "Usage: ?ask <your question> (or @Nymbot <your question>)";
   }
@@ -2878,11 +2880,23 @@ async function handleAsk(question, context) {
     return "AI is not configured. To enable ?ask, add a Workers AI binding named \"AI\" in your Cloudflare Pages project settings (Settings > Functions > AI bindings).";
   }
   try {
+    // Build messages array with conversation context from quote replies
+    var messages = [{ role: "system", content: NYMBOT_SYSTEM_PROMPT }];
+    if (conversation && Array.isArray(conversation) && conversation.length > 0) {
+      // Map conversation entries to user/assistant roles based on author
+      for (var i = 0; i < conversation.length; i++) {
+        var entry = conversation[i];
+        if (!entry || !entry.text) continue;
+        var isBot = /^nymbot(?:#[a-f0-9]{4})?$/i.test(entry.author || "");
+        messages.push({
+          role: isBot ? "assistant" : "user",
+          content: entry.text
+        });
+      }
+    }
+    messages.push({ role: "user", content: question });
     var result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fp8-fast", {
-      messages: [
-        { role: "system", content: NYMBOT_SYSTEM_PROMPT },
-        { role: "user", content: question }
-      ],
+      messages: messages,
       max_tokens: 512
     });
     if (result && result.response) {
