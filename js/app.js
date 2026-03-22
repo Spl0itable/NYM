@@ -6743,7 +6743,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const resp = await fetch('/api/bot', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command, args, geohash, conversation })
+                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym })
             });
             if (!resp.ok) return;
             const data = await resp.json();
@@ -17427,14 +17427,20 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
 
-        // Code blocks with proper line break handling
+        // Code blocks and inline code — extract into placeholders so
+        // later markdown/mention/channel processing doesn't touch their contents
+        const codePlaceholders = [];
         formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => {
             const formattedCode = code.trim().replace(/\n/g, '<br/>');
-            return `<pre><code>${formattedCode}</code></pre>`;
+            const idx = codePlaceholders.length;
+            codePlaceholders.push(`<pre><code>${formattedCode}</code></pre>`);
+            return `\x00CODE_${idx}\x00`;
         });
-
-        // Inline code `text`
-        formatted = formatted.replace(/`([^`]+?)`/g, '<code>$1</code>');
+        formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
+            const idx = codePlaceholders.length;
+            codePlaceholders.push(`<code>${code}</code>`);
+            return `\x00CODE_${idx}\x00`;
+        });
 
         // Bold **text** or __text__
         formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
@@ -17564,6 +17570,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 return `<span class="emoji">${match}</span>`;
             }
         );
+
+        // Restore code placeholders
+        formatted = formatted.replace(/\x00CODE_(\d+)\x00/g, (m, idx) => codePlaceholders[idx]);
 
         // Line breaks
         formatted = formatted.replace(/\n/g, '<br>');
@@ -25296,7 +25305,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.217 ═══<br/>
+═══ Nymchat v3.52.218 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

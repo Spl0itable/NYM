@@ -2528,7 +2528,7 @@ async function onRequest(context) {
     });
   }
 
-  const { command, args, geohash, conversation } = body;
+  const { command, args, geohash, conversation, senderNym } = body;
   if (!command) {
     return new Response(JSON.stringify({ error: "Missing command" }), {
       status: 400,
@@ -2614,6 +2614,17 @@ async function onRequest(context) {
     }
   } catch (e) {
     response = "Error processing command: " + e.message;
+  }
+
+  // Prepend quote-reply so the bot's response threads back to the user's message
+  var quotedContent = args || command;
+  if (senderNym && quotedContent) {
+    var quoteLines = quotedContent.split("\n");
+    var quotePart = "> @" + senderNym + ": " + quoteLines[0];
+    if (quoteLines.length > 1) {
+      quotePart += "\n" + quoteLines.slice(1).map(function(l) { return "> " + l; }).join("\n");
+    }
+    response = quotePart + "\n\n" + response;
   }
 
   // Build and sign the Nostr event
