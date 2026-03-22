@@ -8005,7 +8005,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 name: this.nym,
                 display_name: this.nym,
                 lud16: this.lightningAddress,
-                about: bio || `Nymchat user - ${this.nym}`
+                about: bio || `Nymchat user`
             };
 
             // Include avatar picture if set
