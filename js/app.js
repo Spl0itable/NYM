@@ -6714,6 +6714,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const question = content.replace(mentionRegex, '').trim();
             if (question) {
                 content = '?ask ' + question;
+            } else if (quoteContext && quoteContext.text) {
+                // User just typed @Nymbot with no question — use the quoted text as the question
+                const quotedText = quoteContext.text.replace(/^>\s*@[^:]+:\s*/gm, '').replace(/^>\s?/gm, '').trim();
+                if (quotedText) {
+                    content = '?ask ' + quotedText;
+                }
             }
         }
         // If replying to a Nymbot message without an explicit command, treat as ?ask
@@ -25290,7 +25296,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.215 ═══<br/>
+═══ Nymchat v3.52.216 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
