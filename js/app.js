@@ -17078,6 +17078,26 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
+        // Truncate long messages with "Read more" toggle
+        // Mobile: 400 chars, Desktop: 600 chars
+        const isMobileTruncate = window.innerWidth <= 768;
+        const truncateThreshold = isMobileTruncate ? 400 : 600;
+        if (!message.isFileOffer && message.content && message.content.length > truncateThreshold) {
+            const contentEl = messageEl.querySelector('.message-content') || messageEl;
+            contentEl.classList.add('truncated');
+            const readMoreBtn = document.createElement('button');
+            readMoreBtn.className = 'read-more-btn';
+            readMoreBtn.textContent = 'Read more';
+            readMoreBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const isExpanded = contentEl.classList.toggle('truncated-expanded');
+                readMoreBtn.textContent = isExpanded ? 'Show less' : 'Read more';
+            });
+            // Always insert after contentEl; CSS handles bubble styling
+            contentEl.after(readMoreBtn);
+        }
+
         // Apply shop styles for own messages (load from cache if needed)
         if (message.pubkey === this.pubkey) {
             // Use cached values if shop items haven't loaded yet
@@ -25275,7 +25295,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.211 ═══<br/>
+═══ Nymchat v3.52.212 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

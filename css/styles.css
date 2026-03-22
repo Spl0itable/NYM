@@ -1672,6 +1672,73 @@ body.light-mode .pubkey-slideout-copy:hover {
     overflow-wrap: anywhere;
 }
 
+.message-content.truncated {
+    display: block;
+    max-height: 300px;
+    overflow: hidden;
+}
+
+.message-content.truncated.truncated-expanded {
+    max-height: none;
+    overflow: visible;
+}
+
+@media (max-width: 768px) {
+    .message-content.truncated {
+        max-height: 200px;
+    }
+}
+
+.read-more-btn {
+    display: block;
+    background: none;
+    border: none;
+    color: var(--primary);
+    font-size: 12px;
+    padding: 4px 0;
+    cursor: pointer;
+    font-family: inherit;
+    margin-top: 2px;
+    flex-basis: 100%;
+    order: 99;
+}
+
+body.chat-bubbles .message-content.truncated {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+body.chat-bubbles .message-content + .read-more-btn {
+    text-align: center;
+    margin: 0;
+    padding: 8px 12px 8px;
+    border-radius: 0 0 16px 16px;
+    background: rgba(255, 255, 255, 0.14);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    flex-basis: 100%;
+    max-width: 85%;
+}
+
+body.chat-bubbles .message.self .message-content + .read-more-btn {
+    background: rgb(from var(--primary) r g b / 0.25);
+    margin-left: auto;
+    border-top-color: rgba(255, 255, 255, 0.1);
+}
+
+body.light-mode.chat-bubbles .message-content + .read-more-btn {
+    background: rgba(0, 0, 0, 0.10);
+    border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode.chat-bubbles .message.self .message-content + .read-more-btn {
+    background: rgb(from var(--primary) r g b / 0.20);
+    border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+body.chat-bubbles .message-content.truncated-expanded + .read-more-btn {
+    border-radius: 0 0 16px 16px;
+}
+
 .emoji {
     font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', 'EmojiSymbols', 'ColorEmoji', sans-serif;
     font-style: normal;
@@ -3882,6 +3949,7 @@ body.light-mode .verified-badge::before {
     .emoji-grid {
         grid-template-columns: repeat(6, 1fr);
     }
+
 }
 
 .emoji-picker {
