@@ -1672,25 +1672,26 @@ body.light-mode .pubkey-slideout-copy:hover {
     overflow-wrap: anywhere;
 }
 
-.message-content.truncated {
+.truncated-inner {
     display: block;
     max-height: 300px;
     overflow: hidden;
 }
 
-.message-content.truncated.truncated-expanded {
+.truncated-inner.truncated-expanded {
     max-height: none;
     overflow: visible;
 }
 
 @media (max-width: 768px) {
-    .message-content.truncated {
+    .truncated-inner {
         max-height: 200px;
     }
 }
 
 .read-more-btn {
     display: block;
+    width: 100%;
     background: none;
     border: none;
     color: var(--primary);
@@ -1699,44 +1700,17 @@ body.light-mode .pubkey-slideout-copy:hover {
     cursor: pointer;
     font-family: inherit;
     margin-top: 2px;
-    flex-basis: 100%;
-    order: 99;
 }
 
-body.chat-bubbles .message-content.truncated {
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-}
-
-body.chat-bubbles .message-content + .read-more-btn {
+body.chat-bubbles .read-more-btn {
     text-align: center;
-    margin: 0;
-    padding: 8px 12px 8px;
-    border-radius: 0 0 16px 16px;
-    background: rgba(255, 255, 255, 0.14);
+    padding: 6px 0 4px;
+    margin-top: 0;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
-    flex-basis: 100%;
-    max-width: 85%;
 }
 
-body.chat-bubbles .message.self .message-content + .read-more-btn {
-    background: rgb(from var(--primary) r g b / 0.25);
-    margin-left: auto;
-    border-top-color: rgba(255, 255, 255, 0.1);
-}
-
-body.light-mode.chat-bubbles .message-content + .read-more-btn {
-    background: rgba(0, 0, 0, 0.10);
+body.light-mode.chat-bubbles .read-more-btn {
     border-top-color: rgba(0, 0, 0, 0.06);
-}
-
-body.light-mode.chat-bubbles .message.self .message-content + .read-more-btn {
-    background: rgb(from var(--primary) r g b / 0.20);
-    border-top-color: rgba(0, 0, 0, 0.08);
-}
-
-body.chat-bubbles .message-content.truncated-expanded + .read-more-btn {
-    border-radius: 0 0 16px 16px;
 }
 
 .emoji {
@@ -4644,7 +4618,11 @@ body.light-mode .message.style-satoshi .message-content {
     background-color: rgba(196, 122, 21, 0.1);
 }
 
-body.light-mode .message.style-satoshi .message-content>* {
+body.light-mode .message.style-satoshi .message-content>*:not(.truncated-inner):not(.read-more-btn) {
+    color: #c47a15;
+}
+
+body.light-mode .message.style-satoshi .message-content>.truncated-inner>* {
     color: #c47a15;
 }
 
@@ -5515,14 +5493,25 @@ body.light-mode .color-mode-btn.active {
     z-index: 0;
 }
 
-.message.style-satoshi .message-content>* {
+.message.style-satoshi .message-content>*:not(.truncated-inner):not(.read-more-btn) {
     position: relative;
     z-index: 1;
     color: #f7931a;
     font-weight: bold;
 }
 
-.message.style-satoshi .message-content>*::selection {
+.message.style-satoshi .message-content>.truncated-inner {
+    position: relative;
+    z-index: 1;
+}
+
+.message.style-satoshi .message-content>.truncated-inner>* {
+    color: #f7931a;
+    font-weight: bold;
+}
+
+.message.style-satoshi .message-content>*::selection,
+.message.style-satoshi .message-content>.truncated-inner>*::selection {
     background: rgba(247, 147, 26, 0.3);
 }
 
@@ -5623,7 +5612,8 @@ body.light-mode .color-mode-btn.active {
 .message[class*="style-"] .message-content blockquote,
 .message[class*="style-"] .message-content pre,
 .message[class*="style-"] .message-content a,
-.message[class*="style-"] .message-content .emoji {
+.message[class*="style-"] .message-content .emoji,
+.message[class*="style-"] .message-content .read-more-btn {
     color: initial !important;
     text-shadow: none !important;
     animation: none !important;
@@ -5632,6 +5622,10 @@ body.light-mode .color-mode-btn.active {
 
 .message[class*="style-"] .message-content a {
     color: var(--secondary) !important;
+}
+
+.message[class*="style-"] .message-content .read-more-btn {
+    color: var(--primary) !important;
 }
 
 .message[class*="style-"] .message-content blockquote {
@@ -5646,6 +5640,11 @@ body.light-mode .color-mode-btn.active {
 .message.supporter-style .message-content {
     color: #ffd700 !important;
     text-shadow: 0 0 8px rgba(255, 215, 0, 0.25);
+}
+
+.message.supporter-style .message-content .read-more-btn {
+    color: var(--primary) !important;
+    text-shadow: none !important;
 }
 
 .message.cosmetic-aura-gold {
@@ -7671,6 +7670,14 @@ body.chat-bubbles .message[class*="style-"] .bubble-time-inner,
 body.chat-bubbles .message.supporter-style .bubble-time-inner {
     -webkit-text-fill-color: var(--text-dim) !important;
     color: var(--text-dim) !important;
+    text-shadow: none !important;
+    animation: none !important;
+}
+
+body.chat-bubbles .message[class*="style-"] .read-more-btn,
+body.chat-bubbles .message.supporter-style .read-more-btn {
+    -webkit-text-fill-color: var(--primary) !important;
+    color: var(--primary) !important;
     text-shadow: none !important;
     animation: none !important;
 }

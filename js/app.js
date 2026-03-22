@@ -17072,18 +17072,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const truncateThreshold = isMobileTruncate ? 400 : 600;
         if (!message.isFileOffer && message.content && message.content.length > truncateThreshold) {
             const contentEl = messageEl.querySelector('.message-content') || messageEl;
-            contentEl.classList.add('truncated');
+            // Wrap existing content in an inner span so we can truncate it
+            // while keeping the button inside the bubble
+            const inner = document.createElement('span');
+            inner.className = 'truncated-inner';
+            while (contentEl.firstChild) {
+                inner.appendChild(contentEl.firstChild);
+            }
+            contentEl.appendChild(inner);
+            contentEl.classList.add('has-truncation');
             const readMoreBtn = document.createElement('button');
             readMoreBtn.className = 'read-more-btn';
             readMoreBtn.textContent = 'Read more';
             readMoreBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                const isExpanded = contentEl.classList.toggle('truncated-expanded');
+                const isExpanded = inner.classList.toggle('truncated-expanded');
                 readMoreBtn.textContent = isExpanded ? 'Show less' : 'Read more';
             });
-            // Always insert after contentEl; CSS handles bubble styling
-            contentEl.after(readMoreBtn);
+            contentEl.appendChild(readMoreBtn);
         }
 
         // Apply shop styles for own messages (load from cache if needed)
@@ -25283,7 +25290,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.213 ═══<br/>
+═══ Nymchat v3.52.214 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
