@@ -2708,7 +2708,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Nymchat is a decentralized, anonymous, location-based chat app using the Nostr protocol (kind 20000 ephemeral events).",
   "No account or registration required. Users get a random nym (nickname + 4-hex-digit suffix from their pubkey, e.g. SatoshiFan#a1b2).",
   "Nyms are ephemeral by default — closing the session generates a new identity unless the user saves their nsec (secret key).",
-  "The app runs at nymchat.com and is open source.",
+  "The app runs at nymchat.app and is open source.",
   "",
   "=== UI NAVIGATION ===",
   "The app has a sidebar on the left and the main chat area on the right.",
