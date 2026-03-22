@@ -6712,11 +6712,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     async _handleBotCommand(content, geohash, quoteContext) {
         if (!this.useRelayProxy) return;
-        // Support @Nymbot mentions as an alias for ?ask
-        // The mentions modal auto-suggests @nymbot#4bb2 (with pubkey suffix)
-        const mentionMatch = content.match(/^@nymbot(?:#[a-f0-9]{4})?\s+([\s\S]*)/i);
-        if (mentionMatch) {
-            content = '?ask ' + mentionMatch[1];
+        // Support @Nymbot mentions anywhere in the message as an alias for ?ask
+        const mentionRegex = /@nymbot(?:#[a-f0-9]{4})?/i;
+        if (mentionRegex.test(content) && !content.startsWith('?')) {
+            // Remove the @nymbot mention and use the rest as the question
+            const question = content.replace(mentionRegex, '').trim();
+            if (question) {
+                content = '?ask ' + question;
+            }
         }
         // If replying to a Nymbot message without an explicit command, treat as ?ask
         if (quoteContext && /^nymbot(?:#[a-f0-9]{4})?$/i.test(quoteContext.author)) {
@@ -19630,7 +19633,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
                 // Check for bot commands (? prefix or @Nymbot mention)
                 // Use rawInput for trigger detection since quote prepend may hide the prefix
-                const isBotCmd = rawInput.startsWith('?') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(rawInput);
+                const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
                 const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
                 if (isBotCmd || isNymbotReply) {
                     this._handleBotCommand(rawInput, this.currentGeohash, savedQuote);
@@ -19686,7 +19689,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Send via ephemeral keypair (anonymous)
                 await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash);
                 // Check for bot commands (? prefix or @Nymbot mention)
-                const isBotCmd = rawInput.startsWith('?') || /^@nymbot(?:#[a-f0-9]{4})?\s/i.test(rawInput);
+                const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
                 const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
                 if (isBotCmd || isNymbotReply) {
                     this._handleBotCommand(rawInput, this.currentGeohash, savedQuote);
@@ -25272,7 +25275,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.210 ═══<br/>
+═══ Nymchat v3.52.211 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
