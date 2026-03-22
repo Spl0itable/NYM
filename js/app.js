@@ -4804,16 +4804,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.attemptReconnection();
                     }
 
+                    // Pool mode: only resubscribe if sockets are healthy;
+                    // if sockets were closed by checkConnectionHealth, the onclose
+                    // handlers will schedule reconnection + resubscription automatically.
                     if (this.useRelayProxy) {
-                        setTimeout(() => {
-                            if (this._isAnyPoolOpen()) {
-                                this._poolSubscribe();
-                            } else if (navigator.onLine) {
-                                this._poolReconnecting = false;
-                                this._poolReconnectRetries = 0;
-                                this._schedulePoolReconnect();
-                            }
-                        }, 500);
+                        if (this._isAnyPoolOpen()) {
+                            this._poolSubscribe();
+                        }
+                        // If no pool sockets are open and nothing is reconnecting, kick it off
+                        if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
+                            this._schedulePoolReconnect();
+                        }
                     } else {
                         // Always refresh subscriptions when we come back to foreground
                         setTimeout(() => this.resubscribeAllRelays(), 250);
@@ -4845,17 +4846,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.attemptReconnection();
                 }
 
-                // Pool mode: force-resubscribe with delay for stale-socket cleanup
+                // Pool mode: only resubscribe if sockets are healthy
                 if (this.useRelayProxy) {
-                    setTimeout(() => {
-                        if (this._isAnyPoolOpen()) {
-                            this._poolSubscribe();
-                        } else if (navigator.onLine) {
-                            this._poolReconnecting = false;
-                            this._poolReconnectRetries = 0;
-                            this._schedulePoolReconnect();
-                        }
-                    }, 500);
+                    if (this._isAnyPoolOpen()) {
+                        this._poolSubscribe();
+                    }
+                    if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
+                        this._schedulePoolReconnect();
+                    }
                 } else {
                     // Always refresh subscriptions when window regains focus
                     setTimeout(() => this.resubscribeAllRelays(), 250);
@@ -4877,17 +4875,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.attemptReconnection();
                     }
 
-                    // Pool mode: force-resubscribe with delay for stale-socket cleanup
+                    // Pool mode: only resubscribe if sockets are healthy
                     if (this.useRelayProxy) {
-                        setTimeout(() => {
-                            if (this._isAnyPoolOpen()) {
-                                this._poolSubscribe();
-                            } else if (navigator.onLine) {
-                                this._poolReconnecting = false;
-                                this._poolReconnectRetries = 0;
-                                this._schedulePoolReconnect();
-                            }
-                        }, 500);
+                        if (this._isAnyPoolOpen()) {
+                            this._poolSubscribe();
+                        }
+                        if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
+                            this._schedulePoolReconnect();
+                        }
                     } else {
                         // Always refresh subscriptions when app resumes
                         setTimeout(() => this.resubscribeAllRelays(), 250);
@@ -4924,7 +4919,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // (browser throttles timers when backgrounded so keepalive may not fire)
         if (this.useRelayProxy) {
             const now = Date.now();
-            const STALE_MS = 65000; // >2 missed POOL:PING cycles (30s each)
+            const STALE_MS = 120000; // >3 missed POOL:PING cycles (30s each) + margin
             let closedAny = false;
             for (const p of this.poolSockets) {
                 if (p.ws && p.ws.readyState === WebSocket.OPEN) {
@@ -10538,17 +10533,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.displayMessage(message);
                 this.updateUserPresence(nym, event.pubkey, message.channel, geohash, event.created_at);
 
-                // Show notification if mentioned and not blocked
+                // Notification check
                 const _notifStorageKey = geohash ? `#${geohash}` : message.channel;
                 const _notifCurrentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                 const _isViewingChannel = !this.inPMMode && _notifStorageKey === _notifCurrentKey;
-                if (_isViewingChannel && !document.querySelector(`[data-message-id="${message.id}"]`)) {
-                    const container = document.getElementById('messagesContainer');
-                    if (container) {
-                        container.dataset.lastChannel = ''; // invalidate cache guard
-                        this.loadChannelMessages(this.currentChannel);
-                    }
-                }
 
                 const shouldNotify = !message.isOwn &&
                     this.isMentioned(message.content) &&
@@ -25295,7 +25283,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.212 ═══<br/>
+═══ Nymchat v3.52.213 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
