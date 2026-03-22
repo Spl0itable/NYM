@@ -4804,10 +4804,25 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.attemptReconnection();
                     }
 
-                    // Always refresh subscriptions when we come back to foreground
-                    setTimeout(() => this.resubscribeAllRelays(), 250);
+                    if (this.useRelayProxy) {
+                        setTimeout(() => {
+                            if (this._isAnyPoolOpen()) {
+                                this._poolSubscribe();
+                            } else if (navigator.onLine) {
+                                this._poolReconnecting = false;
+                                this._poolReconnectRetries = 0;
+                                this._schedulePoolReconnect();
+                            }
+                        }, 500);
+                    } else {
+                        // Always refresh subscriptions when we come back to foreground
+                        setTimeout(() => this.resubscribeAllRelays(), 250);
+                    }
                 }, delay);
             } else {
+                // Record when app went to background so we can measure staleness
+                this._backgroundedAt = Date.now();
+
                 // Stop monitoring when app goes to background
                 if (this.reconnectionInterval) {
                     clearInterval(this.reconnectionInterval);
@@ -4830,8 +4845,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.attemptReconnection();
                 }
 
-                // Always refresh subscriptions when window regains focus
-                setTimeout(() => this.resubscribeAllRelays(), 250);
+                // Pool mode: force-resubscribe with delay for stale-socket cleanup
+                if (this.useRelayProxy) {
+                    setTimeout(() => {
+                        if (this._isAnyPoolOpen()) {
+                            this._poolSubscribe();
+                        } else if (navigator.onLine) {
+                            this._poolReconnecting = false;
+                            this._poolReconnectRetries = 0;
+                            this._schedulePoolReconnect();
+                        }
+                    }, 500);
+                } else {
+                    // Always refresh subscriptions when window regains focus
+                    setTimeout(() => this.resubscribeAllRelays(), 250);
+                }
             }, delay);
         });
 
@@ -4849,8 +4877,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.attemptReconnection();
                     }
 
-                    // Always refresh subscriptions when app resumes
-                    setTimeout(() => this.resubscribeAllRelays(), 250);
+                    // Pool mode: force-resubscribe with delay for stale-socket cleanup
+                    if (this.useRelayProxy) {
+                        setTimeout(() => {
+                            if (this._isAnyPoolOpen()) {
+                                this._poolSubscribe();
+                            } else if (navigator.onLine) {
+                                this._poolReconnecting = false;
+                                this._poolReconnectRetries = 0;
+                                this._schedulePoolReconnect();
+                            }
+                        }, 500);
+                    } else {
+                        // Always refresh subscriptions when app resumes
+                        setTimeout(() => this.resubscribeAllRelays(), 250);
+                    }
                 }, 200);
             });
         }
@@ -4878,6 +4919,30 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async checkConnectionHealth() {
+
+        // Pool mode: check individual poolSockets for staleness
+        // (browser throttles timers when backgrounded so keepalive may not fire)
+        if (this.useRelayProxy) {
+            const now = Date.now();
+            const STALE_MS = 65000; // >2 missed POOL:PING cycles (30s each)
+            let closedAny = false;
+            for (const p of this.poolSockets) {
+                if (p.ws && p.ws.readyState === WebSocket.OPEN) {
+                    const silenceMs = now - (p.lastMessage || 0);
+                    if (silenceMs > STALE_MS) {
+                        // Connection is likely a zombie — close to trigger reconnect
+                        p.ws.close();
+                        closedAny = true;
+                    }
+                }
+            }
+            if (closedAny) {
+                // onclose handlers will fire and trigger reconnection;
+                // force status update so UI reflects disconnected state immediately
+                this._mergePoolStatus();
+                this._syncLegacyPoolSocket();
+            }
+        }
 
         // First, check if we think we're connected
         let actuallyConnected = 0;
@@ -6819,6 +6884,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     .then(() => {
                         this._poolReconnecting = false;
                         this._poolReconnectRetries = 0;
+                        this._startPoolKeepalive();
                         this._poolSubscribe();
                         this.retryPendingDMsOnReconnect();
                     })
@@ -6871,6 +6937,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this._connectSinglePoolWorker(shard)
                     .then(() => {
                         this._shardReconnecting.delete(shardId);
+                        this._startPoolKeepalive();
                         this._poolSubscribeOnWorker(shard.id);
                     })
                     .catch(() => {
@@ -10398,6 +10465,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 pubkey: event.pubkey,
                 content: event.content,
                 created_at: correctedCreatedAt,
+                _originalCreatedAt: eventCreatedAt,
                 _seq: ++this._msgSeq,
                 timestamp: new Date(correctedCreatedAt * 1000),
                 channel: geohash ? geohash : 'unknown',
@@ -13204,6 +13272,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 pubkey: senderPubkey,
                 content: messageContent,
                 created_at: tsSec,
+                _originalCreatedAt: tsSec,
                 _seq: ++this._msgSeq,
                 timestamp: new Date(tsSec * 1000),
                 isOwn,
@@ -13590,6 +13659,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             pubkey: senderPubkey,
             content: messageContent,
             created_at: tsSec,
+            _originalCreatedAt: tsSec,
             _seq: ++this._msgSeq,
             timestamp: new Date(tsSec * 1000),
             isOwn,
@@ -21629,12 +21699,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    // Compute a fingerprint of messages for cache invalidation.
-    // Includes ALL message IDs in order so any insertion, deletion, or
-    // reordering is detected — prevents stale DOM cache from being restored.
+    // Compute a fingerprint of messages for cache invalidation
     _computeMessageFingerprint(messages) {
         if (!messages || messages.length === 0) return '';
-        return messages.map(m => `${m.id}:${m.created_at || 0}:${m.deliveryStatus || ''}:${m.isEdited ? 'e' : ''}`).join('|');
+        return messages.map(m => `${m.id}:${m._originalCreatedAt || m.created_at || 0}:${m.deliveryStatus || ''}:${m.isEdited ? 'e' : ''}`).join('|');
     }
 
     loadChannelMessages(displayName) {
@@ -25138,7 +25206,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.208 ═══<br/>
+═══ Nymchat v3.52.209 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
