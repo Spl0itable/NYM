@@ -22917,6 +22917,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Skip bot digest messages that mass-mention users
         if (body && body.includes('10 recent messages:')) return;
 
+        // Skip Nymbot quote-reply notifications (bot quotes user's message with @mention)
+        if (senderPubkey && this.isVerifiedBot(senderPubkey)) return;
+
         // If this is a PM notification (we have a pubkey), append plain suffix for readability
         let titleToShow = baseTitle;
         if (channelInfo && channelInfo.pubkey) {
@@ -22991,6 +22994,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Skip bot digest messages that mass-mention users
         if (body && body.includes('10 recent messages:')) return;
+
+        // Skip Nymbot quote-reply notifications (bot quotes user's message with @mention)
+        if (senderPubkey && this.isVerifiedBot(senderPubkey)) return;
 
         let titleToShow = baseTitle;
         if (channelInfo && channelInfo.pubkey) {
