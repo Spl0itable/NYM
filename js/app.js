@@ -5912,7 +5912,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             });
 
             this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
-
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         }
     }
 
@@ -5938,7 +5938,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         });
 
         this.displaySystemMessage(`Unblocked keyword: "${keyword}"`);
-
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     updateKeywordList() {
@@ -8000,30 +8000,56 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Skip kind 0 updates for the verified developer - they have their own profile data
         if (this.isVerifiedDeveloper(this.pubkey)) return;
 
-        // Skip kind 0 updates when logged in with a persistent Nostr identity
-        // to avoid overwriting the user's real profile with ephemeral session data
-        if (isNostrLoggedIn()) return;
-
         try {
-            // Ephemeral mode - minimal profile
-            const bio = this.userBios.get(this.pubkey) || '';
-            const profileToSave = {
-                name: this.nym,
-                display_name: this.nym,
-                lud16: this.lightningAddress,
-                about: bio || `Nymchat user`
-            };
+            let profileToSave;
 
-            // Include avatar picture if set
-            const avatarUrl = this.userAvatars.get(this.pubkey);
-            if (avatarUrl) {
-                profileToSave.picture = avatarUrl;
-            }
+            if (typeof isNostrLoggedIn === 'function' && isNostrLoggedIn()) {
+                // Nostr-logged-in users: merge changes into their existing profile
+                // so we don't lose fields the app doesn't manage (nip05, website, etc.)
+                let existing = {};
+                try {
+                    const cached = this._cachedKind0Profile;
+                    if (cached && typeof cached === 'object') {
+                        existing = { ...cached };
+                    }
+                } catch (_) {}
 
-            // Include banner if set
-            const bannerUrl = this.userBanners.get(this.pubkey);
-            if (bannerUrl) {
-                profileToSave.banner = bannerUrl;
+                const bio = this.userBios.get(this.pubkey);
+                const avatarUrl = this.userAvatars.get(this.pubkey);
+                const bannerUrl = this.userBanners.get(this.pubkey);
+
+                // Only overwrite fields the user explicitly set in the app
+                if (this.nym) {
+                    existing.name = this.nym;
+                    existing.display_name = this.nym;
+                }
+                if (bio !== undefined) existing.about = bio;
+                if (this.lightningAddress) existing.lud16 = this.lightningAddress;
+                if (avatarUrl) existing.picture = avatarUrl;
+                if (bannerUrl) existing.banner = bannerUrl;
+
+                profileToSave = existing;
+            } else {
+                // Ephemeral mode - minimal profile
+                const bio = this.userBios.get(this.pubkey) || '';
+                profileToSave = {
+                    name: this.nym,
+                    display_name: this.nym,
+                    lud16: this.lightningAddress,
+                    about: bio || `Nymchat user`
+                };
+
+                // Include avatar picture if set
+                const avatarUrl = this.userAvatars.get(this.pubkey);
+                if (avatarUrl) {
+                    profileToSave.picture = avatarUrl;
+                }
+
+                // Include banner if set
+                const bannerUrl = this.userBanners.get(this.pubkey);
+                if (bannerUrl) {
+                    profileToSave.banner = bannerUrl;
+                }
             }
 
             const profileEvent = {
@@ -9676,35 +9702,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async saveSyncedSettings() {
         if (!this.pubkey) return;
 
+        // Skip sync for hardcore mode (keypair changes every message) and random-per-session
+        if (this.connectionMode === 'ephemeral') {
+            const keypairMode = localStorage.getItem('nym_keypair_mode') || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
+            if (keypairMode === 'random' || keypairMode === 'hardcore') return;
+        }
+
         try {
-            // For ephemeral users, only sync lightning address
-            if (this.connectionMode === 'ephemeral') {
-                if (!this.lightningAddress) {
-                    return;
-                }
-
-                const settingsData = {
-                    lightningAddress: this.lightningAddress
-                };
-
-                const settingsEvent = {
-                    kind: 30078,
-                    created_at: Math.floor(Date.now() / 1000),
-                    tags: [
-                        ["d", "nym-settings"],
-                        ["title", "Nymchat Settings"],
-                        ["encrypted"]
-                    ],
-                    content: JSON.stringify(settingsData),
-                    pubkey: this.pubkey
-                };
-
-                try {
-                    const signedSettingsEvent = await this.signEvent(settingsEvent);
-                    if (signedSettingsEvent) this.sendToRelay(["EVENT", signedSettingsEvent]);
-                } catch (_) {}
-                return; // Don't sync anything else for ephemeral users
-            }
 
             // Save Nymchat-specific settings (kind 30078)
             const settingsData = {
@@ -9736,8 +9740,31 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
                 textSize: this.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
                 lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
-                groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false
+                groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false,
+                notificationsEnabled: this.notificationsEnabled !== false,
+                notificationLastReadTime: this.notificationLastReadTime || 0,
+                closedPMs: Array.from(this.closedPMs || [])
             };
+
+            // Encrypt group conversations data with NIP-44 to self for privacy
+            try {
+                if (this.groupConversations && this.groupConversations.size > 0) {
+                    const groupData = {};
+                    for (const [groupId, group] of this.groupConversations) {
+                        groupData[groupId] = {
+                            name: group.name,
+                            members: group.members,
+                            lastMessageTime: group.lastMessageTime,
+                            createdBy: group.createdBy
+                        };
+                    }
+                    const groupJson = JSON.stringify(groupData);
+                    const encrypted = await this.encryptNIP44(this.pubkey, groupJson);
+                    if (encrypted) {
+                        settingsData.encryptedGroups = encrypted;
+                    }
+                }
+            } catch (_) {}
 
             const settingsEvent = {
                 kind: 30078,
@@ -10854,6 +10881,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const profile = JSON.parse(event.content);
                 const pubkey = event.pubkey;
 
+                // Cache the full kind 0 profile for own user so saveToNostrProfile
+                // can merge changes without losing fields the app doesn't manage
+                if (pubkey === this.pubkey) {
+                    this._cachedKind0Profile = profile;
+                }
+
                 // Store lightning address if present
                 if (profile.lud16 || profile.lud06) {
                     const lnAddress = profile.lud16 || profile.lud06;
@@ -10993,7 +11026,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         await this.publishMessage(response, this.currentChannel, this.currentGeohash);
     }
 
-    handleSyncedSettings(event) {
+    async handleSyncedSettings(event) {
         if (event.pubkey !== this.pubkey) return;
 
         try {
@@ -11185,6 +11218,43 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     typingIndicatorsSel.value = this.settings.typingIndicatorsEnabled !== false ? 'true' : 'false';
                 }
             }
+
+            // Notifications enabled
+            if (typeof settings.notificationsEnabled === 'boolean') {
+                this.notificationsEnabled = settings.notificationsEnabled;
+                localStorage.setItem('nym_notifications_enabled', String(settings.notificationsEnabled));
+            }
+            // Notification last read time (take the later of local vs relay)
+            if (typeof settings.notificationLastReadTime === 'number' && settings.notificationLastReadTime > this.notificationLastReadTime) {
+                this.notificationLastReadTime = settings.notificationLastReadTime;
+                localStorage.setItem('nym_notification_last_read', String(settings.notificationLastReadTime));
+            }
+            // Closed PMs
+            if (Array.isArray(settings.closedPMs)) {
+                this.closedPMs = new Set(settings.closedPMs);
+                localStorage.setItem('nym_closed_pms', JSON.stringify(settings.closedPMs));
+            }
+
+            // Encrypted group conversations - decrypt with NIP-44 from self
+            if (settings.encryptedGroups && typeof settings.encryptedGroups === 'string') {
+                try {
+                    const groupJson = await this.decryptNIP44(this.pubkey, settings.encryptedGroups);
+                    if (groupJson) {
+                        const groupData = JSON.parse(groupJson);
+                        for (const [groupId, group] of Object.entries(groupData)) {
+                            if (!this.groupConversations.has(groupId)) {
+                                this.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
+                                const g = this.groupConversations.get(groupId);
+                                if (g && group.createdBy) g.createdBy = group.createdBy;
+                            }
+                        }
+                        this._saveGroupConversations();
+                        this.updateViewMoreButton('pmList');
+                    }
+                } catch (_) {}
+            }
+
+            this._updateNotificationBadge();
         } catch (error) {
         }
     }
@@ -13823,6 +13893,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const grp = this.groupConversations.get(groupId);
         if (grp) grp.createdBy = this.pubkey;
         this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.openGroup(groupId);
         return groupId;
     }
@@ -14073,6 +14144,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.switchChannel(fallback, fallback);
         }
         this.updateViewMoreButton('pmList');
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     // Delete a group conversation locally
@@ -14756,6 +14828,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Persist closed state so PM doesn't reappear on reload
             this.closedPMs.add(pubkey);
             try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
             // Remove from UI
             const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
@@ -18083,6 +18156,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     savePinnedChannels() {
         localStorage.setItem('nym_pinned_channels', JSON.stringify(Array.from(this.pinnedChannels)));
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     loadPinnedChannels() {
@@ -18146,6 +18220,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     saveHiddenChannels() {
         localStorage.setItem('nym_hidden_channels', JSON.stringify(Array.from(this.hiddenChannels)));
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     loadHiddenChannels() {
@@ -19677,6 +19752,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.hideAutocomplete();
         this.hideEmojiAutocomplete();
         this.sendTypingStop();
+
+        // Hardcore mode: rotate keypair after every sent message
+        if (this.connectionMode === 'ephemeral' && localStorage.getItem('nym_keypair_mode') === 'hardcore') {
+            await this.generateKeypair();
+            this.nym = this.generateRandomNym();
+            document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
+            this.updateSidebarAvatar();
+        }
     }
 
     async sendMessageAnonymous() {
@@ -20462,6 +20545,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displaySystemMessage(`Unblocked ${cleanNym}`);
             this.updateUserList();
             this.updateBlockedList();
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
             return;
         }
 
@@ -20472,7 +20556,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.displaySystemMessage(`Blocked ${cleanNym}`);
         this.updateUserList();
         this.updateBlockedList();
-
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     unblockByPubkey(pubkey) {
@@ -20484,7 +20568,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.displaySystemMessage(`Unblocked ${nym}`);
         this.updateUserList();
         this.updateBlockedList();
-
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     hideMessagesFromBlockedUser(pubkey) {
@@ -21507,6 +21591,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     saveBlockedChannels() {
         localStorage.setItem('nym_blocked_channels', JSON.stringify(Array.from(this.blockedChannels)));
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     isChannelBlocked(channel, geohash) {
@@ -22302,6 +22387,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const existing = this.loadUserJoinedChannels();
         const combined = new Set([...existing, ...this.userJoinedChannels]);
         localStorage.setItem('nym_user_joined_channels', JSON.stringify(Array.from(combined)));
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     loadUserJoinedChannels() {
@@ -23022,7 +23108,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         });
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
-        this._updateNotificationBadge();
+        // Historical notifications are silently recorded – advance lastReadTime
+        // so they never retrigger the unread badge on reload.
+        if (ts > this.notificationLastReadTime) {
+            this.notificationLastReadTime = ts;
+            try { localStorage.setItem('nym_notification_last_read', String(ts)); } catch {}
+        }
     }
 
     _loadNotificationHistory() {
@@ -23031,7 +23122,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!raw) return [];
             const parsed = JSON.parse(raw);
             const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-            return parsed.filter(n => n.timestamp > cutoff24h);
+            const filtered = parsed.filter(n => n.timestamp > cutoff24h);
+            // Mark all persisted notifications as already seen so they don't
+            // retrigger the unread badge on reload.  Advance lastReadTime to
+            // cover every entry that was already stored.
+            if (filtered.length > 0) {
+                const maxTs = Math.max(...filtered.map(n => n.timestamp));
+                const stored = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
+                if (maxTs > stored) {
+                    this.notificationLastReadTime = maxTs;
+                    try { localStorage.setItem('nym_notification_last_read', String(maxTs)); } catch {}
+                }
+            }
+            return filtered;
         } catch { return []; }
     }
 
@@ -23078,6 +23181,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.notificationsEnabled = enabled;
         localStorage.setItem('nym_notifications_enabled', String(enabled));
         this._updateNotificationBadge();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     openNotificationsModal() {
@@ -24703,8 +24807,25 @@ async function showSettings() {
     // Load random keypair per session setting
     const randomKeypairSelect = document.getElementById('randomKeypairSelect');
     if (randomKeypairSelect) {
-        const randomKeypair = localStorage.getItem('nym_random_keypair_per_session') === 'true';
-        randomKeypairSelect.value = randomKeypair ? 'true' : 'false';
+        if (isNostrLoggedIn()) {
+            // Disable keypair rotation for logged-in users — it would conflict with their identity
+            randomKeypairSelect.value = 'persistent';
+            randomKeypairSelect.disabled = true;
+            randomKeypairSelect.title = 'Not available while logged in with a Nostr identity';
+        } else {
+            randomKeypairSelect.disabled = false;
+            randomKeypairSelect.title = '';
+            const keypairMode = localStorage.getItem('nym_keypair_mode');
+            if (keypairMode) {
+                randomKeypairSelect.value = keypairMode;
+            } else {
+                // Migrate legacy boolean setting
+                const randomKeypair = localStorage.getItem('nym_random_keypair_per_session') === 'true';
+                randomKeypairSelect.value = randomKeypair ? 'random' : 'persistent';
+            }
+        }
+        const hardcoreWarning = document.getElementById('hardcoreKeypairWarning');
+        if (hardcoreWarning) hardcoreWarning.style.display = randomKeypairSelect.value === 'hardcore' ? 'block' : 'none';
     }
 
     // Load translation language setting
@@ -25019,11 +25140,12 @@ async function saveSettings() {
         localStorage.removeItem('nym_auto_ephemeral_channel');
     }
 
-    // Handle random keypair per session setting
+    // Handle random keypair per session setting (skip for logged-in users)
     const randomKeypairEl = document.getElementById('randomKeypairSelect');
-    if (randomKeypairEl) {
-        const randomKeypair = randomKeypairEl.value === 'true';
-        if (randomKeypair) {
+    if (randomKeypairEl && !isNostrLoggedIn()) {
+        const keypairMode = randomKeypairEl.value; // 'persistent', 'random', or 'hardcore'
+        localStorage.setItem('nym_keypair_mode', keypairMode);
+        if (keypairMode === 'random' || keypairMode === 'hardcore') {
             localStorage.setItem('nym_random_keypair_per_session', 'true');
             // Clear saved session keypair so next reload generates fresh one
             localStorage.removeItem('nym_session_nsec');
@@ -25311,7 +25433,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.52.218 ═══<br/>
+═══ Nymchat v3.53.218 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -26046,7 +26168,13 @@ async function nostrSettingsSign(event) {
 }
 
 async function nostrSettingsSave() {
-    if (!isNostrLoggedIn()) return;
+    // For ephemeral users, delegate to the instance method which handles all modes
+    if (!isNostrLoggedIn()) {
+        if (nym && typeof nym.saveSyncedSettings === 'function') {
+            nym.saveSyncedSettings();
+        }
+        return;
+    }
     const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
     if (!pubkey) return;
 
@@ -26082,8 +26210,31 @@ async function nostrSettingsSave() {
             hiddenChannels: Array.from(nym.hiddenChannels || []),
             blockedUsers: Array.from(nym.blockedUsers || []),
             blockedKeywords: Array.from(nym.blockedKeywords || []),
-            translateLanguage: nym.settings.translateLanguage || ''
+            translateLanguage: nym.settings.translateLanguage || '',
+            notificationsEnabled: nym.notificationsEnabled !== false,
+            notificationLastReadTime: nym.notificationLastReadTime || 0,
+            closedPMs: Array.from(nym.closedPMs || [])
         };
+
+        // Encrypt group conversations data with NIP-44 to self for privacy
+        try {
+            if (nym.groupConversations && nym.groupConversations.size > 0) {
+                const groupData = {};
+                for (const [groupId, group] of nym.groupConversations) {
+                    groupData[groupId] = {
+                        name: group.name,
+                        members: group.members,
+                        lastMessageTime: group.lastMessageTime,
+                        createdBy: group.createdBy
+                    };
+                }
+                const groupJson = JSON.stringify(groupData);
+                const encrypted = await nym.encryptNIP44(pubkey, groupJson);
+                if (encrypted) {
+                    settingsPayload.encryptedGroups = encrypted;
+                }
+            }
+        } catch (_) {}
 
         const event = {
             kind: 30078,
@@ -26398,7 +26549,7 @@ function nostrSettingsLoad() {
     });
 }
 
-function applyNostrSettings(s) {
+async function applyNostrSettings(s) {
     if (!s || typeof s !== 'object' || !s.v) return;
 
     // Theme
@@ -26591,6 +26742,44 @@ function applyNostrSettings(s) {
         localStorage.setItem('nym_translate_language', s.translateLanguage);
     }
 
+    // Notifications enabled
+    if (typeof s.notificationsEnabled === 'boolean') {
+        nym.notificationsEnabled = s.notificationsEnabled;
+        localStorage.setItem('nym_notifications_enabled', String(s.notificationsEnabled));
+    }
+
+    // Notification last read time (take the later of local vs relay)
+    if (typeof s.notificationLastReadTime === 'number' && s.notificationLastReadTime > nym.notificationLastReadTime) {
+        nym.notificationLastReadTime = s.notificationLastReadTime;
+        localStorage.setItem('nym_notification_last_read', String(s.notificationLastReadTime));
+    }
+
+    // Closed PMs
+    if (Array.isArray(s.closedPMs)) {
+        nym.closedPMs = new Set(s.closedPMs);
+        localStorage.setItem('nym_closed_pms', JSON.stringify(s.closedPMs));
+    }
+
+    // Encrypted group conversations - decrypt with NIP-44 from self
+    if (s.encryptedGroups && typeof s.encryptedGroups === 'string') {
+        try {
+            const groupJson = await nym.decryptNIP44(nym.pubkey, s.encryptedGroups);
+            if (groupJson) {
+                const groupData = JSON.parse(groupJson);
+                for (const [groupId, group] of Object.entries(groupData)) {
+                    if (!nym.groupConversations.has(groupId)) {
+                        nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
+                        const g = nym.groupConversations.get(groupId);
+                        if (g && group.createdBy) g.createdBy = group.createdBy;
+                    }
+                }
+                nym._saveGroupConversations();
+                nym.updateViewMoreButton('pmList');
+            }
+        } catch (_) {}
+    }
+
+    nym._updateNotificationBadge();
     nym.displaySystemMessage('Settings synced from Nostr relays.');
 }
 

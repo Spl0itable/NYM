@@ -1124,11 +1124,13 @@
 
                 <div class="form-group">
                     <label class="form-label">Generate Random Keypair Per Session</label>
-                    <select class="form-select" id="randomKeypairSelect">
-                        <option value="false">Disabled (reuse same keypair)</option>
-                        <option value="true">Enabled (new identity each session)</option>
+                    <select class="form-select" id="randomKeypairSelect" onchange="document.getElementById('hardcoreKeypairWarning').style.display = this.value === 'hardcore' ? 'block' : 'none'">
+                        <option value="persistent">Disabled (reuse same keypair)</option>
+                        <option value="random">Enabled (new identity each session)</option>
+                        <option value="hardcore">Hardcore (new keypair every message)</option>
                     </select>
                     <div class="form-hint">Generate a new random keypair on every session restart for improved anonymity. When disabled, your generated keypair persists across reloads.</div>
+                    <div id="hardcoreKeypairWarning" class="form-hint" style="display:none; color: var(--warning-color, #f0a030); margin-top: 4px;">⚠ Hardcore mode changes your identity after every sent message. PMs and group chats will not work reliably since recipients cannot reply to a constantly changing pubkey. Settings will not sync across devices.</div>
                 </div>
 
                 <div class="form-group" data-geohash-setting>
