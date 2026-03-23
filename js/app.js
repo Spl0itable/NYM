@@ -5912,7 +5912,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             });
 
             this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
-
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         }
     }
 
@@ -5938,7 +5938,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         });
 
         this.displaySystemMessage(`Unblocked keyword: "${keyword}"`);
-
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     updateKeywordList() {
@@ -8000,30 +8000,56 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Skip kind 0 updates for the verified developer - they have their own profile data
         if (this.isVerifiedDeveloper(this.pubkey)) return;
 
-        // Skip kind 0 updates when logged in with a persistent Nostr identity
-        // to avoid overwriting the user's real profile with ephemeral session data
-        if (isNostrLoggedIn()) return;
-
         try {
-            // Ephemeral mode - minimal profile
-            const bio = this.userBios.get(this.pubkey) || '';
-            const profileToSave = {
-                name: this.nym,
-                display_name: this.nym,
-                lud16: this.lightningAddress,
-                about: bio || `Nymchat user`
-            };
+            let profileToSave;
 
-            // Include avatar picture if set
-            const avatarUrl = this.userAvatars.get(this.pubkey);
-            if (avatarUrl) {
-                profileToSave.picture = avatarUrl;
-            }
+            if (typeof isNostrLoggedIn === 'function' && isNostrLoggedIn()) {
+                // Nostr-logged-in users: merge changes into their existing profile
+                // so we don't lose fields the app doesn't manage (nip05, website, etc.)
+                let existing = {};
+                try {
+                    const cached = this._cachedKind0Profile;
+                    if (cached && typeof cached === 'object') {
+                        existing = { ...cached };
+                    }
+                } catch (_) {}
 
-            // Include banner if set
-            const bannerUrl = this.userBanners.get(this.pubkey);
-            if (bannerUrl) {
-                profileToSave.banner = bannerUrl;
+                const bio = this.userBios.get(this.pubkey);
+                const avatarUrl = this.userAvatars.get(this.pubkey);
+                const bannerUrl = this.userBanners.get(this.pubkey);
+
+                // Only overwrite fields the user explicitly set in the app
+                if (this.nym) {
+                    existing.name = this.nym;
+                    existing.display_name = this.nym;
+                }
+                if (bio !== undefined) existing.about = bio;
+                if (this.lightningAddress) existing.lud16 = this.lightningAddress;
+                if (avatarUrl) existing.picture = avatarUrl;
+                if (bannerUrl) existing.banner = bannerUrl;
+
+                profileToSave = existing;
+            } else {
+                // Ephemeral mode - minimal profile
+                const bio = this.userBios.get(this.pubkey) || '';
+                profileToSave = {
+                    name: this.nym,
+                    display_name: this.nym,
+                    lud16: this.lightningAddress,
+                    about: bio || `Nymchat user`
+                };
+
+                // Include avatar picture if set
+                const avatarUrl = this.userAvatars.get(this.pubkey);
+                if (avatarUrl) {
+                    profileToSave.picture = avatarUrl;
+                }
+
+                // Include banner if set
+                const bannerUrl = this.userBanners.get(this.pubkey);
+                if (bannerUrl) {
+                    profileToSave.banner = bannerUrl;
+                }
             }
 
             const profileEvent = {
@@ -9736,7 +9762,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
                 textSize: this.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
                 lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
-                groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false
+                groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false,
+                notificationsEnabled: this.notificationsEnabled !== false,
+                notificationLastReadTime: this.notificationLastReadTime || 0,
+                closedPMs: Array.from(this.closedPMs || [])
             };
 
             const settingsEvent = {
@@ -10854,6 +10883,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const profile = JSON.parse(event.content);
                 const pubkey = event.pubkey;
 
+                // Cache the full kind 0 profile for own user so saveToNostrProfile
+                // can merge changes without losing fields the app doesn't manage
+                if (pubkey === this.pubkey) {
+                    this._cachedKind0Profile = profile;
+                }
+
                 // Store lightning address if present
                 if (profile.lud16 || profile.lud06) {
                     const lnAddress = profile.lud16 || profile.lud06;
@@ -11185,6 +11220,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     typingIndicatorsSel.value = this.settings.typingIndicatorsEnabled !== false ? 'true' : 'false';
                 }
             }
+
+            // Notifications enabled
+            if (typeof settings.notificationsEnabled === 'boolean') {
+                this.notificationsEnabled = settings.notificationsEnabled;
+                localStorage.setItem('nym_notifications_enabled', String(settings.notificationsEnabled));
+            }
+            // Notification last read time (take the later of local vs relay)
+            if (typeof settings.notificationLastReadTime === 'number' && settings.notificationLastReadTime > this.notificationLastReadTime) {
+                this.notificationLastReadTime = settings.notificationLastReadTime;
+                localStorage.setItem('nym_notification_last_read', String(settings.notificationLastReadTime));
+            }
+            // Closed PMs
+            if (Array.isArray(settings.closedPMs)) {
+                this.closedPMs = new Set(settings.closedPMs);
+                localStorage.setItem('nym_closed_pms', JSON.stringify(settings.closedPMs));
+            }
+            this._updateNotificationBadge();
         } catch (error) {
         }
     }
@@ -14756,6 +14808,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Persist closed state so PM doesn't reappear on reload
             this.closedPMs.add(pubkey);
             try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
             // Remove from UI
             const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
@@ -20462,6 +20515,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displaySystemMessage(`Unblocked ${cleanNym}`);
             this.updateUserList();
             this.updateBlockedList();
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
             return;
         }
 
@@ -20472,7 +20526,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.displaySystemMessage(`Blocked ${cleanNym}`);
         this.updateUserList();
         this.updateBlockedList();
-
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     unblockByPubkey(pubkey) {
@@ -20484,7 +20538,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.displaySystemMessage(`Unblocked ${nym}`);
         this.updateUserList();
         this.updateBlockedList();
-
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     hideMessagesFromBlockedUser(pubkey) {
@@ -23022,7 +23076,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         });
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
-        this._updateNotificationBadge();
+        // Historical notifications are silently recorded – advance lastReadTime
+        // so they never retrigger the unread badge on reload.
+        if (ts > this.notificationLastReadTime) {
+            this.notificationLastReadTime = ts;
+            try { localStorage.setItem('nym_notification_last_read', String(ts)); } catch {}
+        }
     }
 
     _loadNotificationHistory() {
@@ -23031,7 +23090,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!raw) return [];
             const parsed = JSON.parse(raw);
             const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-            return parsed.filter(n => n.timestamp > cutoff24h);
+            const filtered = parsed.filter(n => n.timestamp > cutoff24h);
+            // Mark all persisted notifications as already seen so they don't
+            // retrigger the unread badge on reload.  Advance lastReadTime to
+            // cover every entry that was already stored.
+            if (filtered.length > 0) {
+                const maxTs = Math.max(...filtered.map(n => n.timestamp));
+                const stored = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
+                if (maxTs > stored) {
+                    this.notificationLastReadTime = maxTs;
+                    try { localStorage.setItem('nym_notification_last_read', String(maxTs)); } catch {}
+                }
+            }
+            return filtered;
         } catch { return []; }
     }
 
@@ -23078,6 +23149,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.notificationsEnabled = enabled;
         localStorage.setItem('nym_notifications_enabled', String(enabled));
         this._updateNotificationBadge();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     openNotificationsModal() {
@@ -26082,7 +26154,10 @@ async function nostrSettingsSave() {
             hiddenChannels: Array.from(nym.hiddenChannels || []),
             blockedUsers: Array.from(nym.blockedUsers || []),
             blockedKeywords: Array.from(nym.blockedKeywords || []),
-            translateLanguage: nym.settings.translateLanguage || ''
+            translateLanguage: nym.settings.translateLanguage || '',
+            notificationsEnabled: nym.notificationsEnabled !== false,
+            notificationLastReadTime: nym.notificationLastReadTime || 0,
+            closedPMs: Array.from(nym.closedPMs || [])
         };
 
         const event = {
@@ -26591,6 +26666,25 @@ function applyNostrSettings(s) {
         localStorage.setItem('nym_translate_language', s.translateLanguage);
     }
 
+    // Notifications enabled
+    if (typeof s.notificationsEnabled === 'boolean') {
+        nym.notificationsEnabled = s.notificationsEnabled;
+        localStorage.setItem('nym_notifications_enabled', String(s.notificationsEnabled));
+    }
+
+    // Notification last read time (take the later of local vs relay)
+    if (typeof s.notificationLastReadTime === 'number' && s.notificationLastReadTime > nym.notificationLastReadTime) {
+        nym.notificationLastReadTime = s.notificationLastReadTime;
+        localStorage.setItem('nym_notification_last_read', String(s.notificationLastReadTime));
+    }
+
+    // Closed PMs
+    if (Array.isArray(s.closedPMs)) {
+        nym.closedPMs = new Set(s.closedPMs);
+        localStorage.setItem('nym_closed_pms', JSON.stringify(s.closedPMs));
+    }
+
+    nym._updateNotificationBadge();
     nym.displaySystemMessage('Settings synced from Nostr relays.');
 }
 
