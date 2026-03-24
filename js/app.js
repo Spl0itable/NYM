@@ -8242,6 +8242,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     // Sync the settings modal select if it exists
                     const select = document.getElementById('translateLanguageSelect');
                     if (select) select.value = code;
+                    // Persist to relay so it survives reload
+                    if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
                     cleanup(code);
                 });
                 btn.addEventListener('mouseenter', () => {
@@ -9741,6 +9743,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 textSize: this.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
                 lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
                 groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false,
+                translateLanguage: this.settings.translateLanguage || '',
                 notificationsEnabled: this.notificationsEnabled !== false,
                 notificationLastReadTime: this.notificationLastReadTime || 0,
                 closedPMs: Array.from(this.closedPMs || [])
@@ -25288,6 +25291,7 @@ function clearLocalStorageCache() {
             key === 'nym_session_nsec' ||
             key === 'nym_random_keypair_per_session' ||
             key === 'nym_dev_nsec' ||
+            key === 'nym_translate_language' ||
             key === 'nym_active_style' ||
             key === 'nym_active_flair' ||
             key === 'nym_shop_active_cache' ||
