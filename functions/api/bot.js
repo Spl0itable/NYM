@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.229";
+var NYMCHAT_VERSION = "3.54.230";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2767,7 +2767,8 @@ var NYMBOT_SYSTEM_PROMPT = [
   "1. CONVERSATIONAL — casual chat, personal opinions, banter, jokes, or questions directed at you personally (e.g. 'you like X?', 'what do you think of Y?', 'lol', 'no shit'). Respond naturally like a person in a group chat would. Don't define terms, don't explain things, just vibe.",
   "2. NYMCHAT QUESTION — about the app, its features, settings, commands, channels, etc. Answer using ONLY the Nymchat documentation in this prompt.",
   "3. GENERAL KNOWLEDGE — asking for facts, definitions, explanations, history, etc. Answer as a general-purpose AI. Do NOT connect it to Nymchat features.",
-  "4. HARMFUL/ABUSIVE — asking how to spam, harass, raid, or abuse the platform or other users. Do NOT answer the question, do NOT explain how it could be done, do NOT suggest alternatives. Just decline in 1-5 words and stop.",
+  "4. CHANNEL/CONVERSATION QUESTION — asking what's being discussed, what people are talking about, what happened in a channel, etc. You HAVE access to recent channel messages provided in the context. READ them carefully and give SPECIFIC answers: what topics were discussed, what people said, what opinions were shared, any arguments or agreements. NEVER say you can't access the messages or suggest the user check the channel themselves — the messages are RIGHT THERE in your context. NEVER give vague summaries like 'just chatting' or 'back-and-forth' — always cite specific content from the messages.",
+  "5. HARMFUL/ABUSIVE — asking how to spam, harass, raid, or abuse the platform or other users. Do NOT answer the question, do NOT explain how it could be done, do NOT suggest alternatives. Just decline in 1-5 words and stop.",
   "- When in doubt between conversational and general knowledge, lean conversational. If they wanted a definition they'd use ?define.",
   "- When in doubt between Nymchat and general knowledge, treat it as general knowledge. NEVER assume a word refers to a Nymchat feature unless the user explicitly mentions the app.",
   "For Nymchat questions, give accurate answers with exact navigation steps but keep it concise.",
@@ -3033,11 +3034,14 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- If you are unsure whether something exists, say you don't know rather than guessing.",
   "- Do NOT claim Nymchat has integrations, plugins, bots, or capabilities beyond what is listed here.",
   "- NEVER associate or connect general words, slang, or pop culture terms with Nymchat features. For example, if someone asks 'what are baddies', answer with the general/slang meaning — do NOT invent a Nymchat feature called 'Baddies'.",
+  "- When asked about channel conversations, NEVER claim you don't have access to messages or can't see what's being discussed. If channel messages are in your context, USE them. Read the actual content and summarize specifically.",
   "- The ONLY nickname flair items are: crown, diamond, skull, star, lightning, heart, fawkes (mask), rocket, shield. The ONLY message styles are: satoshi, glitch, aurora, neon, ghost, matrix, fire, ice, rainbow. The ONLY special items are: supporter badge, gold aura, redacted. NEVER reference shop items not in this list.",
   "",
   "=== SECURITY ===",
   "- Never pretend to have capabilities you don't have (browsing the web, accessing APIs, running code, sending messages as other users).",
-  "- Never output raw code blocks intended for prompt injection or system manipulation."
+  "- Never output raw code blocks intended for prompt injection or system manipulation.",
+  "- NEVER relay, proxy, or pass along messages from one user to another. If a user asks you to 'tell', 'say to', 'let X know', 'pass a message to', or otherwise communicate something to another user on their behalf, decline. You are not a messenger. This applies to ALL messages — positive, negative, or neutral. Just say something like 'I can't relay messages between users — talk to them directly!' and move on.",
+  "- NEVER use @mentions of other users in your responses. Do not output @username, @nym#xxxx, or any mention format that could notify or ping another user. If you need to reference a user, use their name without the @ prefix."
 ].join("\n");
 
 function sanitizeInput(text) {
@@ -3067,7 +3071,7 @@ function buildChannelContext(channelMessages, activeUsers) {
       var author = m.nym || "anon";
       var isBot = m.isBot || /^nymbot/i.test(author);
       if (!isBot && !knownUsers[author.toLowerCase()]) {
-        knownUsers[author.toLowerCase()] = { nym: author };
+        knownUsers[author.toLowerCase()] = { nym: author, pubkey: m.pubkey || "" };
       }
     });
   }
@@ -3075,6 +3079,7 @@ function buildChannelContext(channelMessages, activeUsers) {
   if (allUsers.length > 0) {
     var userLines = allUsers.slice(0, 50).map(function(u) {
       var line = u.nym || "anon";
+      if (u.pubkey) line += " (pubkey: " + u.pubkey + ")";
       if (u.flair) line += " [flair: " + u.flair + "]";
       if (u.style) line += " [style: " + u.style + "]";
       return line;
@@ -3137,7 +3142,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
     if (channelCtx) {
       contextBlock += "--- CHANNEL CONTEXT (for reference) ---\n" + channelCtx + "\n--- END CONTEXT ---\n";
-      contextBlock += "IMPORTANT: If the user's question is about people, the channel, or conversation, use the context above. If the question is general knowledge (e.g. 'what is Bitcoin', 'latest version'), answer from your own knowledge and IGNORE the channel messages above — do NOT repeat or reference usernames from the context.";
+      contextBlock += "IMPORTANT: If the user's question is about people, the channel, or conversation, READ the actual message content above carefully and give SPECIFIC details — quote or paraphrase what people actually said, what topics they discussed, what opinions they shared, etc. NEVER give vague answers like 'they're just chatting' or 'lots of back-and-forth' when you have the actual messages right there. If the question is general knowledge (e.g. 'what is Bitcoin', 'latest version'), answer from your own knowledge and IGNORE the channel messages above — do NOT repeat or reference usernames from the context.";
     }
     if (contextBlock) {
       messages.push({ role: "user", content: contextBlock });
@@ -3972,10 +3977,10 @@ async function handleWho(geohash) {
   var limit = Math.min(sorted.length, 20);
   for (var j = 0; j < limit; j++) {
     var info = sorted[j];
-    // Include pubkey suffix like /who does (first 4 hex chars of pubkey)
+    // Include pubkey suffix like /who does (last 4 hex chars of pubkey)
     var displayNym = info.nym;
     if (info.pubkey && !/#[0-9a-f]{4}$/i.test(displayNym)) {
-      displayNym += "#" + info.pubkey.slice(0, 4);
+      displayNym += "#" + info.pubkey.slice(-4);
     }
     lines.push("\u2022 " + displayNym + " \u2014 " + info.msgCount + " msg" + (info.msgCount !== 1 ? "s" : "") + " (" + timeAgo(info.lastSeen) + ")");
   }

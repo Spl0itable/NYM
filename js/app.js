@@ -6745,7 +6745,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         let activeUsers = [];
         const aiCommands = ['ask', 'summarize'];
         if (aiCommands.includes(command.toLowerCase())) {
-            const msgLimit = command.toLowerCase() === 'summarize' ? 80 : 50;
+            const msgLimit = 100;
             // Check if the user referenced specific channels with #hashtags in their ?ask
             // e.g. "?ask #dr5r what's happening there?" pulls context from #dr5r
             const referencedChannels = new Set();
@@ -6817,6 +6817,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const msgs = this.messages.get(chanKey) || [];
                 const mapped = msgs.slice(-msgLimit).map(m => ({
                     nym: m.author || 'anon',
+                    pubkey: m.pubkey || '',
                     content: (m.content || '').slice(0, 300),
                     timestamp: m.created_at || 0,
                     isBot: !!m.isBot,
@@ -6849,7 +6850,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (found) {
                         const shopItems = this.getUserShopItems(pubkey);
                         activeUsers.push({
-                            nym: user.nym + '#' + pubkey.slice(0, 4),
+                            nym: user.nym + '#' + pubkey.slice(-4),
+                            pubkey: pubkey,
                             flair: shopItems?.flair ? shopItems.flair.replace('flair-', '') : null,
                             style: shopItems?.style ? shopItems.style.replace('style-', '') : null
                         });
@@ -25889,7 +25891,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.229 ═══<br/>
+═══ Nymchat v3.54.230 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
