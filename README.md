@@ -66,7 +66,7 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 ### Channels
 - Regular event `kind 20000` with `['g', channel]` tag
 - Geohash event `kind 20000` with `['g', geohash]` tag
-- Tags: `['n', nym]` for nickname, `['client', 'Nymchat']` for client identification
+- Tag `['n', nym]` for nickname
 
 ### Private Messages & Group Chats
 - NIP-17 `kind 14` rumor (message content + metadata) sealed inside NIP-59 `kind 1059` gift wraps
