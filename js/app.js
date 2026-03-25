@@ -3095,7 +3095,7 @@ ${code}
                     if (el) el.value = String(s.blurOthersImages);
                 }
                 if (s.lightningAddress) {
-                    const el = document.getElementById('lightningAddressInput');
+                    const el = document.getElementById('nickEditLightningInput');
                     if (el) el.value = s.lightningAddress;
                 }
                 if (s.dmForwardSecrecyEnabled !== undefined) {
@@ -11290,7 +11290,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 localStorage.setItem(`nym_lightning_address_${this.pubkey}`, settings.lightningAddress);
                 this.updateLightningAddressDisplay();
 
-                const lightningInput = document.getElementById('lightningAddressInput');
+                const lightningInput = document.getElementById('nickEditLightningInput');
                 if (lightningInput) {
                     lightningInput.value = settings.lightningAddress;
                 }
@@ -24742,6 +24742,12 @@ function editNick() {
         updateBioCharCount();
     }
 
+    // Show current lightning address in edit modal
+    const lnInput = document.getElementById('nickEditLightningInput');
+    if (lnInput) {
+        lnInput.value = nym.lightningAddress || '';
+    }
+
     // Reset private key reveal state
     const privkeySlideout = document.getElementById('privkeySlideout');
     if (privkeySlideout) privkeySlideout.style.display = 'none';
@@ -24779,24 +24785,42 @@ async function changeNick() {
     const baseNick = nym.parseNymFromDisplay(newNick);
     const currentBase = nym.parseNymFromDisplay(nym.nym);
 
+    const nickAlsoChanging = baseNick && baseNick !== currentBase;
+    let profileDirty = false;
+
     // Save bio regardless of nick change
     const bioInput = document.getElementById('nickEditBioInput');
-    const nickAlsoChanging = baseNick && baseNick !== currentBase;
     if (bioInput) {
         const newBio = bioInput.value.trim().substring(0, 150);
         const currentBio = nym.getBio(nym.pubkey);
         if (newBio !== currentBio) {
             nym.userBios.set(nym.pubkey, newBio);
             localStorage.setItem('nym_bio', newBio);
-            // Only publish profile now if nickname is NOT also changing;
-            // if nickname changes, cmdNick will publish with both updates
-            if (!nickAlsoChanging) {
-                await nym.saveToNostrProfile();
+            profileDirty = true;
+        }
+    }
+
+    // Save lightning address regardless of nick change
+    const lnInput = document.getElementById('nickEditLightningInput');
+    if (lnInput) {
+        const newLn = lnInput.value.trim();
+        if (newLn !== (nym.lightningAddress || '')) {
+            if (newLn) {
+                nym.lightningAddress = newLn;
+                localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, newLn);
+                localStorage.setItem('nym_lightning_address_global', newLn);
+            } else {
+                nym.lightningAddress = null;
+                localStorage.removeItem(`nym_lightning_address_${nym.pubkey}`);
+                localStorage.removeItem('nym_lightning_address_global');
             }
+            nym.updateLightningAddressDisplay();
+            profileDirty = true;
         }
     }
 
     if (nickAlsoChanging) {
+        // cmdNick will publish the kind 0 profile (which includes bio + lightning changes)
         closeModal('nickEditModal');
         const cmdResult = await nym.cmdNick(baseNick);
         // If auto-ephemeral is enabled, persist the new nickname so it's reused on next session
@@ -24808,6 +24832,11 @@ async function changeNick() {
             }
         }
         return;
+    }
+
+    // No nickname change — publish profile only if bio or lightning address changed
+    if (profileDirty) {
+        await nym.saveToNostrProfile();
     }
     closeModal('nickEditModal');
 }
@@ -25320,12 +25349,6 @@ async function showSettings() {
         });
     }
 
-    // Load lightning address
-    const lightningInput = document.getElementById('lightningAddressInput');
-    if (lightningInput) {
-        lightningInput.value = nym.lightningAddress || '';
-    }
-
     // Load proximity sorting setting
     const proximitySelect = document.getElementById('proximitySelect');
     if (proximitySelect) {
@@ -25610,7 +25633,6 @@ async function showSettings() {
 
 async function saveSettings() {
     // Get all settings values
-    const lightningAddress = document.getElementById('lightningAddressInput').value.trim();
     const theme = document.getElementById('themeSelect').value;
     const sound = document.getElementById('soundSelect').value;
     const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
@@ -25798,11 +25820,6 @@ async function saveSettings() {
     localStorage.setItem('nym_low_data_mode', String(lowDataMode));
     if (lowDataMode !== wasLowData) {
         nym.applyLowDataMode(lowDataMode);
-    }
-
-    // Save lightning address
-    if (lightningAddress !== nym.lightningAddress) {
-        await nym.saveLightningAddress(lightningAddress || null);
     }
 
     nym.displaySystemMessage('Settings saved');
