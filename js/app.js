@@ -3095,7 +3095,7 @@ ${code}
                     if (el) el.value = String(s.blurOthersImages);
                 }
                 if (s.lightningAddress) {
-                    const el = document.getElementById('lightningAddressInput');
+                    const el = document.getElementById('nickEditLightningInput');
                     if (el) el.value = s.lightningAddress;
                 }
                 if (s.dmForwardSecrecyEnabled !== undefined) {
@@ -11290,7 +11290,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 localStorage.setItem(`nym_lightning_address_${this.pubkey}`, settings.lightningAddress);
                 this.updateLightningAddressDisplay();
 
-                const lightningInput = document.getElementById('lightningAddressInput');
+                const lightningInput = document.getElementById('nickEditLightningInput');
                 if (lightningInput) {
                     lightningInput.value = settings.lightningAddress;
                 }
@@ -20453,6 +20453,30 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
         this.updateSidebarAvatar();
 
+        // Persist nickname to localStorage so it survives page reloads
+        localStorage.setItem(`nym_nickname_${this.pubkey}`, newNym);
+
+        // Update the users map so other parts of the app see the new nym
+        const existingUser = this.users.get(this.pubkey);
+        if (existingUser) {
+            existingUser.nym = newNym;
+            this.users.set(this.pubkey, existingUser);
+        } else {
+            this.users.set(this.pubkey, {
+                nym: newNym,
+                pubkey: this.pubkey,
+                lastSeen: Date.now(),
+                status: 'online',
+                channels: new Set()
+            });
+        }
+
+        // Update already-rendered messages and PM sidebar entries with the new nickname
+        this.updatePMNicknameFromProfile(this.pubkey, newNym);
+
+        // Publish updated kind 0 profile so other users see the new nickname
+        await this.saveToNostrProfile();
+
         const changeMessage = `Your nym's new nick is now ${this.nym}`;
         this.displaySystemMessage(changeMessage);
     }
@@ -24718,6 +24742,12 @@ function editNick() {
         updateBioCharCount();
     }
 
+    // Show current lightning address in edit modal
+    const lnInput = document.getElementById('nickEditLightningInput');
+    if (lnInput) {
+        lnInput.value = nym.lightningAddress || '';
+    }
+
     // Reset private key reveal state
     const privkeySlideout = document.getElementById('privkeySlideout');
     if (privkeySlideout) privkeySlideout.style.display = 'none';
@@ -24755,6 +24785,9 @@ async function changeNick() {
     const baseNick = nym.parseNymFromDisplay(newNick);
     const currentBase = nym.parseNymFromDisplay(nym.nym);
 
+    const nickAlsoChanging = baseNick && baseNick !== currentBase;
+    let profileDirty = false;
+
     // Save bio regardless of nick change
     const bioInput = document.getElementById('nickEditBioInput');
     if (bioInput) {
@@ -24763,12 +24796,31 @@ async function changeNick() {
         if (newBio !== currentBio) {
             nym.userBios.set(nym.pubkey, newBio);
             localStorage.setItem('nym_bio', newBio);
-            // Publish updated profile with new bio
-            await nym.saveToNostrProfile();
+            profileDirty = true;
         }
     }
 
-    if (baseNick && baseNick !== currentBase) {
+    // Save lightning address regardless of nick change
+    const lnInput = document.getElementById('nickEditLightningInput');
+    if (lnInput) {
+        const newLn = lnInput.value.trim();
+        if (newLn !== (nym.lightningAddress || '')) {
+            if (newLn) {
+                nym.lightningAddress = newLn;
+                localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, newLn);
+                localStorage.setItem('nym_lightning_address_global', newLn);
+            } else {
+                nym.lightningAddress = null;
+                localStorage.removeItem(`nym_lightning_address_${nym.pubkey}`);
+                localStorage.removeItem('nym_lightning_address_global');
+            }
+            nym.updateLightningAddressDisplay();
+            profileDirty = true;
+        }
+    }
+
+    if (nickAlsoChanging) {
+        // cmdNick will publish the kind 0 profile (which includes bio + lightning changes)
         closeModal('nickEditModal');
         const cmdResult = await nym.cmdNick(baseNick);
         // If auto-ephemeral is enabled, persist the new nickname so it's reused on next session
@@ -24780,6 +24832,11 @@ async function changeNick() {
             }
         }
         return;
+    }
+
+    // No nickname change — publish profile only if bio or lightning address changed
+    if (profileDirty) {
+        await nym.saveToNostrProfile();
     }
     closeModal('nickEditModal');
 }
@@ -25292,12 +25349,6 @@ async function showSettings() {
         });
     }
 
-    // Load lightning address
-    const lightningInput = document.getElementById('lightningAddressInput');
-    if (lightningInput) {
-        lightningInput.value = nym.lightningAddress || '';
-    }
-
     // Load proximity sorting setting
     const proximitySelect = document.getElementById('proximitySelect');
     if (proximitySelect) {
@@ -25582,7 +25633,6 @@ async function showSettings() {
 
 async function saveSettings() {
     // Get all settings values
-    const lightningAddress = document.getElementById('lightningAddressInput').value.trim();
     const theme = document.getElementById('themeSelect').value;
     const sound = document.getElementById('soundSelect').value;
     const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
@@ -25772,11 +25822,6 @@ async function saveSettings() {
         nym.applyLowDataMode(lowDataMode);
     }
 
-    // Save lightning address
-    if (lightningAddress !== nym.lightningAddress) {
-        await nym.saveLightningAddress(lightningAddress || null);
-    }
-
     nym.displaySystemMessage('Settings saved');
 
     // Sync settings to Nostr relays if logged in
@@ -25947,7 +25992,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.231 ═══<br/>
+═══ Nymchat v3.54.232 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
