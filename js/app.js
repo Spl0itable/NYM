@@ -6859,6 +6859,33 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             });
         }
+        // For top/last/seen/who, gather messages from ALL channels in memory
+        const inMemoryCommands = ['top', 'last', 'seen', 'who'];
+        if (inMemoryCommands.includes(command.toLowerCase())) {
+            channelMessages = [];
+            for (const [chanKey, msgs] of this.messages) {
+                const mapped = msgs.map(m => ({
+                    nym: m.author || 'anon',
+                    pubkey: m.pubkey || '',
+                    content: (m.content || '').slice(0, 300),
+                    timestamp: m.created_at || 0,
+                    isBot: !!m.isBot,
+                    channel: chanKey
+                }));
+                channelMessages.push(...mapped);
+            }
+            channelMessages.sort((a, b) => a.timestamp - b.timestamp);
+            // Gather all known active users
+            activeUsers = [];
+            this.users.forEach((user, pubkey) => {
+                if (user.nym) {
+                    activeUsers.push({
+                        nym: user.nym + '#' + pubkey.slice(-4),
+                        pubkey: pubkey
+                    });
+                }
+            });
+        }
         try {
             const resp = await fetch('/api/bot', {
                 method: 'POST',
@@ -17308,17 +17335,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
+    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}</span>&gt;</span>
     <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${editedBubble}${bubbleTime}</span></span>
     ${editedIRC}
     ${hoverButtons}
     ${deliveryCheckmark}
 `;
 
-            const authorSpan = messageEl.querySelector('.message-author');
-            if (authorSpan) {
-                authorSpan.style.cursor = 'pointer';
-                authorSpan.addEventListener('click', (e) => {
+            const authorClickable = messageEl.querySelector('.author-clickable');
+            if (authorClickable) {
+                authorClickable.style.cursor = 'pointer';
+                authorClickable.addEventListener('click', (e) => {
                     e.preventDefault();
                     e.stopPropagation();
                     const ctxReactionId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
@@ -21860,7 +21887,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         messageEl.innerHTML = `
             <span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
-            <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>${displayAuthor}${verifiedBadge}${supporterBadge}&gt;</span>
+            <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}</span>&gt;</span>
             <div class="message-content">
                 <div class="poll-container" data-poll-id="${pollId}">
                     <div class="poll-header">📊 Poll</div>
@@ -21873,10 +21900,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         `;
 
         // Add context menu to poll author (same as regular messages)
-        const authorSpan = messageEl.querySelector('.message-author');
-        if (authorSpan) {
-            authorSpan.style.cursor = 'pointer';
-            authorSpan.addEventListener('click', (e) => {
+        const authorClickable = messageEl.querySelector('.author-clickable');
+        if (authorClickable) {
+            authorClickable.style.cursor = 'pointer';
+            authorClickable.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 this.showContextMenu(e, displayAuthor, pubkey, `[Poll] ${question}`, pollId);
@@ -25891,7 +25918,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.230 ═══<br/>
+═══ Nymchat v3.54.231 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

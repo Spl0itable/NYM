@@ -1560,10 +1560,15 @@ body.light-mode .channel-context-menu {
     color: var(--secondary);
     min-width: 120px;
     font-weight: 600;
-    cursor: pointer;
     display: inline-flex;
     align-items: center;
     letter-spacing: 0.2px;
+}
+
+.author-clickable {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
 }
 
 .nym-suffix {

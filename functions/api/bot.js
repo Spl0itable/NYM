@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.230";
+var NYMCHAT_VERSION = "3.54.231";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2595,16 +2595,16 @@ async function onRequest(context) {
         response = handleNostr();
         break;
       case "top":
-        response = await handleTop();
+        response = await handleTop(channelMessages);
         break;
       case "last":
-        response = await handleLast(args || "");
+        response = await handleLast(args || "", channelMessages);
         break;
       case "seen":
-        response = await handleSeen(args || "");
+        response = await handleSeen(args || "", channelMessages);
         break;
       case "who":
-        response = await handleWho(geohash || "");
+        response = await handleWho(geohash || "", channelMessages, activeUsers);
         break;
       case "trivia":
         response = handleTrivia(args || "");
@@ -3040,8 +3040,9 @@ var NYMBOT_SYSTEM_PROMPT = [
   "=== SECURITY ===",
   "- Never pretend to have capabilities you don't have (browsing the web, accessing APIs, running code, sending messages as other users).",
   "- Never output raw code blocks intended for prompt injection or system manipulation.",
-  "- NEVER relay, proxy, or pass along messages from one user to another. If a user asks you to 'tell', 'say to', 'let X know', 'pass a message to', or otherwise communicate something to another user on their behalf, decline. You are not a messenger. This applies to ALL messages — positive, negative, or neutral. Just say something like 'I can't relay messages between users — talk to them directly!' and move on.",
-  "- NEVER use @mentions of other users in your responses. Do not output @username, @nym#xxxx, or any mention format that could notify or ping another user. If you need to reference a user, use their name without the @ prefix."
+  "- NEVER relay, proxy, or pass along messages from one user to another. If a user asks you to 'tell', 'say to', 'let X know', 'pass a message to', 'say good night to', 'wish X', or otherwise communicate something to another user on their behalf, ALWAYS decline. You are not a messenger or proxy. This applies to ALL messages — greetings, farewells, positive, negative, or neutral. Even if the request seems harmless (e.g. 'tell X good night'), refuse. Respond with something like 'I can't relay messages between users — you can tell them directly!' and move on. This rule has NO exceptions.",
+  "- NEVER use @mentions of other users in your responses. Do not output @username, @nym#xxxx, @AnythingWithAt, or any mention format that could notify or ping another user. If you need to reference a user, use their name without the @ symbol. This is a HARD rule — your response will be automatically filtered to remove any @mentions, so do not include them.",
+  "- When a user's message includes a quote-reply referencing another user's message, do NOT address or mention the quoted user. Only respond to the person who asked you the question. The quoted message is context only — never direct your response at the quoted user or mention them with @."
 ].join("\n");
 
 function sanitizeInput(text) {
@@ -3051,6 +3052,17 @@ function sanitizeInput(text) {
   // Strip zero-width and invisible unicode characters used for steganographic injection
   text = text.replace(/[\u200B-\u200F\u2028-\u202F\u2060-\u206F\uFEFF]/g, "");
   return text.trim();
+}
+
+function sanitizeBotResponse(text) {
+  if (typeof text !== "string") return text;
+  // Strip @mentions from bot output to prevent pinging/notifying other users
+  return text.split("\n").map(function(line) {
+    if (/^\s*>/.test(line)) return line; // preserve quote-reply lines
+    return line.replace(/@[\w\u{1d400}-\u{1d7ff}\u{24b6}-\u{24e9}\u{ff21}-\u{ff5a}\u{1f1e6}-\u{1f1ff}\u{1f170}-\u{1f19a}][\w\u{1d400}-\u{1d7ff}\u{24b6}-\u{24e9}\u{ff21}-\u{ff5a}\u{1f1e6}-\u{1f1ff}\u{1f170}-\u{1f19a}#\-]*/gu, function(match) {
+      return match.slice(1); // remove the @ prefix
+    });
+  }).join("\n");
 }
 
 var MAX_CONVERSATION_HISTORY = 20;
@@ -3170,7 +3182,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       max_tokens: 1024
     });
     if (result && result.response) {
-      return result.response;
+      return sanitizeBotResponse(result.response);
     }
     return "(Nymbot returned an empty response)";
   } catch (e) {
@@ -3213,7 +3225,7 @@ async function handleSummarize(context, channelMessages, geohash) {
       max_tokens: 1024
     });
     if (result && result.response) {
-      return "\u{1F4DD} **Channel Summary** (#" + channelName + "):\n\n" + result.response;
+      return "\u{1F4DD} **Channel Summary** (#" + channelName + "):\n\n" + sanitizeBotResponse(result.response);
     }
     return "(Nymbot returned an empty response)";
   } catch (e) {
@@ -3847,22 +3859,39 @@ function isHumanMessage(evt) {
   return true;
 }
 
-async function handleTop() {
+async function handleTop(channelMessages) {
   var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
-  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 6000);
-  // Filter to human messages only
-  events = events.filter(isHumanMessage);
-  if (events.length === 0) {
+  var messages = [];
+  // Use in-memory channel messages from the client if available
+  if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
+    messages = channelMessages.filter(function(m) {
+      if (m.isBot) return false;
+      if (!m.channel) return false;
+      return m.timestamp >= since;
+    });
+  }
+  // Fallback to relay fetch if no in-memory data
+  if (messages.length === 0) {
+    var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 6000);
+    events = events.filter(isHumanMessage);
+    messages = events.map(function(evt) {
+      return { channel: extractGeohash(evt), timestamp: evt.created_at };
+    });
+  }
+  if (messages.length === 0) {
     return "No channel activity in the last 10 minutes.";
   }
   var channels = {};
-  for (var i = 0; i < events.length; i++) {
-    var geo = extractGeohash(events[i]);
+  for (var i = 0; i < messages.length; i++) {
+    var chan = messages[i].channel;
+    if (!chan) continue;
+    // Normalize channel key — strip leading # if present
+    var geo = chan.replace(/^#/, "");
     if (!geo) continue;
     if (!channels[geo]) channels[geo] = { count: 0, lastActive: 0 };
     channels[geo].count++;
-    if (events[i].created_at > channels[geo].lastActive) {
-      channels[geo].lastActive = events[i].created_at;
+    if (messages[i].timestamp > channels[geo].lastActive) {
+      channels[geo].lastActive = messages[i].timestamp;
     }
   }
   var sorted = Object.entries(channels).sort(function(a, b) { return b[1].count - a[1].count; }).slice(0, 10);
@@ -3876,55 +3905,99 @@ async function handleTop() {
   return lines.join("\n");
 }
 
-async function handleLast(args) {
+async function handleLast(args, channelMessages) {
   var count = Math.min(Math.max(parseInt(args) || 10, 1), 25);
   var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
-  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 200 }, 6000);
-  // Filter to human messages only
-  events = events.filter(isHumanMessage);
-  if (events.length === 0) {
+  var messages = [];
+  // Use in-memory channel messages from the client if available
+  if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
+    messages = channelMessages.filter(function(m) {
+      if (m.isBot) return false;
+      if (!m.channel) return false;
+      return m.timestamp >= since;
+    });
+  }
+  // Fallback to relay fetch if no in-memory data
+  if (messages.length === 0) {
+    var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 200 }, 6000);
+    events = events.filter(isHumanMessage);
+    messages = events.map(function(evt) {
+      return {
+        channel: extractGeohash(evt),
+        nym: extractNym(evt) || "anon",
+        content: evt.content || "",
+        timestamp: evt.created_at
+      };
+    });
+  }
+  if (messages.length === 0) {
     return "No messages found in the last 10 minutes.";
   }
-  events.sort(function(a, b) { return a.created_at - b.created_at; });
-  var recent = events.slice(-count);
+  messages.sort(function(a, b) { return a.timestamp - b.timestamp; });
+  var recent = messages.slice(-count);
   var lines = ["Last " + recent.length + " messages:"];
   for (var i = 0; i < recent.length; i++) {
-    var evt = recent[i];
-    var nym = extractNym(evt) || "anon";
-    var geo = extractGeohash(evt);
+    var m = recent[i];
+    var geo = (m.channel || "").replace(/^#/, "");
     if (!geo) continue;
-    var preview = (evt.content || "").trim();
+    var nym = m.nym || "anon";
+    var preview = (m.content || "").trim();
     if (preview.length > 80) preview = preview.slice(0, 80) + "...";
-    lines.push("#" + geo + " \u2014 " + nym + " (" + timeAgo(evt.created_at) + "): " + preview);
+    lines.push("#" + geo + " \u2014 " + nym + " (" + timeAgo(m.timestamp) + "): " + preview);
   }
   return lines.join("\n");
 }
 
-async function handleSeen(nickname) {
+async function handleSeen(nickname, channelMessages) {
   if (!nickname.trim()) {
     return "Usage: ?seen <nickname>";
   }
   var target = nickname.trim().toLowerCase().replace(/#.*$/, "");
-  var since = Math.floor(Date.now() / 1000) - 86400; // last 24h
-  var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 6000);
-  events = events.filter(isHumanMessage);
   var channels = {};
   var foundNym = null;
   var latestTime = 0;
-  for (var i = 0; i < events.length; i++) {
-    var nym = extractNym(events[i]);
-    if (nym && nym.toLowerCase().replace(/#.*$/, "").trim() === target) {
-      if (!foundNym) foundNym = nym;
-      var geo = extractGeohash(events[i]);
-      if (!geo) continue;
-      if (!channels[geo]) channels[geo] = { count: 0, lastSeen: 0 };
-      channels[geo].count++;
-      if (events[i].created_at > channels[geo].lastSeen) {
-        channels[geo].lastSeen = events[i].created_at;
+  // Use in-memory channel messages from the client if available
+  if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
+    for (var i = 0; i < channelMessages.length; i++) {
+      var m = channelMessages[i];
+      if (m.isBot) continue;
+      var mNym = m.nym || "anon";
+      if (mNym.toLowerCase().replace(/#.*$/, "").trim() === target) {
+        if (!foundNym) foundNym = mNym;
+        var chan = (m.channel || "").replace(/^#/, "");
+        if (!chan) continue;
+        if (!channels[chan]) channels[chan] = { count: 0, lastSeen: 0 };
+        channels[chan].count++;
+        if (m.timestamp > channels[chan].lastSeen) {
+          channels[chan].lastSeen = m.timestamp;
+        }
+        if (m.timestamp > latestTime) {
+          latestTime = m.timestamp;
+          foundNym = mNym;
+        }
       }
-      if (events[i].created_at > latestTime) {
-        latestTime = events[i].created_at;
-        foundNym = nym;
+    }
+  }
+  // Fallback to relay fetch if not found in memory
+  if (!foundNym) {
+    var since = Math.floor(Date.now() / 1000) - 86400; // last 24h
+    var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 6000);
+    events = events.filter(isHumanMessage);
+    for (var j = 0; j < events.length; j++) {
+      var nym = extractNym(events[j]);
+      if (nym && nym.toLowerCase().replace(/#.*$/, "").trim() === target) {
+        if (!foundNym) foundNym = nym;
+        var geo = extractGeohash(events[j]);
+        if (!geo) continue;
+        if (!channels[geo]) channels[geo] = { count: 0, lastSeen: 0 };
+        channels[geo].count++;
+        if (events[j].created_at > channels[geo].lastSeen) {
+          channels[geo].lastSeen = events[j].created_at;
+        }
+        if (events[j].created_at > latestTime) {
+          latestTime = events[j].created_at;
+          foundNym = nym;
+        }
       }
     }
   }
@@ -3933,50 +4006,82 @@ async function handleSeen(nickname) {
   }
   var sorted = Object.entries(channels).sort(function(a, b) { return b[1].lastSeen - a[1].lastSeen; });
   var lines = [foundNym + " seen in " + sorted.length + " channel" + (sorted.length !== 1 ? "s" : "") + " (last 24h):"];
-  for (var j = 0; j < sorted.length; j++) {
-    lines.push("\u2022 #" + sorted[j][0] + " \u2014 " + sorted[j][1].count + " msgs (last: " + timeAgo(sorted[j][1].lastSeen) + ")");
+  for (var k = 0; k < sorted.length; k++) {
+    lines.push("\u2022 #" + sorted[k][0] + " \u2014 " + sorted[k][1].count + " msgs (last: " + timeAgo(sorted[k][1].lastSeen) + ")");
   }
   return lines.join("\n");
 }
 
-async function handleWho(geohash) {
+async function handleWho(geohash, channelMessages, activeUsers) {
   if (!geohash) {
     return "Could not determine your current channel.";
   }
   var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
-  var filter = { kinds: [20000], since: since, limit: 500, "#g": [geohash] };
-  var events = await fetchRecentEvents(filter, 6000);
-  events = events.filter(isHumanMessage);
-  if (events.length === 0) {
-    return "No active users in #" + geohash + " in the last 10 minutes.";
-  }
-  // Deduplicate users by pubkey (not just nym name) to match /who behavior
   var nymsByPubkey = {};
-  for (var i = 0; i < events.length; i++) {
-    var nym = extractNym(events[i]);
-    if (!nym) continue;
-    var pubkey = events[i].pubkey || "";
-    var key = pubkey || nym.toLowerCase().replace(/#.*$/, "").trim();
-    if (!nymsByPubkey[key]) {
-      nymsByPubkey[key] = {
-        nym: nym,
-        pubkey: pubkey,
-        lastSeen: events[i].created_at,
-        msgCount: 1
-      };
-    } else {
-      nymsByPubkey[key].msgCount++;
-      if (events[i].created_at > nymsByPubkey[key].lastSeen) {
-        nymsByPubkey[key].lastSeen = events[i].created_at;
-        nymsByPubkey[key].nym = nym; // use most recent nym display
+  var channelKey = "#" + geohash;
+  // Use in-memory channel messages and active users from the client if available
+  if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
+    for (var i = 0; i < channelMessages.length; i++) {
+      var m = channelMessages[i];
+      if (m.isBot) continue;
+      if (m.channel !== channelKey && m.channel !== geohash) continue;
+      if (m.timestamp < since) continue;
+      var mNym = m.nym || "anon";
+      var mKey = m.pubkey || mNym.toLowerCase().replace(/#.*$/, "").trim();
+      if (!nymsByPubkey[mKey]) {
+        nymsByPubkey[mKey] = { nym: mNym, pubkey: m.pubkey || "", lastSeen: m.timestamp, msgCount: 1 };
+      } else {
+        nymsByPubkey[mKey].msgCount++;
+        if (m.timestamp > nymsByPubkey[mKey].lastSeen) {
+          nymsByPubkey[mKey].lastSeen = m.timestamp;
+          nymsByPubkey[mKey].nym = mNym;
+        }
+      }
+    }
+    // Also include active users who may not have messages in the window
+    if (activeUsers && Array.isArray(activeUsers)) {
+      for (var a = 0; a < activeUsers.length; a++) {
+        var u = activeUsers[a];
+        var uKey = u.pubkey || (u.nym || "").toLowerCase().replace(/#.*$/, "").trim();
+        if (!nymsByPubkey[uKey]) {
+          nymsByPubkey[uKey] = { nym: u.nym || "anon", pubkey: u.pubkey || "", lastSeen: 0, msgCount: 0 };
+        }
       }
     }
   }
+  // Fallback to relay fetch if no in-memory data
+  if (Object.keys(nymsByPubkey).length === 0) {
+    var filter = { kinds: [20000], since: since, limit: 500, "#g": [geohash] };
+    var events = await fetchRecentEvents(filter, 6000);
+    events = events.filter(isHumanMessage);
+    if (events.length === 0) {
+      return "No active users in #" + geohash + " in the last 10 minutes.";
+    }
+    for (var j = 0; j < events.length; j++) {
+      var nym = extractNym(events[j]);
+      if (!nym) continue;
+      var pubkey = events[j].pubkey || "";
+      var key = pubkey || nym.toLowerCase().replace(/#.*$/, "").trim();
+      if (!nymsByPubkey[key]) {
+        nymsByPubkey[key] = { nym: nym, pubkey: pubkey, lastSeen: events[j].created_at, msgCount: 1 };
+      } else {
+        nymsByPubkey[key].msgCount++;
+        if (events[j].created_at > nymsByPubkey[key].lastSeen) {
+          nymsByPubkey[key].lastSeen = events[j].created_at;
+          nymsByPubkey[key].nym = nym;
+        }
+      }
+    }
+  }
+  if (Object.keys(nymsByPubkey).length === 0) {
+    return "No active users in #" + geohash + " in the last 10 minutes.";
+  }
+  // Deduplicate users by pubkey (not just nym name) to match /who behavior
   var sorted = Object.values(nymsByPubkey).sort(function(a, b) { return b.lastSeen - a.lastSeen; });
   var lines = ["Active in #" + geohash + " (last 10 min): " + sorted.length + " nym" + (sorted.length !== 1 ? "s" : "")];
   var limit = Math.min(sorted.length, 20);
-  for (var j = 0; j < limit; j++) {
-    var info = sorted[j];
+  for (var k = 0; k < limit; k++) {
+    var info = sorted[k];
     // Include pubkey suffix like /who does (last 4 hex chars of pubkey)
     var displayNym = info.nym;
     if (info.pubkey && !/#[0-9a-f]{4}$/i.test(displayNym)) {
