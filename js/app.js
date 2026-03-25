@@ -17890,6 +17890,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Restore code placeholders
         formatted = formatted.replace(/\uFDD0(\d+)\uFDD1/g, (m, idx) => codePlaceholders[idx]);
 
+        // Handle game tokens
+        formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
+
         // Line breaks
         formatted = formatted.replace(/\n/g, '<br>');
 

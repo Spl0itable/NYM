@@ -1907,6 +1907,10 @@ body.light-mode.chat-bubbles .read-more-btn {
     color: var(--text-dim);
 }
 
+.game-token {
+    display: none;
+}
+
 .system-message {
     white-space: pre-line;
     color: var(--text-dim);
