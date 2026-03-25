@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.224";
+var NYMCHAT_VERSION = "3.54.225";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2565,7 +2565,7 @@ async function onRequest(context) {
         response = handleHelp();
         break;
       case "ask":
-        response = await handleAsk(args || "", context, conversation, channelMessages, activeUsers);
+        response = await handleAsk(args || "", context, conversation, channelMessages, activeUsers, senderNym);
         break;
       case "summarize":
         response = await handleSummarize(context, channelMessages, geohash);
@@ -3054,28 +3054,43 @@ var MAX_CONVERSATION_HISTORY = 6;
 function buildChannelContext(channelMessages, activeUsers) {
   var parts = [];
   if (activeUsers && Array.isArray(activeUsers) && activeUsers.length > 0) {
-    var userLines = activeUsers.slice(0, 30).map(function(u) {
+    var userLines = activeUsers.slice(0, 50).map(function(u) {
       var line = u.nym || "anon";
-      if (u.pubkey) line += " (pubkey: " + u.pubkey.slice(0, 8) + "...)";
       if (u.flair) line += " [flair: " + u.flair + "]";
       if (u.style) line += " [style: " + u.style + "]";
       return line;
     });
-    parts.push("=== ACTIVE USERS IN CHANNEL ===\n" + userLines.join("\n"));
+    parts.push("Active users: " + userLines.join(", "));
   }
   if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
-    var msgLines = channelMessages.slice(-50).map(function(m) {
-      var author = m.nym || "anon";
-      var text = (m.content || "").slice(0, 200);
-      var ts = m.timestamp ? new Date(m.timestamp * 1000).toISOString().slice(11, 19) + " UTC" : "";
-      return "[" + ts + "] " + author + ": " + text;
+    // Filter out raw commands and empty messages, keep both user and bot messages
+    var filtered = channelMessages.filter(function(m) {
+      var text = (m.content || "").trim();
+      if (!text) return false;
+      // Skip raw JSON
+      if (text.charAt(0) === "{" || text.charAt(0) === "[") return false;
+      return true;
     });
-    parts.push("=== RECENT CHANNEL MESSAGES ===\n" + msgLines.join("\n"));
+    // Detect if messages span multiple channels
+    var channels = {};
+    filtered.forEach(function(m) { if (m.channel) channels[m.channel] = true; });
+    var multiChannel = Object.keys(channels).length > 1;
+    var msgLines = filtered.slice(-50).map(function(m) {
+      var isBot = m.isBot || /^nymbot/i.test(m.nym || "");
+      // Strip the nym to just alphanumeric + basic chars to avoid confusing the LLM
+      var author = isBot ? "Nymbot" : (m.nym || "anon").replace(/[^\w#\-_ ]/g, "").slice(0, 25);
+      var text = (m.content || "").replace(/[^\x20-\x7E\n]/g, " ").trim().slice(0, 300);
+      var prefix = multiChannel && m.channel ? "[" + m.channel + "] " : "";
+      return prefix + author + ": " + text;
+    });
+    if (msgLines.length > 0) {
+      parts.push("Recent messages:\n" + msgLines.join("\n"));
+    }
   }
-  return parts.length > 0 ? "\n\n" + parts.join("\n\n") : "";
+  return parts.length > 0 ? parts.join("\n\n") : "";
 }
 
-async function handleAsk(question, context, conversation, channelMessages, activeUsers) {
+async function handleAsk(question, context, conversation, channelMessages, activeUsers, senderNym) {
   question = sanitizeInput(question);
   if (!question) {
     return "Usage: ?ask <your question> (or @Nymbot <your question>)";
@@ -3085,16 +3100,22 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     return "AI is not configured. To enable ?ask, add a Workers AI binding named \"AI\" in your Cloudflare Pages project settings (Settings > Functions > AI bindings).";
   }
   try {
-    // Build system prompt with optional channel context
-    var systemContent = NYMBOT_SYSTEM_PROMPT;
+    // Build messages array
+    var messages = [{ role: "system", content: NYMBOT_SYSTEM_PROMPT }];
+
+    // Inject channel context as a concise assistant-provided context block
     var channelCtx = buildChannelContext(channelMessages, activeUsers);
     if (channelCtx) {
-      systemContent += channelCtx;
+      var ctxIntro = "Here is the current channel context for reference (use only if relevant to the user's question):\n" + channelCtx;
+      if (senderNym) {
+        ctxIntro += "\nThe user asking this question is: " + senderNym;
+      }
+      messages.push({ role: "user", content: ctxIntro });
+      messages.push({ role: "assistant", content: "Got it, I have the channel context. What's your question?" });
     }
-    // Build messages array with conversation context from quote replies
-    var messages = [{ role: "system", content: systemContent }];
+
+    // Add conversation history from quote replies
     if (conversation && Array.isArray(conversation) && conversation.length > 0) {
-      // Limit conversation history to prevent context stuffing
       var recentConvo = conversation.slice(-MAX_CONVERSATION_HISTORY);
       for (var i = 0; i < recentConvo.length; i++) {
         var entry = recentConvo[i];
@@ -3131,16 +3152,27 @@ async function handleSummarize(context, channelMessages, geohash) {
     return "No messages to summarize in this channel. Start chatting first!";
   }
   try {
-    var msgLines = channelMessages.slice(-100).map(function(m) {
-      var author = m.nym || "anon";
-      var text = (m.content || "").slice(0, 300);
-      return author + ": " + text;
+    // Filter and sanitize messages — skip bot commands and bot responses
+    var filtered = channelMessages.filter(function(m) {
+      var text = (m.content || "").trim();
+      if (!text) return false;
+      if (text.charAt(0) === "?" || text.charAt(0) === "{") return false;
+      return true;
+    });
+    if (filtered.length === 0) {
+      return "No user messages to summarize — only bot commands found.";
+    }
+    var msgLines = filtered.slice(-80).map(function(m) {
+      var author = (m.nym || "anon").replace(/[^\w#\-_ ]/g, "").slice(0, 25);
+      var isBotMsg = m.isBot || /^nymbot/i.test(m.nym || "");
+      var text = (m.content || "").replace(/[^\x20-\x7E\n]/g, " ").trim().slice(0, 300);
+      return (isBotMsg ? "[Nymbot]" : author) + ": " + text;
     });
     var channelName = geohash || "this channel";
-    var prompt = "Summarize this chat conversation from #" + channelName + " concisely. Highlight the main topics discussed, key points made, and any notable interactions between users. Be brief (5-10 sentences). Don't list every message — synthesize the discussion.\n\nMessages:\n" + msgLines.join("\n");
+    var prompt = "Summarize this chat conversation from #" + channelName + " concisely. Highlight the main topics discussed, key points made, and any notable interactions between users. Include what Nymbot said if relevant. Be brief (3-8 sentences). Don't list every message — synthesize the discussion.\n\nMessages:\n" + msgLines.join("\n");
     var result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fp8-fast", {
       messages: [
-        { role: "system", content: "You are Nymbot, a helpful chat bot. Summarize channel discussions concisely and accurately. Use a casual, friendly tone." },
+        { role: "system", content: "You are Nymbot, a helpful chat bot in Nymchat. Summarize channel discussions concisely and accurately. Use a casual, friendly tone." },
         { role: "user", content: prompt }
       ],
       max_tokens: 512
