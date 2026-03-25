@@ -6723,10 +6723,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
         }
-        // If replying to a Nymbot message without an explicit command, treat as ?ask
+        // If replying to a Nymbot message without an explicit command, treat as ?ask or ?guess
         if (quoteContext && /^nymbot(?:#[a-f0-9]{4})?$/i.test(quoteContext.author)) {
             if (!content.startsWith('?')) {
-                content = '?ask ' + content;
+                // If the quoted message contains a wordplay game token, route to ?guess
+                const hasGameToken = quoteContext.text && /\[gc:[A-Za-z0-9+/=]+\]/.test(quoteContext.text);
+                content = hasGameToken ? '?guess ' + content : '?ask ' + content;
             }
         }
         const prefix = '?';
@@ -6735,9 +6737,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const command = parts[0];
         const args = parts.slice(1).join(' ');
         if (!command) return;
-        // Build conversation context from quote chain for ?ask commands
+        // Build conversation context from quote chain for ?ask and ?guess commands
         let conversation = [];
-        if (quoteContext && command.toLowerCase() === 'ask') {
+        if (quoteContext && ['ask', 'guess'].includes(command.toLowerCase())) {
             conversation = this._extractQuoteChain(quoteContext);
         }
         // Gather channel context for AI-aware commands (ask, summarize)
@@ -17754,12 +17756,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return `\uFDD0${idx}\uFDD1`;
         });
 
-        // Bold **text** or __text__
+        // Bold **text** (asterisks — fine anywhere) or __text__ (underscores — require word boundary)
         formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        formatted = formatted.replace(/__(.+?)__/g, '<strong>$1</strong>');
+        formatted = formatted.replace(/(?<!\w)__(.+?)__(?!\w)/g, '<strong>$1</strong>');
 
-        // Italic *text* or _text_
-        formatted = formatted.replace(/(?<![:/])(\*|_)([^*_\s][^*_]*)\1/g, '<em>$2</em>');
+        // Italic *text* (asterisks — fine anywhere) or _text_ (underscores — require word boundary
+        // so that underscores inside names/identifiers like @Cool_User#a1b2 are not treated as italic)
+        formatted = formatted.replace(/(?<![:/])\*([^*\s][^*]*)\*/g, '<em>$1</em>');
+        formatted = formatted.replace(/(?<![:/\w])_([^_\s][^_]*)_(?!\w)/g, '<em>$1</em>');
 
         // Strikethrough ~~text~~
         formatted = formatted.replace(/~~(.+?)~~/g, '<del>$1</del>');
@@ -19051,7 +19055,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '?who': { desc: 'Who is online in this channel' },
             '?about': { desc: 'About Nymbot' },
             '?nostr': { desc: 'What is Nostr?' },
-            '?wordplay': { desc: 'Word games (anagram, rhyme, etc.)' },
+            '?wordplay': { desc: 'Word games (anagram, scramble, wordle)' },
+            '?guess': { desc: 'Submit a guess for a wordplay challenge' },
             '?top': { desc: 'Show top chatters' },
             '?last': { desc: 'Show last message from a user' },
             '?seen': { desc: 'When was a user last seen' },
@@ -25992,7 +25997,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.232 ═══<br/>
+═══ Nymchat v3.54.233 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

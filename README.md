@@ -138,8 +138,9 @@ Nymbot responds to `?` commands in any channel. You can also mention **@Nymbot**
 **Games & Fun:**
 - `?trivia [category]` - Trivia questions (categories: general, history, science, crypto, nostr)
 - `?joke` - Random tech/Bitcoin-themed joke
-- `?riddle` - Random riddle with a hidden answer
-- `?wordplay [mode]` - Word games (modes: wordle, anagram, scramble)
+- `?riddle` - Random riddle — reply to answer
+- `?wordplay [mode]` - Word games (modes: wordle, anagram, scramble) — reply to guess
+- `?guess <word>` - Submit a guess for an active wordplay challenge (or just reply to the challenge)
 - `?roll [NdN]` - Roll dice (e.g., `?roll 2d6`; default 1d6)
 - `?flip` - Flip a coin
 - `?8ball <question>` - Magic 8-ball
@@ -156,7 +157,7 @@ Nymbot responds to `?` commands in any channel. You can also mention **@Nymbot**
 - `?summarize` - Summary of the current channel discussion
 - `?top` - Top channels by recent message activity
 - `?last [N]` - Last N messages across channels (default 10, max 25)
-- `?seen <nym>` - Where and when a nym was last seen
+- `?seen <nym|@mention|pubkey>` - Where and when a nym was last seen
 
 **Info:**
 - `?help` - List all available bot commands

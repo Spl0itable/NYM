@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.232";
+var NYMCHAT_VERSION = "3.54.233";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2606,6 +2606,9 @@ async function onRequest(context) {
       case "who":
         response = await handleWho(geohash || "", channelMessages, activeUsers);
         break;
+      case "guess":
+        response = handleGuess(args || "", conversation);
+        break;
       case "trivia":
         response = handleTrivia(args || "");
         break;
@@ -2713,10 +2716,11 @@ function handleHelp() {
     "?news \u2014 Latest breaking news headlines",
     "",
     "**Games & Fun:**",
-    "?trivia [category] \u2014 Trivia questions (categories: general, history, science, crypto, nostr)",
+    "?trivia [category] \u2014 Trivia questions (categories: general, history, science, crypto, nostr) — reply to answer",
     "?joke \u2014 Random tech/Bitcoin-themed joke",
-    "?riddle \u2014 Random riddle with a hidden answer",
-    "?wordplay [mode] \u2014 Word games (modes: wordle, anagram, scramble)",
+    "?riddle \u2014 Random riddle — reply to answer",
+    "?wordplay [mode] \u2014 Word games (modes: wordle, anagram, scramble) — reply to guess",
+    "?guess <word> \u2014 Submit a guess for an active wordplay challenge",
     "?roll [NdN] \u2014 Roll dice (e.g. ?roll 2d6; default 1d6)",
     "?flip \u2014 Flip a coin",
     "?8ball <question> \u2014 Magic 8-ball",
@@ -2733,7 +2737,7 @@ function handleHelp() {
     "?summarize \u2014 AI summary of the current channel discussion",
     "?top \u2014 Top channels by recent message activity",
     "?last [N] \u2014 Last N messages across channels (default 10, max 25)",
-    "?seen <nym> \u2014 Where and when a nym was last seen",
+    "?seen <nym|@mention|pubkey> \u2014 Where and when a nym was last seen",
     "",
     "**Info:**",
     "?help \u2014 List all available bot commands",
@@ -2774,6 +2778,12 @@ var NYMBOT_SYSTEM_PROMPT = [
   "For general questions, answer directly and briefly.",
   "Never refuse a reasonable question. If you don't know, just say so.",
   "Don't volunteer extra info nobody asked for. Don't explain concepts the user clearly already understands. Read the room.",
+  "",
+  "=== GAME JUDGING ===",
+  "When a user replies to one of your trivia questions or riddles with an answer, judge it briefly:",
+  "- Correct: say ✅ and optionally drop one fun fact. Keep it to 1-2 sentences.",
+  "- Wrong: say ❌, reveal the correct answer, maybe a one-liner about it. Don't be preachy.",
+  "Be casual. Don't over-explain. If their answer is close or partially right, acknowledge it.",
   "",
   "=== NYMCHAT OVERVIEW ===",
   "Nymchat (also known as NYM — Nostr Ynstant Messenger) is a decentralized, anonymous, location-based chat app using the Nostr protocol (kind 20000 ephemeral events).",
@@ -3427,7 +3437,7 @@ function handleTrivia(args) {
   }
   var questions = TRIVIA_QUESTIONS[category];
   var trivia = questions[Math.floor(Math.random() * questions.length)];
-  return "\u2753 [" + category.toUpperCase() + "] " + trivia.q + "\n\n\u{1F4A1} Answer: ||" + trivia.a + "||";
+  return "\u2753 [" + category.toUpperCase() + "] " + trivia.q + "\n\nReply with your answer!";
 }
 
 var JOKES = [
@@ -3470,7 +3480,7 @@ var RIDDLES = [
 
 function handleRiddle() {
   var riddle = RIDDLES[Math.floor(Math.random() * RIDDLES.length)];
-  return "\u{1F9E9} " + riddle.r + "\n\n\u{1F4A1} Answer: ||" + riddle.a + "||";
+  return "\u{1F9E9} " + riddle.r + "\n\nReply with your answer!";
 }
 
 // Wordplay command with anagram, scramble, and wordle modes
@@ -3506,19 +3516,19 @@ function handleWordplay(args) {
 
   if (mode === "wordle") {
     var word = WORDLE_WORDS[Math.floor(Math.random() * WORDLE_WORDS.length)];
-    var hint = word[0] + "____";
-    return "\u{1F7E9} WORDLE CHALLENGE!\nI'm thinking of a 5-letter word.\nHint: it starts with \"" + word[0].toUpperCase() + "\"\n" +
-      "Pattern: " + hint + "\n\n" +
-      "Try to guess! Type: ?ask wordle guess <your word>\n" +
-      "\u{1F4A1} Answer: ||" + word.toUpperCase() + "||";
+    var token = btoa("wordle:" + word);
+    return "\u{1F7E9} WORDLE CHALLENGE!\nGuess the 5-letter word.\nHint: starts with \"" + word[0].toUpperCase() + "\"\n" +
+      "Pattern: " + word[0].toUpperCase() + "____\n\n" +
+      "Reply with your guess!\n[gc:" + token + "]";
   }
 
   if (mode === "anagram") {
     var word = WORDPLAY_WORDS[Math.floor(Math.random() * WORDPLAY_WORDS.length)];
     var scrambled = shuffleString(word);
     while (scrambled === word) scrambled = shuffleString(word);
+    var token = btoa("anagram:" + word);
     return "\u{1F500} ANAGRAM: Rearrange these letters to form a word:\n\"" +
-      scrambled.toUpperCase() + "\" (" + word.length + " letters)\n\n\u{1F4A1} Answer: ||" + word.toUpperCase() + "||";
+      scrambled.toUpperCase() + "\" (" + word.length + " letters)\n\nReply with your answer!\n[gc:" + token + "]";
   }
 
   if (mode === "scramble") {
@@ -3532,12 +3542,81 @@ function handleWordplay(args) {
     for (var i = 0; i < word.length; i++) {
       hint += revealPositions.has(i) ? word[i].toUpperCase() : "_";
     }
-    return "\u{1F524} WORD SCRAMBLE: Fill in the blanks!\n" + hint + " (" + word.length + " letters)\n\n\u{1F4A1} Answer: ||" + word.toUpperCase() + "||";
+    var token = btoa("scramble:" + word);
+    return "\u{1F524} WORD SCRAMBLE: Fill in the blanks!\n" + hint + " (" + word.length + " letters)\n\nReply with your answer!\n[gc:" + token + "]";
   }
 
   // Default: random mode
   var modes = ["anagram", "scramble", "wordle"];
   return handleWordplay(modes[Math.floor(Math.random() * modes.length)]);
+}
+
+function handleWordle(guess, answer) {
+  if (guess.length !== answer.length) {
+    return "\u274C Must be exactly " + answer.length + " letters. Try again!";
+  }
+  if (guess === answer) {
+    return "\u{1F389} YES! \"" + answer.toUpperCase() + "\" is correct!";
+  }
+  var answerArr = answer.split("");
+  var guessArr = guess.split("");
+  var used = new Array(answer.length).fill(false);
+  var feedback = new Array(answer.length).fill("\u2B1C");
+  // First pass: greens
+  for (var i = 0; i < answer.length; i++) {
+    if (guessArr[i] === answerArr[i]) {
+      feedback[i] = "\u{1F7E9}";
+      used[i] = true;
+    }
+  }
+  // Second pass: yellows
+  for (var i = 0; i < answer.length; i++) {
+    if (feedback[i] === "\u{1F7E9}") continue;
+    for (var j = 0; j < answer.length; j++) {
+      if (!used[j] && guessArr[i] === answerArr[j]) {
+        feedback[i] = "\u{1F7E8}";
+        used[j] = true;
+        break;
+      }
+    }
+  }
+  return feedback.join("") + " " + guess.toUpperCase() + "\n\u{1F7E9}=correct \u{1F7E8}=wrong spot \u2B1C=not in word\nKeep guessing! (Reply with your next guess)";
+}
+
+function handleGuess(guess, conversation) {
+  guess = (guess || "").trim().toLowerCase();
+  if (!guess) {
+    return "Reply to a game challenge with your guess!";
+  }
+  // Extract game token from the quoted bot message in the conversation
+  var gameType = null;
+  var answer = null;
+  for (var i = 0; i < (conversation || []).length; i++) {
+    var text = conversation[i].text || "";
+    var match = text.match(/\[gc:([A-Za-z0-9+/=]+)\]/);
+    if (match) {
+      try {
+        var decoded = atob(match[1]);
+        var sep = decoded.indexOf(":");
+        if (sep > 0) {
+          gameType = decoded.slice(0, sep);
+          answer = decoded.slice(sep + 1).toLowerCase();
+        }
+      } catch (e) {}
+      break;
+    }
+  }
+  if (!answer) {
+    return "Reply to a game challenge message to make a guess.";
+  }
+  if (gameType === "wordle") {
+    return handleWordle(guess, answer);
+  }
+  // anagram / scramble: exact match
+  if (guess === answer) {
+    return "\u{1F389} Correct! The answer was \"" + answer.toUpperCase() + "\"!";
+  }
+  return "\u274C Not quite! Try again.";
 }
 
 // Miscellaneous Commands (AI-powered)
@@ -3949,54 +4028,74 @@ async function handleLast(args, channelMessages) {
 
 async function handleSeen(nickname, channelMessages) {
   if (!nickname.trim()) {
-    return "Usage: ?seen <nickname>";
+    return "Usage: ?seen <nickname|@mention|pubkey>";
   }
-  var target = nickname.trim().toLowerCase().replace(/#.*$/, "");
+  // Strip leading @ for mention support
+  var raw = nickname.trim().replace(/^@/, "");
+  // Detect if the arg is a pubkey (64-char hex or npub bech32)
+  var isPubkeyQuery = /^[0-9a-f]{64}$/i.test(raw) || /^npub1[0-9a-z]{58}/i.test(raw);
+  var targetPubkey = isPubkeyQuery ? raw.toLowerCase() : null;
+  var target = isPubkeyQuery ? null : raw.toLowerCase().replace(/#.*$/, "");
   var channels = {};
   var foundNym = null;
   var latestTime = 0;
+
+  function matchesSeen(m) {
+    if (targetPubkey) {
+      return m.pubkey && m.pubkey.toLowerCase() === targetPubkey;
+    }
+    var mNym = m.nym || "anon";
+    return mNym.toLowerCase().replace(/#.*$/, "").trim() === target;
+  }
+
   // Use in-memory channel messages from the client if available
   if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
     for (var i = 0; i < channelMessages.length; i++) {
       var m = channelMessages[i];
       if (m.isBot) continue;
+      if (!matchesSeen(m)) continue;
       var mNym = m.nym || "anon";
-      if (mNym.toLowerCase().replace(/#.*$/, "").trim() === target) {
-        if (!foundNym) foundNym = mNym;
-        var chan = (m.channel || "").replace(/^#/, "");
-        if (!chan) continue;
-        if (!channels[chan]) channels[chan] = { count: 0, lastSeen: 0 };
-        channels[chan].count++;
-        if (m.timestamp > channels[chan].lastSeen) {
-          channels[chan].lastSeen = m.timestamp;
-        }
-        if (m.timestamp > latestTime) {
-          latestTime = m.timestamp;
-          foundNym = mNym;
-        }
+      if (!foundNym) foundNym = mNym;
+      var chan = (m.channel || "").replace(/^#/, "");
+      if (!chan) continue;
+      if (!channels[chan]) channels[chan] = { count: 0, lastSeen: 0 };
+      channels[chan].count++;
+      if (m.timestamp > channels[chan].lastSeen) {
+        channels[chan].lastSeen = m.timestamp;
+      }
+      if (m.timestamp > latestTime) {
+        latestTime = m.timestamp;
+        foundNym = mNym;
       }
     }
   }
   // Fallback to relay fetch if not found in memory
   if (!foundNym) {
     var since = Math.floor(Date.now() / 1000) - 86400; // last 24h
-    var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 6000);
+    var filter = { kinds: [20000], since: since, limit: 500 };
+    if (targetPubkey && /^[0-9a-f]{64}$/i.test(targetPubkey)) {
+      filter.authors = [targetPubkey];
+    }
+    var events = await fetchRecentEvents(filter, 6000);
     events = events.filter(isHumanMessage);
     for (var j = 0; j < events.length; j++) {
       var nym = extractNym(events[j]);
-      if (nym && nym.toLowerCase().replace(/#.*$/, "").trim() === target) {
-        if (!foundNym) foundNym = nym;
-        var geo = extractGeohash(events[j]);
-        if (!geo) continue;
-        if (!channels[geo]) channels[geo] = { count: 0, lastSeen: 0 };
-        channels[geo].count++;
-        if (events[j].created_at > channels[geo].lastSeen) {
-          channels[geo].lastSeen = events[j].created_at;
-        }
-        if (events[j].created_at > latestTime) {
-          latestTime = events[j].created_at;
-          foundNym = nym;
-        }
+      var eventPubkey = (events[j].pubkey || "").toLowerCase();
+      var matchesEvent = targetPubkey
+        ? eventPubkey === targetPubkey
+        : nym && nym.toLowerCase().replace(/#.*$/, "").trim() === target;
+      if (!matchesEvent) continue;
+      if (!foundNym) foundNym = nym || raw;
+      var geo = extractGeohash(events[j]);
+      if (!geo) continue;
+      if (!channels[geo]) channels[geo] = { count: 0, lastSeen: 0 };
+      channels[geo].count++;
+      if (events[j].created_at > channels[geo].lastSeen) {
+        channels[geo].lastSeen = events[j].created_at;
+      }
+      if (events[j].created_at > latestTime) {
+        latestTime = events[j].created_at;
+        if (nym) foundNym = nym;
       }
     }
   }
@@ -4034,16 +4133,6 @@ async function handleWho(geohash, channelMessages, activeUsers) {
         if (m.timestamp > nymsByPubkey[mKey].lastSeen) {
           nymsByPubkey[mKey].lastSeen = m.timestamp;
           nymsByPubkey[mKey].nym = mNym;
-        }
-      }
-    }
-    // Also include active users who may not have messages in the window
-    if (activeUsers && Array.isArray(activeUsers)) {
-      for (var a = 0; a < activeUsers.length; a++) {
-        var u = activeUsers[a];
-        var uKey = u.pubkey || (u.nym || "").toLowerCase().replace(/#.*$/, "").trim();
-        if (!nymsByPubkey[uKey]) {
-          nymsByPubkey[uKey] = { nym: u.nym || "anon", pubkey: u.pubkey || "", lastSeen: 0, msgCount: 0 };
         }
       }
     }
