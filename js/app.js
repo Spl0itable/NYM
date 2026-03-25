@@ -17613,9 +17613,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
-        // Play notification sound for mentions and PMs (but not for historical messages or own messages)
+        // Play notification sound for mentions and PMs (but not for historical messages, own messages, or bot messages)
         // Skip sound when bulk-rendering stored messages (e.g. opening an unread conversation)
-        if (!this._suppressSound && !message.isHistorical && !message.isOwn && this.settings.sound) {
+        if (!this._suppressSound && !message.isHistorical && !message.isOwn && !message.isBot && this.settings.sound) {
             if (isMentioned || message.isPM) {
                 this.playSound(this.settings.sound);
             }
@@ -25997,7 +25997,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.233 ═══<br/>
+═══ Nymchat v3.54.234 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

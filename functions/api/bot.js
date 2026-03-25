@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.233";
+var NYMCHAT_VERSION = "3.54.234";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3517,8 +3517,9 @@ function handleWordplay(args) {
   if (mode === "wordle") {
     var word = WORDLE_WORDS[Math.floor(Math.random() * WORDLE_WORDS.length)];
     var token = btoa("wordle:" + word);
+    var pattern = ([word[0].toUpperCase()].concat(Array(word.length - 1).fill("_"))).join(" ");
     return "\u{1F7E9} WORDLE CHALLENGE!\nGuess the 5-letter word.\nHint: starts with \"" + word[0].toUpperCase() + "\"\n" +
-      "Pattern: " + word[0].toUpperCase() + "____\n\n" +
+      "Pattern: " + pattern + "\n\n" +
       "Reply with your guess!\n[gc:" + token + "]";
   }
 
@@ -3539,9 +3540,11 @@ function handleWordplay(args) {
     while (revealPositions.size < revealed) {
       revealPositions.add(Math.floor(Math.random() * word.length));
     }
+    var hintParts = [];
     for (var i = 0; i < word.length; i++) {
-      hint += revealPositions.has(i) ? word[i].toUpperCase() : "_";
+      hintParts.push(revealPositions.has(i) ? word[i].toUpperCase() : "_");
     }
+    var hint = hintParts.join(" ");
     var token = btoa("scramble:" + word);
     return "\u{1F524} WORD SCRAMBLE: Fill in the blanks!\n" + hint + " (" + word.length + " letters)\n\nReply with your answer!\n[gc:" + token + "]";
   }
@@ -3580,7 +3583,8 @@ function handleWordle(guess, answer) {
       }
     }
   }
-  return feedback.join("") + " " + guess.toUpperCase() + "\n\u{1F7E9}=correct \u{1F7E8}=wrong spot \u2B1C=not in word\nKeep guessing! (Reply with your next guess)";
+  var letters = guess.toUpperCase().split("").join(" ");
+  return feedback.join(" ") + "\n" + letters + "\n\u{1F7E9}=correct \u{1F7E8}=wrong spot \u2B1C=not in word\nKeep guessing! (Reply with your next guess)";
 }
 
 function handleGuess(guess, conversation) {
