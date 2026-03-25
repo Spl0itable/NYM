@@ -611,6 +611,7 @@ class NYM {
         this.hideNonPinned = false;
         this.reactions = new Map();
         this.reactionLastAction = new Map();
+        this.reactionToggleTracker = new Map();
         this.failedRelays = new Map();
         this.relayRetryDelay = 2 * 60 * 1000;
         this.previouslyConnectedRelays = new Set();
@@ -12154,8 +12155,43 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.activeReactionPickerButton = null;
     }
 
+    _checkReactionRateLimit(messageId, emoji) {
+        const key = `${messageId}:${emoji}`;
+        const now = Date.now();
+        const windowMs = 30000; // 30 second window
+        const maxToggles = 3; // max 3 toggles (react/unreact) per window
+
+        let tracker = this.reactionToggleTracker.get(key);
+        if (!tracker) {
+            tracker = { timestamps: [], cooldownUntil: 0 };
+            this.reactionToggleTracker.set(key, tracker);
+        }
+
+        // Check if in cooldown
+        if (now < tracker.cooldownUntil) {
+            const remaining = Math.ceil((tracker.cooldownUntil - now) / 1000);
+            this.displaySystemMessage(`Slow down! You can react again in ${remaining}s`);
+            return false;
+        }
+
+        // Prune old timestamps outside the window
+        tracker.timestamps = tracker.timestamps.filter(ts => now - ts < windowMs);
+
+        // Check if over limit
+        if (tracker.timestamps.length >= maxToggles) {
+            tracker.cooldownUntil = now + 60000; // 1 minute cooldown
+            this.displaySystemMessage('Too many reaction toggles. Try again in 60s');
+            return false;
+        }
+
+        tracker.timestamps.push(now);
+        return true;
+    }
+
     async sendReaction(messageId, emoji) {
         try {
+            if (!this._checkReactionRateLimit(messageId, emoji)) return;
+
             const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
             if (!messageEl) return;
 
@@ -12259,6 +12295,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     async removeReaction(messageId, emoji) {
         try {
+            if (!this._checkReactionRateLimit(messageId, emoji)) return;
+
             const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
             if (!messageEl) return;
 
@@ -26198,7 +26236,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.235 ═══<br/>
+═══ Nymchat v3.54.236 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
