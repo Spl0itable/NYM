@@ -6750,7 +6750,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // e.g. "?ask #dr5r what's happening there?" pulls context from #dr5r
             const referencedChannels = new Set();
             if (command.toLowerCase() === 'ask' && args) {
-                const channelRefRegex = /(?:^|[^a-z0-9])#([a-z0-9]{2,})/gi;
+                const channelRefRegex = /(?:^|[^a-z0-9])#([a-z0-9_-]+)/gi;
                 let channelRefMatch;
                 const channelRefNames = [];
                 while ((channelRefMatch = channelRefRegex.exec(args)) !== null) {
@@ -6759,31 +6759,48 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (channelRefNames.length > 0) {
                     const channelsToFetch = [];
                     for (const name of channelRefNames) {
-                        // Exact match first
+                        // Case-insensitive lookup across messages Map
+                        let found = false;
+                        // Exact match (case-sensitive) first
                         if (this.messages.has(`#${name}`)) {
                             referencedChannels.add(`#${name}`);
-                        } else {
-                            // Bidirectional prefix match: #d9 matches #d9ru, #svz8en matches #svz8en7k, etc.
-                            let found = false;
+                            found = true;
+                        }
+                        if (!found) {
+                            // Case-insensitive and bidirectional prefix match
                             for (const key of this.messages.keys()) {
-                                if (key.startsWith(`#${name}`) || name.startsWith(key.substring(1))) {
+                                if (!key.startsWith('#')) continue;
+                                const stored = key.substring(1).toLowerCase();
+                                if (stored === name || stored.startsWith(name) || name.startsWith(stored)) {
                                     referencedChannels.add(key);
                                     found = true;
                                     break;
                                 }
                             }
-                            // Not in memory — queue for relay fetch
-                            if (!found && this.isValidGeohash(name)) {
-                                channelsToFetch.push(name);
-                                referencedChannels.add(`#${name}`);
+                        }
+                        // Also check sidebar channels Map (may have channel with no messages yet)
+                        if (!found) {
+                            for (const chanKey of this.channels.keys()) {
+                                if (chanKey.toLowerCase() === name || chanKey.toLowerCase().startsWith(name) || name.startsWith(chanKey.toLowerCase())) {
+                                    const storeKey = `#${chanKey}`;
+                                    referencedChannels.add(storeKey);
+                                    found = true;
+                                    break;
+                                }
                             }
+                        }
+                        // Not found anywhere — queue for relay fetch
+                        if (!found) {
+                            const chanType = this.isValidGeohash(name) ? 'geohash' : 'standard';
+                            channelsToFetch.push({ name, type: chanType });
+                            referencedChannels.add(`#${name}`);
                         }
                     }
                     // Fetch any channels we don't have messages for from relays
                     if (channelsToFetch.length > 0) {
                         for (const ch of channelsToFetch) {
-                            this.channelLoadedFromRelays.delete(ch);
-                            this.subscribeToChannelTargeted(ch, 'geohash');
+                            this.channelLoadedFromRelays.delete(ch.name);
+                            this.subscribeToChannelTargeted(ch.name, ch.type);
                         }
                         // Brief wait for relay messages to arrive
                         await new Promise(r => setTimeout(r, 2000));
@@ -25872,7 +25889,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.228 ═══<br/>
+═══ Nymchat v3.54.229 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

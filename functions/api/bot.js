@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.228";
+var NYMCHAT_VERSION = "3.54.229";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3090,10 +3090,11 @@ function buildChannelContext(channelMessages, activeUsers) {
       if (text.charAt(0) === "{" || text.charAt(0) === "[") return false;
       return true;
     });
-    // Detect if messages span multiple channels
+    // Detect which channels the messages are from
     var channels = {};
     filtered.forEach(function(m) { if (m.channel) channels[m.channel] = true; });
-    var multiChannel = Object.keys(channels).length > 1;
+    var channelNames = Object.keys(channels);
+    var multiChannel = channelNames.length > 1;
     var msgLines = filtered.slice(-50).map(function(m) {
       var isBot = m.isBot || /^nymbot/i.test(m.nym || "");
       // Strip the nym to just alphanumeric + basic chars to avoid confusing the LLM
@@ -3102,11 +3103,15 @@ function buildChannelContext(channelMessages, activeUsers) {
       // Strip @Nymbot mentions and ?command prefixes from context to avoid confusing the LLM
       text = text.replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").replace(/^\?ask\s*/i, "").trim();
       if (!text) return null;
-      var prefix = multiChannel && m.channel ? "[" + m.channel + "] " : "";
+      var prefix = multiChannel && m.channel ? "[#" + m.channel + "] " : "";
       return prefix + author + ": " + text;
     }).filter(Boolean);
     if (msgLines.length > 0) {
-      parts.push("Recent messages:\n" + msgLines.join("\n"));
+      // Always label which channel(s) the messages are from
+      var channelLabel = channelNames.length > 0
+        ? "Recent messages from #" + channelNames.join(", #") + ":"
+        : "Recent messages:";
+      parts.push(channelLabel + "\n" + msgLines.join("\n"));
     }
   }
   return parts.length > 0 ? parts.join("\n\n") : "";
