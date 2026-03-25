@@ -6753,9 +6753,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (channelRefs) {
                     for (const ref of channelRefs) {
                         const name = ref.trim().substring(1).toLowerCase();
-                        // Try both #name (storage key) and raw name (geohash)
+                        // Exact match first
                         if (this.messages.has(`#${name}`)) {
                             referencedChannels.add(`#${name}`);
+                        } else {
+                            // Prefix match: #d9 should match #d9ru, #d9r5, etc.
+                            for (const key of this.messages.keys()) {
+                                if (key.startsWith(`#${name}`)) {
+                                    referencedChannels.add(key);
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -6783,20 +6791,29 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 channelMessages = channelMessages.slice(-msgLimit);
             }
             // Collect active users from referenced channels
+            // user.channels stores raw geohashes (no # prefix) which may vary in precision
             const channelKeys = referencedChannels;
             this.users.forEach((user, pubkey) => {
                 if (user.channels) {
+                    let found = false;
                     for (const chanKey of channelKeys) {
                         const rawName = chanKey.startsWith('#') ? chanKey.substring(1) : chanKey;
-                        if (user.channels.has(chanKey) || user.channels.has(rawName)) {
-                            const shopItems = this.getUserShopItems(pubkey);
-                            activeUsers.push({
-                                nym: user.nym + '#' + pubkey.slice(0, 4),
-                                flair: shopItems?.flair ? shopItems.flair.replace('flair-', '') : null,
-                                style: shopItems?.style ? shopItems.style.replace('style-', '') : null
-                            });
-                            break; // don't add same user twice
+                        for (const userChan of user.channels) {
+                            // Match if either is a prefix of the other (handles geohash precision differences)
+                            if (userChan === rawName || userChan.startsWith(rawName) || rawName.startsWith(userChan)) {
+                                found = true;
+                                break;
+                            }
                         }
+                        if (found) break;
+                    }
+                    if (found) {
+                        const shopItems = this.getUserShopItems(pubkey);
+                        activeUsers.push({
+                            nym: user.nym + '#' + pubkey.slice(0, 4),
+                            flair: shopItems?.flair ? shopItems.flair.replace('flair-', '') : null,
+                            style: shopItems?.style ? shopItems.style.replace('style-', '') : null
+                        });
                     }
                 }
             });
@@ -25661,7 +25678,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.226 ═══<br/>
+═══ Nymchat v3.54.227 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

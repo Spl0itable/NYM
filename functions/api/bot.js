@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.226";
+var NYMCHAT_VERSION = "3.54.227";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2649,7 +2649,7 @@ async function onRequest(context) {
   // Quote the user's full published message (preserves the existing quote chain)
   // so that when a user swipe-replies to the bot, the thread continues naturally
   if (command.toLowerCase() === "ask" && senderNym) {
-    var userMsg = publishedContent || args || "";
+    var userMsg = (publishedContent || args || "").replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").trim();
     if (userMsg) {
       var msgLines = userMsg.split("\n");
       var quotePart = "> @" + senderNym + ": " + msgLines[0];
@@ -3053,8 +3053,27 @@ var MAX_CONVERSATION_HISTORY = 6;
 
 function buildChannelContext(channelMessages, activeUsers) {
   var parts = [];
-  if (activeUsers && Array.isArray(activeUsers) && activeUsers.length > 0) {
-    var userLines = activeUsers.slice(0, 50).map(function(u) {
+  // Build user list from activeUsers + message authors for completeness
+  var knownUsers = {};
+  if (activeUsers && Array.isArray(activeUsers)) {
+    activeUsers.forEach(function(u) {
+      var name = u.nym || "anon";
+      knownUsers[name.toLowerCase()] = u;
+    });
+  }
+  // Add authors from channel messages who aren't in activeUsers
+  if (channelMessages && Array.isArray(channelMessages)) {
+    channelMessages.forEach(function(m) {
+      var author = m.nym || "anon";
+      var isBot = m.isBot || /^nymbot/i.test(author);
+      if (!isBot && !knownUsers[author.toLowerCase()]) {
+        knownUsers[author.toLowerCase()] = { nym: author };
+      }
+    });
+  }
+  var allUsers = Object.values(knownUsers);
+  if (allUsers.length > 0) {
+    var userLines = allUsers.slice(0, 50).map(function(u) {
       var line = u.nym || "anon";
       if (u.flair) line += " [flair: " + u.flair + "]";
       if (u.style) line += " [style: " + u.style + "]";
@@ -3107,23 +3126,17 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     // separate message so it doesn't bloat the system prompt or confuse the model
     var messages = [{ role: "system", content: NYMBOT_SYSTEM_PROMPT }];
 
-    // Only inject channel context when the question actually references the channel
-    // This prevents the LLM from getting confused on general knowledge questions
-    var needsContext = /\b(here|channel|chat|everyone|talking|said|someone|conversation|discuss|who|people|users|vibe|mood|happening|going on|what('?s| is) up|#\w+)\b/i.test(question);
-    if (needsContext && channelMessages && channelMessages.length > 0) {
-      var channelCtx = buildChannelContext(channelMessages, activeUsers);
-      if (channelCtx) {
-        var ctxIntro = "Here is the current channel context. ONLY use this if the user's question is about the channel or people in it. For general knowledge questions, IGNORE this context entirely:\n" + channelCtx;
-        if (senderNym) {
-          ctxIntro += "\nThe user asking this question is: " + senderNym;
-        }
-        messages.push({ role: "user", content: ctxIntro });
-        messages.push({ role: "assistant", content: "Understood. I'll only reference the channel context if the question is about the channel. What's your question?" });
-      }
-    } else if (senderNym) {
-      // Still tell the model who's asking even without channel context
-      messages.push({ role: "user", content: "The user asking is: " + senderNym });
-      messages.push({ role: "assistant", content: "Got it. What's your question?" });
+    // Always include channel context when available — the model decides relevance
+    var channelCtx = buildChannelContext(channelMessages, activeUsers);
+    var contextBlock = "";
+    if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
+    if (channelCtx) {
+      contextBlock += "--- CHANNEL CONTEXT (for reference) ---\n" + channelCtx + "\n--- END CONTEXT ---\n";
+      contextBlock += "IMPORTANT: If the user's question is about people, the channel, or conversation, use the context above. If the question is general knowledge (e.g. 'what is Bitcoin', 'latest version'), answer from your own knowledge and IGNORE the channel messages above — do NOT repeat or reference usernames from the context.";
+    }
+    if (contextBlock) {
+      messages.push({ role: "user", content: contextBlock });
+      messages.push({ role: "assistant", content: "Understood." });
     }
 
     // Add conversation history from quote replies
