@@ -20453,6 +20453,30 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
         this.updateSidebarAvatar();
 
+        // Persist nickname to localStorage so it survives page reloads
+        localStorage.setItem(`nym_nickname_${this.pubkey}`, newNym);
+
+        // Update the users map so other parts of the app see the new nym
+        const existingUser = this.users.get(this.pubkey);
+        if (existingUser) {
+            existingUser.nym = newNym;
+            this.users.set(this.pubkey, existingUser);
+        } else {
+            this.users.set(this.pubkey, {
+                nym: newNym,
+                pubkey: this.pubkey,
+                lastSeen: Date.now(),
+                status: 'online',
+                channels: new Set()
+            });
+        }
+
+        // Update already-rendered messages and PM sidebar entries with the new nickname
+        this.updatePMNicknameFromProfile(this.pubkey, newNym);
+
+        // Publish updated kind 0 profile so other users see the new nickname
+        await this.saveToNostrProfile();
+
         const changeMessage = `Your nym's new nick is now ${this.nym}`;
         this.displaySystemMessage(changeMessage);
     }
@@ -24757,18 +24781,22 @@ async function changeNick() {
 
     // Save bio regardless of nick change
     const bioInput = document.getElementById('nickEditBioInput');
+    const nickAlsoChanging = baseNick && baseNick !== currentBase;
     if (bioInput) {
         const newBio = bioInput.value.trim().substring(0, 150);
         const currentBio = nym.getBio(nym.pubkey);
         if (newBio !== currentBio) {
             nym.userBios.set(nym.pubkey, newBio);
             localStorage.setItem('nym_bio', newBio);
-            // Publish updated profile with new bio
-            await nym.saveToNostrProfile();
+            // Only publish profile now if nickname is NOT also changing;
+            // if nickname changes, cmdNick will publish with both updates
+            if (!nickAlsoChanging) {
+                await nym.saveToNostrProfile();
+            }
         }
     }
 
-    if (baseNick && baseNick !== currentBase) {
+    if (nickAlsoChanging) {
         closeModal('nickEditModal');
         const cmdResult = await nym.cmdNick(baseNick);
         // If auto-ephemeral is enabled, persist the new nickname so it's reused on next session
