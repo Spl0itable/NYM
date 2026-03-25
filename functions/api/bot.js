@@ -2667,7 +2667,6 @@ async function onRequest(context) {
     created_at: now,
     tags: [
       ["n", BOT_NYM],
-      ["client", "nymchat"],
       ["bot", "nymchat"],
       ["g", geohash || "nym"]
     ],
