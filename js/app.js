@@ -11361,9 +11361,54 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 pubkey: event.pubkey,
                 messageId: messageId
             };
+            // Determine the channel/PM context for navigation
+            // Check if the reacted message is in the current channel view
+            const msgEl = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+            if (msgEl) {
+                if (this.inPMMode && this.currentPM) {
+                    channelInfo.sourceType = 'pm';
+                    channelInfo.sourcePubkey = this.currentPM;
+                } else if (this.inPMMode && this.currentGroup) {
+                    channelInfo.sourceType = 'group';
+                    channelInfo.sourceGroupId = this.currentGroup;
+                } else if (this.currentGeohash) {
+                    channelInfo.sourceType = 'geohash';
+                    channelInfo.sourceChannel = this.currentGeohash;
+                    channelInfo.sourceGeohash = this.currentGeohash;
+                }
+            }
+            if (!channelInfo.sourceType) {
+                // Search channel message stores
+                for (const [key, msgs] of this.messages.entries()) {
+                    if (msgs.some(m => m.id === messageId)) {
+                        channelInfo.sourceType = 'geohash';
+                        const gh = key.startsWith('#') ? key.slice(1) : key;
+                        channelInfo.sourceChannel = gh;
+                        channelInfo.sourceGeohash = gh;
+                        break;
+                    }
+                }
+            }
+            if (!channelInfo.sourceType) {
+                // Search PM message stores
+                for (const [key, msgs] of this.pmMessages.entries()) {
+                    if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
+                        // Determine if this is a group PM or 1:1 PM
+                        if (key.startsWith('group:')) {
+                            channelInfo.sourceType = 'group';
+                            channelInfo.sourceGroupId = key.replace('group:', '');
+                        } else {
+                            channelInfo.sourceType = 'pm';
+                            // Extract the peer pubkey from the conversation key
+                            const parts = key.split(':');
+                            channelInfo.sourcePubkey = parts.find(p => p !== this.pubkey) || parts[0];
+                        }
+                        break;
+                    }
+                }
+            }
             // Try to find a preview of the original message
             let msgPreview = '';
-            const msgEl = document.querySelector(`[data-message-id="${messageId}"]`);
             if (msgEl) {
                 const raw = msgEl.dataset.rawContent;
                 if (raw) {
@@ -23053,11 +23098,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         window.focus();
 
                         if (channelInfo.type === 'pm') {
-                            this.openUserPM(baseTitle, channelInfo.pubkey);
+                            this.openUserPM(channelInfo.nym || baseTitle, channelInfo.pubkey);
                         } else if (channelInfo.type === 'group') {
                             this.openGroup(channelInfo.groupId);
                         } else if (channelInfo.type === 'geohash') {
                             this.switchChannel(channelInfo.channel, channelInfo.geohash);
+                        } else if (channelInfo.type === 'reaction') {
+                            if (channelInfo.sourceType === 'pm' && channelInfo.sourcePubkey) {
+                                this.openUserPM(this.getNymFromPubkey(channelInfo.sourcePubkey), channelInfo.sourcePubkey);
+                            } else if (channelInfo.sourceType === 'group' && channelInfo.sourceGroupId) {
+                                this.openGroup(channelInfo.sourceGroupId);
+                            } else if (channelInfo.sourceType === 'geohash' && channelInfo.sourceGeohash) {
+                                this.switchChannel(channelInfo.sourceChannel, channelInfo.sourceGeohash);
+                            }
                         }
 
                         notification.close();
@@ -23280,11 +23333,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     const info = n.channelInfo;
                     item.onclick = () => {
                         if (info.type === 'pm') {
-                            this.openUserPM(n.title, info.pubkey);
+                            this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
                         } else if (info.type === 'group') {
                             this.openGroup(info.groupId);
                         } else if (info.type === 'geohash') {
                             this.switchChannel(info.channel, info.geohash);
+                        } else if (info.type === 'reaction') {
+                            if (info.sourceType === 'pm' && info.sourcePubkey) {
+                                this.openUserPM(this.getNymFromPubkey(info.sourcePubkey), info.sourcePubkey);
+                            } else if (info.sourceType === 'group' && info.sourceGroupId) {
+                                this.openGroup(info.sourceGroupId);
+                            } else if (info.sourceType === 'geohash' && info.sourceGeohash) {
+                                this.switchChannel(info.sourceChannel, info.sourceGeohash);
+                            }
                         }
                         this.closeNotificationsModal();
                     };
@@ -25437,7 +25498,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.53.219 ═══<br/>
+═══ Nymchat v3.53.220 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
