@@ -1,20 +1,38 @@
 // Nymchat Bot
 //
-// Commands:
-//   ?help              - List available commands
-//   ?top               - Top channels by message activity
-//   ?last [N]          - Last N messages across channels
-//   ?seen <nickname>   - Where was someone last seen
-//   ?who               - Who's active in this channel
+// AI & Knowledge:
 //   ?ask <question>    - Ask the AI a question
+//   ?define <word>     - Word definition
+//   ?translate <text>  - Translate text
+//   ?news              - Breaking news headlines
+//
+// Games & Fun:
+//   ?trivia [category] - Trivia (general, history, science, crypto, nostr)
+//   ?joke              - Random joke
+//   ?riddle            - Random riddle
+//   ?wordplay [mode]   - Word games (wordle, anagram, scramble)
 //   ?roll [NdN]        - Roll dice (e.g., ?roll 2d6)
 //   ?flip              - Flip a coin
 //   ?8ball <question>  - Magic 8-ball
 //   ?pick <options>    - Pick randomly from a list
+//
+// Utility:
 //   ?math <expr>       - Calculate math expression
+//   ?units <v> <f> to <t> - Unit converter
 //   ?time              - Current UTC time
+//   ?btc               - Current Bitcoin price
+//
+// Channel Activity:
+//   ?who               - Who's active in this channel
+//   ?top               - Top channels by message activity
+//   ?last [N]          - Last N messages across channels
+//   ?seen <nickname>   - Where was someone last seen
+//
+// Info:
+//   ?help              - List available commands
 //   ?about             - About Nymchat
 //   ?nostr             - Nostr protocol tips
+//
 //   @Nymbot <question> - Mention-based alias for ?ask
 
 // node_modules/@noble/hashes/esm/crypto.js
@@ -2474,6 +2492,9 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
+var NYMCHAT_VERSION = "3.54.221";
+var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
+var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
 
 // HTTP POST handler
@@ -2606,6 +2627,11 @@ async function onRequest(context) {
       case "news":
         response = await handleNews();
         break;
+      case "btc":
+      case "bitcoin":
+      case "price":
+        response = await handleBtc();
+        break;
       default:
         return new Response(JSON.stringify({ error: "Unknown command" }), {
           status: 400,
@@ -2676,33 +2702,40 @@ async function onRequest(context) {
 // Command Handlers
 function handleHelp() {
   return [
-    "Nymbot commands:",
-    "?help \u2014 List available commands",
-    "?top \u2014 Top channels by message activity",
-    "?last [N] \u2014 Last N messages across channels",
-    "?seen <nickname> \u2014 Where was someone last seen",
-    "?who \u2014 Who's active in this channel",
-    "?ask <question> \u2014 Ask the AI a question",
-    "?roll [NdN] \u2014 Roll dice (e.g. ?roll 2d6)",
-    "?flip \u2014 Flip a coin",
-    "?8ball <question> \u2014 Magic 8-ball",
-    "?pick <options> \u2014 Pick randomly (e.g. ?pick pizza tacos burgers)",
-    "?math <expr> \u2014 Calculate math (e.g. ?math 2+2*3)",
-    "?time \u2014 Current UTC time",
-    "?about \u2014 About Nymchat",
-    "?nostr \u2014 Nostr protocol tips",
+    "Nymbot Commands (v" + NYMCHAT_VERSION + ")",
     "",
-    "Trivia & Fun:",
-    "?trivia [category] \u2014 Trivia question (general, history, science, crypto, nostr)",
-    "?joke \u2014 Tell a joke",
-    "?riddle \u2014 Give a riddle",
-    "?wordplay [mode] \u2014 Word game (wordle, anagram, scramble)",
+    "**AI & Knowledge:**",
+    "?ask <question> \u2014 Ask the AI anything (also via @Nymbot <question>)",
+    "?define <word> \u2014 Look up a word's definition, part of speech, and example usage",
+    "?translate <text> \u2014 Translate text (auto-detects language; English \u2192 Spanish)",
     "?news \u2014 Latest breaking news headlines",
     "",
-    "Miscellaneous:",
-    "?define <word> \u2014 Define a word",
-    "?translate <text> \u2014 Translate text",
-    "?units <value> <from> to <to> \u2014 Convert units (e.g. ?units 10 km to mi)",
+    "**Games & Fun:**",
+    "?trivia [category] \u2014 Trivia questions (categories: general, history, science, crypto, nostr)",
+    "?joke \u2014 Random tech/Bitcoin-themed joke",
+    "?riddle \u2014 Random riddle with a hidden answer",
+    "?wordplay [mode] \u2014 Word games (modes: wordle, anagram, scramble)",
+    "?roll [NdN] \u2014 Roll dice (e.g. ?roll 2d6; default 1d6)",
+    "?flip \u2014 Flip a coin",
+    "?8ball <question> \u2014 Magic 8-ball",
+    "?pick <option1> <option2> ... \u2014 Randomly pick from a list of options",
+    "",
+    "**Utility:**",
+    "?math <expression> \u2014 Calculate a math expression",
+    "?units <value> <from> to <to> \u2014 Unit converter (e.g. ?units 10 km to mi)",
+    "?time \u2014 Current UTC time and Unix timestamp",
+    "?btc \u2014 Current Bitcoin price",
+    "",
+    "**Channel Activity:**",
+    "?who \u2014 Who's active in the current channel",
+    "?top \u2014 Top channels by recent message activity",
+    "?last [N] \u2014 Last N messages across channels (default 10, max 25)",
+    "?seen <nym> \u2014 Where and when a nym was last seen",
+    "",
+    "**Info:**",
+    "?help \u2014 List all available bot commands",
+    "?about \u2014 About Nymchat",
+    "?nostr \u2014 Random Nostr protocol tips",
     "",
     "Tip: You can also @Nymbot <question> (or use the mentions modal) to ask the AI directly!",
     "Tip: Quote-reply any message and @Nymbot to ask about it, or reply to a Nymbot response to continue the conversation!"
@@ -2740,10 +2773,73 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Don't volunteer extra info nobody asked for. Don't explain concepts the user clearly already understands. Read the room.",
   "",
   "=== NYMCHAT OVERVIEW ===",
-  "Nymchat is a decentralized, anonymous, location-based chat app using the Nostr protocol (kind 20000 ephemeral events).",
+  "Nymchat (also known as NYM — Nostr Ynstant Messenger) is a decentralized, anonymous, location-based chat app using the Nostr protocol (kind 20000 ephemeral events).",
+  "Current version: v" + NYMCHAT_VERSION + ".",
   "No account or registration required. Users get a random nym (nickname + 4-hex-digit suffix from their pubkey, e.g. SatoshiFan#a1b2).",
   "Nyms are ephemeral by default — closing the session generates a new identity unless the user saves their nsec (secret key).",
-  "The app runs at nymchat.app and is open source.",
+  "The app runs at nymchat.app and is open source (MIT License) at https://github.com/Spl0itable/NYM.",
+  "Created and operated by 21 Million LLC.",
+  "",
+  "=== PLATFORMS & DOWNLOADS ===",
+  "Nymchat is available on:",
+  "- Web (PWA): https://nymchat.app (or https://web.nymchat.app) — works in any modern browser, installable as a Progressive Web App via 'Add to Home Screen'",
+  "- iOS (TestFlight): " + NYMCHAT_IOS_APP,
+  "- Android (Google Play): " + NYMCHAT_ANDROID_APP,
+  "The iOS and Android apps are open source Flutter wrappers around the PWA with native push notifications.",
+  "The PWA can also be run locally by cloning the repo and opening index.html — no build tools required. However, Nymbot (the AI bot) is only available on the hosted site and official apps since it relies on Cloudflare Workers AI.",
+  "The landing page with more info is at https://nymchat.app.",
+  "",
+  "=== FREQUENTLY ASKED QUESTIONS ===",
+  "Q: What is Nymchat and how does it work?",
+  "A: Nymchat (Nostr Ynstant Messenger) is a decentralized, anonymous chat app built on the Nostr protocol. It allows you to communicate freely without registration, accounts, or centralized servers. Messages are distributed across hundreds of community-operated Nostr relays worldwide, making the network censorship-resistant and resilient. Temporary keypairs are auto-generated each session for maximum anonymity — your nym disappears when you disconnect.",
+  "",
+  "Q: Is Nymchat free?",
+  "A: Yes, completely free and open source (MIT License). No subscription or payment required.",
+  "",
+  "Q: Do I need to create an account?",
+  "A: No. Each session generates a random nym (identity). Just open the app and start chatting.",
+  "",
+  "Q: How do I save my identity?",
+  "A: Click your nym in the sidebar > Profile Edit Modal > 'Reveal this nym's private key' > copy your nsec and store it safely. To restore: click the ASCII logo > Nostr Login Modal > paste your nsec.",
+  "",
+  "Q: How does the connection work?",
+  "A: Nymchat uses ephemeral connections only. Temporary keypairs are auto-generated for maximum anonymity. Your identity exists only for the current session and leaves no trace when you disconnect. No accounts, no registration, no persistent data.",
+  "",
+  "Q: How do channels work?",
+  "A: Nymchat uses ephemeral regular and geohash channels — location-based chat rooms using geohash codes (e.g. #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location. All channel messages are temporary and exist only during active sessions.",
+  "",
+  "Q: How do private messages and group chats work?",
+  "A: PMs and group chats use Nostr's NIP-17 encryption standard for end-to-end encrypted communication that can't be linked to your session. Only you and your recipient(s) can read the messages. You can enable forward secrecy for disappearing messages in Settings. To send a PM, use /pm nym#xxxx or click a user's nym and select 'Private Message'. Each user is identified by their nym + a 4-character suffix from their public key (e.g. cyber_wolf#a3f2).",
+  "",
+  "Q: What is Lightning integration and how do zaps work?",
+  "A: Nymchat integrates Lightning Network for instant Bitcoin micropayments called 'zaps.' You can tip messages you appreciate or send Bitcoin directly to users. To receive zaps, set a Lightning address in Settings (format: user@domain.com). To send a zap, click a user's nym and select 'Zap' or use /zap @nym. Preset amounts: 100, 500, 1000, 5000 sats, or custom amount with optional comment. Zaps are displayed in real-time on messages.",
+  "",
+  "Q: How do reactions and emoji work?",
+  "A: Click on a user's nym and select 'React' or hover over a message to see the reaction button. React with any emoji from the library. Type : followed by a name (like :smile:) for autocomplete, or click the emoji button. Reactions use Nostr's NIP-25 standard.",
+  "",
+  "Q: How do I block users or channels?",
+  "A: Block users: /block nym#xxxx or click a user's nym > 'Block User.' Block channels: /block #channelname. Block keywords: add keywords in Settings > Blocked Keywords. View and manage all blocks in Settings.",
+  "",
+  "Q: How does proximity sorting work?",
+  "A: When enabled in Settings, geohash channels are sorted by distance from your location (requires browser location permission). Disable anytime in Settings > 'Sort Geohash Channels by Proximity.'",
+  "",
+  "Q: Is Nymchat really anonymous and private?",
+  "A: Nymchat provides maximum anonymity through ephemeral connections. Temporary keypairs are generated per session with no connection to your real identity. Messages aren't permanently stored, and your nym disappears when you disconnect. Channel messages ARE visible to anyone on the Nostr network — use encrypted PMs for truly private conversations. For maximum anonymity, use Tor or a VPN.",
+  "",
+  "Q: How do I use Nymchat on mobile?",
+  "A: iOS: Download via TestFlight at " + NYMCHAT_IOS_APP + ". Android: Get it on Google Play at " + NYMCHAT_ANDROID_APP + ". Or use the PWA: open web.nymchat.app in your browser and 'Add to Home Screen.' The mobile interface has touch-friendly controls, swipe gestures for the sidebar, and a responsive layout.",
+  "",
+  "Q: What's the connection with Bitchat?",
+  "A: Nymchat is bridged with Jack Dorsey's Bitchat application for geohash-based location channels. Messages sent in geohash channels on Nymchat appear in Bitchat and vice versa, creating a larger interconnected network of location-based chat rooms using the same Nostr protocol.",
+  "",
+  "Q: How do relay connections work?",
+  "A: Nymchat connects to multiple Nostr relays simultaneously. Broadcast relays for sending messages, read relays for receiving (auto-discovered, up to 1000+), and Nosflare as a write-only relay. The app auto-discovers relays from the same list Bitchat uses, blacklists unresponsive ones, and retries failed connections. More relays = better censorship resistance but more bandwidth.",
+  "",
+  "Q: What's the difference between /who and ?who?",
+  "A: /who shows nyms your client has seen in real-time via WebSocket. ?who queries relays for recent activity — since ephemeral events may not be stored by all relays, results can differ.",
+  "",
+  "Q: What are geohash channels?",
+  "A: Location-based channels named with geohash codes (e.g. #9q8yyk). Shorter codes = larger geographic areas. There's a 3D globe explorer (click globe icon) to browse them visually.",
   "",
   "=== UI NAVIGATION ===",
   "The app has a sidebar on the left and the main chat area on the right.",
@@ -2872,19 +2968,12 @@ var NYMBOT_SYSTEM_PROMPT = [
   "/groupinfo — Group members, /share — Share channel URL, /leave — Leave channel,",
   "/quit — Disconnect, /poll — Create poll.",
   "",
-  "=== BOT COMMANDS (+ prefix) ===",
-  "?help — List bot commands, ?ask <question> — Ask the AI (that's me!),",
-  "?roll [NdN] — Roll dice (e.g. ?roll 2d6), ?flip — Coin flip, ?8ball — Magic 8-ball,",
-  "?pick <options> — Random pick, ?math <expr> — Calculate, ?time — UTC time,",
-  "?about — About Nymchat, ?nostr — Nostr tips,",
-  "?top — Top channels by activity, ?last [N] — Recent messages,",
-  "?seen <nym> — Where was someone last seen, ?who — Active nyms in channel,",
-  "?trivia [category] — Trivia question (general, history, science, crypto, nostr),",
-  "?joke — Tell a joke, ?riddle — Give a riddle,",
-  "?wordplay [mode] — Word game (wordle, anagram, scramble),",
-  "?news — Latest breaking news headlines,",
-  "?define <word> — Define a word, ?translate <text> — Translate text,",
-  "?units <value> <from> to <to> — Convert units (e.g. ?units 10 km to mi).",
+  "=== BOT COMMANDS (? prefix) ===",
+  "AI & Knowledge: ?ask <question> — Ask the AI (that's me!), ?define <word> — Define a word, ?translate <text> — Translate text, ?news — Breaking news headlines.",
+  "Games & Fun: ?trivia [category] — Trivia (general, history, science, crypto, nostr), ?joke — Tell a joke, ?riddle — Give a riddle, ?wordplay [mode] — Word game (wordle, anagram, scramble), ?roll [NdN] — Roll dice, ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
+  "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
+  "Channel Activity: ?who — Active nyms in channel, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips.",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3074,12 +3163,16 @@ function handleMath(expr) {
 
 function handleAbout() {
   return [
-    "Nymchat \u2014 Anonymous, decentralized chat",
+    "Nymchat v" + NYMCHAT_VERSION + " \u2014 Anonymous, decentralized chat",
     "Protocol: Nostr (kind 20000 geohash channels)",
     "No accounts, no tracking, no censorship.",
     "Your messages are signed with ephemeral keys",
     "and broadcast to Nostr relays worldwide.",
-    "https://nymchat.app"
+    "",
+    "\u{1F310} Web: https://nymchat.app",
+    "\u{1F34E} iOS (TestFlight): " + NYMCHAT_IOS_APP,
+    "\u{1F916} Android (Google Play): " + NYMCHAT_ANDROID_APP,
+    "\u{1F4BB} Source: https://github.com/Spl0itable/NYM"
   ].join("\n");
 }
 
@@ -3368,6 +3461,33 @@ function handleUnits(args) {
   return "\u{1F4CF} " + value + " " + from + " = " + formatted + " " + to;
 }
 
+// Bitcoin Price Command
+async function handleBtc() {
+  try {
+    var resp = await fetch("https://mempool.space/api/v1/prices", {
+      headers: { "User-Agent": "Nymbot/1.0" }
+    });
+    if (!resp.ok) throw new Error("API error");
+    var data = await resp.json();
+    var usd = data.USD;
+    if (!usd) throw new Error("No price data");
+    var formatted = usd.toLocaleString("en-US", { maximumFractionDigits: 0 });
+    // Also fetch block height for extra context
+    var blockResp = await fetch("https://mempool.space/api/blocks/tip/height", {
+      headers: { "User-Agent": "Nymbot/1.0" }
+    }).catch(function() { return null; });
+    var blockHeight = blockResp && blockResp.ok ? await blockResp.text() : null;
+    var lines = ["\u20BF Bitcoin: $" + formatted + " USD"];
+    if (blockHeight) lines.push("\u26D3 Block height: " + blockHeight.trim());
+    // Sats per dollar
+    var satsPerDollar = Math.round(100000000 / usd);
+    lines.push("\u26A1 " + satsPerDollar.toLocaleString("en-US") + " sats/$1");
+    return lines.join("\n");
+  } catch (e) {
+    return "\u20BF Unable to fetch Bitcoin price right now. Try again later.";
+  }
+}
+
 // News Command (fetches from public RSS feeds)
 var NEWS_FEEDS = [
   { name: "BBC World", url: "https://feeds.bbci.co.uk/news/world/rss.xml" },
@@ -3403,11 +3523,29 @@ async function handleNews() {
 
   var results = await Promise.all(feedPromises);
   var seenTitles = {};
+  var seenLinks = {};
   for (var i = 0; i < results.length; i++) {
     for (var j = 0; j < results[i].length; j++) {
-      var key = results[i][j].title.toLowerCase().trim();
-      if (!seenTitles[key]) {
-        seenTitles[key] = true;
+      var titleKey = results[i][j].title.toLowerCase().trim();
+      // Normalize link for dedup: strip tracking params, trailing slashes, protocol
+      var linkKey = "";
+      if (results[i][j].link) {
+        try {
+          var urlObj = new URL(results[i][j].link);
+          // Remove common tracking params
+          urlObj.searchParams.delete("utm_source");
+          urlObj.searchParams.delete("utm_medium");
+          urlObj.searchParams.delete("utm_campaign");
+          urlObj.searchParams.delete("utm_content");
+          urlObj.searchParams.delete("utm_term");
+          linkKey = urlObj.hostname.replace(/^www\./, "") + urlObj.pathname.replace(/\/+$/, "");
+        } catch (e) {
+          linkKey = results[i][j].link;
+        }
+      }
+      if (!seenTitles[titleKey] && (!linkKey || !seenLinks[linkKey])) {
+        seenTitles[titleKey] = true;
+        if (linkKey) seenLinks[linkKey] = true;
         headlines.push(results[i][j]);
       }
     }
@@ -3652,24 +3790,39 @@ async function handleWho(geohash) {
   if (events.length === 0) {
     return "No active users in #" + geohash + " in the last 10 minutes.";
   }
-  var nyms = {};
+  // Deduplicate users by pubkey (not just nym name) to match /who behavior
+  var nymsByPubkey = {};
   for (var i = 0; i < events.length; i++) {
     var nym = extractNym(events[i]);
     if (!nym) continue;
-    var key = nym.toLowerCase().replace(/#.*$/, "").trim();
-    if (!nyms[key] || events[i].created_at > nyms[key].lastSeen) {
-      nyms[key] = {
+    var pubkey = events[i].pubkey || "";
+    var key = pubkey || nym.toLowerCase().replace(/#.*$/, "").trim();
+    if (!nymsByPubkey[key]) {
+      nymsByPubkey[key] = {
         nym: nym,
-        lastSeen: events[i].created_at
+        pubkey: pubkey,
+        lastSeen: events[i].created_at,
+        msgCount: 1
       };
+    } else {
+      nymsByPubkey[key].msgCount++;
+      if (events[i].created_at > nymsByPubkey[key].lastSeen) {
+        nymsByPubkey[key].lastSeen = events[i].created_at;
+        nymsByPubkey[key].nym = nym; // use most recent nym display
+      }
     }
   }
-  var sorted = Object.values(nyms).sort(function(a, b) { return b.lastSeen - a.lastSeen; });
-  var lines = ["Active in #" + geohash + " (last 10 min): " + sorted.length];
+  var sorted = Object.values(nymsByPubkey).sort(function(a, b) { return b.lastSeen - a.lastSeen; });
+  var lines = ["Active in #" + geohash + " (last 10 min): " + sorted.length + " nym" + (sorted.length !== 1 ? "s" : "")];
   var limit = Math.min(sorted.length, 20);
   for (var j = 0; j < limit; j++) {
     var info = sorted[j];
-    lines.push("\u2022 " + info.nym + " (" + timeAgo(info.lastSeen) + ")");
+    // Include pubkey suffix like /who does (first 4 hex chars of pubkey)
+    var displayNym = info.nym;
+    if (info.pubkey && !/#[0-9a-f]{4}$/i.test(displayNym)) {
+      displayNym += "#" + info.pubkey.slice(0, 4);
+    }
+    lines.push("\u2022 " + displayNym + " \u2014 " + info.msgCount + " msg" + (info.msgCount !== 1 ? "s" : "") + " (" + timeAgo(info.lastSeen) + ")");
   }
   if (sorted.length > 20) {
     lines.push("...and " + (sorted.length - 20) + " more");
