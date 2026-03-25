@@ -6739,11 +6739,38 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (quoteContext && command.toLowerCase() === 'ask') {
             conversation = this._extractQuoteChain(quoteContext);
         }
+        // Gather channel context for AI-aware commands (ask, summarize)
+        let channelMessages = [];
+        let activeUsers = [];
+        const aiCommands = ['ask', 'summarize'];
+        if (aiCommands.includes(command.toLowerCase())) {
+            // Collect recent channel messages
+            const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+            const msgs = this.messages.get(currentKey) || [];
+            channelMessages = msgs.slice(-50).map(m => ({
+                nym: m.author || 'anon',
+                pubkey: m.pubkey || '',
+                content: (m.content || '').slice(0, 300),
+                timestamp: m.created_at || 0
+            }));
+            // Collect active users in current channel
+            this.users.forEach((user, pubkey) => {
+                if (user.channels && (user.channels.has(currentKey) || user.channels.has(this.currentGeohash))) {
+                    const shopItems = this.getUserShopItems(pubkey);
+                    activeUsers.push({
+                        nym: user.nym + '#' + pubkey.slice(0, 4),
+                        pubkey: pubkey,
+                        flair: shopItems?.flair ? shopItems.flair.replace('flair-', '') : null,
+                        style: shopItems?.style ? shopItems.style.replace('style-', '') : null
+                    });
+                }
+            });
+        }
         try {
             const resp = await fetch('/api/bot', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent })
+                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers })
             });
             if (!resp.ok) return;
             const data = await resp.json();
@@ -25556,7 +25583,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.222 ═══<br/>
+═══ Nymchat v3.54.223 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

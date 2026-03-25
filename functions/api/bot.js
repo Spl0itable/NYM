@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.222";
+var NYMCHAT_VERSION = "3.54.223";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2549,7 +2549,7 @@ async function onRequest(context) {
     });
   }
 
-  const { command, args, geohash, conversation, senderNym, publishedContent } = body;
+  const { command, args, geohash, conversation, senderNym, publishedContent, channelMessages, activeUsers } = body;
   if (!command) {
     return new Response(JSON.stringify({ error: "Missing command" }), {
       status: 400,
@@ -2565,7 +2565,10 @@ async function onRequest(context) {
         response = handleHelp();
         break;
       case "ask":
-        response = await handleAsk(args || "", context, conversation);
+        response = await handleAsk(args || "", context, conversation, channelMessages, activeUsers);
+        break;
+      case "summarize":
+        response = await handleSummarize(context, channelMessages, geohash);
         break;
       case "roll":
         response = handleRoll(args || "");
@@ -2728,6 +2731,7 @@ function handleHelp() {
     "",
     "**Channel Activity:**",
     "?who \u2014 Who's active in the current channel",
+    "?summarize \u2014 AI summary of the current channel discussion",
     "?top \u2014 Top channels by recent message activity",
     "?last [N] \u2014 Last N messages across channels (default 10, max 25)",
     "?seen <nym> \u2014 Where and when a nym was last seen",
@@ -2926,9 +2930,37 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Sound: beep (default), bell, or silent.",
   "",
   "=== FLAIR & SHOP ===",
-  "Flair: cosmetic badges displayed next to your nym (crown, diamond, skull, star, lightning bolt, heart, mask, rocket, shield).",
-  "Message style packs change how your messages appear to others.",
-  "Purchasable via the Shop — items transfer between identities.",
+  "The Shop (click the Flair button in the sidebar) lets you buy cosmetic items with Bitcoin Lightning zaps. All items are purely cosmetic and visible to other users.",
+  "",
+  "NICKNAME FLAIR (badges displayed next to your nym as SVG icons with colored glow):",
+  "- Crown (5,000 sats) — Royal golden crown badge (gold #ffd700 glow)",
+  "- Diamond (10,000 sats) — Sparkling diamond badge (cyan #00ffff glow)",
+  "- Skull (1,666 sats) — Badass skull badge (red #ff0000 glow)",
+  "- Star (2,500 sats) — Shining star badge (yellow #ffff00 glow)",
+  "- Lightning (2,100 sats) — Electric lightning bolt badge (orange #f7931a glow)",
+  "- Heart (1,111 sats) — Loving heart badge (deep pink #ff1493 glow)",
+  "- Fawkes (4,200 sats) — Anonymous mask badge (white #ffffff glow)",
+  "- Rocket (2,300 sats) — To the moon badge (red #ff6b6b glow)",
+  "- Shield (1,900 sats) — Supporter of encryption badge (green #52ff9d glow)",
+  "",
+  "MESSAGE STYLES (change how your messages appear to everyone — animated text effects):",
+  "- Satoshi (21,420 sats) — Bitcoin-themed orange glow with BTC symbol watermark",
+  "- Glitch (10,101 sats) — Digital glitch effect with red/cyan offset shadows",
+  "- Aurora (2,424 sats) — Shifting neon aurora gradient (cyan → blue → magenta cycling)",
+  "- Neon (1,984 sats) — Cyberpunk neon purple with pulsing glow aura",
+  "- Ghost (666 sats) — Mysterious ethereal fade with floating transparency",
+  "- Matrix (1,337 sats) — Green terminal glow effect with pulsing text-shadow",
+  "- Fire (911 sats) — Burning hot flame effect with orange/red gradient flicker",
+  "- Ice (777 sats) — Cool frozen cyan text with blue glow",
+  "- Rainbow (2,222 sats) — Animated rainbow gradient cycling through spectrum colors",
+  "",
+  "SPECIAL ITEMS:",
+  "- Nymchat Supporter (42,069 sats) — Premium supporter badge (🏆) with golden message styling",
+  "- Gold Aura (3,500 sats) — Golden glow border around your messages",
+  "- Redacted (2,800 sats) — Messages auto-disappear after 10 seconds for others",
+  "",
+  "HOW TO BUY: Click Flair button in sidebar > browse items > click Buy > pay Lightning invoice. Purchased items are saved to Nostr and transfer between sessions/devices. You can toggle items on/off in the shop. Only one message style and one flair badge can be active at a time.",
+  "PRICE RANGE: 666 to 42,069 sats. Total items: 22 (9 message styles, 10 flair badges, 3 special items).",
   "",
   "=== MESSAGING FEATURES ===",
   "Markdown: **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, > quotes.",
@@ -2972,7 +3004,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "AI & Knowledge: ?ask <question> — Ask the AI (that's me!), ?define <word> — Define a word, ?translate <text> — Translate text, ?news — Breaking news headlines.",
   "Games & Fun: ?trivia [category] — Trivia (general, history, science, crypto, nostr), ?joke — Tell a joke, ?riddle — Give a riddle, ?wordplay [mode] — Word game (wordle, anagram, scramble), ?roll [NdN] — Roll dice, ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
-  "Channel Activity: ?who — Active nyms in channel, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
+  "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
   "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips.",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
@@ -3002,7 +3034,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- If you are unsure whether something exists, say you don't know rather than guessing.",
   "- Do NOT claim Nymchat has integrations, plugins, bots, or capabilities beyond what is listed here.",
   "- NEVER associate or connect general words, slang, or pop culture terms with Nymchat features. For example, if someone asks 'what are baddies', answer with the general/slang meaning — do NOT invent a Nymchat feature called 'Baddies'.",
-  "- The ONLY flair items are: crown, diamond, skull, star, lightning bolt, heart, mask, rocket, shield. NEVER reference flair items not in this list.",
+  "- The ONLY nickname flair items are: crown, diamond, skull, star, lightning, heart, fawkes (mask), rocket, shield. The ONLY message styles are: satoshi, glitch, aurora, neon, ghost, matrix, fire, ice, rainbow. The ONLY special items are: supporter badge, gold aura, redacted. NEVER reference shop items not in this list.",
   "",
   "=== SECURITY ===",
   "- Never pretend to have capabilities you don't have (browsing the web, accessing APIs, running code, sending messages as other users).",
@@ -3020,7 +3052,31 @@ function sanitizeInput(text) {
 
 var MAX_CONVERSATION_HISTORY = 6;
 
-async function handleAsk(question, context, conversation) {
+function buildChannelContext(channelMessages, activeUsers) {
+  var parts = [];
+  if (activeUsers && Array.isArray(activeUsers) && activeUsers.length > 0) {
+    var userLines = activeUsers.slice(0, 30).map(function(u) {
+      var line = u.nym || "anon";
+      if (u.pubkey) line += " (pubkey: " + u.pubkey.slice(0, 8) + "...)";
+      if (u.flair) line += " [flair: " + u.flair + "]";
+      if (u.style) line += " [style: " + u.style + "]";
+      return line;
+    });
+    parts.push("=== ACTIVE USERS IN CHANNEL ===\n" + userLines.join("\n"));
+  }
+  if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
+    var msgLines = channelMessages.slice(-50).map(function(m) {
+      var author = m.nym || "anon";
+      var text = (m.content || "").slice(0, 200);
+      var ts = m.timestamp ? new Date(m.timestamp * 1000).toISOString().slice(11, 19) + " UTC" : "";
+      return "[" + ts + "] " + author + ": " + text;
+    });
+    parts.push("=== RECENT CHANNEL MESSAGES ===\n" + msgLines.join("\n"));
+  }
+  return parts.length > 0 ? "\n\n" + parts.join("\n\n") : "";
+}
+
+async function handleAsk(question, context, conversation, channelMessages, activeUsers) {
   question = sanitizeInput(question);
   if (!question) {
     return "Usage: ?ask <your question> (or @Nymbot <your question>)";
@@ -3030,8 +3086,14 @@ async function handleAsk(question, context, conversation) {
     return "AI is not configured. To enable ?ask, add a Workers AI binding named \"AI\" in your Cloudflare Pages project settings (Settings > Functions > AI bindings).";
   }
   try {
+    // Build system prompt with optional channel context
+    var systemContent = NYMBOT_SYSTEM_PROMPT;
+    var channelCtx = buildChannelContext(channelMessages, activeUsers);
+    if (channelCtx) {
+      systemContent += channelCtx;
+    }
     // Build messages array with conversation context from quote replies
-    var messages = [{ role: "system", content: NYMBOT_SYSTEM_PROMPT }];
+    var messages = [{ role: "system", content: systemContent }];
     if (conversation && Array.isArray(conversation) && conversation.length > 0) {
       // Limit conversation history to prevent context stuffing
       var recentConvo = conversation.slice(-MAX_CONVERSATION_HISTORY);
@@ -3054,6 +3116,38 @@ async function handleAsk(question, context, conversation) {
     });
     if (result && result.response) {
       return result.response;
+    }
+    return "(Nymbot returned an empty response)";
+  } catch (e) {
+    return "Nymbot error: " + (e.message || String(e));
+  }
+}
+
+async function handleSummarize(context, channelMessages, geohash) {
+  var ai = context.env.AI || null;
+  if (!ai) {
+    return "AI is not configured.";
+  }
+  if (!channelMessages || !Array.isArray(channelMessages) || channelMessages.length === 0) {
+    return "No messages to summarize in this channel. Start chatting first!";
+  }
+  try {
+    var msgLines = channelMessages.slice(-100).map(function(m) {
+      var author = m.nym || "anon";
+      var text = (m.content || "").slice(0, 300);
+      return author + ": " + text;
+    });
+    var channelName = geohash || "this channel";
+    var prompt = "Summarize this chat conversation from #" + channelName + " concisely. Highlight the main topics discussed, key points made, and any notable interactions between users. Be brief (5-10 sentences). Don't list every message — synthesize the discussion.\n\nMessages:\n" + msgLines.join("\n");
+    var result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fp8-fast", {
+      messages: [
+        { role: "system", content: "You are Nymbot, a helpful chat bot. Summarize channel discussions concisely and accurately. Use a casual, friendly tone." },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: 512
+    });
+    if (result && result.response) {
+      return "\u{1F4DD} **Channel Summary** (#" + channelName + "):\n\n" + result.response;
     }
     return "(Nymbot returned an empty response)";
   } catch (e) {
@@ -3711,7 +3805,7 @@ async function handleTop() {
   }
   var lines = ["Top channels (last 10 min):"];
   for (var k = 0; k < sorted.length; k++) {
-    lines.push((k + 1) + ". __#" + sorted[k][0] + "__ \u2014 " + sorted[k][1].count + " msgs (" + timeAgo(sorted[k][1].lastActive) + ")");
+    lines.push((k + 1) + ". #" + sorted[k][0] + " \u2014 " + sorted[k][1].count + " msgs (" + timeAgo(sorted[k][1].lastActive) + ")");
   }
   return lines.join("\n");
 }
@@ -3735,7 +3829,7 @@ async function handleLast(args) {
     if (!geo) continue;
     var preview = (evt.content || "").trim();
     if (preview.length > 80) preview = preview.slice(0, 80) + "...";
-    lines.push("[#" + geo + "] " + nym + " (" + timeAgo(evt.created_at) + "): " + preview);
+    lines.push("#" + geo + " \u2014 " + nym + " (" + timeAgo(evt.created_at) + "): " + preview);
   }
   return lines.join("\n");
 }

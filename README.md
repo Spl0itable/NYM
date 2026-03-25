@@ -149,9 +149,11 @@ Nymbot responds to `?` commands in any channel. You can also mention **@Nymbot**
 - `?math <expression>` - Calculate a math expression
 - `?units <value> <from> to <to>` - Unit converter (e.g., `?units 10 km to mi`)
 - `?time` - Current UTC time and Unix timestamp
+- `?btc` - Current Bitcoin price
 
 **Channel Activity:**
 - `?who` - Who's active in the current channel
+- `?summarize` - Summary of the current channel discussion
 - `?top` - Top channels by recent message activity
 - `?last [N]` - Last N messages across channels (default 10, max 25)
 - `?seen <nym>` - Where and when a nym was last seen
@@ -162,6 +164,8 @@ Nymbot responds to `?` commands in any channel. You can also mention **@Nymbot**
 - `?nostr` - Random Nostr protocol tips
 
 ### Conversational AI
+
+Nymbot is context-aware — when you use `?ask` or `?summarize`, the bot receives the recent channel messages and active user list, so it can answer questions about the current conversation, reference what users said, and summarize discussions intelligently.
 
 Quote-reply to any Nymbot response to continue the conversation — the bot automatically carries context from the reply chain (up to 6 messages of history). You can also quote any message and mention `@Nymbot` to ask the AI about it.
 
