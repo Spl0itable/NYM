@@ -2787,6 +2787,32 @@ body.chat-bubbles .edited-indicator-irc {
     font-size: 12px;
 }
 
+.channel-ac-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.channel-ac-location {
+    font-size: 0.8em;
+    opacity: 0.5;
+}
+
+.channel-ac-count {
+    font-size: 0.75em;
+    opacity: 0.4;
+    margin-left: auto;
+}
+
+.channel-ac-badge {
+    font-size: 0.7em;
+    background: var(--primary);
+    color: var(--bg);
+    padding: 1px 5px;
+    border-radius: var(--radius-xs);
+    margin-left: 4px;
+}
+
 .command-palette {
     position: absolute;
     bottom: 100%;

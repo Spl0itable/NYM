@@ -595,6 +595,7 @@ class NYM {
         this.initialConnectionInProgress = false;
         this.messageQueue = [];
         this.autocompleteIndex = -1;
+        this.channelAutocompleteIndex = -1;
         this.commandPaletteIndex = -1;
         this.gifPicker = null;
         this.gifSearchTimeout = null;
@@ -6749,22 +6750,43 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // e.g. "?ask #dr5r what's happening there?" pulls context from #dr5r
             const referencedChannels = new Set();
             if (command.toLowerCase() === 'ask' && args) {
-                const channelRefs = args.match(/(^|\s)#([a-z0-9_-]+)/gi);
-                if (channelRefs) {
-                    for (const ref of channelRefs) {
-                        const name = ref.trim().substring(1).toLowerCase();
+                const channelRefRegex = /(?:^|[^a-z0-9])#([a-z0-9]{2,})/gi;
+                let channelRefMatch;
+                const channelRefNames = [];
+                while ((channelRefMatch = channelRefRegex.exec(args)) !== null) {
+                    channelRefNames.push(channelRefMatch[1].toLowerCase());
+                }
+                if (channelRefNames.length > 0) {
+                    const channelsToFetch = [];
+                    for (const name of channelRefNames) {
                         // Exact match first
                         if (this.messages.has(`#${name}`)) {
                             referencedChannels.add(`#${name}`);
                         } else {
-                            // Prefix match: #d9 should match #d9ru, #d9r5, etc.
+                            // Bidirectional prefix match: #d9 matches #d9ru, #svz8en matches #svz8en7k, etc.
+                            let found = false;
                             for (const key of this.messages.keys()) {
-                                if (key.startsWith(`#${name}`)) {
+                                if (key.startsWith(`#${name}`) || name.startsWith(key.substring(1))) {
                                     referencedChannels.add(key);
+                                    found = true;
                                     break;
                                 }
                             }
+                            // Not in memory — queue for relay fetch
+                            if (!found && this.isValidGeohash(name)) {
+                                channelsToFetch.push(name);
+                                referencedChannels.add(`#${name}`);
+                            }
                         }
+                    }
+                    // Fetch any channels we don't have messages for from relays
+                    if (channelsToFetch.length > 0) {
+                        for (const ch of channelsToFetch) {
+                            this.channelLoadedFromRelays.delete(ch);
+                            this.subscribeToChannelTargeted(ch, 'geohash');
+                        }
+                        // Brief wait for relay messages to arrive
+                        await new Promise(r => setTimeout(r, 2000));
                     }
                 }
             }
@@ -18445,6 +18467,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         input.addEventListener('keydown', (e) => {
             const autocomplete = document.getElementById('autocompleteDropdown');
+            const channelAc = document.getElementById('channelAutocomplete');
             const emojiAutocomplete = document.getElementById('emojiAutocomplete');
             const commandPalette = document.getElementById('commandPalette');
 
@@ -18461,6 +18484,20 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
                     this.hideAutocomplete();
+                }
+            } else if (channelAc && channelAc.classList.contains('active')) {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    this.navigateChannelAutocomplete(1);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    this.navigateChannelAutocomplete(-1);
+                } else if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    this.selectChannelAutocomplete();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this.hideChannelAutocomplete();
                 }
             } else if (emojiAutocomplete.classList.contains('active')) {
                 if (e.key === 'ArrowDown') {
@@ -18561,6 +18598,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Close emoji autocomplete if clicking outside
             if (!e.target.closest('#emojiAutocomplete') && !e.target.closest('#messageInput')) {
                 this.hideEmojiAutocomplete();
+            }
+
+            // Close # channel autocomplete if clicking outside
+            if (!e.target.closest('#channelAutocomplete') && !e.target.closest('#messageInput')) {
+                this.hideChannelAutocomplete();
             }
 
             // Close @ mention autocomplete if clicking outside
@@ -18985,13 +19027,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const isMentionActive = lastAtIndex !== -1 && (lastAtIndex === value.length - 1 ||
             value.substring(lastAtIndex).match(/^@[^\s]*$/));
 
+        // Check for # channel references (# at start or after whitespace, followed by non-space chars)
+        const hashMatch = value.match(/(?:^|[\s])#([^\s]*)$/);
+        const isChannelActive = hashMatch !== null;
+
         if (isMentionActive) {
             const search = value.substring(lastAtIndex + 1);
             this.showAutocomplete(search);
-            // Hide emoji autocomplete - colon may be part of a nickname
+            // Hide emoji autocomplete and channel autocomplete
+            this.hideEmojiAutocomplete();
+            this.hideChannelAutocomplete();
+        } else if (isChannelActive) {
+            const search = hashMatch[1];
+            this.showChannelAutocomplete(search);
+            this.hideAutocomplete();
             this.hideEmojiAutocomplete();
         } else {
             this.hideAutocomplete();
+            this.hideChannelAutocomplete();
 
             // Only check for emoji autocomplete when not in a mention context
             const colonIndex = value.lastIndexOf(':');
@@ -19307,6 +19360,147 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             input.focus();
             this.hideAutocomplete();
         }
+    }
+
+    showChannelAutocomplete(search) {
+        const dropdown = document.getElementById('channelAutocomplete');
+
+        // Collect all known channels from multiple sources
+        const channelMap = new Map(); // geohash -> { name, messageCount, isJoined, isCurrent }
+        const currentKey = this.currentGeohash || this.currentChannel;
+
+        // From messages Map (channels we have messages for)
+        this.messages.forEach((msgs, key) => {
+            if (key.startsWith('#')) {
+                const name = key.substring(1);
+                channelMap.set(name, {
+                    name,
+                    messageCount: msgs.length,
+                    isJoined: this.userJoinedChannels.has(name) || this.channels.has(name),
+                    isCurrent: name === currentKey
+                });
+            }
+        });
+
+        // From channels Map (sidebar channels)
+        this.channels.forEach((value, key) => {
+            if (!channelMap.has(key)) {
+                const msgCount = (this.messages.get(`#${key}`) || []).length;
+                channelMap.set(key, {
+                    name: key,
+                    messageCount: msgCount,
+                    isJoined: true,
+                    isCurrent: key === currentKey
+                });
+            }
+        });
+
+        // From commonGeohashes
+        this.commonGeohashes.forEach(g => {
+            if (!channelMap.has(g)) {
+                const msgCount = (this.messages.get(`#${g}`) || []).length;
+                channelMap.set(g, {
+                    name: g,
+                    messageCount: msgCount,
+                    isJoined: this.userJoinedChannels.has(g) || this.channels.has(g),
+                    isCurrent: g === currentKey
+                });
+            }
+        });
+
+        // Filter by search
+        const searchLower = search.toLowerCase();
+        let matches = Array.from(channelMap.values())
+            .filter(ch => ch.name.toLowerCase().includes(searchLower));
+
+        // Sort: current first, then joined with messages, then joined, then by name
+        matches.sort((a, b) => {
+            if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+            if (a.isJoined !== b.isJoined) return a.isJoined ? -1 : 1;
+            if (a.messageCount !== b.messageCount) return b.messageCount - a.messageCount;
+            return a.name.localeCompare(b.name);
+        });
+
+        matches = matches.slice(0, 8);
+
+        if (matches.length > 0) {
+            dropdown.innerHTML = matches.map((ch, index) => {
+                const locationName = this.isValidGeohash(ch.name) ? this.getGeohashLocation(ch.name) : '';
+                const locationHtml = locationName ? `<span class="channel-ac-location">${this.escapeHtml(locationName)}</span>` : '';
+                const msgCountHtml = ch.messageCount > 0 ? `<span class="channel-ac-count">${ch.messageCount} msg${ch.messageCount !== 1 ? 's' : ''}</span>` : '';
+                const currentBadge = ch.isCurrent ? '<span class="channel-ac-badge">current</span>' : '';
+                const joinedClass = ch.isJoined ? ' joined' : '';
+                return `
+        <div class="autocomplete-item channel-ac-item${joinedClass} ${index === 0 ? 'selected' : ''}"
+                data-channel="${this.escapeHtml(ch.name)}"
+                onclick="nym.selectChannelAutocompleteItem('${this.escapeHtml(ch.name)}')">
+            <strong>#${this.escapeHtml(ch.name)}</strong>${currentBadge}${locationHtml}${msgCountHtml}
+        </div>
+    `;
+            }).join('');
+            dropdown.classList.add('active');
+            this.channelAutocompleteIndex = 0;
+
+            // Add click handlers
+            dropdown.querySelectorAll('.autocomplete-item').forEach((item, index) => {
+                item.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.channelAutocompleteIndex = index;
+                    dropdown.querySelectorAll('.autocomplete-item').forEach(i => i.classList.remove('selected'));
+                    item.classList.add('selected');
+                    this.selectChannelAutocomplete();
+                };
+            });
+        } else {
+            this.hideChannelAutocomplete();
+        }
+    }
+
+    hideChannelAutocomplete() {
+        const el = document.getElementById('channelAutocomplete');
+        if (el) el.classList.remove('active');
+        this.channelAutocompleteIndex = -1;
+    }
+
+    navigateChannelAutocomplete(direction) {
+        const items = document.querySelectorAll('#channelAutocomplete .autocomplete-item');
+        if (items.length === 0) return;
+
+        items[this.channelAutocompleteIndex]?.classList.remove('selected');
+
+        this.channelAutocompleteIndex += direction;
+        if (this.channelAutocompleteIndex < 0) this.channelAutocompleteIndex = items.length - 1;
+        if (this.channelAutocompleteIndex >= items.length) this.channelAutocompleteIndex = 0;
+
+        items[this.channelAutocompleteIndex].classList.add('selected');
+        items[this.channelAutocompleteIndex].scrollIntoView({ block: 'nearest' });
+    }
+
+    selectChannelAutocomplete() {
+        const selected = document.querySelector('#channelAutocomplete .autocomplete-item.selected');
+        if (selected) {
+            const channel = selected.dataset.channel;
+            this.insertChannelReference(channel);
+        }
+    }
+
+    selectChannelAutocompleteItem(channel) {
+        this.insertChannelReference(channel);
+    }
+
+    insertChannelReference(channel) {
+        const input = document.getElementById('messageInput');
+        const value = input.value;
+        // Find the last # that triggered the autocomplete
+        const lastHash = value.lastIndexOf('#');
+        if (lastHash !== -1) {
+            input.value = value.substring(0, lastHash) + '#' + channel + ' ';
+        }
+        input.focus();
+        this.hideChannelAutocomplete();
+        // Trigger input change to update other autocompletes
+        this.handleInputChange(input.value);
     }
 
     showCommandPalette(input) {
@@ -25678,7 +25872,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.227 ═══<br/>
+═══ Nymchat v3.54.228 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

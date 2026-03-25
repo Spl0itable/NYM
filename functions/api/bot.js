@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.227";
+var NYMCHAT_VERSION = "3.54.228";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2796,8 +2796,8 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Q: What is Nymchat and how does it work?",
   "A: Nymchat (Nostr Ynstant Messenger) is a decentralized, anonymous chat app built on the Nostr protocol. It allows you to communicate freely without registration, accounts, or centralized servers. Messages are distributed across hundreds of community-operated Nostr relays worldwide, making the network censorship-resistant and resilient. Temporary keypairs are auto-generated each session for maximum anonymity — your nym disappears when you disconnect.",
   "",
-  "Q: Is Nymchat free?",
-  "A: Yes, completely free and open source (MIT License). No subscription or payment required.",
+  "Q: Is Nymchat free? Is it open source?",
+  "A: Yes, completely free and open source (FOSS) under the MIT License. The source code is on GitHub: https://github.com/Spl0itable/NYM — contributions and issues are welcome. No subscription or payment required.",
   "",
   "Q: Do I need to create an account?",
   "A: No. Each session generates a random nym (identity). Just open the app and start chatting.",
