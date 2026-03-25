@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.225";
+var NYMCHAT_VERSION = "3.54.226";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3080,9 +3080,12 @@ function buildChannelContext(channelMessages, activeUsers) {
       // Strip the nym to just alphanumeric + basic chars to avoid confusing the LLM
       var author = isBot ? "Nymbot" : (m.nym || "anon").replace(/[^\w#\-_ ]/g, "").slice(0, 25);
       var text = (m.content || "").replace(/[^\x20-\x7E\n]/g, " ").trim().slice(0, 300);
+      // Strip @Nymbot mentions and ?command prefixes from context to avoid confusing the LLM
+      text = text.replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").replace(/^\?ask\s*/i, "").trim();
+      if (!text) return null;
       var prefix = multiChannel && m.channel ? "[" + m.channel + "] " : "";
       return prefix + author + ": " + text;
-    });
+    }).filter(Boolean);
     if (msgLines.length > 0) {
       parts.push("Recent messages:\n" + msgLines.join("\n"));
     }
@@ -3100,18 +3103,27 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     return "AI is not configured. To enable ?ask, add a Workers AI binding named \"AI\" in your Cloudflare Pages project settings (Settings > Functions > AI bindings).";
   }
   try {
-    // Build messages array
+    // Build messages array — system prompt stays clean, channel context is a
+    // separate message so it doesn't bloat the system prompt or confuse the model
     var messages = [{ role: "system", content: NYMBOT_SYSTEM_PROMPT }];
 
-    // Inject channel context as a concise assistant-provided context block
-    var channelCtx = buildChannelContext(channelMessages, activeUsers);
-    if (channelCtx) {
-      var ctxIntro = "Here is the current channel context for reference (use only if relevant to the user's question):\n" + channelCtx;
-      if (senderNym) {
-        ctxIntro += "\nThe user asking this question is: " + senderNym;
+    // Only inject channel context when the question actually references the channel
+    // This prevents the LLM from getting confused on general knowledge questions
+    var needsContext = /\b(here|channel|chat|everyone|talking|said|someone|conversation|discuss|who|people|users|vibe|mood|happening|going on|what('?s| is) up|#\w+)\b/i.test(question);
+    if (needsContext && channelMessages && channelMessages.length > 0) {
+      var channelCtx = buildChannelContext(channelMessages, activeUsers);
+      if (channelCtx) {
+        var ctxIntro = "Here is the current channel context. ONLY use this if the user's question is about the channel or people in it. For general knowledge questions, IGNORE this context entirely:\n" + channelCtx;
+        if (senderNym) {
+          ctxIntro += "\nThe user asking this question is: " + senderNym;
+        }
+        messages.push({ role: "user", content: ctxIntro });
+        messages.push({ role: "assistant", content: "Understood. I'll only reference the channel context if the question is about the channel. What's your question?" });
       }
-      messages.push({ role: "user", content: ctxIntro });
-      messages.push({ role: "assistant", content: "Got it, I have the channel context. What's your question?" });
+    } else if (senderNym) {
+      // Still tell the model who's asking even without channel context
+      messages.push({ role: "user", content: "The user asking is: " + senderNym });
+      messages.push({ role: "assistant", content: "Got it. What's your question?" });
     }
 
     // Add conversation history from quote replies

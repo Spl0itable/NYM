@@ -18896,6 +18896,33 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     setupCommands() {
+        // Bot commands (? prefix) — shown in command palette when user types ?
+        this.botCommands = {
+            '?ask': { desc: 'Ask Nymbot a question (or @Nymbot)' },
+            '?summarize': { desc: 'Summarize recent channel conversation' },
+            '?roll': { desc: 'Roll dice (e.g. ?roll 2d6)' },
+            '?flip': { desc: 'Flip a coin' },
+            '?8ball': { desc: 'Ask the magic 8-ball' },
+            '?pick': { desc: 'Pick between options (e.g. ?pick a, b, c)' },
+            '?time': { desc: 'Show current UTC time' },
+            '?math': { desc: 'Calculate a math expression' },
+            '?joke': { desc: 'Tell a random joke' },
+            '?riddle': { desc: 'Get a riddle' },
+            '?trivia': { desc: 'Random trivia question' },
+            '?define': { desc: 'Define a word' },
+            '?translate': { desc: 'Translate text (e.g. ?translate es Hello)' },
+            '?units': { desc: 'Convert units (e.g. ?units 5km to miles)' },
+            '?btc': { desc: 'Show Bitcoin price' },
+            '?news': { desc: 'Show latest news headlines' },
+            '?who': { desc: 'Who is online in this channel' },
+            '?about': { desc: 'About Nymbot' },
+            '?nostr': { desc: 'What is Nostr?' },
+            '?wordplay': { desc: 'Word games (anagram, rhyme, etc.)' },
+            '?top': { desc: 'Show top chatters' },
+            '?last': { desc: 'Show last message from a user' },
+            '?seen': { desc: 'When was a user last seen' },
+            '?help': { desc: 'Show all Nymbot commands' },
+        };
         this.commands = {
             '/help': { desc: 'Show available commands', fn: () => this.showHelp() },
             '/join': { desc: 'Join a channel', fn: (args) => this.cmdJoin(args) },
@@ -18960,9 +18987,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
-        // Check for commands
+        // Check for commands (/ for local commands, ? for bot commands)
         if (value.startsWith('/')) {
             this.showCommandPalette(value);
+        } else if (value.startsWith('?')) {
+            this.showBotCommandPalette(value);
         } else {
             this.hideCommandPalette();
         }
@@ -19266,6 +19295,25 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     showCommandPalette(input) {
         const palette = document.getElementById('commandPalette');
         const matchingCommands = Object.entries(this.commands)
+            .filter(([cmd]) => cmd.startsWith(input.toLowerCase()));
+
+        if (matchingCommands.length > 0) {
+            palette.innerHTML = matchingCommands.map(([cmd, info], index) => `
+                <div class="command-item ${index === 0 ? 'selected' : ''}" data-command="${cmd}">
+                    <span class="command-name">${cmd}</span>
+                    <span class="command-desc">${info.desc}</span>
+                </div>
+            `).join('');
+            palette.classList.add('active');
+            this.commandPaletteIndex = 0;
+        } else {
+            this.hideCommandPalette();
+        }
+    }
+
+    showBotCommandPalette(input) {
+        const palette = document.getElementById('commandPalette');
+        const matchingCommands = Object.entries(this.botCommands)
             .filter(([cmd]) => cmd.startsWith(input.toLowerCase()));
 
         if (matchingCommands.length > 0) {
@@ -25613,7 +25661,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.225 ═══<br/>
+═══ Nymchat v3.54.226 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
