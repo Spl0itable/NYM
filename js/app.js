@@ -15475,8 +15475,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const now = Math.floor(Date.now() / 1000);
             const tags = [
-                ['n', this.nym],
-                ['client', 'nymchat']
+                ['n', this.nym]
             ];
 
             const kind = 20000; // Geohash channels use kind 20000
@@ -15578,8 +15577,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const now = Math.floor(Date.now() / 1000);
             const tags = [
-                ['n', anonNym],
-                ['client', 'nymchat']
+                ['n', anonNym]
             ];
 
             const kind = 20000;
@@ -15887,8 +15885,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Determine channel info and kind for the offer event
         let tags = [
             ['n', this.nym],
-            ['offer', JSON.stringify(fileOffer)],
-            ['client', 'nymchat']
+            ['offer', JSON.stringify(fileOffer)]
         ];
 
         let kind;
@@ -16640,8 +16637,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const tags = [
             ['n', this.nym],
             ['offer', JSON.stringify(fileOffer)],
-            ['g', this.currentGeohash],
-            ['client', 'nymchat']
+            ['g', this.currentGeohash]
         ];
 
         // Create and broadcast the file offer event
@@ -19386,8 +19382,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const tags = [
                 ['n', this.nym],
                 ['g', geohash],
-                ['edit', originalEventId], // Tag referencing the original message being edited
-                ['client', 'nymchat']
+                ['edit', originalEventId]
             ];
 
             let event = {
@@ -25583,7 +25578,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.223 ═══<br/>
+═══ Nymchat v3.54.224 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
