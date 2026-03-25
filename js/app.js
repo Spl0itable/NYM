@@ -14913,11 +14913,40 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const suffix = this.getPubkeySuffix(pubkey);
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
             ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
-            : '';
+            : this.isVerifiedBot(pubkey)
+                ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
+                : '';
         const flairHtml = this.getFlairForUser(pubkey);
         const avatarSrc = this.getAvatarUrl(pubkey);
+        const userShopItems = this.getUserShopItems(pubkey);
+        const supporterBadge = userShopItems?.supporter ?
+            '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span></span>' : '';
         document.querySelectorAll(`.message[data-pubkey="${pubkey}"] .message-author`).forEach(el => {
-            el.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}&gt;`;
+            // Update only the author-clickable inner span to preserve bubble-time and click handler
+            const clickable = el.querySelector('.author-clickable');
+            if (clickable) {
+                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}`;
+            } else {
+                // Fallback: full rewrite with author-clickable wrapper for older messages missing it
+                const bubbleTime = el.querySelector('.bubble-time');
+                const bubbleHtml = bubbleTime ? bubbleTime.outerHTML : '';
+                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}</span>&gt;`;
+                const newClickable = el.querySelector('.author-clickable');
+                if (newClickable) {
+                    newClickable.style.cursor = 'pointer';
+                    const msgEl = el.closest('.message');
+                    const msgId = msgEl ? msgEl.dataset.messageId : null;
+                    const rawContent = msgEl ? msgEl.dataset.rawContent : null;
+                    const isPM = msgEl ? !!msgEl.dataset.isPM : false;
+                    newClickable.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+                        this.showContextMenu(e, displayAuthor, pubkey, rawContent, msgId, false, isPM ? msgId : null);
+                        return false;
+                    });
+                }
+            }
         });
 
         // Update PM header title if currently viewing this user's PM

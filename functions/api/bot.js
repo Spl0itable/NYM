@@ -2740,8 +2740,7 @@ function handleHelp() {
     "?about \u2014 About Nymchat",
     "?nostr \u2014 Random Nostr protocol tips",
     "",
-    "Tip: You can also @Nymbot <question> (or use the mentions modal) to ask the AI directly!",
-    "Tip: Quote-reply any message and @Nymbot to ask about it, or reply to a Nymbot response to continue the conversation!"
+    "Tip: You can @Nymbot <question> to ask the AI directly! Quote-reply any message and @Nymbot to ask about it, or reply directly to a Nymbot response to continue the conversation!"
   ].join("\n");
 }
 
