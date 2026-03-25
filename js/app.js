@@ -610,6 +610,7 @@ class NYM {
         this.hiddenChannels = new Set();
         this.hideNonPinned = false;
         this.reactions = new Map();
+        this.reactionLastAction = new Map();
         this.failedRelays = new Map();
         this.relayRetryDelay = 2 * 60 * 1000;
         this.previouslyConnectedRelays = new Set();
@@ -10559,7 +10560,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // For reactions (kind 7)
             if (event.kind === 7) {
                 const eTag = event.tags.find(t => t[0] === 'e');
-                if (eTag) {
+                const actionTag = event.tags.find(t => t[0] === 'action');
+                const isRemoval = actionTag && actionTag[1] === 'remove';
+                if (eTag && !isRemoval) {
                     const messageId = eTag[1];
                     const emoji = event.content;
 
@@ -10572,6 +10575,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         }
                     }
                 }
+                // Removal events always pass through to handleReaction
+                // where timestamp-based ordering resolves conflicts
             }
         }
 
@@ -11453,6 +11458,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const eTag = event.tags.find(t => t[0] === 'e');
         const kTag = event.tags.find(t => t[0] === 'k');
         const pTag = event.tags.find(t => t[0] === 'p');
+        const actionTag = event.tags.find(t => t[0] === 'action');
+        const isRemoval = actionTag && actionTag[1] === 'remove';
 
         if (!eTag) return;
 
@@ -11483,6 +11490,52 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         const reactorNym = this.getNymFromPubkey(event.pubkey);
+
+        // Use timestamp tracking to ensure only the latest action wins
+        // (handles out-of-order event delivery from relays on reload)
+        const actionKey = `${messageId}:${reactionContent}:${event.pubkey}`;
+        const lastAction = this.reactionLastAction.get(actionKey);
+        const eventTs = event.created_at || 0;
+        if (lastAction && lastAction.ts > eventTs) {
+            return; // We already processed a newer action for this reaction
+        }
+        this.reactionLastAction.set(actionKey, { action: isRemoval ? 'remove' : 'add', ts: eventTs });
+
+        // Prune if too large
+        if (this.reactionLastAction.size > 5000) {
+            const entries = Array.from(this.reactionLastAction.entries());
+            this.reactionLastAction = new Map(entries.slice(-4000));
+        }
+
+        // Handle reaction removal
+        if (isRemoval) {
+            const messageReactions = this.reactions.get(messageId);
+            if (messageReactions && messageReactions.has(reactionContent)) {
+                messageReactions.get(reactionContent).delete(event.pubkey);
+                if (messageReactions.get(reactionContent).size === 0) {
+                    messageReactions.delete(reactionContent);
+                }
+                if (messageReactions.size === 0) {
+                    this.reactions.delete(messageId);
+                }
+            }
+            const reactionApplied = this.updateMessageReactions(messageId);
+            if (!reactionApplied) {
+                for (const [key, msgs] of this.messages.entries()) {
+                    if (msgs.some(m => m.id === messageId)) {
+                        this.channelDOMCache.delete(key);
+                        break;
+                    }
+                }
+                for (const [key, msgs] of this.pmMessages.entries()) {
+                    if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
+                        this.channelDOMCache.delete(key);
+                        break;
+                    }
+                }
+            }
+            return;
+        }
 
         // Store reaction with pubkey and nym
         if (!this.reactions.has(messageId)) {
@@ -11623,7 +11676,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const reactions = this.reactions.get(messageId);
         if (!reactions || reactions.size === 0) {
-            // Even if no reactions, update zaps display
+            // Remove reaction badges from DOM but preserve zap badges
+            const reactionsRow = messageEl.querySelector('.reactions-row');
+            if (reactionsRow) {
+                // Remove reaction badges and add-reaction button, keep zap elements
+                reactionsRow.querySelectorAll('.reaction-badge, .add-reaction-btn').forEach(el => el.remove());
+                // If only zap elements remain (or nothing), clean up empty row
+                if (reactionsRow.children.length === 0) {
+                    reactionsRow.remove();
+                }
+            }
             this.updateMessageZaps(messageId);
             return true;
         }
@@ -11720,7 +11782,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (!hasReacted) {
                     await this.sendReaction(messageId, emoji);
                 } else {
-                    this.displaySystemMessage(`You already reacted with ${emoji}`);
+                    await this.removeReaction(messageId, emoji);
                 }
             };
 
@@ -12192,6 +12254,102 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 messageReactions.get(emoji).delete(this.pubkey);
                 this.updateMessageReactions(messageId);
             }
+        }
+    }
+
+    async removeReaction(messageId, emoji) {
+        try {
+            const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+            if (!messageEl) return;
+
+            const targetPubkey = messageEl.dataset.pubkey;
+            if (!targetPubkey) return;
+
+            // Remove reaction from local state immediately
+            const messageReactions = this.reactions.get(messageId);
+            if (!messageReactions || !messageReactions.has(emoji)) return;
+            messageReactions.get(emoji).delete(this.pubkey);
+            if (messageReactions.get(emoji).size === 0) {
+                messageReactions.delete(emoji);
+            }
+            if (messageReactions.size === 0) {
+                this.reactions.delete(messageId);
+            }
+
+            // Update UI immediately
+            this.updateMessageReactions(messageId);
+
+            // Infer original kind from message context
+            let originalKind = '20000';
+            if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
+                originalKind = '1059';
+            }
+
+            const event = {
+                kind: 7,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [
+                    ['e', messageId],
+                    ['p', targetPubkey],
+                    ['k', originalKind],
+                    ['action', 'remove']
+                ],
+                content: emoji,
+                pubkey: this.pubkey
+            };
+
+            // For group messages: send unreact as gift wrap to all members
+            const groupId = messageEl.dataset.groupId;
+            if (groupId && this._canSendGiftWraps()) {
+                const group = this.groupConversations.get(groupId);
+                if (group) {
+                    const now = Math.floor(Date.now() / 1000);
+                    const reactionRumor = {
+                        kind: 7,
+                        created_at: now,
+                        tags: [['g', groupId], ['e', messageId], ['k', '14'], ['action', 'remove']],
+                        content: emoji,
+                        pubkey: this.pubkey
+                    };
+                    await this._sendGiftWrapsAsync(group.members, reactionRumor, null);
+                    return;
+                }
+            }
+
+            // For 1:1 PM messages: send unreact as gift wrap to the peer
+            if (messageEl.dataset.isPM === '1' && !groupId && this._canSendGiftWraps() && this.currentPM) {
+                const now = Math.floor(Date.now() / 1000);
+                const reactionRumor = {
+                    kind: 7,
+                    created_at: now,
+                    tags: [['e', messageId], ['p', targetPubkey], ['k', '1059'], ['action', 'remove']],
+                    content: emoji,
+                    pubkey: this.pubkey
+                };
+                await this._sendGiftWrapsAsync([this.pubkey, this.currentPM], reactionRumor, null);
+                return;
+            }
+
+            const signedEvent = await this.signEvent(event);
+
+            if (signedEvent) {
+                this.sendToRelay(["EVENT", signedEvent]);
+            } else {
+                // Signing failed - revert the optimistic removal
+                if (!this.reactions.has(messageId)) this.reactions.set(messageId, new Map());
+                const mr = this.reactions.get(messageId);
+                if (!mr.has(emoji)) mr.set(emoji, new Map());
+                mr.get(emoji).set(this.pubkey, this.nym);
+                this.updateMessageReactions(messageId);
+                this.displaySystemMessage('Failed to sign reaction removal');
+            }
+        } catch (error) {
+            // Revert optimistic removal on error
+            if (!this.reactions.has(messageId)) this.reactions.set(messageId, new Map());
+            const mr = this.reactions.get(messageId);
+            if (!mr.has(emoji)) mr.set(emoji, new Map());
+            mr.get(emoji).set(this.pubkey, this.nym);
+            this.updateMessageReactions(messageId);
         }
     }
 
@@ -13492,7 +13650,26 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (eTag) {
                     const reactionMessageId = eTag[1];
                     const emoji = rumor.content;
-                    if (emoji) {
+                    if (!emoji) { return; }
+                    const actionTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'action');
+                    const isRemoval = actionTag && actionTag[1] === 'remove';
+
+                    // Timestamp-based dedup for out-of-order delivery
+                    const actionKey = `${reactionMessageId}:${emoji}:${senderPubkey}`;
+                    const lastAction = this.reactionLastAction.get(actionKey);
+                    const eventTs = rumor.created_at || 0;
+                    if (lastAction && lastAction.ts > eventTs) { return; }
+                    this.reactionLastAction.set(actionKey, { action: isRemoval ? 'remove' : 'add', ts: eventTs });
+
+                    if (isRemoval) {
+                        const msgReactions = this.reactions.get(reactionMessageId);
+                        if (msgReactions && msgReactions.has(emoji)) {
+                            msgReactions.get(emoji).delete(senderPubkey);
+                            if (msgReactions.get(emoji).size === 0) msgReactions.delete(emoji);
+                            if (msgReactions.size === 0) this.reactions.delete(reactionMessageId);
+                        }
+                        this.updateMessageReactions(reactionMessageId);
+                    } else {
                         const reactorNym = this.getNymFromPubkey(senderPubkey);
                         if (!this.reactions.has(reactionMessageId)) this.reactions.set(reactionMessageId, new Map());
                         const msgReactions = this.reactions.get(reactionMessageId);
@@ -13833,6 +14010,27 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const messageId = eTag[1]; // nymMessageId of the target message
         const emoji = rumor.content;
         if (!emoji) return;
+
+        const actionTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'action');
+        const isRemoval = actionTag && actionTag[1] === 'remove';
+
+        // Timestamp-based dedup for out-of-order delivery
+        const actionKey = `${messageId}:${emoji}:${senderPubkey}`;
+        const lastAction = this.reactionLastAction.get(actionKey);
+        const eventTs = rumor.created_at || 0;
+        if (lastAction && lastAction.ts > eventTs) return;
+        this.reactionLastAction.set(actionKey, { action: isRemoval ? 'remove' : 'add', ts: eventTs });
+
+        if (isRemoval) {
+            const messageReactions = this.reactions.get(messageId);
+            if (messageReactions && messageReactions.has(emoji)) {
+                messageReactions.get(emoji).delete(senderPubkey);
+                if (messageReactions.get(emoji).size === 0) messageReactions.delete(emoji);
+                if (messageReactions.size === 0) this.reactions.delete(messageId);
+            }
+            this.updateMessageReactions(messageId);
+            return;
+        }
 
         const reactorNym = this.getNymFromPubkey(senderPubkey);
         if (!this.reactions.has(messageId)) this.reactions.set(messageId, new Map());
@@ -26000,7 +26198,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.234 ═══<br/>
+═══ Nymchat v3.54.235 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
