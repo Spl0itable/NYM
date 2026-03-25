@@ -2650,9 +2650,30 @@ body.chat-bubbles .edited-indicator-irc {
     transition: all var(--transition);
 }
 
-.image-modal-close:hover {
+.image-modal-close:hover,
+.image-modal-download:hover {
     background: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.2);
+}
+
+.image-modal-download {
+    position: absolute;
+    top: 20px;
+    right: 70px;
+    color: var(--text);
+    font-size: 22px;
+    cursor: pointer;
+    background: rgba(20, 20, 35, 0.8);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition);
+    z-index: 10002;
 }
 
 .mobile-menu-toggle,
@@ -4865,7 +4886,8 @@ body.light-mode .message-time:hover::after {
     color: var(--text);
 }
 
-body.light-mode .image-modal-close {
+body.light-mode .image-modal-close,
+body.light-mode .image-modal-download {
     backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }

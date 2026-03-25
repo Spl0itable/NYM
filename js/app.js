@@ -24157,6 +24157,45 @@ function closeImageModal() {
     modalVid.load();
 }
 
+function downloadModalMedia(event) {
+    event.stopPropagation();
+    const modalImg = document.getElementById('modalImage');
+    const modalVid = document.getElementById('modalVideo');
+    let src = '';
+    let defaultName = 'download';
+
+    if (modalImg.style.display !== 'none' && modalImg.src) {
+        src = modalImg.src;
+        const ext = src.split('.').pop().split('?')[0].toLowerCase();
+        const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+        defaultName = 'image.' + (imageExts.includes(ext) ? ext : 'jpg');
+    } else if (modalVid.style.display !== 'none') {
+        src = modalVid.src || (modalVid.querySelector('source') && modalVid.querySelector('source').src) || '';
+        const ext = src.split('.').pop().split('?')[0].toLowerCase();
+        const videoExts = ['mp4', 'webm', 'ogg', 'mov'];
+        defaultName = 'video.' + (videoExts.includes(ext) ? ext : 'mp4');
+    }
+
+    if (!src) return;
+
+    fetch(src)
+        .then(resp => resp.blob())
+        .then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = defaultName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        })
+        .catch(() => {
+            // Fallback: open in new tab
+            window.open(src, '_blank');
+        });
+}
+
 function addPollOption() {
     const container = document.getElementById('pollOptionsContainer');
     const existing = container.querySelectorAll('[data-poll-option]');
