@@ -11348,8 +11348,26 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Store pubkey with nym
         messageReactions.get(reactionContent).set(event.pubkey, reactorNym);
 
-        // Update UI if message is visible
-        this.updateMessageReactions(messageId);
+        // Update UI if message is visible, otherwise invalidate DOM cache
+        // so the reaction appears when the user switches to that channel
+        const reactionApplied = this.updateMessageReactions(messageId);
+        if (!reactionApplied) {
+            // Message not in current DOM — find which channel owns it and
+            // invalidate that channel's cached DOM so it re-renders with the
+            // new reaction when the user navigates there.
+            for (const [key, msgs] of this.messages.entries()) {
+                if (msgs.some(m => m.id === messageId)) {
+                    this.channelDOMCache.delete(key);
+                    break;
+                }
+            }
+            for (const [key, msgs] of this.pmMessages.entries()) {
+                if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
+                    this.channelDOMCache.delete(key);
+                    break;
+                }
+            }
+        }
 
         // Notify if someone reacted to OUR message (not our own reaction)
         if (pTag && pTag[1] === this.pubkey && event.pubkey !== this.pubkey) {
@@ -11448,7 +11466,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     updateMessageReactions(messageId) {
         const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
-        if (!messageEl) return;
+        if (!messageEl) return false;
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed
         const container = document.getElementById('messagesContainer');
@@ -11458,7 +11476,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!reactions || reactions.size === 0) {
             // Even if no reactions, update zaps display
             this.updateMessageZaps(messageId);
-            return;
+            return true;
         }
 
         // Remove existing reactions display but preserve zap badges
@@ -11585,6 +11603,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (wasAtBottom) {
             this._scheduleScrollToBottom();
         }
+        return true;
     }
 
     showReactorsModal(messageId, emoji, badge) {
@@ -25537,7 +25556,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.221 ═══<br/>
+═══ Nymchat v3.54.222 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
