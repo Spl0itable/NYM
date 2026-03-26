@@ -10832,19 +10832,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const eventCreatedAt = Math.floor(event.created_at) || 0;
             const nowSec = Math.floor(Date.now() / 1000);
 
-            // Guard against clock skew if the sender's device clock is wrong
+            // Guard against clock skew: cap at current time (no future messages)
             let correctedCreatedAt = Math.min(eventCreatedAt, nowSec);
-            const isLiveMessage = (nowSec - eventCreatedAt) <= 3;
-            if (isLiveMessage) {
-                const _channelKey = geohash ? `#${geohash}` : 'unknown';
-                const existing = this.messages.get(_channelKey) || [];
-                if (existing.length > 0) {
-                    const latestTs = existing[existing.length - 1].created_at || 0;
-                    if (correctedCreatedAt < latestTs) {
-                        correctedCreatedAt = latestTs + 1;
-                    }
-                }
-            }
 
             // Reconstruct quote display from nymquote tag (NYM-specific quote reply)
             // On the wire, quotes are sent as @mention + nymquote tag so other clients
@@ -13905,13 +13894,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Guard against clock skew: cap at current time (no future messages)
             tsSec = Math.min(tsSec, nowSec);
-            const isLivePM = (nowSec - tsSec) <= 3;
-            if (isLivePM && list.length > 0) {
-                const latestTs = list[list.length - 1].created_at || 0;
-                if (tsSec < latestTs) {
-                    tsSec = latestTs + 1;
-                }
-            }
 
             // Parse bitchat1: format if present to extract actual message
             const parsed = parseBitchatMessage(rumor.content);
@@ -14364,13 +14346,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Guard against clock skew: cap at current time (no future messages)
         tsSec = Math.min(tsSec, nowSec);
-        const isLiveGroup = (nowSec - tsSec) <= 3;
-        if (isLiveGroup && list.length > 0) {
-            const latestTs = list[list.length - 1].created_at || 0;
-            if (tsSec < latestTs) {
-                tsSec = latestTs + 1;
-            }
-        }
 
         // Check if this is an edit of a previous group message (has 'edit' tag in rumor)
         const groupEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
@@ -26486,7 +26461,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.55.242 ═══<br/>
+═══ Nymchat v3.55.243 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
