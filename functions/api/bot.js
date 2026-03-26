@@ -2651,28 +2651,31 @@ async function onRequest(context) {
   // Prepend quote-reply for ?ask commands so the bot's response threads back
   // Quote the user's full published message (preserves the existing quote chain)
   // so that when a user swipe-replies to the bot, the thread continues naturally
+  var quoteTag = null;
   if (command.toLowerCase() === "ask" && senderNym) {
     var userMsg = (publishedContent || args || "").replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").trim();
     if (userMsg) {
-      var msgLines = userMsg.split("\n");
-      var quotePart = "> @" + senderNym + ": " + msgLines[0];
-      if (msgLines.length > 1) {
-        quotePart += "\n" + msgLines.slice(1).map(function(l) { return "> " + l; }).join("\n");
-      }
-      response = quotePart + "\n\n" + response;
+      // Store quote data in nymquote tag for NYM app to reconstruct
+      quoteTag = ["nymquote", senderNym, userMsg];
+      // Wire content uses @mention format so non-NYM clients see a normal mention
+      response = "@" + senderNym + " " + response;
     }
   }
 
   // Build and sign the Nostr event
   var now = Math.floor(Date.now() / 1000);
+  var eventTags = [
+    ["n", BOT_NYM],
+    ["bot", "nymchat"],
+    ["g", geohash || "nym"]
+  ];
+  if (quoteTag) {
+    eventTags.push(quoteTag);
+  }
   var event = {
     kind: 20000,
     created_at: now,
-    tags: [
-      ["n", BOT_NYM],
-      ["bot", "nymchat"],
-      ["g", geohash || "nym"]
-    ],
+    tags: eventTags,
     content: response,
     pubkey: pubkey
   };
