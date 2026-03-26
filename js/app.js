@@ -447,7 +447,8 @@
 class NYM {
     constructor() {
         this.relayPool = new Map();
-        this.useRelayProxy = this._detectCloudflareHost();
+        this._isCloudflareHost = this._detectCloudflareHost();
+        this.useRelayProxy = true;
         this.poolSockets = [];
         this.poolSocket = null;
         this.poolConnectedRelays = [];
@@ -6792,6 +6793,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return false;
     }
 
+    // Returns the host to use for API endpoints.
+    // When running on Cloudflare, use the current host; otherwise use the production host
+    // so that local/PWA instances still route through the relay proxy pool and bot.
+    _getApiHost() {
+        return this._isCloudflareHost ? window.location.host : 'web.nymchat.app';
+    }
+
     async _handleBotCommand(content, geohash, quoteContext, publishedContent) {
         if (!this.useRelayProxy) return;
         // Support @Nymbot mentions anywhere in the message as an alias for ?ask
@@ -6975,7 +6983,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             });
         }
         try {
-            const resp = await fetch('/api/bot', {
+            const resp = await fetch(`https://${this._getApiHost()}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers })
@@ -7052,14 +7060,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     _getProxiedRelayUrl(relayUrl) {
         if (!this.useRelayProxy) return relayUrl;
-        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${proto}//${window.location.host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
+        return `wss://${this._getApiHost()}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
     }
 
     // Multiplexed relay pool (multi-worker WebSocket proxy)
     _getRelayPoolUrl() {
-        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${proto}//${window.location.host}/api/relay-pool`;
+        return `wss://${this._getApiHost()}/api/relay-pool`;
     }
 
     // Returns true if any pool worker socket is open
@@ -8379,10 +8385,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         document.getElementById('contextMenuOverlay').classList.remove('active');
     }
 
-    // Returns the base URL for the Cloudflare proxy endpoint (only available on CF-hosted versions)
+    // Returns the base URL for the Cloudflare proxy endpoint (translation, media, unfurl).
+    // Routes through the production host when running locally.
     _getProxyBaseUrl() {
-        if (!this.useRelayProxy) return null;
-        return `${window.location.protocol}//${window.location.host}/api/proxy`;
+        return `https://${this._getApiHost()}/api/proxy`;
     }
 
     // Returns a proxied URL for media (images/videos) to hide the user's IP
@@ -26395,7 +26401,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.55.238 ═══<br/>
+═══ Nymchat v3.55.239 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

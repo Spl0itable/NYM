@@ -2492,10 +2492,16 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.55.238";
+var NYMCHAT_VERSION = "3.55.239";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
+
+const BOT_CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type"
+};
 
 // HTTP POST handler
 async function onRequest(context) {
@@ -2505,11 +2511,7 @@ async function onRequest(context) {
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST",
-        "Access-Control-Allow-Headers": "Content-Type"
-      }
+      headers: BOT_CORS_HEADERS
     });
   }
 
@@ -2517,7 +2519,7 @@ async function onRequest(context) {
   if (request.method !== "POST") {
     return new Response(JSON.stringify({ error: "POST required" }), {
       status: 405,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   }
 
@@ -2525,7 +2527,7 @@ async function onRequest(context) {
   if (!privkey) {
     return new Response(JSON.stringify({ error: "Bot not configured" }), {
       status: 500,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   }
 
@@ -2535,7 +2537,7 @@ async function onRequest(context) {
   } catch (e) {
     return new Response(JSON.stringify({ error: "Invalid bot key" }), {
       status: 500,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   }
 
@@ -2545,7 +2547,7 @@ async function onRequest(context) {
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON" }), {
       status: 400,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   }
 
@@ -2553,7 +2555,7 @@ async function onRequest(context) {
   if (!command) {
     return new Response(JSON.stringify({ error: "Missing command" }), {
       status: 400,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   }
 
@@ -2641,7 +2643,7 @@ async function onRequest(context) {
       default:
         return new Response(JSON.stringify({ error: "Unknown command" }), {
           status: 400,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
         });
     }
   } catch (e) {
@@ -2703,7 +2705,7 @@ async function onRequest(context) {
 
   return new Response(JSON.stringify({ event: signed, profile: signedProfile }), {
     status: 200,
-    headers: { "Content-Type": "application/json" }
+    headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
   });
 }
 
