@@ -10778,9 +10778,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const eventCreatedAt = Math.floor(event.created_at) || 0;
             const nowSec = Math.floor(Date.now() / 1000);
 
-            // Guard against clock skew if the sender's device clock is wrong.
+            // Guard against clock skew if the sender's device clock is wrong
             let correctedCreatedAt = Math.min(eventCreatedAt, nowSec);
-            if (!isHistorical) {
+            const isLiveMessage = (nowSec - eventCreatedAt) <= 3;
+            if (isLiveMessage) {
                 const _channelKey = geohash ? `#${geohash}` : 'unknown';
                 const existing = this.messages.get(_channelKey) || [];
                 if (existing.length > 0) {
@@ -13845,12 +13846,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (list.some(m => m.id === event.id)) return;
 
             const nowSec = Math.floor(Date.now() / 1000);
-            let tsSec = Math.floor(rumor.created_at) || nowSec;
+            const originalTsSec = Math.floor(rumor.created_at) || nowSec;
+            let tsSec = originalTsSec;
 
             // Guard against clock skew: cap at current time (no future messages)
-            // and ensure new messages sort after existing ones in this conversation.
             tsSec = Math.min(tsSec, nowSec);
-            if (list.length > 0) {
+            const isLivePM = (nowSec - tsSec) <= 3;
+            if (isLivePM && list.length > 0) {
                 const latestTs = list[list.length - 1].created_at || 0;
                 if (tsSec < latestTs) {
                     tsSec = latestTs + 1;
@@ -13866,11 +13868,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             let messageContent = parsed.content;
 
             // Drop messages whose content is raw ciphertext from other NIP-17
-            // clients that add an extra encryption layer Nymchat can't decode.
-            // These show up as long base64 strings with no whitespace and create
-            // phantom PM conversations from unknown pubkeys.
-            // Exclude known legitimate long strings: lightning invoices, Cashu
-            // tokens, nostr bech32 identifiers, Bitcoin addresses, URLs, etc.
             if (messageContent && messageContent.length > 80 &&
                 !/\s/.test(messageContent) && /^[A-Za-z0-9+/=_-]+$/.test(messageContent) &&
                 !/^(lnbc|lnurl|lntb|lntbs|cashu|npub1|nsec1|nprofile1|nevent1|naddr1|note1|bc1|tb1|bitcoin:)/i.test(messageContent)) {
@@ -13931,7 +13928,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 pubkey: senderPubkey,
                 content: messageContent,
                 created_at: tsSec,
-                _originalCreatedAt: tsSec,
+                _originalCreatedAt: originalTsSec,
                 _seq: ++this._msgSeq,
                 timestamp: new Date(tsSec * 1000),
                 isOwn,
@@ -14063,7 +14060,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 eventKind: 1059,
                 deliveryStatus: 'failed'
             };
-            this.pmMessages.get(conversationKey).push(failedMsg);
+            const failList = this.pmMessages.get(conversationKey);
+            failList.push(failedMsg);
+            failList.sort((a, b) => {
+                const dt = (a.created_at || 0) - (b.created_at || 0);
+                if (dt !== 0) return dt;
+                return (a._seq || 0) - (b._seq || 0);
+            });
             // Invalidate cached DOM for this conversation
             this.channelDOMCache.delete(conversationKey);
             // Display the failed message if currently viewing this PM
@@ -14302,12 +14305,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const messageContent = rumor.content;
         const nowSec = Math.floor(Date.now() / 1000);
-        let tsSec = Math.floor(rumor.created_at) || nowSec;
+        const originalGroupTsSec = Math.floor(rumor.created_at) || nowSec;
+        let tsSec = originalGroupTsSec;
 
         // Guard against clock skew: cap at current time (no future messages)
-        // and ensure new messages sort after existing ones in this group.
         tsSec = Math.min(tsSec, nowSec);
-        if (list.length > 0) {
+        const isLiveGroup = (nowSec - tsSec) <= 3;
+        if (isLiveGroup && list.length > 0) {
             const latestTs = list[list.length - 1].created_at || 0;
             if (tsSec < latestTs) {
                 tsSec = latestTs + 1;
@@ -14339,7 +14343,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             pubkey: senderPubkey,
             content: messageContent,
             created_at: tsSec,
-            _originalCreatedAt: tsSec,
+            _originalCreatedAt: originalGroupTsSec,
             _seq: ++this._msgSeq,
             timestamp: new Date(tsSec * 1000),
             isOwn,
@@ -26401,7 +26405,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.55.239 ═══<br/>
+═══ Nymchat v3.55.240 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
