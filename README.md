@@ -123,9 +123,7 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 
 ## Nymbot
 
-Nymbot is a built-in AI-powered chat bot available exclusively through the site ([nymchat.app](https://nymchat.app)) and the official iOS/Android apps. It is not available when running the PWA locally, as it relies on Cloudflare Workers AI infrastructure.
-
-Nymbot responds to `?` commands in any channel. You can also mention **@Nymbot** in a message or quote-reply to a Nymbot response to continue a conversation.
+Nymbot is a built-in AI-powered chat bot that responds to `?` commands in any channel. You can also mention **@Nymbot** in a message or quote-reply to a Nymbot response to continue a conversation.
 
 ### Bot Commands
 
