@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.238";
+var NYMCHAT_VERSION = "3.55.238";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2903,6 +2903,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Blur Images from Others: blur until clicked",
   "- Blocked Keywords/Phrases, Hide Non-Pinned Channels, Hidden/Blocked Channels, Blocked Users",
   "- Low Data Mode: reduces relay connections",
+  "- Performance Mode: auto/enabled/disabled — reduces visual effects (disables blur, simplifies animations, lowers 3D globe quality) for better performance on older or low-end devices. Auto mode detects device capabilities and activates automatically on weaker hardware",
   "- Transfer Settings to Another User, Pending Transfers",
   "- Clear Local Storage Cache: resets settings to defaults",
   "",
@@ -2976,7 +2977,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "=== MESSAGING FEATURES ===",
   "Markdown: **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, > quotes.",
   "Emoji: shortcodes like :smile: auto-convert. Emoji picker via the smiley button. Type ?: to search emoji.",
-  "Images/videos: paste, drag, or attach directly in chat.",
+  "Images/videos: paste, drag, or attach directly in chat. Uploaded images have their EXIF metadata automatically removed for privacy.",
   "Reactions: click or long-press a message > React (10 default emoji).",
   "Mentions: type @ to open the mentions modal with user suggestions.",
   "Translations: click a message's nickname or long-press message > Translate. Set your target language in Settings > Translation.",

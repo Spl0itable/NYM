@@ -576,6 +576,9 @@ class NYM {
         if (this.settings.textSize && this.settings.textSize !== 15) {
             document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
         }
+        this.performanceMode = false;
+        this._deviceCapabilities = this._detectDeviceCapabilities();
+        this._applyPerformanceMode();
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
         if (this.settings.groupChatPMOnlyMode) {
             // In PM-only mode, don't default to a geohash channel
@@ -3368,13 +3371,16 @@ ${code}
         const initialDistance = isMobile ? 400 : 300;
 
         // Create globe with dynamic sizing
+        const isPerf = this.performanceMode;
         const Globe = new ThreeGlobe()
-            .globeImageUrl('https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg')
-            .bumpImageUrl('https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png');
+            .globeImageUrl('https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg');
+        if (!isPerf) {
+            Globe.bumpImageUrl('https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png');
+        }
 
-        // Setup renderer first
-        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        renderer.setPixelRatio(window.devicePixelRatio);
+        // Setup renderer - disable antialias and limit pixel ratio in performance mode
+        const renderer = new THREE.WebGLRenderer({ antialias: !isPerf, alpha: true });
+        renderer.setPixelRatio(isPerf ? 1 : window.devicePixelRatio);
         globeViz.appendChild(renderer.domElement);
 
         // Setup camera
@@ -3392,19 +3398,21 @@ ${code}
 
         updateSize();
 
-        // Setup scene with brighter lighting
+        // Setup scene with brighter lighting (fewer lights in performance mode)
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x000011);
         scene.add(Globe);
-        scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+        scene.add(new THREE.AmbientLight(0xffffff, isPerf ? 2.0 : 1.5));
 
-        const directionalLight1 = new THREE.DirectionalLight(0xffffff, 1.2);
-        directionalLight1.position.set(5, 3, 5);
-        scene.add(directionalLight1);
+        if (!isPerf) {
+            const directionalLight1 = new THREE.DirectionalLight(0xffffff, 1.2);
+            directionalLight1.position.set(5, 3, 5);
+            scene.add(directionalLight1);
 
-        const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight2.position.set(-5, -3, -5);
-        scene.add(directionalLight2);
+            const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight2.position.set(-5, -3, -5);
+            scene.add(directionalLight2);
+        }
 
         // Create a container group for points that will rotate with the globe
         const pointsGroup = new THREE.Group();
@@ -3429,8 +3437,9 @@ ${code}
         const POINT_ALTITUDE = 0.01; // Just above surface
 
         // Create individual sphere meshes for each geohash channel
+        const sphereDetail = isPerf ? 6 : 16;
         this.geohashChannels.forEach((channel, index) => {
-            const geometry = new THREE.SphereGeometry(2.5, 16, 16);
+            const geometry = new THREE.SphereGeometry(2.5, sphereDetail, sphereDetail);
             const material = new THREE.MeshBasicMaterial({
                 color: channel.isJoined ? 0x00ff00 : 0x00ffff,
                 transparent: true,
@@ -3461,7 +3470,7 @@ ${code}
         const hasLocation = this.userLocation || (this.settings.sortByProximity && navigator.geolocation);
 
         if (this.userLocation) {
-            const geometry = new THREE.SphereGeometry(3, 16, 16);
+            const geometry = new THREE.SphereGeometry(3, sphereDetail, sphereDetail);
             const material = new THREE.MeshBasicMaterial({
                 color: 0xffff00,
                 transparent: true,
@@ -3696,9 +3705,17 @@ ${code}
             }
         });
 
-        // Animation loop
-        const animate = () => {
+        // Animation loop (throttled to ~20fps in performance mode)
+        let lastFrame = 0;
+        const frameInterval = isPerf ? 50 : 0; // 50ms = ~20fps
+        const animate = (now) => {
             if (!this.globeAnimationActive) return;
+
+            if (isPerf && now - lastFrame < frameInterval) {
+                requestAnimationFrame(animate);
+                return;
+            }
+            lastFrame = now;
 
             if (autoRotate) {
                 Globe.rotation.y += 0.002;
@@ -3715,6 +3732,7 @@ ${code}
             scene: Globe,
             camera: camera,
             renderer: renderer,
+            animate: animate,
             pointMeshes: pointMeshes,
             pointsGroup: pointsGroup,
             autoRotate: autoRotate,
@@ -3730,8 +3748,9 @@ ${code}
                 pointMeshes.length = 0;
 
                 // Recreate point meshes
+                const sd = this.performanceMode ? 6 : 16;
                 this.geohashChannels.forEach((channel, index) => {
-                    const geometry = new THREE.SphereGeometry(2.5, 16, 16);
+                    const geometry = new THREE.SphereGeometry(2.5, sd, sd);
                     const material = new THREE.MeshBasicMaterial({
                         color: channel.isJoined ? 0x00ff00 : 0x00ffff,
                         transparent: true,
@@ -3756,7 +3775,7 @@ ${code}
 
                 // Re-add user location if available
                 if (this.userLocation) {
-                    const geometry = new THREE.SphereGeometry(3, 16, 16);
+                    const geometry = new THREE.SphereGeometry(3, sd, sd);
                     const material = new THREE.MeshBasicMaterial({
                         color: 0xffff00,
                         transparent: true,
@@ -4749,6 +4768,58 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.saveRecentEmojis();
     }
 
+    _detectDeviceCapabilities() {
+        const caps = { tier: 'high', cores: 4, memory: 8, mobile: false, weakGPU: false };
+        try {
+            caps.cores = navigator.hardwareConcurrency || 2;
+            caps.memory = navigator.deviceMemory || 4;
+            caps.mobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+                || (navigator.maxTouchPoints > 1 && window.innerWidth <= 1024);
+
+            // Check for weak GPU via canvas test
+            try {
+                const canvas = document.createElement('canvas');
+                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                if (gl) {
+                    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                    if (debugInfo) {
+                        const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL).toLowerCase();
+                        caps.weakGPU = /swiftshader|llvmpipe|softpipe|mesa|intel.*hd(?!.*[6-9]\d{2,})/.test(renderer);
+                    }
+                    const ext = gl.getExtension('WEBGL_lose_context');
+                    if (ext) ext.loseContext();
+                }
+                canvas.remove();
+            } catch (e) {
+                caps.weakGPU = true;
+            }
+
+            // Determine tier
+            if (caps.cores <= 2 || caps.memory <= 2 || (caps.mobile && caps.cores <= 4 && caps.memory <= 4)) {
+                caps.tier = 'low';
+            } else if (caps.cores <= 4 || caps.memory <= 4 || caps.weakGPU) {
+                caps.tier = 'mid';
+            }
+        } catch (e) { /* fallback to defaults */ }
+        return caps;
+    }
+
+    _applyPerformanceMode() {
+        const setting = this.settings.performanceMode || 'auto';
+        if (setting === 'auto') {
+            const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            this.performanceMode = this._deviceCapabilities.tier === 'low' || prefersReduced;
+        } else {
+            this.performanceMode = setting === 'enabled';
+        }
+
+        if (this.performanceMode) {
+            document.body.classList.add('performance-mode');
+        } else {
+            document.body.classList.remove('performance-mode');
+        }
+    }
+
     async initialize() {
         try {
             // Check if nostr-tools is loaded
@@ -4796,6 +4867,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Track when app becomes visible/hidden
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
+                // Resume globe animation if it was paused by backgrounding
+                if (this._globeWasActive && this.globe && this.globe.animate) {
+                    this._globeWasActive = false;
+                    this.globeAnimationActive = true;
+                    requestAnimationFrame(this.globe.animate);
+                }
+
                 const delay = this.isFlutterWebView ? 200 : 500;
                 setTimeout(() => {
                     // Clear failed relays and blacklist to allow immediate reconnection
@@ -4826,6 +4904,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } else {
                 // Record when app went to background so we can measure staleness
                 this._backgroundedAt = Date.now();
+
+                // Pause globe animation when backgrounded to save GPU/CPU
+                if (this.globeAnimationActive) {
+                    this._globeWasActive = true;
+                    this.globeAnimationActive = false;
+                }
 
                 // Stop monitoring when app goes to background
                 if (this.reconnectionInterval) {
@@ -22747,8 +22831,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Use requestAnimationFrame to prevent blocking
+        // Smaller batches in performance mode to avoid long frames
         let index = 0;
-        const batchSize = 50;
+        const batchSize = this.performanceMode ? 20 : 50;
 
         const renderBatch = () => {
             const batch = filteredMessages.slice(index, index + batchSize);
@@ -24484,7 +24569,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             lowDataMode: localStorage.getItem('nym_low_data_mode') === 'true',
             textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10),
             groupChatPMOnlyMode: localStorage.getItem('nym_groupchat_pm_only_mode') === 'true',
-            translateLanguage: localStorage.getItem('nym_translate_language') || ''
+            translateLanguage: localStorage.getItem('nym_translate_language') || '',
+            performanceMode: localStorage.getItem('nym_performance_mode') || 'auto'
         };
     }
 
@@ -25924,6 +26010,12 @@ async function showSettings() {
         lowDataSelect.value = nym.settings.lowDataMode ? 'true' : 'false';
     }
 
+    // Initialize performance mode select
+    const perfSelect = document.getElementById('performanceModeSelect');
+    if (perfSelect) {
+        perfSelect.value = nym.settings.performanceMode || 'auto';
+    }
+
     // Render pending settings transfers
     nym.renderPendingSettingsTransfers();
 
@@ -26121,6 +26213,18 @@ async function saveSettings() {
         nym.applyLowDataMode(lowDataMode);
     }
 
+    // Save performance mode
+    const perfModeSelect = document.getElementById('performanceModeSelect');
+    if (perfModeSelect) {
+        const perfMode = perfModeSelect.value;
+        const wasPerfMode = nym.settings.performanceMode;
+        nym.settings.performanceMode = perfMode;
+        localStorage.setItem('nym_performance_mode', perfMode);
+        if (perfMode !== wasPerfMode) {
+            nym._applyPerformanceMode();
+        }
+    }
+
     nym.displaySystemMessage('Settings saved');
 
     // Sync settings to Nostr relays if logged in
@@ -26291,7 +26395,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.238 ═══<br/>
+═══ Nymchat v3.55.238 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -28120,9 +28224,9 @@ function drawThroughputGraph(history) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
 
-    // High-DPI
+    // High-DPI (cap at 1x in performance mode to reduce fill rate)
     const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = (typeof nym !== 'undefined' && nym.performanceMode) ? 1 : (window.devicePixelRatio || 1);
     const w = rect.width;
     const h = rect.height;
     if (canvas.width !== w * dpr || canvas.height !== h * dpr) {

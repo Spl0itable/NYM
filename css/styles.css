@@ -1983,8 +1983,15 @@ body.light-mode.chat-bubbles .read-more-btn {
 }
 
 @keyframes quoteSlideIn {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .quote-preview-bar {
@@ -2227,8 +2234,15 @@ body.chat-bubbles .edited-indicator-irc {
 }
 
 @keyframes translatePulse {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 0.8; }
+
+    0%,
+    100% {
+        opacity: 0.4;
+    }
+
+    50% {
+        opacity: 0.8;
+    }
 }
 
 .translate-input-dropdown {
@@ -6569,9 +6583,17 @@ body.light-mode .color-mode-btn.active {
     top: 0;
 }
 
-.group-avatar-stack-img:nth-child(1) { left: 0px; }
-.group-avatar-stack-img:nth-child(2) { left: 9px; }
-.group-avatar-stack-img:nth-child(3) { left: 18px; }
+.group-avatar-stack-img:nth-child(1) {
+    left: 0px;
+}
+
+.group-avatar-stack-img:nth-child(2) {
+    left: 9px;
+}
+
+.group-avatar-stack-img:nth-child(3) {
+    left: 18px;
+}
 
 .group-icon-badge {
     position: absolute;
@@ -7694,24 +7716,30 @@ body.chat-bubbles .message.style-fire .message-content {
     background: rgba(255, 255, 255, 0.14) !important;
     color: #ff6600 !important;
 }
+
 body.chat-bubbles .message.style-ice .message-content {
     background: rgba(255, 255, 255, 0.14) !important;
     color: #00ccff !important;
 }
+
 body.chat-bubbles .message.style-rainbow .message-content {
     background: rgba(255, 255, 255, 0.14) !important;
     animation: rainbowText 3s linear infinite;
 }
+
 body.chat-bubbles .message.style-aurora .message-content {
     background: rgba(255, 255, 255, 0.14) !important;
     animation: auroraText 6s linear infinite;
 }
+
 body.chat-bubbles .message.style-satoshi .message-content {
     background: rgba(247, 147, 26, 0.2) !important;
 }
+
 body.chat-bubbles .message.supporter-style .message-content {
     background: rgba(255, 215, 0, 0.12) !important;
 }
+
 body.chat-bubbles .message.cosmetic-aura-gold .message-content {
     background: rgba(255, 215, 0, 0.10) !important;
 }
@@ -8177,7 +8205,7 @@ body.light-mode .poll-option-selected .poll-option-bar {
     object-fit: cover;
 }
 
-.typing-indicator-avatars img + img {
+.typing-indicator-avatars img+img {
     margin-left: -6px;
 }
 
@@ -8204,10 +8232,14 @@ body.light-mode .poll-option-selected .poll-option-bar {
 }
 
 @keyframes typingBounce {
-    0%, 60%, 100% {
+
+    0%,
+    60%,
+    100% {
         opacity: 0.3;
         transform: translateY(0);
     }
+
     30% {
         opacity: 1;
         transform: translateY(-3px);
@@ -8357,3 +8389,134 @@ body.light-mode .poll-option-selected .poll-option-bar {
     }
 }
 
+body.performance-mode,
+body.performance-mode *,
+body.performance-mode *::before,
+body.performance-mode *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+body.performance-mode .sidebar {
+    background: var(--bg-secondary);
+}
+
+body.performance-mode .context-menu {
+    background: var(--bg-tertiary);
+}
+
+body.performance-mode .mobile-overlay,
+body.performance-mode .context-menu-overlay {
+    background: rgba(0, 0, 0, 0.6);
+}
+
+body.performance-mode .channel-context-menu,
+body.performance-mode .reactors-modal,
+body.performance-mode .autocomplete-dropdown,
+body.performance-mode .emoji-autocomplete {
+    background: var(--bg-tertiary);
+}
+
+body.performance-mode .modal-overlay {
+    background: rgba(0, 0, 0, 0.7);
+}
+
+body.performance-mode .modal-content,
+body.performance-mode .shop-content {
+    background: var(--bg-secondary);
+}
+
+body.performance-mode .message-header-bar {
+    background: var(--bg-secondary);
+}
+
+body.performance-mode .message-input-footer {
+    background: var(--bg-secondary);
+}
+
+body.performance-mode .geohash-explorer-content {
+    background: var(--bg-secondary);
+}
+
+body.performance-mode .geohash-info-panel,
+body.performance-mode .geohash-control-btn,
+body.performance-mode .geohash-legend {
+    background: rgba(0, 0, 0, 0.7);
+}
+
+body.performance-mode .tutorial-card {
+    background: var(--bg-tertiary);
+}
+
+body.performance-mode .image-modal-overlay {
+    background: rgba(0, 0, 0, 0.85);
+}
+
+body.performance-mode .status-dot {
+    animation: none;
+}
+
+body.performance-mode .message {
+    animation: none;
+    transition: none;
+}
+
+body.performance-mode .message:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+body.performance-mode .sidebar {
+    transition: transform 0.15s linear;
+}
+
+body.performance-mode .context-menu {
+    transition: transform 0.15s linear;
+}
+
+body.performance-mode .modal-content {
+    animation: none;
+}
+
+body.performance-mode .reactors-modal {
+    animation: none;
+}
+
+body.performance-mode .message.cosmetic-aura-gold {
+    box-shadow: none;
+    background: linear-gradient(135deg, rgba(255, 215, 0, 0.05), transparent);
+}
+
+body.performance-mode .logo-ascii {
+    text-shadow: none;
+}
+
+body.performance-mode .status-dot {
+    box-shadow: none;
+}
+
+body.performance-mode .channel-item,
+body.performance-mode .pm-item,
+body.performance-mode .user-item,
+body.performance-mode .context-menu-item {
+    transition: none;
+}
+
+body.performance-mode .message.flooded {
+    filter: none;
+    opacity: 0.2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .status-dot {
+        animation: none;
+    }
+
+    .message {
+        animation: none;
+    }
+
+    .modal-content,
+    .reactors-modal {
+        animation: none;
+    }
+}
