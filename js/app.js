@@ -6152,56 +6152,70 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.initialConnectionInProgress = true;
             this.updateConnectionStatus('Connecting...');
 
-            // Use multiplexed relay pool when running on Cloudflare
+            // Use multiplexed relay pool when running on Cloudflare (or remote proxy)
             if (this.useRelayProxy) {
-                await this._connectToRelayPool();
-                this.connected = true;
-                this._startPoolKeepalive();
-                document.getElementById('messageInput').disabled = false;
-                document.getElementById('sendBtn').disabled = false;
-                this.updateConnectionStatus();
-
-                // Subscribe to events via the pool
-                this._poolSubscribe();
-
-                // Set initial channel label
-                if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
-                    const channelLabel = `#${this.currentChannel}`;
-                    const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
-                    document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
-                }
-
-                // Switch to pinned landing channel (or PM-only mode landing)
-                setTimeout(() => {
-                    if (window.pendingChannel || window.urlChannelRouted) return;
-                    if (this.settings.groupChatPMOnlyMode) {
-                        this.navigateToLatestPMOrGroup();
+                try {
+                    await this._connectToRelayPool();
+                } catch (poolErr) {
+                    // Remote relay pool unreachable — fall back to direct relay connections
+                    if (!this._isCloudflareHost) {
+                        console.warn('[NYM] Relay pool failed, falling back to direct connections:', poolErr.message);
+                        this._fallbackToLocal();
+                        // Fall through to direct relay connection code below
                     } else {
-                        const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
-                        this.currentChannel = '';
-                        this.currentGeohash = '';
-                        if (pinned.type === 'geohash' && pinned.geohash) {
-                            this.switchChannel(pinned.geohash, pinned.geohash);
-                        } else {
-                            this.switchChannel('nym', 'nym');
-                        }
+                        throw poolErr;
                     }
-                }, 100);
-
-                // Process any queued messages
-                if (this.messageQueue.length > 0) {
-                    const queuedMessages = [...this.messageQueue];
-                    this.messageQueue = [];
-                    queuedMessages.forEach(msg => {
-                        try {
-                            const parsed = JSON.parse(msg);
-                            this.sendToRelay(parsed);
-                        } catch (e) {}
-                    });
                 }
 
-                this.initialConnectionInProgress = false;
-                return;
+                if (this.useRelayProxy) {
+                    this.connected = true;
+                    this._startPoolKeepalive();
+                    document.getElementById('messageInput').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    this.updateConnectionStatus();
+
+                    // Subscribe to events via the pool
+                    this._poolSubscribe();
+
+                    // Set initial channel label
+                    if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
+                        const channelLabel = `#${this.currentChannel}`;
+                        const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
+                        document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
+                    }
+
+                    // Switch to pinned landing channel (or PM-only mode landing)
+                    setTimeout(() => {
+                        if (window.pendingChannel || window.urlChannelRouted) return;
+                        if (this.settings.groupChatPMOnlyMode) {
+                            this.navigateToLatestPMOrGroup();
+                        } else {
+                            const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+                            this.currentChannel = '';
+                            this.currentGeohash = '';
+                            if (pinned.type === 'geohash' && pinned.geohash) {
+                                this.switchChannel(pinned.geohash, pinned.geohash);
+                            } else {
+                                this.switchChannel('nym', 'nym');
+                            }
+                        }
+                    }, 100);
+
+                    // Process any queued messages
+                    if (this.messageQueue.length > 0) {
+                        const queuedMessages = [...this.messageQueue];
+                        this.messageQueue = [];
+                        queuedMessages.forEach(msg => {
+                            try {
+                                const parsed = JSON.parse(msg);
+                                this.sendToRelay(parsed);
+                            } catch (e) {}
+                        });
+                    }
+
+                    this.initialConnectionInProgress = false;
+                    return;
+                }
             }
 
             // Check if we're already connected to ANY default relay from pre-connection
@@ -6797,7 +6811,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // When running on Cloudflare, use the current host; otherwise use the production host
     // so that local/PWA instances still route through the relay proxy pool and bot.
     _getApiHost() {
-        return this._isCloudflareHost ? window.location.host : 'web.nymchat.app';
+        if (this._isCloudflareHost) return window.location.host;
+        if (this._remoteApiFailed) return null;
+        return 'web.nymchat.app';
+    }
+
+    // Mark the remote API as unavailable and fall back to local/direct connections
+    _fallbackToLocal() {
+        if (this._isCloudflareHost || this._remoteApiFailed) return;
+        this._remoteApiFailed = true;
+        this.useRelayProxy = false;
+        console.warn('[NYM] Remote API unreachable, falling back to direct connections');
     }
 
     async _handleBotCommand(content, geohash, quoteContext, publishedContent) {
@@ -8386,9 +8410,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     // Returns the base URL for the Cloudflare proxy endpoint (translation, media, unfurl).
-    // Routes through the production host when running locally.
+    // Routes through the production host when running locally. Returns null if remote is down.
     _getProxyBaseUrl() {
-        return `https://${this._getApiHost()}/api/proxy`;
+        const host = this._getApiHost();
+        if (!host) return null;
+        return `https://${host}/api/proxy`;
     }
 
     // Returns a proxied URL for media (images/videos) to hide the user's IP
@@ -8556,22 +8582,30 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             const base = this._getProxyBaseUrl();
             if (base) {
-                // Proxied path (CF-hosted): translate via our worker
-                const resp = await fetch(`${base}?action=translate`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: mentionShielded, source: 'auto', target: targetLang }),
-                });
-                const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-                if (!contentType.includes('application/json')) {
-                    throw new Error(`Proxy returned non-JSON response (${resp.status})`);
+                try {
+                    // Proxied path (CF-hosted): translate via our worker
+                    const resp = await fetch(`${base}?action=translate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: mentionShielded, source: 'auto', target: targetLang }),
+                    });
+                    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+                    if (!contentType.includes('application/json')) {
+                        throw new Error(`Proxy returned non-JSON response (${resp.status})`);
+                    }
+                    const data = await resp.json();
+                    if (data.error) throw new Error(data.error);
+                    translatedText = this._restoreMentions(this._restoreEmojis(data.translatedText, savedEmojis), mentions);
+                    detectedLang = data.detectedLanguage || 'auto';
+                } catch (proxyErr) {
+                    // Proxy failed — fall back to direct translation
+                    if (!this._isCloudflareHost) this._fallbackToLocal();
+                    const result = await this._translateDirect(mentionShielded, targetLang);
+                    translatedText = this._restoreMentions(this._restoreEmojis(result.translatedText, savedEmojis), mentions);
+                    detectedLang = result.detectedLanguage || 'auto';
                 }
-                const data = await resp.json();
-                if (data.error) throw new Error(data.error);
-                translatedText = this._restoreMentions(this._restoreEmojis(data.translatedText, savedEmojis), mentions);
-                detectedLang = data.detectedLanguage || 'auto';
             } else {
-                // Direct path: call LibreTranslate instances directly
+                // Direct path: call Google Translate directly
                 const result = await this._translateDirect(mentionShielded, targetLang);
                 translatedText = this._restoreMentions(this._restoreEmojis(result.translatedText, savedEmojis), mentions);
                 detectedLang = result.detectedLanguage || 'auto';
@@ -8692,18 +8726,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             let translatedText;
             const base = this._getProxyBaseUrl();
             if (base) {
-                const resp = await fetch(`${base}?action=translate`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: shieldedText, source: 'auto', target: targetLang }),
-                });
-                const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-                if (!contentType.includes('application/json')) {
-                    throw new Error(`Proxy returned non-JSON response (${resp.status})`);
+                try {
+                    const resp = await fetch(`${base}?action=translate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: shieldedText, source: 'auto', target: targetLang }),
+                    });
+                    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+                    if (!contentType.includes('application/json')) {
+                        throw new Error(`Proxy returned non-JSON response (${resp.status})`);
+                    }
+                    const data = await resp.json();
+                    if (data.error) throw new Error(data.error);
+                    translatedText = this._restoreEmojis(data.translatedText, savedEmojis);
+                } catch (proxyErr) {
+                    if (!this._isCloudflareHost) this._fallbackToLocal();
+                    const result = await this._translateDirect(shieldedText, targetLang);
+                    translatedText = this._restoreEmojis(result.translatedText, savedEmojis);
                 }
-                const data = await resp.json();
-                if (data.error) throw new Error(data.error);
-                translatedText = this._restoreEmojis(data.translatedText, savedEmojis);
             } else {
                 const result = await this._translateDirect(shieldedText, targetLang);
                 translatedText = this._restoreEmojis(result.translatedText, savedEmojis);
@@ -8839,9 +8879,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             let data;
             const base = this._getProxyBaseUrl();
             if (base) {
-                const resp = await fetch(`${base}?action=unfurl&url=${encodeURIComponent(url)}`);
-                if (!resp.ok) return null;
-                data = await resp.json();
+                try {
+                    const resp = await fetch(`${base}?action=unfurl&url=${encodeURIComponent(url)}`);
+                    if (!resp.ok) throw new Error(`Unfurl proxy returned ${resp.status}`);
+                    data = await resp.json();
+                } catch (proxyErr) {
+                    // Proxy failed — try direct fetch
+                    if (!this._isCloudflareHost) this._fallbackToLocal();
+                    const resp = await fetch(url, {
+                        headers: { 'Accept': 'text/html' },
+                        redirect: 'follow',
+                    });
+                    if (!resp.ok) return null;
+                    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+                    if (!contentType.includes('text/html')) return null;
+                    const html = await resp.text();
+                    data = this._extractOpenGraph(html, url);
+                }
             } else {
                 // Direct fetch fallback — works when the target sets CORS headers
                 const resp = await fetch(url, {
@@ -26405,7 +26459,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.55.240 ═══<br/>
+═══ Nymchat v3.55.241 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -27440,8 +27494,6 @@ function applyLocalPurchasesToNostr(localCache) {
     nym.savePurchaseToNostr();
     nym.publishActiveShopItems();
     nym.applyShopStylesToOwnMessages();
-
-    nym.displaySystemMessage('Local shop purchases saved to Nostr relays.');
 }
 
 function nostrSettingsLoad() {
