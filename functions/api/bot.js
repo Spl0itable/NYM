@@ -3123,8 +3123,8 @@ function buildChannelContext(channelMessages, activeUsers) {
     var msgLines = filtered.slice(-100).map(function(m) {
       var isBot = m.isBot || /^nymbot/i.test(m.nym || "");
       // Strip the nym to just alphanumeric + basic chars to avoid confusing the LLM
-      var author = isBot ? "Nymbot" : (m.nym || "anon").replace(/[^\w#\-_ ]/g, "").slice(0, 25);
-      var text = (m.content || "").replace(/[^\x20-\x7E\n]/g, " ").trim().slice(0, 1000);
+      var author = isBot ? "Nymbot" : (m.nym || "anon").replace(/[\x00-\x1F\x7F]/g, "").slice(0, 25);
+      var text = (m.content || "").replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, "").trim().slice(0, 1000);
       // Strip @Nymbot mentions and ?command prefixes from context to avoid confusing the LLM
       text = text.replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").replace(/^\?ask\s*/i, "").trim();
       if (!text) return null;
@@ -3218,9 +3218,9 @@ async function handleSummarize(context, channelMessages, geohash) {
       return "No user messages to summarize — only bot commands found.";
     }
     var msgLines = filtered.slice(-100).map(function(m) {
-      var author = (m.nym || "anon").replace(/[^\w#\-_ ]/g, "").slice(0, 25);
+      var author = (m.nym || "anon").replace(/[\x00-\x1F\x7F]/g, "").slice(0, 25);
       var isBotMsg = m.isBot || /^nymbot/i.test(m.nym || "");
-      var text = (m.content || "").replace(/[^\x20-\x7E\n]/g, " ").trim().slice(0, 1000);
+      var text = (m.content || "").replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, "").trim().slice(0, 1000);
       return (isBotMsg ? "[Nymbot]" : author) + ": " + text;
     });
     var channelName = geohash || "this channel";
