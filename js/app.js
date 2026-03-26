@@ -10701,11 +10701,29 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
+            // Reconstruct quote display from nymquote tag (NYM-specific quote reply)
+            // On the wire, quotes are sent as @mention + nymquote tag so other clients
+            // see a normal mention; NYM reconstructs the > @author: blockquote format
+            let displayContent = event.content;
+            const nymquoteTag = event.tags.find(t => t[0] === 'nymquote');
+            if (nymquoteTag && nymquoteTag[1] && nymquoteTag[2]) {
+                const qAuthor = nymquoteTag[1];
+                const qText = nymquoteTag[2];
+                // Strip the @author mention prefix from event content to get user's reply
+                const mentionPattern = new RegExp(`^@${qAuthor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`);
+                const userMessage = event.content.replace(mentionPattern, '').trim();
+                // Reconstruct > @author: blockquote format for NYM display
+                const textLines = qText.split('\n');
+                const quoteLine = `> @${qAuthor}: ${textLines[0]}` +
+                    (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
+                displayContent = userMessage ? `${quoteLine}\n\n${userMessage}` : quoteLine;
+            }
+
             const message = {
                 id: event.id,
                 author: nym,
                 pubkey: event.pubkey,
-                content: event.content,
+                content: displayContent,
                 created_at: correctedCreatedAt,
                 _originalCreatedAt: eventCreatedAt,
                 _seq: ++this._msgSeq,
@@ -15854,7 +15872,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash) {
+    async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null) {
         try {
             if (!this.connected) {
                 throw new Error('Not connected to relay');
@@ -15868,11 +15886,30 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const kind = 20000; // Geohash channels use kind 20000
             tags.push(['g', geohash || 'nym']);
 
+            // Build wire content: if quoting, use @mention format instead of > blockquote
+            // so other Nostr clients see a normal mention, while NYM reconstructs the quote
+            let wireContent = content;
+            if (quoteData) {
+                tags.push(['nymquote', quoteData.author, quoteData.text]);
+                // Extract user's reply text (everything after the > quote block)
+                const lines = content.split('\n');
+                const nonQuoteLines = [];
+                let pastQuote = false;
+                for (const line of lines) {
+                    if (!pastQuote && line.startsWith('>')) continue;
+                    if (!pastQuote && line.trim() === '') { pastQuote = true; continue; }
+                    pastQuote = true;
+                    nonQuoteLines.push(line);
+                }
+                const userMessage = nonQuoteLines.join('\n').trim();
+                wireContent = userMessage ? `@${quoteData.author} ${userMessage}` : `@${quoteData.author}`;
+            }
+
             let event = {
                 kind: kind,
                 created_at: now,
                 tags: tags,
-                content: content,
+                content: wireContent,
                 pubkey: this.pubkey
             };
 
@@ -15924,7 +15961,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
 
-    async publishMessageAnonymous(content, channel = this.currentChannel, geohash = this.currentGeohash) {
+    async publishMessageAnonymous(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null) {
         try {
             if (!this.connected) {
                 throw new Error('Not connected to relay');
@@ -15970,11 +16007,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const kind = 20000;
             tags.push(['g', geohash || 'nym']);
 
+            // Build wire content: if quoting, use @mention format instead of > blockquote
+            let wireContent = content;
+            if (quoteData) {
+                tags.push(['nymquote', quoteData.author, quoteData.text]);
+                const lines = content.split('\n');
+                const nonQuoteLines = [];
+                let pastQuote = false;
+                for (const line of lines) {
+                    if (!pastQuote && line.startsWith('>')) continue;
+                    if (!pastQuote && line.trim() === '') { pastQuote = true; continue; }
+                    pastQuote = true;
+                    nonQuoteLines.push(line);
+                }
+                const userMessage = nonQuoteLines.join('\n').trim();
+                wireContent = userMessage ? `@${quoteData.author} ${userMessage}` : `@${quoteData.author}`;
+            }
+
             let event = {
                 kind: kind,
                 created_at: now,
                 tags: tags,
-                content: content,
+                content: wireContent,
                 pubkey: ephPk
             };
 
@@ -20410,6 +20464,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Capture quote context before clearing (for bot reply support)
         const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text } : null;
+        const quoteData = savedQuote; // Pass to publishMessage for nymquote tag
         const rawInput = content; // User's typed text before quote prepend
 
         // Prepend quote if there's a pending quote reply
@@ -20436,7 +20491,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 await this.sendPM(content, this.currentPM);
             } else if (this.currentGeohash) {
                 // Send to geohash channel (kind 20000)
-                await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+                await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData);
                 // Check for bot commands (? prefix or @Nymbot mention)
                 // Use rawInput for trigger detection since quote prepend may hide the prefix
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
@@ -20476,6 +20531,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Capture quote context before clearing (for bot reply support)
         const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text } : null;
+        const quoteData = savedQuote; // Pass to publishMessageAnonymous for nymquote tag
         const rawInput = content;
 
         // Prepend quote if there's a pending quote reply
@@ -20501,7 +20557,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 await this.sendPM(content, this.currentPM);
             } else if (this.currentGeohash) {
                 // Send via ephemeral keypair (anonymous)
-                await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash);
+                await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash, quoteData);
                 // Check for bot commands (? prefix or @Nymbot mention)
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
                 const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
@@ -26235,7 +26291,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.237 ═══<br/>
+═══ Nymchat v3.54.238 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
