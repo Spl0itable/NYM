@@ -5872,8 +5872,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock User' : 'Block User');
         }
 
-        // Hide PM option if it's yourself
-        document.getElementById('ctxPM').style.display = pubkey === this.pubkey ? 'none' : 'block';
+        // Hide PM option if it's yourself or the bot (bot only lives in channels)
+        document.getElementById('ctxPM').style.display = (pubkey === this.pubkey || this.isVerifiedBot(pubkey)) ? 'none' : 'block';
 
         // Show "Edit Profile" only for own messages
         const editProfileOption = document.getElementById('ctxEditProfile');
@@ -15633,6 +15633,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
+        // Don't open PM with the bot — it only lives in channels
+        if (this.isVerifiedBot(pubkey)) {
+            this.displaySystemMessage("Nymbot doesn't accept private messages. Use ?ask or @Nymbot in a channel instead.");
+            return;
+        }
+
         // Extract base nym if it has a suffix
         const baseNym = this.stripPubkeySuffix(nym);
 
@@ -18606,7 +18612,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                 if (!uniqueUsers.has(pubkey)) {
                     let effectiveStatus = user.status;
-                    if (now - user.lastSeen >= activeThreshold && effectiveStatus !== 'away') {
+                    if (this.isVerifiedBot(pubkey)) {
+                        effectiveStatus = 'online';
+                    } else if (now - user.lastSeen >= activeThreshold && effectiveStatus !== 'away') {
                         effectiveStatus = 'offline';
                     }
                     uniqueUsers.set(pubkey, { ...user, effectiveStatus });
@@ -19740,7 +19748,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                 // Compute effective status matching sidebar logic
                 let effectiveStatus = user.status;
-                if (now - user.lastSeen >= activeThreshold && effectiveStatus !== 'away') {
+                if (this.isVerifiedBot(pubkey)) {
+                    effectiveStatus = 'online';
+                } else if (now - user.lastSeen >= activeThreshold && effectiveStatus !== 'away') {
                     effectiveStatus = 'offline';
                 }
 
@@ -20973,6 +20983,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.displaySystemMessage("You're already in this group");
                 return;
             }
+            if (this.isVerifiedBot(targetPubkey)) {
+                this.displaySystemMessage("Nymbot can't be added to group chats. Use ?ask or @Nymbot in a channel instead.");
+                return;
+            }
             await this.addMemberToGroup(this.currentGroup, targetPubkey);
             return;
         }
@@ -21113,6 +21127,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 return;
             }
             if (pubkey === this.pubkey) continue; // self is always included
+            if (this.isVerifiedBot(pubkey)) {
+                this.displaySystemMessage("Nymbot can't be added to group chats. Use ?ask or @Nymbot in a channel instead.");
+                return;
+            }
             if (!resolvedMembers.includes(pubkey)) resolvedMembers.push(pubkey);
         }
 
@@ -21149,6 +21167,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
         if (targetPubkey === this.pubkey) {
             this.displaySystemMessage("You're already in this group");
+            return;
+        }
+        if (this.isVerifiedBot(targetPubkey)) {
+            this.displaySystemMessage("Nymbot can't be added to group chats. Use ?ask or @Nymbot in a channel instead.");
             return;
         }
         await this.addMemberToGroup(this.currentGroup, targetPubkey);
@@ -21267,6 +21289,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const matchedPubkeys = new Set();
         this.users.forEach((user, pubkey) => {
             if (pubkey === this.pubkey) return;
+            if (this.isVerifiedBot(pubkey)) return;
             if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
             const baseNym = this.stripPubkeySuffix(user.nym).toLowerCase();
             if (baseNym.includes(query)) {
@@ -21319,6 +21342,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     addNewPMRecipient(pubkey, nym) {
         if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
+        if (this.isVerifiedBot(pubkey)) {
+            this.displaySystemMessage("Nymbot doesn't accept private messages or group chats. Use ?ask or @Nymbot in a channel instead.");
+            return;
+        }
         this._newPMRecipients.push({ pubkey, nym });
         this._renderNewPMRecipientChips();
         document.getElementById('pmRecipientInput').value = '';
@@ -26459,7 +26486,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.55.241 ═══<br/>
+═══ Nymchat v3.55.242 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
