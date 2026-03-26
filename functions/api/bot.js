@@ -3549,9 +3549,8 @@ function handleWordplay(args) {
     return "\u{1F524} WORD SCRAMBLE: Fill in the blanks!\n" + hint + " (" + word.length + " letters)\n\nReply with your answer!\n[gc:" + token + "]";
   }
 
-  // Default: random mode
-  var modes = ["anagram", "scramble", "wordle"];
-  return handleWordplay(modes[Math.floor(Math.random() * modes.length)]);
+  // Default: wordle mode
+  return handleWordplay("wordle");
 }
 
 function handleWordle(guess, answer) {
@@ -3595,10 +3594,12 @@ function handleGuess(guess, conversation) {
   // Extract game token from the quoted bot message in the conversation
   var gameType = null;
   var answer = null;
+  var tokenTag = null;
   for (var i = 0; i < (conversation || []).length; i++) {
     var text = conversation[i].text || "";
     var match = text.match(/\[gc:([A-Za-z0-9+/=]+)\]/);
     if (match) {
+      tokenTag = match[0];
       try {
         var decoded = atob(match[1]);
         var sep = decoded.indexOf(":");
@@ -3614,13 +3615,19 @@ function handleGuess(guess, conversation) {
     return "Reply to a game challenge message to make a guess.";
   }
   if (gameType === "wordle") {
-    return handleWordle(guess, answer);
+    var result = handleWordle(guess, answer);
+    // If not solved, include the game token so subsequent replies continue the game
+    var solved = (guess.length === answer.length && guess === answer);
+    if (!solved && tokenTag) {
+      result += "\n" + tokenTag;
+    }
+    return result;
   }
   // anagram / scramble: exact match
   if (guess === answer) {
     return "\u{1F389} Correct! The answer was \"" + answer.toUpperCase() + "\"!";
   }
-  return "\u274C Not quite! Try again.";
+  return "\u274C Not quite! Try again." + (tokenTag ? "\n" + tokenTag : "");
 }
 
 // Miscellaneous Commands (AI-powered)
