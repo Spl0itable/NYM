@@ -19295,7 +19295,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '?about': { desc: 'About Nymbot' },
             '?nostr': { desc: 'What is Nostr?' },
             '?wordplay': { desc: 'Word games (anagram, scramble, wordle)' },
-            '?guess': { desc: 'Submit a guess for a wordplay challenge' },
             '?top': { desc: 'Show top chatters' },
             '?last': { desc: 'Show last message from a user' },
             '?seen': { desc: 'When was a user last seen' },
@@ -26236,7 +26235,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.54.236 ═══<br/>
+═══ Nymchat v3.54.237 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

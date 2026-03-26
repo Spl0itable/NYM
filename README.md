@@ -140,7 +140,6 @@ Nymbot responds to `?` commands in any channel. You can also mention **@Nymbot**
 - `?joke` - Random tech/Bitcoin-themed joke
 - `?riddle` - Random riddle — reply to answer
 - `?wordplay [mode]` - Word games (modes: wordle, anagram, scramble) — reply to guess
-- `?guess <word>` - Submit a guess for an active wordplay challenge (or just reply to the challenge)
 - `?roll [NdN]` - Roll dice (e.g., `?roll 2d6`; default 1d6)
 - `?flip` - Flip a coin
 - `?8ball <question>` - Magic 8-ball

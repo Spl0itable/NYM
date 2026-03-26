@@ -2492,7 +2492,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.54.236";
+var NYMCHAT_VERSION = "3.54.237";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2720,7 +2720,6 @@ function handleHelp() {
     "?joke \u2014 Random tech/Bitcoin-themed joke",
     "?riddle \u2014 Random riddle — reply to answer",
     "?wordplay [mode] \u2014 Word games (modes: wordle, anagram, scramble) — reply to guess",
-    "?guess <word> \u2014 Submit a guess for an active wordplay challenge",
     "?roll [NdN] \u2014 Roll dice (e.g. ?roll 2d6; default 1d6)",
     "?flip \u2014 Flip a coin",
     "?8ball <question> \u2014 Magic 8-ball",
