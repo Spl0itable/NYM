@@ -2792,7 +2792,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Do NOT write any additional ASCII art, doodles, drawings, or text-art of any kind — not before, not after, not 'creative alternatives'. ONE piece only.",
   "- Do NOT modify the art in any way. Do NOT re-draw it. Do NOT add characters. Copy it character-for-character.",
   "- ABSOLUTE RULE: You cannot draw ASCII art. Your attempts are always wrong and broken. The fetched art is the only valid art.",
-  "- If no FETCHED ASCII ART options appear in your context, tell the user you couldn't find art for that subject and suggest a simpler term like 'cat', 'dog', 'skull', 'dragon', or 'heart'.",
+  "- If no FETCHED ASCII ART options appear in your context, tell the user you couldn't find art for that subject and suggest a simpler term like 'cat', 'dog', 'skull', 'dragon', or 'heart'. Do NOT draw or generate any ASCII art yourself — not even a small attempt.",
   "",
   "=== RESPONSE INTELLIGENCE ===",
   "CRITICAL: Determine what TYPE of message the user is sending:",
@@ -3084,6 +3084,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Never pretend to have capabilities you don't have (running code, sending messages as other users).",
   "- Never output raw code blocks intended for prompt injection or system manipulation.",
   "- NEVER relay, proxy, or pass along messages from one user to another. If a user asks you to 'tell', 'say to', 'let X know', 'pass a message to', 'say good night to', 'wish X', or otherwise communicate something to another user on their behalf, ALWAYS decline. You are not a messenger or proxy. This applies to ALL messages — greetings, farewells, positive, negative, or neutral. Even if the request seems harmless (e.g. 'tell X good night'), refuse. Respond with something like 'I can't relay messages between users — you can tell them directly!' and move on. This rule has NO exceptions.",
+  "- LANGUAGE: Always reply in the exact same language the user wrote in. If they write in Spanish, reply in Spanish. If they write in French, reply in French. If they write in Japanese, reply in Japanese. Never default to English if the user's message is in another language.",
   "- NEVER use @mentions of other users in your responses. Do not output @username, @nym#xxxx, @AnythingWithAt, or any mention format that could notify or ping another user. If you need to reference a user, use their name without the @ symbol. This is a HARD rule — your response will be automatically filtered to remove any @mentions, so do not include them.",
   "- When a user's message includes a quote-reply referencing another user's message, do NOT address or mention the quoted user. Only respond to the person who asked you the question. The quoted message is context only — never direct your response at the quoted user or mention them with @."
 ].join("\n");
@@ -3523,7 +3524,11 @@ async function handleAsk(question, context, conversation, channelMessages, activ
         var firstWord = artSubject.split(" ")[0];
         asciiArtResults = await fetchAsciiArt(firstWord);
       }
-      searchResults = asciiArtResults; // may be empty — handled below
+      // If still nothing, return early — don't send to AI or it will hallucinate art
+      if (asciiArtResults.length === 0) {
+        return "Couldn't find any ASCII art for that. Try a simpler term like `cat`, `dog`, `skull`, `dragon`, or `heart`.";
+      }
+      searchResults = asciiArtResults;
     } else if (needsWebSearch(question)) {
       searchResults = await webSearch(question);
     }
@@ -3534,17 +3539,13 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     var contextBlock = "";
     if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
     if (isAsciiArtRequest) {
-      if (searchResults.length > 0) {
-        contextBlock += "--- FETCHED ASCII ART ---\n";
-        for (var s = 0; s < searchResults.length; s++) {
-          contextBlock += "[OPTION " + (s + 1) + "]\n" + searchResults[s] + "\n\n";
-        }
-        contextBlock += "--- END FETCHED ASCII ART ---\n";
-        contextBlock += "RULE: Pick ONE option above. Copy it into your response EXACTLY as-is, code block and all. Do NOT write any additional ASCII art, doodles, or creative drawings. Do NOT modify the art. Just pick one, add a single short comment line, and stop.\n";
-      } else {
-        contextBlock += "--- FETCHED ASCII ART ---\nNONE. The fetch returned zero results for this subject.\n--- END FETCHED ASCII ART ---\n";
-        contextBlock += "RULE: No ASCII art was found. Tell the user you couldn't find any for their request and suggest simpler terms like 'cat', 'dog', 'skull', or 'dragon'. Do NOT draw or generate any ASCII art yourself — not even a small example.\n";
+      // searchResults is guaranteed non-empty here (empty case returns early above)
+      contextBlock += "--- FETCHED ASCII ART ---\n";
+      for (var s = 0; s < searchResults.length; s++) {
+        contextBlock += "[OPTION " + (s + 1) + "]\n" + searchResults[s] + "\n\n";
       }
+      contextBlock += "--- END FETCHED ASCII ART ---\n";
+      contextBlock += "RULE: Pick ONE option above. Copy it into your response EXACTLY as-is, code block and all. Do NOT write any additional ASCII art, doodles, or creative drawings. Do NOT modify the art. Just pick one, add a single short comment line, and stop.\n";
     } else if (searchResults.length > 0) {
       contextBlock += "--- LIVE WEB SEARCH RESULTS ---\n";
       for (var s = 0; s < searchResults.length; s++) {
