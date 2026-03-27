@@ -3177,14 +3177,14 @@ function buildChannelContext(channelMessages, activeUsers) {
   return parts.length > 0 ? parts.join("\n\n") : "";
 }
 
-// Web search
+// Web search — multiple sources for reliability
 var SEARCH_TIMEOUT = 6000;
 
 function stripHtmlEntities(str) {
   return str.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&#x2F;/g, "/").trim();
 }
 
-// SearXNG public instances
+// SearXNG public instances — returns JSON, designed for programmatic use
 var SEARXNG_INSTANCES = [
   "https://search.sapti.me",
   "https://searx.be",
@@ -3192,44 +3192,42 @@ var SEARXNG_INSTANCES = [
   "https://searx.tiekoetter.com"
 ];
 
-async function searchSearXNG(query) {
-  // Try multiple SearXNG instances
+async function searchSearXNG(query, log) {
   for (var idx = 0; idx < SEARXNG_INSTANCES.length; idx++) {
+    var instance = SEARXNG_INSTANCES[idx];
     try {
       var controller = new AbortController();
       var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
-      var url = SEARXNG_INSTANCES[idx] + "/search?q=" + encodeURIComponent(query) + "&format=json&categories=general&language=en";
+      var url = instance + "/search?q=" + encodeURIComponent(query) + "&format=json&categories=general&language=en";
       var resp = await fetch(url, {
-        headers: {
-          "User-Agent": "NymchatBot/1.0",
-          "Accept": "application/json"
-        },
+        headers: { "User-Agent": "NymchatBot/1.0", "Accept": "application/json" },
         signal: controller.signal
       });
       clearTimeout(timer);
-      if (!resp.ok) continue;
+      if (!resp.ok) { log.push("searx:" + instance + ":http" + resp.status); continue; }
       var data = await resp.json();
-      if (data.results && data.results.length > 0) {
+      var count = (data.results && data.results.length) || 0;
+      log.push("searx:" + instance + ":ok:" + count + "results");
+      if (count > 0) {
         var results = [];
-        for (var i = 0; i < Math.min(data.results.length, 5); i++) {
+        for (var i = 0; i < Math.min(count, 5); i++) {
           var r = data.results[i];
           var title = (r.title || "").trim();
           var snippet = (r.content || "").trim();
-          if (title || snippet) {
-            results.push((title ? title + ": " : "") + snippet);
-          }
+          if (title || snippet) results.push((title ? title + ": " : "") + snippet);
         }
         if (results.length > 0) return results;
       }
     } catch (e) {
+      log.push("searx:" + instance + ":" + (e.name === "AbortError" ? "timeout" : e.message));
       continue;
     }
   }
   return [];
 }
 
-// DuckDuckGo Instant Answer API
-async function searchDDGInstant(query) {
+// DuckDuckGo Instant Answer API — JSON, no key needed, reliable from servers
+async function searchDDGInstant(query, log) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://api.duckduckgo.com/?q=" + encodeURIComponent(query) + "&format=json&no_html=1&skip_disambig=1", {
@@ -3237,7 +3235,7 @@ async function searchDDGInstant(query) {
     signal: controller.signal
   });
   clearTimeout(timer);
-  if (!resp.ok) return [];
+  if (!resp.ok) { log.push("ddg-instant:http" + resp.status); return []; }
   var data = await resp.json();
   var results = [];
   // Abstract (Wikipedia/knowledge summary)
@@ -3257,11 +3255,12 @@ async function searchDDGInstant(query) {
       }
     }
   }
+  log.push("ddg-instant:ok:" + results.length + "results");
   return results;
 }
 
-// DuckDuckGo HTML lite
-async function searchDDGLite(query) {
+// DuckDuckGo HTML lite — fallback scraper
+async function searchDDGLite(query, log) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query), {
@@ -3272,8 +3271,9 @@ async function searchDDGLite(query) {
     signal: controller.signal
   });
   clearTimeout(timer);
-  if (!resp.ok) return [];
+  if (!resp.ok) { log.push("ddg-lite:http" + resp.status); return []; }
   var html = await resp.text();
+  log.push("ddg-lite:html:" + html.length + "bytes");
   var snippetRegex = /<td[^>]+class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
   var titleRegex = /<a[^>]+class="result-link"[^>]*>([\s\S]*?)<\/a>/gi;
   var titles = [];
@@ -3285,6 +3285,7 @@ async function searchDDGLite(query) {
   while ((m = snippetRegex.exec(html)) !== null && snippets.length < 5) {
     snippets.push(stripHtmlEntities(m[1]));
   }
+  log.push("ddg-lite:parsed:" + titles.length + "titles," + snippets.length + "snippets");
   var results = [];
   for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
     var title = titles[i] || "";
@@ -3294,8 +3295,8 @@ async function searchDDGLite(query) {
   return results;
 }
 
-// Google HTML
-async function searchGoogle(query) {
+// Google HTML — last resort fallback
+async function searchGoogle(query, log) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://www.google.com/search?q=" + encodeURIComponent(query), {
@@ -3307,8 +3308,9 @@ async function searchGoogle(query) {
     signal: controller.signal
   });
   clearTimeout(timer);
-  if (!resp.ok) return [];
+  if (!resp.ok) { log.push("google:http" + resp.status); return []; }
   var html = await resp.text();
+  log.push("google:html:" + html.length + "bytes");
   var h3Regex = /<h3[^>]*>([\s\S]*?)<\/h3>/gi;
   var snippetRegex = /<div[^>]+class="[^"]*(?:VwiC3b|IsZvec|s3v9rd)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
   var titles = [];
@@ -3328,32 +3330,33 @@ async function searchGoogle(query) {
     var snippet = snippets[i] || "";
     if (title || snippet) results.push((title ? title + ": " : "") + snippet);
   }
+  log.push("google:parsed:" + results.length + " results from " + titles.length + " titles," + snippets.length + " snippets");
   return results;
 }
 
 async function webSearch(query) {
-  // Fire SearXNG (JSON API) and DDG Instant Answer (JSON API) in parallel
-  // Fall back to HTML scrapers (DDG Lite, Google) if JSON APIs fail
-  var searxPromise = searchSearXNG(query).catch(function() { return []; });
-  var ddgInstantPromise = searchDDGInstant(query).catch(function() { return []; });
-  var ddgLitePromise = searchDDGLite(query).catch(function() { return []; });
-  var googlePromise = searchGoogle(query).catch(function() { return []; });
+  // Fire all search sources in parallel
+  var log = [];
 
-  // Prefer SearXNG (full web results as JSON)
+  var searxPromise = searchSearXNG(query, log).catch(function(e) { log.push("searx:catch:" + e.message); return []; });
+  var ddgInstantPromise = searchDDGInstant(query, log).catch(function(e) { log.push("ddg-instant:catch:" + e.message); return []; });
+  var ddgLitePromise = searchDDGLite(query, log).catch(function(e) { log.push("ddg-lite:catch:" + e.message); return []; });
+  var googlePromise = searchGoogle(query, log).catch(function(e) { log.push("google:catch:" + e.message); return []; });
+
   var searxResults = await searxPromise;
-  if (searxResults.length > 0) return searxResults;
+  if (searxResults.length > 0) { log.push("USED:searx:" + searxResults.length); return { results: searxResults, log: log }; }
 
-  // Then DDG Lite HTML scraper
   var ddgLiteResults = await ddgLitePromise;
-  if (ddgLiteResults.length > 0) return ddgLiteResults;
+  if (ddgLiteResults.length > 0) { log.push("USED:ddg-lite:" + ddgLiteResults.length); return { results: ddgLiteResults, log: log }; }
 
-  // Then Google HTML scraper
   var googleResults = await googlePromise;
-  if (googleResults.length > 0) return googleResults;
+  if (googleResults.length > 0) { log.push("USED:google:" + googleResults.length); return { results: googleResults, log: log }; }
 
-  // Last resort: DDG Instant Answer (knowledge base, not full web results)
   var ddgInstantResults = await ddgInstantPromise;
-  return ddgInstantResults;
+  if (ddgInstantResults.length > 0) { log.push("USED:ddg-instant:" + ddgInstantResults.length); return { results: ddgInstantResults, log: log }; }
+
+  log.push("ALL_FAILED:no results from any source");
+  return { results: [], log: log };
 }
 
 // Determine if a question would benefit from live web search
@@ -3395,8 +3398,11 @@ async function handleAsk(question, context, conversation, channelMessages, activ
 
     // Web search: fetch live results for questions that need current info
     var searchResults = [];
+    var searchLog = [];
     if (needsWebSearch(question)) {
-      searchResults = await webSearch(question);
+      var searchData = await webSearch(question);
+      searchResults = searchData.results;
+      searchLog = searchData.log;
     }
 
     // Always include channel context when available — the model decides relevance
@@ -3440,10 +3446,17 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       messages: messages,
       max_tokens: 1024
     });
+    var response = "";
     if (result && result.response) {
-      return sanitizeBotResponse(result.response);
+      response = sanitizeBotResponse(result.response);
+    } else {
+      response = "(Nymbot returned an empty response)";
     }
-    return "(Nymbot returned an empty response)";
+    // Append web search debug log if any
+    if (searchLog.length > 0) {
+      response += "\n\n`[search-debug: " + searchLog.join(" | ") + "]`";
+    }
+    return response;
   } catch (e) {
     return "Nymbot error: " + (e.message || String(e));
   }
