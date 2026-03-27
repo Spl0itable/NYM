@@ -3177,20 +3177,94 @@ function buildChannelContext(channelMessages, activeUsers) {
   return parts.length > 0 ? parts.join("\n\n") : "";
 }
 
-// Web search — DuckDuckGo primary, Google fallback
-var SEARCH_TIMEOUT = 5000;
+// Web search
+var SEARCH_TIMEOUT = 6000;
 
 function stripHtmlEntities(str) {
   return str.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&#x2F;/g, "/").trim();
 }
 
-async function searchDuckDuckGo(query) {
+// SearXNG public instances
+var SEARXNG_INSTANCES = [
+  "https://search.sapti.me",
+  "https://searx.be",
+  "https://search.bus-hit.me",
+  "https://searx.tiekoetter.com"
+];
+
+async function searchSearXNG(query) {
+  // Try multiple SearXNG instances
+  for (var idx = 0; idx < SEARXNG_INSTANCES.length; idx++) {
+    try {
+      var controller = new AbortController();
+      var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
+      var url = SEARXNG_INSTANCES[idx] + "/search?q=" + encodeURIComponent(query) + "&format=json&categories=general&language=en";
+      var resp = await fetch(url, {
+        headers: {
+          "User-Agent": "NymchatBot/1.0",
+          "Accept": "application/json"
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (!resp.ok) continue;
+      var data = await resp.json();
+      if (data.results && data.results.length > 0) {
+        var results = [];
+        for (var i = 0; i < Math.min(data.results.length, 5); i++) {
+          var r = data.results[i];
+          var title = (r.title || "").trim();
+          var snippet = (r.content || "").trim();
+          if (title || snippet) {
+            results.push((title ? title + ": " : "") + snippet);
+          }
+        }
+        if (results.length > 0) return results;
+      }
+    } catch (e) {
+      continue;
+    }
+  }
+  return [];
+}
+
+// DuckDuckGo Instant Answer API
+async function searchDDGInstant(query) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
-  var params = new URLSearchParams({ q: query });
-  // Use DuckDuckGo lite — simpler HTML, more scrape-friendly from server IPs
+  var resp = await fetch("https://api.duckduckgo.com/?q=" + encodeURIComponent(query) + "&format=json&no_html=1&skip_disambig=1", {
+    headers: { "User-Agent": "NymchatBot/1.0", "Accept": "application/json" },
+    signal: controller.signal
+  });
+  clearTimeout(timer);
+  if (!resp.ok) return [];
+  var data = await resp.json();
+  var results = [];
+  // Abstract (Wikipedia/knowledge summary)
+  if (data.AbstractText) {
+    results.push((data.AbstractSource || "Summary") + ": " + data.AbstractText);
+  }
+  // Answer (instant answer)
+  if (data.Answer) {
+    results.push("Answer: " + data.Answer);
+  }
+  // Related topics
+  if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
+    for (var i = 0; i < Math.min(data.RelatedTopics.length, 4); i++) {
+      var topic = data.RelatedTopics[i];
+      if (topic.Text) {
+        results.push(topic.Text);
+      }
+    }
+  }
+  return results;
+}
+
+// DuckDuckGo HTML lite
+async function searchDDGLite(query) {
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query), {
-    method: "GET",
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "Accept": "text/html"
@@ -3200,7 +3274,6 @@ async function searchDuckDuckGo(query) {
   clearTimeout(timer);
   if (!resp.ok) return [];
   var html = await resp.text();
-  // DDG lite uses <a class="result-link"> for titles and <td class="result-snippet"> for snippets
   var snippetRegex = /<td[^>]+class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
   var titleRegex = /<a[^>]+class="result-link"[^>]*>([\s\S]*?)<\/a>/gi;
   var titles = [];
@@ -3216,18 +3289,16 @@ async function searchDuckDuckGo(query) {
   for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
     var title = titles[i] || "";
     var snippet = snippets[i] || "";
-    if (title || snippet) {
-      results.push((title ? title + ": " : "") + snippet);
-    }
+    if (title || snippet) results.push((title ? title + ": " : "") + snippet);
   }
   return results;
 }
 
+// Google HTML
 async function searchGoogle(query) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
-  var params = new URLSearchParams({ q: query });
-  var resp = await fetch("https://www.google.com/search?" + params.toString(), {
+  var resp = await fetch("https://www.google.com/search?q=" + encodeURIComponent(query), {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "Accept": "text/html",
@@ -3238,11 +3309,7 @@ async function searchGoogle(query) {
   clearTimeout(timer);
   if (!resp.ok) return [];
   var html = await resp.text();
-  // Google wraps result snippets in <div> blocks — extract text from result blocks
-  var results = [];
-  // Match <h3> titles (result headings)
   var h3Regex = /<h3[^>]*>([\s\S]*?)<\/h3>/gi;
-  // Match snippet divs that follow result links — Google uses data-sncf or class="VwiC3b" etc.
   var snippetRegex = /<div[^>]+class="[^"]*(?:VwiC3b|IsZvec|s3v9rd)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
   var titles = [];
   var snippets = [];
@@ -3255,68 +3322,38 @@ async function searchGoogle(query) {
     var s = stripHtmlEntities(m[1]);
     if (s && s.length > 20) snippets.push(s);
   }
-  for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
-    var title = titles[i] || "";
-    var snippet = snippets[i] || "";
-    if (title || snippet) {
-      results.push((title ? title + ": " : "") + snippet);
-    }
-  }
-  return results;
-}
-
-async function searchBrave(query) {
-  var controller = new AbortController();
-  var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
-  var resp = await fetch("https://search.brave.com/search?q=" + encodeURIComponent(query) + "&source=web", {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "text/html",
-      "Accept-Language": "en-US,en;q=0.9"
-    },
-    signal: controller.signal
-  });
-  clearTimeout(timer);
-  if (!resp.ok) return [];
-  var html = await resp.text();
   var results = [];
-  // Brave uses <span class="snippet-title">...</span> and <p class="snippet-description">...</p>
-  // Also try data-pos attributes and snippet-content class
-  var titleRegex = /<span[^>]+class="snippet-title"[^>]*>([\s\S]*?)<\/span>/gi;
-  var snippetRegex = /<p[^>]+class="snippet-description"[^>]*>([\s\S]*?)<\/p>/gi;
-  var titles = [];
-  var snippets = [];
-  var m;
-  while ((m = titleRegex.exec(html)) !== null && titles.length < 5) {
-    var t = stripHtmlEntities(m[1]);
-    if (t) titles.push(t);
-  }
-  while ((m = snippetRegex.exec(html)) !== null && snippets.length < 5) {
-    var s = stripHtmlEntities(m[1]);
-    if (s && s.length > 20) snippets.push(s);
-  }
   for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
     var title = titles[i] || "";
     var snippet = snippets[i] || "";
-    if (title || snippet) {
-      results.push((title ? title + ": " : "") + snippet);
-    }
+    if (title || snippet) results.push((title ? title + ": " : "") + snippet);
   }
   return results;
 }
 
 async function webSearch(query) {
-  // Fire all three search engines in parallel — use first one that returns results
-  var ddgPromise = searchDuckDuckGo(query).catch(function() { return []; });
-  var bravePromise = searchBrave(query).catch(function() { return []; });
+  // Fire SearXNG (JSON API) and DDG Instant Answer (JSON API) in parallel
+  // Fall back to HTML scrapers (DDG Lite, Google) if JSON APIs fail
+  var searxPromise = searchSearXNG(query).catch(function() { return []; });
+  var ddgInstantPromise = searchDDGInstant(query).catch(function() { return []; });
+  var ddgLitePromise = searchDDGLite(query).catch(function() { return []; });
   var googlePromise = searchGoogle(query).catch(function() { return []; });
-  // Prefer DDG > Brave > Google
-  var ddgResults = await ddgPromise;
-  if (ddgResults.length > 0) return ddgResults;
-  var braveResults = await bravePromise;
-  if (braveResults.length > 0) return braveResults;
+
+  // Prefer SearXNG (full web results as JSON)
+  var searxResults = await searxPromise;
+  if (searxResults.length > 0) return searxResults;
+
+  // Then DDG Lite HTML scraper
+  var ddgLiteResults = await ddgLitePromise;
+  if (ddgLiteResults.length > 0) return ddgLiteResults;
+
+  // Then Google HTML scraper
   var googleResults = await googlePromise;
-  return googleResults;
+  if (googleResults.length > 0) return googleResults;
+
+  // Last resort: DDG Instant Answer (knowledge base, not full web results)
+  var ddgInstantResults = await ddgInstantPromise;
+  return ddgInstantResults;
 }
 
 // Determine if a question would benefit from live web search
