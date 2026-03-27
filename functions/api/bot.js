@@ -3178,55 +3178,38 @@ function buildChannelContext(channelMessages, activeUsers) {
 }
 
 // Web search — multiple sources for reliability
-var SEARCH_TIMEOUT = 6000;
+var SEARCH_TIMEOUT = 8000;
 
 function stripHtmlEntities(str) {
-  return str.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&#x2F;/g, "/").trim();
+  return str.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&#x2F;/g, "/").replace(/&nbsp;/g, " ").trim();
 }
 
-// SearXNG public instances — returns JSON, designed for programmatic use
-var SEARXNG_INSTANCES = [
-  "https://search.sapti.me",
-  "https://searx.be",
-  "https://search.bus-hit.me",
-  "https://searx.tiekoetter.com"
-];
-
-async function searchSearXNG(query, log) {
-  for (var idx = 0; idx < SEARXNG_INSTANCES.length; idx++) {
-    var instance = SEARXNG_INSTANCES[idx];
-    try {
-      var controller = new AbortController();
-      var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
-      var url = instance + "/search?q=" + encodeURIComponent(query) + "&format=json&categories=general&language=en";
-      var resp = await fetch(url, {
-        headers: { "User-Agent": "NymchatBot/1.0", "Accept": "application/json" },
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-      if (!resp.ok) { log.push("searx:" + instance + ":http" + resp.status); continue; }
-      var data = await resp.json();
-      var count = (data.results && data.results.length) || 0;
-      log.push("searx:" + instance + ":ok:" + count + "results");
-      if (count > 0) {
-        var results = [];
-        for (var i = 0; i < Math.min(count, 5); i++) {
-          var r = data.results[i];
-          var title = (r.title || "").trim();
-          var snippet = (r.content || "").trim();
-          if (title || snippet) results.push((title ? title + ": " : "") + snippet);
-        }
-        if (results.length > 0) return results;
-      }
-    } catch (e) {
-      log.push("searx:" + instance + ":" + (e.name === "AbortError" ? "timeout" : e.message));
-      continue;
+// Wikipedia API
+async function searchWikipedia(query, log) {
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
+  var url = "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=" + encodeURIComponent(query) + "&srnamespace=0&srlimit=3&utf8=1&format=json";
+  var resp = await fetch(url, {
+    headers: { "User-Agent": "NymchatBot/1.0 (nostr chat bot)", "Accept": "application/json" },
+    signal: controller.signal
+  });
+  clearTimeout(timer);
+  if (!resp.ok) { log.push("wiki:http" + resp.status); return []; }
+  var data = await resp.json();
+  var results = [];
+  if (data.query && data.query.search) {
+    for (var i = 0; i < data.query.search.length; i++) {
+      var item = data.query.search[i];
+      var title = (item.title || "").trim();
+      var snippet = stripHtmlEntities(item.snippet || "");
+      if (title && snippet) results.push("Wikipedia - " + title + ": " + snippet);
     }
   }
-  return [];
+  log.push("wiki:ok:" + results.length + "results");
+  return results;
 }
 
-// DuckDuckGo Instant Answer API — JSON, no key needed, reliable from servers
+// DuckDuckGo Instant Answer API
 async function searchDDGInstant(query, log) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
@@ -3238,15 +3221,12 @@ async function searchDDGInstant(query, log) {
   if (!resp.ok) { log.push("ddg-instant:http" + resp.status); return []; }
   var data = await resp.json();
   var results = [];
-  // Abstract (Wikipedia/knowledge summary)
   if (data.AbstractText) {
     results.push((data.AbstractSource || "Summary") + ": " + data.AbstractText);
   }
-  // Answer (instant answer)
   if (data.Answer) {
     results.push("Answer: " + data.Answer);
   }
-  // Related topics
   if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
     for (var i = 0; i < Math.min(data.RelatedTopics.length, 4); i++) {
       var topic = data.RelatedTopics[i];
@@ -3259,33 +3239,58 @@ async function searchDDGInstant(query, log) {
   return results;
 }
 
-// DuckDuckGo HTML lite — fallback scraper
-async function searchDDGLite(query, log) {
+// DuckDuckGo HTML search
+async function searchDDGHtml(query, log) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
-  var resp = await fetch("https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query), {
+  var resp = await fetch("https://html.duckduckgo.com/html/", {
+    method: "POST",
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "text/html"
+      "Accept": "text/html",
+      "Content-Type": "application/x-www-form-urlencoded"
     },
+    body: "q=" + encodeURIComponent(query),
     signal: controller.signal
   });
   clearTimeout(timer);
-  if (!resp.ok) { log.push("ddg-lite:http" + resp.status); return []; }
+  if (!resp.ok) { log.push("ddg-html:http" + resp.status); return []; }
   var html = await resp.text();
-  log.push("ddg-lite:html:" + html.length + "bytes");
-  var snippetRegex = /<td[^>]+class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
-  var titleRegex = /<a[^>]+class="result-link"[^>]*>([\s\S]*?)<\/a>/gi;
+  log.push("ddg-html:html:" + html.length + "bytes");
+  // DDG HTML uses class="result__a" for title links and class="result__snippet" for snippets
+  var titleRegex = /<a[^>]+class="result__a"[^>]*>([\s\S]*?)<\/a>/gi;
+  var snippetRegex = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
   var titles = [];
   var snippets = [];
   var m;
   while ((m = titleRegex.exec(html)) !== null && titles.length < 5) {
-    titles.push(stripHtmlEntities(m[1]));
+    var t = stripHtmlEntities(m[1]);
+    if (t) titles.push(t);
   }
   while ((m = snippetRegex.exec(html)) !== null && snippets.length < 5) {
-    snippets.push(stripHtmlEntities(m[1]));
+    var s = stripHtmlEntities(m[1]);
+    if (s) snippets.push(s);
   }
-  log.push("ddg-lite:parsed:" + titles.length + "titles," + snippets.length + "snippets");
+  // Fallback: try result-link / result-snippet (lite variant)
+  if (titles.length === 0) {
+    var liteTitleRegex = /<a[^>]+class="result-link"[^>]*>([\s\S]*?)<\/a>/gi;
+    while ((m = liteTitleRegex.exec(html)) !== null && titles.length < 5) {
+      var lt = stripHtmlEntities(m[1]);
+      if (lt) titles.push(lt);
+    }
+  }
+  if (snippets.length === 0) {
+    var liteSnippetRegex = /<td[^>]+class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
+    while ((m = liteSnippetRegex.exec(html)) !== null && snippets.length < 5) {
+      var ls = stripHtmlEntities(m[1]);
+      if (ls) snippets.push(ls);
+    }
+  }
+  log.push("ddg-html:parsed:" + titles.length + "titles," + snippets.length + "snippets");
+  // Log sample of HTML for debugging if no results found
+  if (titles.length === 0 && snippets.length === 0) {
+    log.push("ddg-html:sample:" + html.substring(0, 300).replace(/[\n\r]+/g, " "));
+  }
   var results = [];
   for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
     var title = titles[i] || "";
@@ -3295,14 +3300,14 @@ async function searchDDGLite(query, log) {
   return results;
 }
 
-// Google HTML — last resort fallback
+// Google HTML search
 async function searchGoogle(query, log) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
-  var resp = await fetch("https://www.google.com/search?q=" + encodeURIComponent(query), {
+  var resp = await fetch("https://www.google.com/search?q=" + encodeURIComponent(query) + "&hl=en&gl=us", {
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "text/html",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml",
       "Accept-Language": "en-US,en;q=0.9"
     },
     signal: controller.signal
@@ -3311,49 +3316,80 @@ async function searchGoogle(query, log) {
   if (!resp.ok) { log.push("google:http" + resp.status); return []; }
   var html = await resp.text();
   log.push("google:html:" + html.length + "bytes");
-  var h3Regex = /<h3[^>]*>([\s\S]*?)<\/h3>/gi;
-  var snippetRegex = /<div[^>]+class="[^"]*(?:VwiC3b|IsZvec|s3v9rd)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
-  var titles = [];
-  var snippets = [];
-  var m;
-  while ((m = h3Regex.exec(html)) !== null && titles.length < 5) {
-    var t = stripHtmlEntities(m[1]);
-    if (t) titles.push(t);
-  }
-  while ((m = snippetRegex.exec(html)) !== null && snippets.length < 5) {
-    var s = stripHtmlEntities(m[1]);
-    if (s && s.length > 20) snippets.push(s);
+  // Check for consent/cookie wall
+  if (html.includes("consent.google") || html.includes("Before you continue")) {
+    log.push("google:CONSENT_WALL");
+    return [];
   }
   var results = [];
+  // Strategy 1: Extract <h3> titles paired with nearby text
+  var h3Regex = /<h3[^>]*>([\s\S]*?)<\/h3>/gi;
+  var m;
+  var titles = [];
+  while ((m = h3Regex.exec(html)) !== null && titles.length < 5) {
+    var t = stripHtmlEntities(m[1]);
+    if (t && t.length > 3) titles.push(t);
+  }
+  // Strategy 2: Try data-sncf/data-snf/BNeawe class snippets (various Google layouts)
+  var snippetPatterns = [
+    /<div[^>]+class="[^"]*(?:VwiC3b|IsZvec|s3v9rd|BNeawe)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+    /<span[^>]+class="[^"]*(?:aCOpRe|st|hgKElc)[^"]*"[^>]*>([\s\S]*?)<\/span>/gi,
+    /<div[^>]+class="[^"]*kCrYT[^"]*"[^>]*>[\s\S]*?<div[^>]*>([\s\S]*?)<\/div>/gi
+  ];
+  var snippets = [];
+  for (var p = 0; p < snippetPatterns.length && snippets.length < 5; p++) {
+    var regex = snippetPatterns[p];
+    while ((m = regex.exec(html)) !== null && snippets.length < 5) {
+      var s = stripHtmlEntities(m[1]);
+      if (s && s.length > 30) snippets.push(s);
+    }
+  }
   for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
     var title = titles[i] || "";
     var snippet = snippets[i] || "";
     if (title || snippet) results.push((title ? title + ": " : "") + snippet);
   }
-  log.push("google:parsed:" + results.length + " results from " + titles.length + " titles," + snippets.length + " snippets");
+  // Strategy 3: If still nothing, do a broad text extraction from search result divs
+  if (results.length === 0) {
+    var broadRegex = /<div[^>]*>((?:(?!<div).){50,300})<\/div>/gi;
+    var seen = {};
+    while ((m = broadRegex.exec(html)) !== null && results.length < 5) {
+      var text = stripHtmlEntities(m[1]);
+      if (text.length > 50 && !seen[text] && !text.includes("function") && !text.includes("{") && !text.includes("cookie")) {
+        seen[text] = true;
+        results.push(text);
+      }
+    }
+  }
+  log.push("google:parsed:" + results.length + "results," + titles.length + "titles," + snippets.length + "snippets");
+  if (results.length === 0) {
+    log.push("google:sample:" + html.substring(0, 300).replace(/[\n\r]+/g, " "));
+  }
   return results;
 }
 
 async function webSearch(query) {
-  // Fire all search sources in parallel
   var log = [];
 
-  var searxPromise = searchSearXNG(query, log).catch(function(e) { log.push("searx:catch:" + e.message); return []; });
+  // Fire all search sources in parallel
+  var wikiPromise = searchWikipedia(query, log).catch(function(e) { log.push("wiki:catch:" + e.message); return []; });
   var ddgInstantPromise = searchDDGInstant(query, log).catch(function(e) { log.push("ddg-instant:catch:" + e.message); return []; });
-  var ddgLitePromise = searchDDGLite(query, log).catch(function(e) { log.push("ddg-lite:catch:" + e.message); return []; });
+  var ddgHtmlPromise = searchDDGHtml(query, log).catch(function(e) { log.push("ddg-html:catch:" + e.message); return []; });
   var googlePromise = searchGoogle(query, log).catch(function(e) { log.push("google:catch:" + e.message); return []; });
 
-  var searxResults = await searxPromise;
-  if (searxResults.length > 0) { log.push("USED:searx:" + searxResults.length); return { results: searxResults, log: log }; }
-
-  var ddgLiteResults = await ddgLitePromise;
-  if (ddgLiteResults.length > 0) { log.push("USED:ddg-lite:" + ddgLiteResults.length); return { results: ddgLiteResults, log: log }; }
+  // Prefer structured search results first
+  var ddgHtmlResults = await ddgHtmlPromise;
+  if (ddgHtmlResults.length > 0) { log.push("USED:ddg-html:" + ddgHtmlResults.length); return { results: ddgHtmlResults, log: log }; }
 
   var googleResults = await googlePromise;
   if (googleResults.length > 0) { log.push("USED:google:" + googleResults.length); return { results: googleResults, log: log }; }
 
+  // Knowledge sources as fallback
   var ddgInstantResults = await ddgInstantPromise;
   if (ddgInstantResults.length > 0) { log.push("USED:ddg-instant:" + ddgInstantResults.length); return { results: ddgInstantResults, log: log }; }
+
+  var wikiResults = await wikiPromise;
+  if (wikiResults.length > 0) { log.push("USED:wiki:" + wikiResults.length); return { results: wikiResults, log: log }; }
 
   log.push("ALL_FAILED:no results from any source");
   return { results: [], log: log };
