@@ -3174,6 +3174,129 @@ function buildChannelContext(channelMessages, activeUsers) {
   return parts.length > 0 ? parts.join("\n\n") : "";
 }
 
+// Web search — DuckDuckGo primary, Google fallback
+var SEARCH_TIMEOUT = 5000;
+
+function stripHtmlEntities(str) {
+  return str.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&#x2F;/g, "/").trim();
+}
+
+async function searchDuckDuckGo(query) {
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
+  var params = new URLSearchParams({ q: query, kl: "", df: "" });
+  var resp = await fetch("https://html.duckduckgo.com/html/?" + params.toString(), {
+    method: "POST",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "text/html",
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: params.toString(),
+    signal: controller.signal
+  });
+  clearTimeout(timer);
+  if (!resp.ok) return [];
+  var html = await resp.text();
+  var snippetRegex = /<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+  var titleRegex = /<a class="result__a"[^>]*>([\s\S]*?)<\/a>/gi;
+  var titles = [];
+  var snippets = [];
+  var m;
+  while ((m = titleRegex.exec(html)) !== null && titles.length < 5) {
+    titles.push(stripHtmlEntities(m[1]));
+  }
+  while ((m = snippetRegex.exec(html)) !== null && snippets.length < 5) {
+    snippets.push(stripHtmlEntities(m[1]));
+  }
+  var results = [];
+  for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
+    var title = titles[i] || "";
+    var snippet = snippets[i] || "";
+    if (title || snippet) {
+      results.push((title ? title + ": " : "") + snippet);
+    }
+  }
+  return results;
+}
+
+async function searchGoogle(query) {
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
+  var params = new URLSearchParams({ q: query });
+  var resp = await fetch("https://www.google.com/search?" + params.toString(), {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "text/html",
+      "Accept-Language": "en-US,en;q=0.9"
+    },
+    signal: controller.signal
+  });
+  clearTimeout(timer);
+  if (!resp.ok) return [];
+  var html = await resp.text();
+  // Google wraps result snippets in <div> blocks — extract text from result blocks
+  var results = [];
+  // Match <h3> titles (result headings)
+  var h3Regex = /<h3[^>]*>([\s\S]*?)<\/h3>/gi;
+  // Match snippet divs that follow result links — Google uses data-sncf or class="VwiC3b" etc.
+  var snippetRegex = /<div[^>]+class="[^"]*(?:VwiC3b|IsZvec|s3v9rd)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+  var titles = [];
+  var snippets = [];
+  var m;
+  while ((m = h3Regex.exec(html)) !== null && titles.length < 5) {
+    var t = stripHtmlEntities(m[1]);
+    if (t) titles.push(t);
+  }
+  while ((m = snippetRegex.exec(html)) !== null && snippets.length < 5) {
+    var s = stripHtmlEntities(m[1]);
+    if (s && s.length > 20) snippets.push(s);
+  }
+  for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
+    var title = titles[i] || "";
+    var snippet = snippets[i] || "";
+    if (title || snippet) {
+      results.push((title ? title + ": " : "") + snippet);
+    }
+  }
+  return results;
+}
+
+async function webSearch(query) {
+  // Try DuckDuckGo first, fall back to Google
+  try {
+    var results = await searchDuckDuckGo(query);
+    if (results.length > 0) return results;
+  } catch (e) {}
+  try {
+    return await searchGoogle(query);
+  } catch (e) {}
+  return [];
+}
+
+// Determine if a question would benefit from live web search
+function needsWebSearch(question) {
+  var q = question.toLowerCase();
+  // Current events, news, prices, dates, recent happenings
+  var currentPatterns = [
+    /\b(today|tonight|yesterday|this week|this month|this year|right now|currently|latest|recent|new)\b/,
+    /\b(news|headline|update|announce|launch|release|happen|event)\b/,
+    /\b(price|cost|worth|value|market)\b/,
+    /\b(score|game|match|play|won|lost|beat)\b/,
+    /\b(weather|forecast|temperature)\b/,
+    /\b(who is|who was|what is|what was|when did|when was|where is|where was)\b/,
+    /\b(how to|how do|how can|how does)\b/,
+    /\b(best|top|popular|trending|most)\b/,
+    /\b(2024|2025|2026)\b/
+  ];
+  for (var i = 0; i < currentPatterns.length; i++) {
+    if (currentPatterns[i].test(q)) return true;
+  }
+  // If it's a question (contains ?) that doesn't match conversational patterns
+  if (q.includes("?") && !/^(you|u|how are|what do you|do you|can you|will you|are you)\b/.test(q)) return true;
+  return false;
+}
+
 async function handleAsk(question, context, conversation, channelMessages, activeUsers, senderNym) {
   question = sanitizeInput(question);
   if (!question) {
@@ -3188,10 +3311,24 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     // separate message so it doesn't bloat the system prompt or confuse the model
     var messages = [{ role: "system", content: NYMBOT_SYSTEM_PROMPT }];
 
+    // Web search: fetch live results for questions that need current info
+    var searchResults = [];
+    if (needsWebSearch(question)) {
+      searchResults = await webSearch(question);
+    }
+
     // Always include channel context when available — the model decides relevance
     var channelCtx = buildChannelContext(channelMessages, activeUsers);
     var contextBlock = "";
     if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
+    if (searchResults.length > 0) {
+      contextBlock += "--- WEB SEARCH RESULTS (for reference — use these to inform your answer if relevant) ---\n";
+      for (var s = 0; s < searchResults.length; s++) {
+        contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
+      }
+      contextBlock += "--- END SEARCH RESULTS ---\n";
+      contextBlock += "Use the search results above to provide accurate, up-to-date information when relevant to the user's question. If the results aren't helpful, rely on your own knowledge. Do NOT mention that you searched the web or reference 'search results' — just answer naturally.\n";
+    }
     if (channelCtx) {
       contextBlock += "--- CHANNEL CONTEXT (for reference) ---\n" + channelCtx + "\n--- END CONTEXT ---\n";
       contextBlock += "IMPORTANT: If the user's question is about people, the channel, or conversation, READ the actual message content above carefully and give SPECIFIC details — quote or paraphrase what people actually said, what topics they discussed, what opinions they shared, etc. NEVER give vague answers like 'they're just chatting' or 'lots of back-and-forth' when you have the actual messages right there. If the question is general knowledge (e.g. 'what is Bitcoin', 'latest version'), answer from your own knowledge and IGNORE the channel messages above — do NOT repeat or reference usernames from the context.";
