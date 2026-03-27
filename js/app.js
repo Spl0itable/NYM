@@ -12617,6 +12617,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (window.nostr?.nip44?.encrypt) {
             return await window.nostr.nip44.encrypt(recipientPubkey, plaintext);
         }
+        // Try NIP-46 remote signer
+        if (this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected) {
+            return await _nip46Encrypt(recipientPubkey, plaintext);
+        }
         // Local fallback derive conversation key and encrypt
         if (!this.privkey) throw new Error('No privkey available for NIP-44 encryption');
         const { nip44 } = window.NostrTools;
@@ -12628,6 +12632,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Try extension first
         if (window.nostr?.nip44?.decrypt) {
             return await window.nostr.nip44.decrypt(senderPubkey, payload);
+        }
+        // Try NIP-46 remote signer
+        if (this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected) {
+            return await _nip46Decrypt(senderPubkey, payload);
         }
         // Local fallback derive conversation key and decrypt
         if (!this.privkey) throw new Error('No privkey available for NIP-44 decryption');
@@ -15684,6 +15692,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             };
             const signed = await window.nostr.signEvent(unsigned);
             return signed;
+        }
+        // NIP-46 remote signer
+        if (this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected) {
+            return await _nip46SignEvent(event);
         }
         if (this.privkey) {
             return window.NostrTools.finalizeEvent(event, this.privkey);
@@ -26463,7 +26475,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.55.244 ═══<br/>
+═══ Nymchat v3.56.244 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -26509,6 +26521,11 @@ async function checkSavedConnection() {
                     if (window.nostr?.getPublicKey) break;
                     await new Promise(r => setTimeout(r, 300));
                 }
+            }
+
+            // For NIP-46 remote signer, restore the WebSocket session
+            if (method === 'nip46') {
+                await _nip46RestoreSession();
             }
 
             // Hide setup modal
@@ -26977,6 +26994,11 @@ function openNostrLogin() {
     // Reset state
     document.getElementById('nostrLoginNsecInput').value = '';
     document.getElementById('nostrLoginError').style.display = 'none';
+    // Reset remote signer UI
+    document.getElementById('nostrLoginRemoteSignerConnect').style.display = 'none';
+    document.getElementById('nostrLoginRemoteSignerBtn').style.display = '';
+    document.getElementById('nostrLoginRemoteSignerBtn').disabled = false;
+    document.getElementById('nostrLoginRemoteSignerBtn').textContent = 'Login with Remote Signer';
     document.getElementById('nostrLoginModal').classList.add('active');
 }
 
@@ -27018,7 +27040,7 @@ async function nostrLoginWithExtension() {
         errorEl.style.display = 'block';
     } finally {
         btn.disabled = false;
-        btn.textContent = 'Login with Browser Extension (NIP-07)';
+        btn.textContent = 'Login with Browser Extension';
     }
 }
 
@@ -27059,6 +27081,408 @@ async function nostrLoginWithNsec() {
         await nostrLoginBypassSetup();
     } else {
         nym.displaySystemMessage('Logged in with Nostr identity.');
+    }
+}
+
+// NIP-46 Remote Signer (Nostr Connect) Support
+let _nip46State = null; // holds active connection state during login flow
+
+function nostrLoginStartRemoteSigner() {
+    const errorEl = document.getElementById('nostrLoginError');
+    errorEl.style.display = 'none';
+    const btn = document.getElementById('nostrLoginRemoteSignerBtn');
+    btn.disabled = true;
+    btn.textContent = 'Connecting...';
+
+    try {
+        // Generate ephemeral keypair for NIP-46 communication
+        const clientSecretKey = window.NostrTools.generateSecretKey();
+        const clientPubkey = window.NostrTools.getPublicKey(clientSecretKey);
+
+        // Generate a random secret for the connection
+        const secretBytes = new Uint8Array(32);
+        crypto.getRandomValues(secretBytes);
+        const secret = Array.from(secretBytes).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+
+        // Use a well-known relay for NIP-46 communication
+        const relayUrl = 'wss://relay.damus.io';
+
+        // Build nostrconnect:// URI per NIP-46
+        const params = new URLSearchParams();
+        params.set('relay', relayUrl);
+        params.set('metadata', JSON.stringify({ name: 'Nymchat' }));
+        params.set('secret', secret);
+        const connectURI = `nostrconnect://${clientPubkey}?${params.toString()}`;
+
+        // Show the connection UI
+        btn.style.display = 'none';
+        const connectDiv = document.getElementById('nostrLoginRemoteSignerConnect');
+        connectDiv.style.display = '';
+
+        // Set connection string
+        document.getElementById('nostrLoginBunkerURI').value = connectURI;
+
+        // Generate QR code
+        const qrContainer = document.getElementById('nostrLoginRemoteSignerQR');
+        qrContainer.innerHTML = '';
+        try {
+            new QRCode(qrContainer, {
+                text: connectURI,
+                width: 220,
+                height: 220,
+                colorDark: '#000000',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.L
+            });
+        } catch (qrErr) {
+            qrContainer.textContent = 'QR code generation failed';
+        }
+
+        // Store state for the connection flow
+        _nip46State = {
+            clientSecretKey,
+            clientPubkey,
+            relayUrl,
+            secret,
+            ws: null,
+            remotePubkey: null,
+            subId: 'nip46-auth-' + Date.now(),
+            pendingRequests: new Map(),
+            connected: false
+        };
+
+        // Open WebSocket to relay and listen for the signer's connect response
+        _nip46OpenRelay();
+    } catch (err) {
+        errorEl.textContent = 'Failed to start remote signer connection: ' + err.message;
+        errorEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Login with Remote Signer';
+        btn.style.display = '';
+    }
+}
+
+function _nip46OpenRelay() {
+    const state = _nip46State;
+    if (!state) return;
+
+    const ws = new WebSocket(state.relayUrl);
+    state.ws = ws;
+
+    ws.onopen = () => {
+        // Subscribe to kind 24133 events addressed to our client pubkey
+        const filter = {
+            kinds: [24133],
+            '#p': [state.clientPubkey],
+            since: Math.floor(Date.now() / 1000) - 10
+        };
+        ws.send(JSON.stringify(['REQ', state.subId, filter]));
+    };
+
+    ws.onmessage = async (evt) => {
+        try {
+            const msg = JSON.parse(evt.data);
+            if (msg[0] === 'EVENT' && msg[1] === state.subId) {
+                await _nip46HandleEvent(msg[2]);
+            }
+        } catch (_) {}
+    };
+
+    ws.onerror = () => {
+        const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
+        if (statusEl) statusEl.textContent = 'Relay connection error. Try again.';
+    };
+
+    ws.onclose = () => {
+        // Reconnect if still waiting for signer
+        if (_nip46State && !_nip46State.connected) {
+            setTimeout(() => {
+                if (_nip46State && !_nip46State.connected) {
+                    _nip46OpenRelay();
+                }
+            }, 3000);
+        }
+    };
+}
+
+async function _nip46HandleEvent(event) {
+    const state = _nip46State;
+    if (!state) return;
+
+    try {
+        // Decrypt the NIP-44 encrypted content from the remote signer
+        const { nip44 } = window.NostrTools;
+        const ck = nip44.getConversationKey(state.clientSecretKey, event.pubkey);
+        const decrypted = nip44.decrypt(event.content, ck);
+        const response = JSON.parse(decrypted);
+
+        if (response.result === 'auth_url') {
+            // Remote signer requires auth — show URL to user
+            const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
+            statusEl.innerHTML = `Signer requires authorization. <a href="${response.error}" target="_blank" rel="noopener" style="color: var(--secondary)">Open auth page</a>`;
+            return;
+        }
+
+        if (response.method === 'connect') {
+            // This is the signer's connect acknowledgement
+            state.remotePubkey = event.pubkey;
+            state.connected = true;
+            await _nip46CompleteLogin(event.pubkey);
+            return;
+        }
+
+        if (response.id && response.result !== undefined) {
+            // Handle response to connect or ack
+            if (!state.remotePubkey) {
+                // First response — this is the connect ack
+                state.remotePubkey = event.pubkey;
+
+                // Verify the secret if the signer echoed it back
+                if (response.result && response.result !== 'ack' && response.result !== state.secret) {
+                    // Secret mismatch; could be a replay
+                    const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
+                    statusEl.textContent = 'Connection secret mismatch. Try again.';
+                    return;
+                }
+
+                state.connected = true;
+                await _nip46CompleteLogin(event.pubkey);
+                return;
+            }
+
+            // Response to a pending request (sign_event, etc.)
+            const pending = state.pendingRequests.get(response.id);
+            if (pending) {
+                state.pendingRequests.delete(response.id);
+                if (response.error) {
+                    pending.reject(new Error(response.error));
+                } else {
+                    pending.resolve(response.result);
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('[NIP-46] Failed to handle event:', err.message);
+    }
+}
+
+async function _nip46CompleteLogin(remotePubkey) {
+    const state = _nip46State;
+    if (!state) return;
+
+    const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
+    statusEl.textContent = 'Connected! Fetching public key...';
+
+    try {
+        // Request the signer's public key via get_public_key
+        const pubkey = await _nip46SendRequest('get_public_key', []);
+
+        if (!pubkey || typeof pubkey !== 'string' || pubkey.length !== 64) {
+            throw new Error('Remote signer returned an invalid public key.');
+        }
+
+        // Store login state
+        localStorage.setItem('nym_nostr_login_method', 'nip46');
+        localStorage.setItem('nym_nostr_login_pubkey', pubkey);
+        // Store NIP-46 connection details for session restoration
+        localStorage.setItem('nym_nip46_client_secret', Array.from(state.clientSecretKey).map(b => b.toString(16).padStart(2, '0')).join(''));
+        localStorage.setItem('nym_nip46_remote_pubkey', remotePubkey);
+        localStorage.setItem('nym_nip46_relay', state.relayUrl);
+        try {
+            const npub = window.NostrTools.nip19.npubEncode(pubkey);
+            localStorage.setItem('nym_nostr_login_npub', npub);
+        } catch (_) {}
+
+        // Close the subscription but keep the WebSocket alive for signing
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            state.ws.send(JSON.stringify(['CLOSE', state.subId]));
+            // Resubscribe with a persistent filter for ongoing NIP-46 communication
+            const persistentSubId = 'nip46-session-' + Date.now();
+            state.subId = persistentSubId;
+            state.ws.send(JSON.stringify(['REQ', persistentSubId, {
+                kinds: [24133],
+                '#p': [state.clientPubkey],
+                since: Math.floor(Date.now() / 1000) - 5
+            }]));
+        }
+
+        // Apply identity to current session (no local secret key)
+        applyNostrLogin(pubkey, null, 'nip46');
+
+        closeModal('nostrLoginModal');
+
+        // If the setup modal is still showing, bypass it and connect
+        if (document.getElementById('setupModal')?.classList.contains('active')) {
+            await nostrLoginBypassSetup();
+        } else {
+            nym.displaySystemMessage('Logged in with remote signer (NIP-46).');
+        }
+    } catch (err) {
+        statusEl.textContent = 'Login failed: ' + err.message;
+        console.error('[NIP-46] Login failed:', err);
+    }
+}
+
+function _nip46SendRequest(method, params) {
+    const state = _nip46State;
+    if (!state || !state.ws || state.ws.readyState !== WebSocket.OPEN || !state.remotePubkey) {
+        return Promise.reject(new Error('NIP-46 remote signer not connected'));
+    }
+
+    const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const request = JSON.stringify({ id, method, params });
+
+    // Encrypt with NIP-44 to the remote signer
+    const { nip44 } = window.NostrTools;
+    const ck = nip44.getConversationKey(state.clientSecretKey, state.remotePubkey);
+    const encrypted = nip44.encrypt(request, ck);
+
+    // Build and sign the event with our ephemeral client key
+    const event = {
+        kind: 24133,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['p', state.remotePubkey]],
+        content: encrypted,
+        pubkey: state.clientPubkey
+    };
+
+    const signed = window.NostrTools.finalizeEvent(event, state.clientSecretKey);
+    state.ws.send(JSON.stringify(['EVENT', signed]));
+
+    return new Promise((resolve, reject) => {
+        state.pendingRequests.set(id, { resolve, reject });
+        // Timeout after 60 seconds (remote signer may prompt user)
+        setTimeout(() => {
+            if (state.pendingRequests.has(id)) {
+                state.pendingRequests.delete(id);
+                reject(new Error('Remote signer request timed out'));
+            }
+        }, 60000);
+    });
+}
+
+// Send a sign_event request to the remote signer
+async function _nip46SignEvent(event) {
+    const unsigned = {
+        kind: event.kind,
+        created_at: event.created_at,
+        tags: event.tags,
+        content: event.content,
+        pubkey: event.pubkey || localStorage.getItem('nym_nostr_login_pubkey')
+    };
+    const resultStr = await _nip46SendRequest('sign_event', [JSON.stringify(unsigned)]);
+    // The result is the signed event JSON string
+    const signed = typeof resultStr === 'string' ? JSON.parse(resultStr) : resultStr;
+    return signed;
+}
+
+// NIP-44 encrypt via remote signer
+async function _nip46Encrypt(thirdPartyPubkey, plaintext) {
+    return await _nip46SendRequest('nip44_encrypt', [thirdPartyPubkey, plaintext]);
+}
+
+// NIP-44 decrypt via remote signer
+async function _nip46Decrypt(thirdPartyPubkey, ciphertext) {
+    return await _nip46SendRequest('nip44_decrypt', [thirdPartyPubkey, ciphertext]);
+}
+
+function nostrLoginCopyBunkerURI() {
+    const input = document.getElementById('nostrLoginBunkerURI');
+    if (!input) return;
+    navigator.clipboard.writeText(input.value).then(() => {
+        const btn = input.nextElementSibling;
+        if (btn) {
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+        }
+    }).catch(() => {
+        // Fallback: select and copy
+        input.select();
+        document.execCommand('copy');
+    });
+}
+
+function nostrLoginCancelRemoteSigner() {
+    // Clean up WebSocket and state
+    if (_nip46State) {
+        if (_nip46State.ws) {
+            try { _nip46State.ws.close(); } catch (_) {}
+        }
+        _nip46State = null;
+    }
+    // Reset UI
+    document.getElementById('nostrLoginRemoteSignerConnect').style.display = 'none';
+    document.getElementById('nostrLoginRemoteSignerBtn').style.display = '';
+    document.getElementById('nostrLoginRemoteSignerBtn').disabled = false;
+    document.getElementById('nostrLoginRemoteSignerBtn').textContent = 'Login with Remote Signer';
+    document.getElementById('nostrLoginRemoteSignerQR').innerHTML = '';
+    document.getElementById('nostrLoginRemoteSignerStatus').textContent = 'Waiting for remote signer...';
+}
+
+// Restore NIP-46 session from localStorage on page reload
+async function _nip46RestoreSession() {
+    const clientSecretHex = localStorage.getItem('nym_nip46_client_secret');
+    const remotePubkey = localStorage.getItem('nym_nip46_remote_pubkey');
+    const relayUrl = localStorage.getItem('nym_nip46_relay');
+    if (!clientSecretHex || !remotePubkey || !relayUrl) return false;
+
+    try {
+        // Reconstruct the secret key from hex
+        const clientSecretKey = new Uint8Array(clientSecretHex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+        const clientPubkey = window.NostrTools.getPublicKey(clientSecretKey);
+
+        _nip46State = {
+            clientSecretKey,
+            clientPubkey,
+            relayUrl,
+            secret: null,
+            ws: null,
+            remotePubkey,
+            subId: 'nip46-session-' + Date.now(),
+            pendingRequests: new Map(),
+            connected: true
+        };
+
+        // Open WebSocket for ongoing signing requests
+        const ws = new WebSocket(relayUrl);
+        _nip46State.ws = ws;
+
+        ws.onopen = () => {
+            ws.send(JSON.stringify(['REQ', _nip46State.subId, {
+                kinds: [24133],
+                '#p': [clientPubkey],
+                since: Math.floor(Date.now() / 1000) - 10
+            }]));
+        };
+
+        ws.onmessage = async (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                if (msg[0] === 'EVENT' && msg[1] === _nip46State.subId) {
+                    await _nip46HandleEvent(msg[2]);
+                }
+            } catch (_) {}
+        };
+
+        ws.onclose = () => {
+            // Reconnect if session is still active
+            if (_nip46State && _nip46State.connected) {
+                setTimeout(() => {
+                    if (_nip46State && _nip46State.connected) {
+                        const newWs = new WebSocket(_nip46State.relayUrl);
+                        _nip46State.ws = newWs;
+                        newWs.onopen = ws.onopen;
+                        newWs.onmessage = ws.onmessage;
+                        newWs.onclose = ws.onclose;
+                    }
+                }, 3000);
+            }
+        };
+
+        return true;
+    } catch (err) {
+        console.warn('[NIP-46] Failed to restore session:', err.message);
+        return false;
     }
 }
 
@@ -27181,6 +27605,16 @@ function nostrLogout() {
     localStorage.removeItem('nym_nostr_login_nsec');
     localStorage.removeItem('nym_nostr_login_npub');
     localStorage.removeItem('nym_nostr_login_profile');
+    // Clean up NIP-46 remote signer state
+    localStorage.removeItem('nym_nip46_client_secret');
+    localStorage.removeItem('nym_nip46_remote_pubkey');
+    localStorage.removeItem('nym_nip46_relay');
+    if (_nip46State) {
+        if (_nip46State.ws) {
+            try { _nip46State.ws.close(); } catch (_) {}
+        }
+        _nip46State = null;
+    }
     nym.nostrLoginPubkey = null;
     nym.nostrLoginSecretKey = null;
     nym.nostrLoginMethod = null;
@@ -27191,6 +27625,8 @@ function nostrLogout() {
 async function nostrSettingsSign(event) {
     if (nym.nostrLoginMethod === 'extension' && window.nostr?.signEvent) {
         return await window.nostr.signEvent(event);
+    } else if (nym.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected) {
+        return await _nip46SignEvent(event);
     } else if (nym.nostrLoginSecretKey) {
         return window.NostrTools.finalizeEvent(event, nym.nostrLoginSecretKey);
     }

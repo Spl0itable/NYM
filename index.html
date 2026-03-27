@@ -713,7 +713,7 @@
     <!-- Nostr Login Modal (easter egg via ASCII art click) -->
     <div class="modal" id="nostrLoginModal">
         <div class="modal-content" style="max-width: 440px;">
-            <button class="modal-close" onclick="closeModal('nostrLoginModal')">&#x2715;</button>
+            <button class="modal-close" onclick="nostrLoginCancelRemoteSigner(); closeModal('nostrLoginModal')">&#x2715;</button>
             <div class="modal-header">Login with Nostr</div>
             <div class="modal-body">
                 <div style="color: var(--text-dim); font-size: 13px; margin-bottom: 18px;">
@@ -732,6 +732,39 @@
                     or
                 </div>
 
+                <!-- Remote Signer Option (NIP-46 Nostr Connect) -->
+                <div id="nostrLoginRemoteSignerOption" style="margin-bottom: 14px;">
+                    <button class="send-btn" id="nostrLoginRemoteSignerBtn" onclick="nostrLoginStartRemoteSigner()" style="width: 100%; padding: 12px;">
+                        Login with Remote Signer
+                    </button>
+                    <div class="form-hint" style="margin-top: 6px;">Use Amber, or another NIP-46 compatible remote signer</div>
+
+                    <!-- Remote signer connection UI (hidden until initiated) -->
+                    <div id="nostrLoginRemoteSignerConnect" style="display: none; margin-top: 14px;">
+                        <div style="text-align: center; margin-bottom: 10px;">
+                            <div id="nostrLoginRemoteSignerStatus" style="color: var(--text-dim); font-size: 13px; margin-bottom: 12px;">
+                                Waiting for remote signer...
+                            </div>
+                            <div id="nostrLoginRemoteSignerQR" style="display: inline-block; padding: 12px; background: #fff; border-radius: 8px; margin-bottom: 10px;"></div>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 8px;">
+                            <label class="form-label">Connection String</label>
+                            <div style="display: flex; gap: 6px;">
+                                <input type="text" class="form-input" id="nostrLoginBunkerURI" readonly style="font-size: 11px; flex: 1;">
+                                <button class="icon-btn" onclick="nostrLoginCopyBunkerURI()" title="Copy" style="padding: 8px 10px; white-space: nowrap;">Copy</button>
+                            </div>
+                            <div class="form-hint">Scan the QR code or copy this connection string into your remote signer app</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <button class="icon-btn" onclick="nostrLoginCancelRemoteSigner()" style="font-size: 12px;">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="nostrLoginDivider2" style="text-align: center; margin: 16px 0; color: var(--text-dim); font-size: 12px;">
+                    or
+                </div>
+
                 <!-- Paste nsec Option -->
                 <div class="form-group" style="margin-bottom: 0;">
                     <label class="form-label">Paste your nsec</label>
@@ -741,7 +774,7 @@
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="closeModal('nostrLoginModal')">Cancel</button>
+                <button class="icon-btn" onclick="nostrLoginCancelRemoteSigner(); closeModal('nostrLoginModal')">Cancel</button>
                 <button class="send-btn" id="nostrLoginSubmitBtn" onclick="nostrLoginWithNsec()">Login</button>
             </div><br/>
             <div style="text-align: center; padding: 0 20px 16px; color: var(--text-dim); font-size: 12px;">
