@@ -2647,6 +2647,7 @@ async function onRequest(context) {
   }
 
   // Append a zap prompt to select commands (excludes game commands that expect reply-guesses)
+  // Always append for ?ask queries that used web search; 50% chance for other eligible commands
   var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "news", "btc", "bitcoin", "price"];
   var ZAP_PROMPTS = [
     "⚡ Liked this response? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!",
@@ -2656,7 +2657,8 @@ async function onRequest(context) {
     "⚡ Zap this message to tip with Bitcoin Lightning! If you don't know what or how to zap, just ask!",
     "⚡ Want to say thanks? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!"
   ];
-  if (ZAP_ELIGIBLE_COMMANDS.includes(command.toLowerCase()) && Math.random() < 0.5) {
+  var isWebSearchAsk = command.toLowerCase() === "ask" && needsWebSearch(args || "");
+  if (ZAP_ELIGIBLE_COMMANDS.includes(command.toLowerCase()) && (isWebSearchAsk || Math.random() < 0.5)) {
     var zapPrompt = ZAP_PROMPTS[Math.floor(Math.random() * ZAP_PROMPTS.length)];
     response = response + "\n\n" + zapPrompt;
   }
