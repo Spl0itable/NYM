@@ -3518,9 +3518,12 @@ async function handleAsk(question, context, conversation, channelMessages, activ
         .trim();
       if (!artSubject) artSubject = question;
       var asciiArtResults = await fetchAsciiArt(artSubject);
-      if (asciiArtResults.length > 0) {
-        searchResults = asciiArtResults;
+      // If multi-word subject found nothing, retry with just the first word
+      if (asciiArtResults.length === 0 && artSubject.indexOf(" ") !== -1) {
+        var firstWord = artSubject.split(" ")[0];
+        asciiArtResults = await fetchAsciiArt(firstWord);
       }
+      searchResults = asciiArtResults; // may be empty — handled below
     } else if (needsWebSearch(question)) {
       searchResults = await webSearch(question);
     }
@@ -3530,22 +3533,25 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     var channelCtx = isAsciiArtRequest ? "" : buildChannelContext(channelMessages, activeUsers);
     var contextBlock = "";
     if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
-    if (searchResults.length > 0) {
-      if (isAsciiArtRequest) {
-        contextBlock += "--- FETCHED ASCII ART (use one of these, exactly as-is) ---\n";
+    if (isAsciiArtRequest) {
+      if (searchResults.length > 0) {
+        contextBlock += "--- FETCHED ASCII ART ---\n";
         for (var s = 0; s < searchResults.length; s++) {
           contextBlock += "[OPTION " + (s + 1) + "]\n" + searchResults[s] + "\n\n";
         }
         contextBlock += "--- END FETCHED ASCII ART ---\n";
         contextBlock += "RULE: Pick ONE option above. Copy it into your response EXACTLY as-is, code block and all. Do NOT write any additional ASCII art, doodles, or creative drawings. Do NOT modify the art. Just pick one, add a single short comment line, and stop.\n";
       } else {
-        contextBlock += "--- LIVE WEB SEARCH RESULTS ---\n";
-        for (var s = 0; s < searchResults.length; s++) {
-          contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
-        }
-        contextBlock += "--- END SEARCH RESULTS ---\n";
-        contextBlock += "IMPORTANT: You MUST use these live web search results to answer the user's question with current, accurate information. Do NOT say you lack real-time data or can't access the web — the results above ARE real-time data retrieved just now. Answer naturally as if you know the information. Do NOT reference 'search results' or say 'according to my search'. If the results don't cover the question well, supplement with your own knowledge.\n";
+        contextBlock += "--- FETCHED ASCII ART ---\nNONE. The fetch returned zero results for this subject.\n--- END FETCHED ASCII ART ---\n";
+        contextBlock += "RULE: No ASCII art was found. Tell the user you couldn't find any for their request and suggest simpler terms like 'cat', 'dog', 'skull', or 'dragon'. Do NOT draw or generate any ASCII art yourself — not even a small example.\n";
       }
+    } else if (searchResults.length > 0) {
+      contextBlock += "--- LIVE WEB SEARCH RESULTS ---\n";
+      for (var s = 0; s < searchResults.length; s++) {
+        contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
+      }
+      contextBlock += "--- END SEARCH RESULTS ---\n";
+      contextBlock += "IMPORTANT: You MUST use these live web search results to answer the user's question with current, accurate information. Do NOT say you lack real-time data or can't access the web — the results above ARE real-time data retrieved just now. Answer naturally as if you know the information. Do NOT reference 'search results' or say 'according to my search'. If the results don't cover the question well, supplement with your own knowledge.\n";
     }
     if (channelCtx) {
       contextBlock += "--- CHANNEL CONTEXT (for reference) ---\n" + channelCtx + "\n--- END CONTEXT ---\n";
