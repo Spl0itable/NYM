@@ -217,7 +217,9 @@ See the [releases page](https://github.com/Spl0itable/NYM/releases) for each upd
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) - see the [LICENSE](LICENSE) file for details.
+Copyright 21 Million LLC
+
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) - see the [LICENSE](LICENSE) file for details. https://www.gnu.org/licenses/agpl-3.0.html
 
 ## Legal
 
