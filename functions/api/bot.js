@@ -3185,7 +3185,7 @@ function stripHtmlEntities(str) {
 }
 
 // Wikipedia API
-async function searchWikipedia(query, log) {
+async function searchWikipedia(query) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var url = "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=" + encodeURIComponent(query) + "&srnamespace=0&srlimit=3&utf8=1&format=json";
@@ -3194,7 +3194,7 @@ async function searchWikipedia(query, log) {
     signal: controller.signal
   });
   clearTimeout(timer);
-  if (!resp.ok) { log.push("wiki:http" + resp.status); return []; }
+  if (!resp.ok) return [];
   var data = await resp.json();
   var results = [];
   if (data.query && data.query.search) {
@@ -3205,12 +3205,11 @@ async function searchWikipedia(query, log) {
       if (title && snippet) results.push("Wikipedia - " + title + ": " + snippet);
     }
   }
-  log.push("wiki:ok:" + results.length + "results");
   return results;
 }
 
 // DuckDuckGo Instant Answer API
-async function searchDDGInstant(query, log) {
+async function searchDDGInstant(query) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://api.duckduckgo.com/?q=" + encodeURIComponent(query) + "&format=json&no_html=1&skip_disambig=1", {
@@ -3218,7 +3217,7 @@ async function searchDDGInstant(query, log) {
     signal: controller.signal
   });
   clearTimeout(timer);
-  if (!resp.ok) { log.push("ddg-instant:http" + resp.status); return []; }
+  if (!resp.ok) return [];
   var data = await resp.json();
   var results = [];
   if (data.AbstractText) {
@@ -3235,12 +3234,11 @@ async function searchDDGInstant(query, log) {
       }
     }
   }
-  log.push("ddg-instant:ok:" + results.length + "results");
   return results;
 }
 
 // DuckDuckGo HTML search
-async function searchDDGHtml(query, log) {
+async function searchDDGHtml(query) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://html.duckduckgo.com/html/", {
@@ -3254,9 +3252,8 @@ async function searchDDGHtml(query, log) {
     signal: controller.signal
   });
   clearTimeout(timer);
-  if (!resp.ok) { log.push("ddg-html:http" + resp.status); return []; }
+  if (!resp.ok) return [];
   var html = await resp.text();
-  log.push("ddg-html:html:" + html.length + "bytes");
   // DDG HTML uses class="result__a" for title links and class="result__snippet" for snippets
   var titleRegex = /<a[^>]+class="result__a"[^>]*>([\s\S]*?)<\/a>/gi;
   var snippetRegex = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
@@ -3286,11 +3283,6 @@ async function searchDDGHtml(query, log) {
       if (ls) snippets.push(ls);
     }
   }
-  log.push("ddg-html:parsed:" + titles.length + "titles," + snippets.length + "snippets");
-  // Log sample of HTML for debugging if no results found
-  if (titles.length === 0 && snippets.length === 0) {
-    log.push("ddg-html:sample:" + html.substring(0, 300).replace(/[\n\r]+/g, " "));
-  }
   var results = [];
   for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
     var title = titles[i] || "";
@@ -3301,7 +3293,7 @@ async function searchDDGHtml(query, log) {
 }
 
 // Google HTML search
-async function searchGoogle(query, log) {
+async function searchGoogle(query) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://www.google.com/search?q=" + encodeURIComponent(query) + "&hl=en&gl=us", {
@@ -3313,12 +3305,10 @@ async function searchGoogle(query, log) {
     signal: controller.signal
   });
   clearTimeout(timer);
-  if (!resp.ok) { log.push("google:http" + resp.status); return []; }
+  if (!resp.ok) return [];
   var html = await resp.text();
-  log.push("google:html:" + html.length + "bytes");
   // Check for consent/cookie wall
   if (html.includes("consent.google") || html.includes("Before you continue")) {
-    log.push("google:CONSENT_WALL");
     return [];
   }
   var results = [];
@@ -3361,38 +3351,31 @@ async function searchGoogle(query, log) {
       }
     }
   }
-  log.push("google:parsed:" + results.length + "results," + titles.length + "titles," + snippets.length + "snippets");
-  if (results.length === 0) {
-    log.push("google:sample:" + html.substring(0, 300).replace(/[\n\r]+/g, " "));
-  }
   return results;
 }
 
 async function webSearch(query) {
-  var log = [];
-
   // Fire all search sources in parallel
-  var wikiPromise = searchWikipedia(query, log).catch(function(e) { log.push("wiki:catch:" + e.message); return []; });
-  var ddgInstantPromise = searchDDGInstant(query, log).catch(function(e) { log.push("ddg-instant:catch:" + e.message); return []; });
-  var ddgHtmlPromise = searchDDGHtml(query, log).catch(function(e) { log.push("ddg-html:catch:" + e.message); return []; });
-  var googlePromise = searchGoogle(query, log).catch(function(e) { log.push("google:catch:" + e.message); return []; });
+  var ddgHtmlPromise = searchDDGHtml(query).catch(function() { return []; });
+  var googlePromise = searchGoogle(query).catch(function() { return []; });
+  var ddgInstantPromise = searchDDGInstant(query).catch(function() { return []; });
+  var wikiPromise = searchWikipedia(query).catch(function() { return []; });
 
   // Prefer structured search results first
   var ddgHtmlResults = await ddgHtmlPromise;
-  if (ddgHtmlResults.length > 0) { log.push("USED:ddg-html:" + ddgHtmlResults.length); return { results: ddgHtmlResults, log: log }; }
+  if (ddgHtmlResults.length > 0) return ddgHtmlResults;
 
   var googleResults = await googlePromise;
-  if (googleResults.length > 0) { log.push("USED:google:" + googleResults.length); return { results: googleResults, log: log }; }
+  if (googleResults.length > 0) return googleResults;
 
   // Knowledge sources as fallback
   var ddgInstantResults = await ddgInstantPromise;
-  if (ddgInstantResults.length > 0) { log.push("USED:ddg-instant:" + ddgInstantResults.length); return { results: ddgInstantResults, log: log }; }
+  if (ddgInstantResults.length > 0) return ddgInstantResults;
 
   var wikiResults = await wikiPromise;
-  if (wikiResults.length > 0) { log.push("USED:wiki:" + wikiResults.length); return { results: wikiResults, log: log }; }
+  if (wikiResults.length > 0) return wikiResults;
 
-  log.push("ALL_FAILED:no results from any source");
-  return { results: [], log: log };
+  return [];
 }
 
 // Determine if a question would benefit from live web search
@@ -3434,11 +3417,8 @@ async function handleAsk(question, context, conversation, channelMessages, activ
 
     // Web search: fetch live results for questions that need current info
     var searchResults = [];
-    var searchLog = [];
     if (needsWebSearch(question)) {
-      var searchData = await webSearch(question);
-      searchResults = searchData.results;
-      searchLog = searchData.log;
+      searchResults = await webSearch(question);
     }
 
     // Always include channel context when available — the model decides relevance
@@ -3482,17 +3462,10 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       messages: messages,
       max_tokens: 1024
     });
-    var response = "";
     if (result && result.response) {
-      response = sanitizeBotResponse(result.response);
-    } else {
-      response = "(Nymbot returned an empty response)";
+      return sanitizeBotResponse(result.response);
     }
-    // Append web search debug log if any
-    if (searchLog.length > 0) {
-      response += "\n\n`[search-debug: " + searchLog.join(" | ") + "]`";
-    }
-    return response;
+    return "(Nymbot returned an empty response)";
   } catch (e) {
     return "Nymbot error: " + (e.message || String(e));
   }
