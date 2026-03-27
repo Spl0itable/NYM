@@ -2651,7 +2651,7 @@ async function onRequest(context) {
   }
 
   // Occasionally append a zap prompt to select commands
-  var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "trivia", "riddle", "news", "btc", "bitcoin", "price"];
+  var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "trivia", "riddle", "news", "btc"];
   var ZAP_PROMPTS = [
     "⚡ Liked this response? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!",
     "⚡ Found this helpful? Send a Bitcoin zap to show some love! If you don't know what or how to zap, just ask!",
