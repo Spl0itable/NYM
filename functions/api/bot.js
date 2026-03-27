@@ -2647,7 +2647,7 @@ async function onRequest(context) {
   }
 
   // Append a zap prompt to select commands (excludes game commands that expect reply-guesses)
-  var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "news", "btc"];
+  var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "news", "btc", "bitcoin", "price"];
   var ZAP_PROMPTS = [
     "⚡ Liked this response? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!",
     "⚡ Found this helpful? Send a Bitcoin zap to show some love! If you don't know what or how to zap, just ask!",
@@ -3387,7 +3387,7 @@ async function handleTrivia(args, context) {
       max_tokens: 256
     });
     if (result && result.response) {
-      var text = result.response.trim();
+      var text = String(result.response).trim();
       // Extract JSON from response (handle markdown code fences)
       var jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -3418,7 +3418,7 @@ async function handleJoke(context) {
       max_tokens: 256
     });
     if (result && result.response) {
-      return "\u{1F602} " + sanitizeBotResponse(result.response.trim());
+      return "\u{1F602} " + sanitizeBotResponse(String(result.response).trim());
     }
     return "\u{1F602} I tried to think of a joke but my circuits got crossed. Try again!";
   } catch (e) {
@@ -3438,7 +3438,7 @@ async function handleRiddle(context) {
       max_tokens: 256
     });
     if (result && result.response) {
-      var text = result.response.trim();
+      var text = String(result.response).trim();
       var jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         var parsed = JSON.parse(jsonMatch[0]);
@@ -3476,7 +3476,7 @@ async function generateWord(ai, letterCount) {
       max_tokens: 32
     });
     if (result && result.response) {
-      var word = result.response.trim().toLowerCase().replace(/[^a-z]/g, "");
+      var word = String(result.response).trim().toLowerCase().replace(/[^a-z]/g, "");
       if (word.length === letterCount) return word;
     }
   } catch (e) {}
