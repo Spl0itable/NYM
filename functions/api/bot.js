@@ -2787,14 +2787,12 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- If someone asks you to do something harmful (spam, harass, raid, etc.) or asks HOW to do something harmful, do NOT help or explain how — just decline and then roast them for asking such a stupid question. Don't provide workarounds, alternatives, or explanations of why it's bad. Just shut it down and move on.",
   "",
   "=== ASCII ART ===",
-  "When a user asks you to draw, create, or make ASCII art, you will receive ASCII art from web search results. Your job is to:",
-  "- Pick the BEST ASCII art from the search results that matches what the user asked for.",
-  "- Reproduce the ASCII art EXACTLY as found — do NOT modify, simplify, or regenerate it. Copy it character-for-character.",
-  "- Always wrap ASCII art in triple backtick code blocks so it renders in monospace font and preserves spacing.",
-  "- If multiple good options are found, pick the one that is most recognizable and compact (fits well in chat).",
-  "- If no ASCII art is found in search results, tell the user you couldn't find a good match and suggest they try a different subject.",
-  "- NEVER attempt to create ASCII art yourself from scratch — you are bad at it. Only use art found from search results.",
-  "- If the user asks for something inappropriate or harmful as ASCII art, decline as you would for any harmful request.",
+  "When a user asks for ASCII art, the system will fetch real ASCII art from the web and include it in your context.",
+  "- If ASCII art code blocks are provided in your context, pick the BEST one that matches the request and include it in your response EXACTLY as-is. Do NOT modify or regenerate it.",
+  "- If multiple pieces are provided, pick the most recognizable and compact one (fits well in chat).",
+  "- Add a brief fun comment with the art, like 'Here you go!' or a relevant quip.",
+  "- CRITICAL: NEVER create ASCII art yourself. You are terrible at it. Only use art that was fetched from the web and provided to you.",
+  "- If no ASCII art was provided in your context (the fetch returned nothing), tell the user you couldn't find ASCII art for that subject and suggest trying a simpler/different subject like 'cat', 'dog', 'skull', 'dragon', 'heart', etc.",
   "",
   "=== RESPONSE INTELLIGENCE ===",
   "CRITICAL: Determine what TYPE of message the user is sending:",
@@ -3380,100 +3378,84 @@ async function webSearch(query) {
   return [];
 }
 
-// Fetch actual ASCII art by scraping pages that host it
+// Fetch actual ASCII art by directly scraping known ASCII art sites
 async function fetchAsciiArt(subject) {
   var results = [];
-  try {
-    // Step 1: Get URLs from DuckDuckGo HTML search
-    var controller = new AbortController();
-    var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
-    var resp = await fetch("https://html.duckduckgo.com/html/", {
-      method: "POST",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept": "text/html",
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: "q=" + encodeURIComponent("ASCII art " + subject),
-      signal: controller.signal
-    });
-    clearTimeout(timer);
-    if (!resp.ok) return [];
-    var html = await resp.text();
-    // Extract result URLs
-    var urlRegex = /<a[^>]+class="result__url"[^>]*href="([^"]+)"[^>]*>/gi;
-    var urls = [];
-    var m;
-    while ((m = urlRegex.exec(html)) !== null && urls.length < 5) {
-      var url = m[1].trim();
-      if (url.startsWith("//")) url = "https:" + url;
-      if (!url.startsWith("http")) continue;
-      // Decode DDG redirect URLs
-      if (url.includes("duckduckgo.com") && url.includes("uddg=")) {
-        var uddg = url.match(/uddg=([^&]+)/);
-        if (uddg) url = decodeURIComponent(uddg[1]);
-      }
-      urls.push(url);
-    }
-    // Also try extracting from result__a href
-    if (urls.length === 0) {
-      var linkRegex = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>/gi;
-      while ((m = linkRegex.exec(html)) !== null && urls.length < 5) {
-        var lurl = m[1].trim();
-        if (lurl.startsWith("//")) lurl = "https:" + lurl;
-        if (!lurl.startsWith("http")) continue;
-        if (lurl.includes("duckduckgo.com") && lurl.includes("uddg=")) {
-          var luddg = lurl.match(/uddg=([^&]+)/);
-          if (luddg) lurl = decodeURIComponent(luddg[1]);
-        }
-        urls.push(lurl);
-      }
-    }
-    if (urls.length === 0) return [];
+  var subjectLower = subject.toLowerCase().trim();
+  // Normalize common subjects to URL-friendly forms
+  var urlSubject = subjectLower.replace(/\s+/g, "+");
+  var firstLetter = subjectLower.charAt(0);
 
-    // Step 2: Fetch pages in parallel and extract <pre> blocks containing ASCII art
-    var fetchPromises = urls.slice(0, 3).map(function(pageUrl) {
-      return (async function() {
-        try {
-          var c2 = new AbortController();
-          var t2 = setTimeout(function() { c2.abort(); }, SEARCH_TIMEOUT);
-          var pageResp = await fetch(pageUrl, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-              "Accept": "text/html"
-            },
-            signal: c2.signal
-          });
-          clearTimeout(t2);
-          if (!pageResp.ok) return [];
-          var pageHtml = await pageResp.text();
-          var arts = [];
-          // Extract <pre> blocks (most ASCII art sites use <pre> tags)
-          var preRegex = /<pre[^>]*>([\s\S]*?)<\/pre>/gi;
-          var pm;
-          while ((pm = preRegex.exec(pageHtml)) !== null && arts.length < 3) {
-            var art = pm[1]
-              .replace(/<[^>]+>/g, "")
-              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-              .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
-            // Filter: must have multiple lines and look like art (special chars), not just text
-            var lines = art.split("\n").filter(function(l) { return l.trim().length > 0; });
-            var hasArtChars = /[\/\\|_\-=+*#@~^(){}\[\]<>]/.test(art);
-            if (lines.length >= 3 && hasArtChars && art.length >= 30 && art.length <= 5000) {
-              arts.push(art);
-            }
+  // Helper: fetch a page and extract art from <pre> tags or art containers
+  async function scrapeArt(pageUrl) {
+    try {
+      var c = new AbortController();
+      var t = setTimeout(function() { c.abort(); }, SEARCH_TIMEOUT);
+      var resp = await fetch(pageUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+          "Accept": "text/html,text/plain"
+        },
+        signal: c.signal,
+        redirect: "follow"
+      });
+      clearTimeout(t);
+      if (!resp.ok) return [];
+      var contentType = resp.headers.get("content-type") || "";
+      var body = await resp.text();
+      // If plain text, the whole body is likely ASCII art
+      if (contentType.includes("text/plain") && body.length >= 20 && body.length <= 10000) {
+        var plainLines = body.split("\n").filter(function(l) { return l.trim().length > 0; });
+        if (plainLines.length >= 3) return [body.trim()];
+      }
+      // Extract from <pre> tags
+      var arts = [];
+      var preRegex = /<pre[^>]*>([\s\S]*?)<\/pre>/gi;
+      var m;
+      while ((m = preRegex.exec(body)) !== null && arts.length < 4) {
+        var art = m[1]
+          .replace(/<[^>]+>/g, "")
+          .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+        var lines = art.split("\n").filter(function(l) { return l.trim().length > 0; });
+        var hasArtChars = /[\/\\|_\-=+*#@~^(){}\[\]<>]/.test(art);
+        if (lines.length >= 3 && hasArtChars && art.length >= 30 && art.length <= 5000) {
+          arts.push(art.trim());
+        }
+      }
+      // Also try <div class="ascii-art"> or similar containers
+      if (arts.length === 0) {
+        var divRegex = /<div[^>]+class="[^"]*art[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+        while ((m = divRegex.exec(body)) !== null && arts.length < 4) {
+          var dart = m[1].replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
+            .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+          var dlines = dart.split("\n").filter(function(l) { return l.trim().length > 0; });
+          if (dlines.length >= 3 && dart.length >= 30 && dart.length <= 5000) {
+            arts.push(dart.trim());
           }
-          return arts;
-        } catch (e) {
-          return [];
         }
-      })();
-    });
+      }
+      return arts;
+    } catch (e) {
+      return [];
+    }
+  }
 
-    var allArts = await Promise.all(fetchPromises);
-    for (var a = 0; a < allArts.length; a++) {
-      for (var b = 0; b < allArts[a].length && results.length < 3; b++) {
-        results.push("--- ASCII ART " + (results.length + 1) + " ---\n" + allArts[a][b]);
+  try {
+    // Fetch from multiple known ASCII art sources in parallel
+    var sources = [
+      // ascii.co.uk has predictable URLs: /art/{subject}
+      scrapeArt("https://ascii.co.uk/art/" + encodeURIComponent(subjectLower)),
+      // asciiart.eu search
+      scrapeArt("https://www.asciiart.eu/search?q=" + encodeURIComponent(subjectLower)),
+      // ascii-art.de organized by first letter
+      scrapeArt("https://www.ascii-art.de/ascii/" + firstLetter + "/" + encodeURIComponent(subjectLower) + ".txt"),
+    ];
+    var allResults = await Promise.all(sources);
+    for (var i = 0; i < allResults.length; i++) {
+      for (var j = 0; j < allResults[i].length && results.length < 3; j++) {
+        results.push("```\n" + allResults[i][j] + "\n```");
       }
     }
   } catch (e) {
@@ -3538,7 +3520,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       }
       contextBlock += "--- END SEARCH RESULTS ---\n";
       if (isAsciiArtRequest) {
-        contextBlock += "IMPORTANT: The user wants ASCII art. The results above contain ACTUAL ASCII art scraped from the web. Pick the BEST piece that matches what the user asked for and reproduce it EXACTLY character-for-character inside a triple-backtick code block. Do NOT modify, simplify, or regenerate it. Do NOT create your own ASCII art. If multiple pieces are shown, pick the most recognizable and appropriately sized one for chat. Add a brief fun comment before or after the art block.\n";
+        contextBlock += "IMPORTANT: The user wants ASCII art. The code blocks above contain REAL ASCII art fetched from the web. Pick the BEST one that matches what the user asked for and include it EXACTLY as-is in your response (already in code blocks). Do NOT modify it. Do NOT create your own ASCII art — just use what is provided above. Add a fun comment with it.\n";
       } else {
         contextBlock += "IMPORTANT: You MUST use these live web search results to answer the user's question with current, accurate information. Do NOT say you lack real-time data or can't access the web — the results above ARE real-time data retrieved just now. Answer naturally as if you know the information. Do NOT reference 'search results' or say 'according to my search'. If the results don't cover the question well, supplement with your own knowledge.\n";
       }
