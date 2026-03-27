@@ -2660,6 +2660,10 @@ async function onRequest(context) {
   var isWebSearchAsk = command.toLowerCase() === "ask" && needsWebSearch(args || "");
   if (ZAP_ELIGIBLE_COMMANDS.includes(command.toLowerCase()) && (isWebSearchAsk || Math.random() < 0.5)) {
     var zapPrompt = ZAP_PROMPTS[Math.floor(Math.random() * ZAP_PROMPTS.length)];
+    var userInputText = args || "";
+    if (isLikelyNonEnglish(userInputText) && context.env.AI) {
+      zapPrompt = await translateZapPrompt(zapPrompt, userInputText, context.env.AI);
+    }
     response = response + "\n\n" + zapPrompt;
   }
 
@@ -3089,6 +3093,30 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- When a user's message includes a quote-reply referencing another user's message, do NOT address or mention the quoted user. Only respond to the person who asked you the question. The quoted message is context only — never direct your response at the quoted user or mention them with @."
 ].join("\n");
 
+function isLikelyNonEnglish(text) {
+  if (!text) return false;
+  // Non-Latin scripts: CJK, Cyrillic, Arabic, Hebrew, Thai, Devanagari, etc.
+  if (/[\u0400-\u04FF\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u3000-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]/.test(text)) return true;
+  // Common Latin-script non-English markers: accented chars frequent in Romance/Germanic languages
+  var nonEnglishAccents = (text.match(/[àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿœšžÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕÖØÙÚÛÜÝŸŒŠŽ]/g) || []).length;
+  return nonEnglishAccents >= 2;
+}
+
+async function translateZapPrompt(zapPrompt, userText, ai) {
+  try {
+    var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+      messages: [
+        { role: "user", content: "Translate the following message into the same language as this user text: \"" + userText.slice(0, 200) + "\"\n\nMessage to translate:\n" + zapPrompt + "\n\nReturn ONLY the translated message, nothing else. Keep the ⚡ emoji." }
+      ],
+      max_tokens: 120
+    });
+    if (result && result.response && result.response.trim()) {
+      return result.response.trim();
+    }
+  } catch (_) {}
+  return zapPrompt;
+}
+
 function sanitizeInput(text) {
   if (typeof text !== "string") return "";
   // Truncate excessively long inputs
@@ -3512,16 +3540,35 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     var searchResults = [];
     var isAsciiArtRequest = /\b(ascii\s*art|draw|sketch)\b/i.test(question) && /\b(ascii|art|draw|make|create|generate|show)\b/i.test(question);
     if (isAsciiArtRequest) {
-      // Extract the subject from the request (strip common prefixes and trailing "ascii art")
-      var artSubject = question
-        .replace(/^(draw|make|create|generate|show|give)\s+(me\s+)?(an?\s+)?(ascii\s*art\s*(of|for)?\s*)?/i, "")
-        .replace(/\s*(in|as|using)?\s*ascii(\s*art)?$/i, "")
+      // Extract the subject from any natural-language ASCII art request
+      var cleanQ = question.replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").trim();
+      var artSubject;
+      if (/\bascii\s*art\s*(of|for)\b/i.test(cleanQ)) {
+        // Pattern: "... ascii art of/for X" → take X
+        artSubject = cleanQ.replace(/^.*?\bascii\s*art\s*(of|for)\s*/i, "").trim();
+      } else if (/^.*?\bascii\s*art\b/i.test(cleanQ)) {
+        // Pattern: "... ascii art X" (no of/for) → take everything after "ascii art"
+        artSubject = cleanQ.replace(/^.*?\bascii\s*art\s*/i, "").trim();
+        // If empty (e.g. "X ascii art"), fall through to get X from before
+        if (!artSubject) {
+          artSubject = cleanQ.replace(/\s*\bascii\s*art\s*$/i, "").trim();
+        }
+      } else {
+        artSubject = cleanQ;
+      }
+      // Strip any remaining leading command verbs and filler
+      artSubject = artSubject
+        .replace(/^(can\s+you\s+)?(please\s+)?(draw|make|create|generate|show|give|do|get|find|send)\s+(me\s+)?(an?\s+|some\s+)?/i, "")
+        .replace(/\s*(in|as|using)?\s*ascii(\s*art)?\s*[?!.]*$/i, "")
+        .replace(/^(an?\s+|the\s+)/i, "")  // strip leading article
+        .replace(/\s*(please|thanks|thx|pls)[?!.]*$/i, "")  // strip trailing noise
         .trim();
-      if (!artSubject) artSubject = question;
+      if (!artSubject) artSubject = cleanQ || question;
       var asciiArtResults = await fetchAsciiArt(artSubject);
-      // If multi-word subject found nothing, retry with just the first word
+      // If multi-word subject found nothing, retry with just the first meaningful word
       if (asciiArtResults.length === 0 && artSubject.indexOf(" ") !== -1) {
-        var firstWord = artSubject.split(" ")[0];
+        var stopwords = /^(a|an|the|my|your|some|any|one|this|that)$/i;
+        var firstWord = artSubject.split(/\s+/).find(function(w) { return w && !stopwords.test(w); }) || artSubject.split(" ")[0];
         asciiArtResults = await fetchAsciiArt(firstWord);
       }
       // If still nothing, return early — don't send to AI or it will hallucinate art
