@@ -2787,15 +2787,14 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- If someone asks you to do something harmful (spam, harass, raid, etc.) or asks HOW to do something harmful, do NOT help or explain how — just decline and then roast them for asking such a stupid question. Don't provide workarounds, alternatives, or explanations of why it's bad. Just shut it down and move on.",
   "",
   "=== ASCII ART ===",
-  "You are skilled at creating ASCII art. When a user asks you to draw, create, or make ASCII art of anything, generate it using standard ASCII/Unicode characters inside a code block (triple backticks).",
-  "Guidelines for ASCII art:",
-  "- Use monospaced characters: letters, numbers, symbols (/ \\ | _ - = + * # @ . , : ; ' \" ~ ^ ( ) [ ] { } < >)",
-  "- Keep art compact enough to display well in a chat message (max ~40 columns wide, ~20 rows tall).",
-  "- For simple requests (hearts, stars, animals, faces, logos), create clean recognizable shapes.",
-  "- For complex requests, use the space efficiently — stylized/simplified versions are fine.",
+  "When a user asks you to draw, create, or make ASCII art, you will receive ASCII art from web search results. Your job is to:",
+  "- Pick the BEST ASCII art from the search results that matches what the user asked for.",
+  "- Reproduce the ASCII art EXACTLY as found — do NOT modify, simplify, or regenerate it. Copy it character-for-character.",
   "- Always wrap ASCII art in triple backtick code blocks so it renders in monospace font and preserves spacing.",
+  "- If multiple good options are found, pick the one that is most recognizable and compact (fits well in chat).",
+  "- If no ASCII art is found in search results, tell the user you couldn't find a good match and suggest they try a different subject.",
+  "- NEVER attempt to create ASCII art yourself from scratch — you are bad at it. Only use art found from search results.",
   "- If the user asks for something inappropriate or harmful as ASCII art, decline as you would for any harmful request.",
-  "- Be creative! Users love unique, well-crafted ASCII art. Combine it with your playful personality.",
   "",
   "=== RESPONSE INTELLIGENCE ===",
   "CRITICAL: Determine what TYPE of message the user is sending:",
@@ -2904,7 +2903,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Avatar: click 'Change photo' to upload a profile picture",
   "- Banner: click 'Choose banner' to upload a banner image",
   "- Bio: text area (max 150 chars)",
-    "- Lightning Address: your Bitcoin Lightning address for receiving zaps",
+  "- Lightning Address: your Bitcoin Lightning address for receiving zaps",
   "- 'Reveal this nym's private key' expandable section:",
   "  - Shows your nsec (Nostr secret key) — view-only, with eye toggle and copy button",
   "  - IMPORTANT: This is for VIEWING/COPYING your nsec to back it up. To LOGIN with an nsec, use the Nostr Login Modal (click ASCII logo)",
@@ -3388,7 +3387,6 @@ function needsWebSearch(question) {
   var skipPatterns = [
     /^(hi|hey|hello|sup|yo|gm|gn|thanks|thank you|ok|okay|sure|lol|lmao|haha)\b/,
     /^(you |u |how are |what do you |do you |can you |will you |are you |tell me about yourself|what are you)/,
-    /^(draw |make |create |generate ).*(ascii|art|picture|image)/,
     /^(help|commands|what can you do)/
   ];
   for (var i = 0; i < skipPatterns.length; i++) {
@@ -3414,7 +3412,17 @@ async function handleAsk(question, context, conversation, channelMessages, activ
 
     // Web search: fetch live results for questions that need current info
     var searchResults = [];
-    if (needsWebSearch(question)) {
+    var isAsciiArtRequest = /\b(ascii\s*art|draw|sketch)\b/i.test(question) && /\b(ascii|art|draw|make|create|generate|show)\b/i.test(question);
+    if (isAsciiArtRequest) {
+      // Extract the subject from the request (strip common prefixes)
+      var artSubject = question.replace(/^(draw|make|create|generate|show|give)\s+(me\s+)?(an?\s+)?(ascii\s*art\s*(of|for)?\s*)?/i, "").replace(/\s*(in|as|using)\s+ascii(\s*art)?$/i, "").trim();
+      if (!artSubject) artSubject = question;
+      searchResults = await webSearch("ASCII art " + artSubject + " site:ascii-art.de OR site:asciiart.eu OR site:ascii.co.uk");
+      // If targeted search fails, try broader
+      if (searchResults.length === 0) {
+        searchResults = await webSearch("ASCII art " + artSubject);
+      }
+    } else if (needsWebSearch(question)) {
       searchResults = await webSearch(question);
     }
 
@@ -3428,7 +3436,11 @@ async function handleAsk(question, context, conversation, channelMessages, activ
         contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
       }
       contextBlock += "--- END SEARCH RESULTS ---\n";
-      contextBlock += "IMPORTANT: You MUST use these live web search results to answer the user's question with current, accurate information. Do NOT say you lack real-time data or can't access the web — the results above ARE real-time data retrieved just now. Answer naturally as if you know the information. Do NOT reference 'search results' or say 'according to my search'. If the results don't cover the question well, supplement with your own knowledge.\n";
+      if (isAsciiArtRequest) {
+        contextBlock += "IMPORTANT: The user wants ASCII art. The search results above contain ASCII art found from the web. Find the best ASCII art in these results that matches what the user asked for and reproduce it EXACTLY character-for-character inside a code block (triple backticks). Do NOT create your own ASCII art — only use what was found. If no usable ASCII art appears in the results, say you couldn't find a good match.\n";
+      } else {
+        contextBlock += "IMPORTANT: You MUST use these live web search results to answer the user's question with current, accurate information. Do NOT say you lack real-time data or can't access the web — the results above ARE real-time data retrieved just now. Answer naturally as if you know the information. Do NOT reference 'search results' or say 'according to my search'. If the results don't cover the question well, supplement with your own knowledge.\n";
+      }
     }
     if (channelCtx) {
       contextBlock += "--- CHANNEL CONTEXT (for reference) ---\n" + channelCtx + "\n--- END CONTEXT ---\n";
