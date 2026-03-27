@@ -18178,9 +18178,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // later markdown/mention/channel processing doesn't touch their contents
         const codePlaceholders = [];
         formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => {
-            const formattedCode = code.trim().replace(/\n/g, '<br/>');
+            const trimmedCode = code.trim();
+            const formattedCode = trimmedCode.replace(/\n/g, '<br/>');
+            const escapedRaw = trimmedCode.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
             const idx = codePlaceholders.length;
-            codePlaceholders.push(`<pre><code>${formattedCode}</code></pre>`);
+            codePlaceholders.push(`<div class="code-block-wrapper"><pre><code>${formattedCode}</code></pre><button class="code-copy-btn" onclick="navigator.clipboard.writeText('${escapedRaw}'.replace(/\\\\n/g,'\\n')).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)}).catch(()=>{})">Copy</button></div>`);
             return `\uFDD0${idx}\uFDD1`;
         });
         formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
@@ -26475,7 +26477,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.244 ═══<br/>
+═══ Nymchat v3.56.245 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>

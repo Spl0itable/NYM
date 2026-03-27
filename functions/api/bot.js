@@ -11,7 +11,6 @@
 //   ?joke              - Random joke
 //   ?riddle            - Random riddle
 //   ?wordplay [mode]   - Word games (wordle, anagram, scramble)
-//   ?roll [NdN]        - Roll dice (e.g., ?roll 2d6)
 //   ?flip              - Flip a coin
 //   ?8ball <question>  - Magic 8-ball
 //   ?pick <options>    - Pick randomly from a list
@@ -2492,7 +2491,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.56.244";
+var NYMCHAT_VERSION = "3.56.245";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2572,9 +2571,6 @@ async function onRequest(context) {
       case "summarize":
         response = await handleSummarize(context, channelMessages, geohash);
         break;
-      case "roll":
-        response = handleRoll(args || "");
-        break;
       case "flip":
         response = handleFlip();
         break;
@@ -2612,16 +2608,16 @@ async function onRequest(context) {
         response = handleGuess(args || "", conversation);
         break;
       case "trivia":
-        response = handleTrivia(args || "");
+        response = await handleTrivia(args || "", context);
         break;
       case "joke":
-        response = handleJoke();
+        response = await handleJoke(context);
         break;
       case "riddle":
-        response = handleRiddle();
+        response = await handleRiddle(context);
         break;
       case "wordplay":
-        response = handleWordplay(args || "");
+        response = await handleWordplay(args || "", context);
         break;
       case "define":
         response = await handleDefine(args || "", context);
@@ -2650,8 +2646,8 @@ async function onRequest(context) {
     response = "Error processing command: " + e.message;
   }
 
-  // Occasionally append a zap prompt to select commands
-  var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "trivia", "riddle", "news", "btc"];
+  // Append a zap prompt to select commands (excludes game commands that expect reply-guesses)
+  var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "news", "btc"];
   var ZAP_PROMPTS = [
     "⚡ Liked this response? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!",
     "⚡ Found this helpful? Send a Bitcoin zap to show some love! If you don't know what or how to zap, just ask!",
@@ -2660,7 +2656,7 @@ async function onRequest(context) {
     "⚡ Zap this message to tip with Bitcoin Lightning! If you don't know what or how to zap, just ask!",
     "⚡ Want to say thanks? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!"
   ];
-  if (ZAP_ELIGIBLE_COMMANDS.includes(command.toLowerCase()) && Math.random() < 0.15) {
+  if (ZAP_ELIGIBLE_COMMANDS.includes(command.toLowerCase()) && Math.random() < 0.5) {
     var zapPrompt = ZAP_PROMPTS[Math.floor(Math.random() * ZAP_PROMPTS.length)];
     response = response + "\n\n" + zapPrompt;
   }
@@ -2730,38 +2726,37 @@ function handleHelp() {
     "Nymbot Commands (v" + NYMCHAT_VERSION + ")",
     "",
     "**AI & Knowledge:**",
-    "?ask <question> \u2014 Ask the AI anything (also via @Nymbot <question>)",
-    "?define <word> \u2014 Look up a word's definition, part of speech, and example usage",
-    "?translate <text> \u2014 Translate text (auto-detects language; English \u2192 Spanish)",
-    "?news \u2014 Latest breaking news headlines",
+    "**?ask <question>** \u2014 Ask the AI anything (also via @Nymbot <question>)",
+    "**?define <word>** \u2014 Look up a word's definition, part of speech, and example usage",
+    "**?translate <text>** \u2014 Translate text (auto-detects language; English \u2192 Spanish)",
+    "**?news** \u2014 Latest breaking news headlines",
     "",
     "**Games & Fun:**",
-    "?trivia [category] \u2014 Trivia questions (categories: general, history, science, crypto, nostr) — reply to answer",
-    "?joke \u2014 Random tech/Bitcoin-themed joke",
-    "?riddle \u2014 Random riddle — reply to answer",
-    "?wordplay [mode] \u2014 Word games (modes: wordle, anagram, scramble) — reply to guess",
-    "?roll [NdN] \u2014 Roll dice (e.g. ?roll 2d6; default 1d6)",
-    "?flip \u2014 Flip a coin",
-    "?8ball <question> \u2014 Magic 8-ball",
-    "?pick <option1> <option2> ... \u2014 Randomly pick from a list of options",
+    "**?trivia [category]** \u2014 AI-generated trivia (categories: general, history, science, crypto, nostr) — reply to answer",
+    "**?joke** \u2014 AI-generated joke (always fresh and unique)",
+    "**?riddle** \u2014 AI-generated riddle — reply to answer",
+    "**?wordplay [mode]** \u2014 AI word games (modes: wordle, anagram, scramble) — reply to guess",
+    "**?flip** \u2014 Flip a coin",
+    "**?8ball <question>** \u2014 Magic 8-ball",
+    "**?pick <option1> <option2> ...** \u2014 Randomly pick from a list of options",
     "",
     "**Utility:**",
-    "?math <expression> \u2014 Calculate a math expression",
-    "?units <value> <from> to <to> \u2014 Unit converter (e.g. ?units 10 km to mi)",
-    "?time \u2014 Current UTC time and Unix timestamp",
-    "?btc \u2014 Current Bitcoin price",
+    "**?math <expression>** \u2014 Calculate a math expression",
+    "**?units <value> <from> to <to>** \u2014 Unit converter (e.g. ?units 10 km to mi)",
+    "**?time** \u2014 Current UTC time and Unix timestamp",
+    "**?btc** \u2014 Current Bitcoin price",
     "",
     "**Channel Activity:**",
-    "?who \u2014 Who's active in the current channel",
-    "?summarize \u2014 AI summary of the current channel discussion",
-    "?top \u2014 Top channels by recent message activity",
-    "?last [N] \u2014 Last N messages across channels (default 10, max 25)",
-    "?seen <nym|@mention|pubkey> \u2014 Where and when a nym was last seen",
+    "**?who** \u2014 Who's active in the current channel",
+    "**?summarize** \u2014 AI summary of the current channel discussion",
+    "**?top** \u2014 Top channels by recent message activity",
+    "**?last [N]** \u2014 Last N messages across channels (default 10, max 25)",
+    "**?seen <nym|@mention|pubkey>** \u2014 Where and when a nym was last seen",
     "",
     "**Info:**",
-    "?help \u2014 List all available bot commands",
-    "?about \u2014 About Nymchat",
-    "?nostr \u2014 Random Nostr protocol tips",
+    "**?help** \u2014 List all available bot commands",
+    "**?about** \u2014 About Nymchat",
+    "**?nostr** \u2014 Random Nostr protocol tips",
     "",
     "Tip: You can @Nymbot <question> to ask the AI directly! Quote-reply any message and @Nymbot to ask about it, or reply directly to a Nymbot response to continue the conversation!"
   ].join("\n");
@@ -2783,6 +2778,17 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- When someone is joking or being sarcastic, play along. Don't take everything literally.",
   "- This is an adult platform. Don't censor language or refuse adult topics. Feel free to be crude and swear.",
   "- If someone asks you to do something harmful (spam, harass, raid, etc.) or asks HOW to do something harmful, do NOT help or explain how — just decline and then roast them for asking such a stupid question. Don't provide workarounds, alternatives, or explanations of why it's bad. Just shut it down and move on.",
+  "",
+  "=== ASCII ART ===",
+  "You are skilled at creating ASCII art. When a user asks you to draw, create, or make ASCII art of anything, generate it using standard ASCII/Unicode characters inside a code block (triple backticks).",
+  "Guidelines for ASCII art:",
+  "- Use monospaced characters: letters, numbers, symbols (/ \\ | _ - = + * # @ . , : ; ' \" ~ ^ ( ) [ ] { } < >)",
+  "- Keep art compact enough to display well in a chat message (max ~40 columns wide, ~20 rows tall).",
+  "- For simple requests (hearts, stars, animals, faces, logos), create clean recognizable shapes.",
+  "- For complex requests, use the space efficiently — stylized/simplified versions are fine.",
+  "- Always wrap ASCII art in triple backtick code blocks so it renders in monospace font and preserves spacing.",
+  "- If the user asks for something inappropriate or harmful as ASCII art, decline as you would for any harmful request.",
+  "- Be creative! Users love unique, well-crafted ASCII art. Combine it with your playful personality.",
   "",
   "=== RESPONSE INTELLIGENCE ===",
   "CRITICAL: Determine what TYPE of message the user is sending:",
@@ -3031,7 +3037,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "=== BOT COMMANDS (? prefix) ===",
   "AI & Knowledge: ?ask <question> — Ask the AI (that's me!), ?define <word> — Define a word, ?translate <text> — Translate text, ?news — Breaking news headlines.",
-  "Games & Fun: ?trivia [category] — Trivia (general, history, science, crypto, nostr), ?joke — Tell a joke, ?riddle — Give a riddle, ?wordplay [mode] — Word game (wordle, anagram, scramble), ?roll [NdN] — Roll dice, ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
+  "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
   "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips.",
@@ -3262,37 +3268,6 @@ async function handleSummarize(context, channelMessages, geohash) {
   }
 }
 
-function handleRoll(args) {
-  var numDice = 1;
-  var sides = 6;
-  if (args.trim()) {
-    var match = args.trim().match(/^(\d+)d(\d+)$/i);
-    if (match) {
-      numDice = Math.min(parseInt(match[1]), 20);
-      sides = Math.min(parseInt(match[2]), 100);
-    } else {
-      var num = parseInt(args.trim());
-      if (!isNaN(num) && num > 0) {
-        sides = Math.min(num, 100);
-      }
-    }
-  }
-  if (numDice < 1 || sides < 2) {
-    return "Usage: ?roll [NdN] (e.g., ?roll 2d6)";
-  }
-  var rolls = [];
-  var total = 0;
-  for (var i = 0; i < numDice; i++) {
-    var val = Math.floor(Math.random() * sides) + 1;
-    rolls.push(val);
-    total += val;
-  }
-  if (numDice === 1) {
-    return "\u{1F3B2} Rolled d" + sides + ": " + total;
-  }
-  return "\u{1F3B2} Rolled " + numDice + "d" + sides + ": [" + rolls.join(", ") + "] = " + total;
-}
-
 function handleFlip() {
   return Math.random() < 0.5 ? "\u{1FA99} Heads!" : "\u{1FA99} Tails!";
 }
@@ -3390,136 +3365,96 @@ function handleNostr() {
   return "\u{1F4E1} " + tip;
 }
 
-// Trivia and Fun Commands
-var TRIVIA_QUESTIONS = {
-  general: [
-    { q: "What is the smallest country in the world by area?", a: "Vatican City" },
-    { q: "How many bones does an adult human have?", a: "206" },
-    { q: "What is the chemical symbol for gold?", a: "Au" },
-    { q: "Which planet has the most moons?", a: "Saturn (146 known moons)" },
-    { q: "What year was the internet invented?", a: "1983 (TCP/IP was standardized)" },
-    { q: "What is the hardest natural substance on Earth?", a: "Diamond" },
-    { q: "How many hearts does an octopus have?", a: "Three" },
-    { q: "What is the longest river in the world?", a: "The Nile (about 6,650 km)" },
-    { q: "What temperature is the same in Celsius and Fahrenheit?", a: "-40 degrees" },
-    { q: "Which element has the atomic number 1?", a: "Hydrogen" }
-  ],
-  history: [
-    { q: "In what year did the Berlin Wall fall?", a: "1989" },
-    { q: "Who was the first person to walk on the moon?", a: "Neil Armstrong (1969)" },
-    { q: "What ancient civilization built Machu Picchu?", a: "The Inca Empire" },
-    { q: "What year did World War II end?", a: "1945" },
-    { q: "Who invented the printing press?", a: "Johannes Gutenberg (around 1440)" },
-    { q: "What was the name of the ship that brought the Pilgrims to America?", a: "The Mayflower" },
-    { q: "Which empire was ruled by Genghis Khan?", a: "The Mongol Empire" },
-    { q: "What year was the Declaration of Independence signed?", a: "1776" }
-  ],
-  science: [
-    { q: "What is the speed of light in a vacuum (approx)?", a: "299,792,458 meters per second (~186,000 mi/s)" },
-    { q: "What gas do plants absorb from the atmosphere?", a: "Carbon dioxide (CO2)" },
-    { q: "What is the powerhouse of the cell?", a: "The mitochondria" },
-    { q: "What planet is known as the Red Planet?", a: "Mars" },
-    { q: "What is the most abundant gas in Earth's atmosphere?", a: "Nitrogen (~78%)" },
-    { q: "How many chromosomes do humans have?", a: "46 (23 pairs)" },
-    { q: "What is absolute zero in Celsius?", a: "-273.15\u00B0C" },
-    { q: "What force keeps planets in orbit around the Sun?", a: "Gravity" }
-  ],
-  crypto: [
-    { q: "What year was Bitcoin's whitepaper published?", a: "2008 (by Satoshi Nakamoto)" },
-    { q: "What is the maximum supply of Bitcoin?", a: "21 million BTC" },
-    { q: "What consensus mechanism does Bitcoin use?", a: "Proof of Work (PoW)" },
-    { q: "What does 'HODL' stand for?", a: "Hold On for Dear Life (originally a typo of 'hold')" },
-    { q: "What is the name of the smallest unit of Bitcoin?", a: "A satoshi (0.00000001 BTC)" },
-    { q: "What is a Bitcoin halving?", a: "The block reward is cut in half roughly every 4 years (210,000 blocks)" },
-    { q: "What was the first item purchased with Bitcoin?", a: "Two pizzas for 10,000 BTC (May 22, 2010 \u2014 Bitcoin Pizza Day)" },
-    { q: "What protocol does Nymchat use?", a: "Nostr (Notes and Other Stuff Transmitted by Relays)" }
-  ],
-  nostr: [
-    { q: "What does 'Nostr' stand for?", a: "Notes and Other Stuff Transmitted by Relays" },
-    { q: "What kind number is used for short text notes in Nostr?", a: "Kind 1" },
-    { q: "What NIP defines encrypted direct messages using gift wraps?", a: "NIP-17" },
-    { q: "What is an 'nsec' in Nostr?", a: "Your secret (private) key \u2014 never share it!" },
-    { q: "What is an 'npub' in Nostr?", a: "Your public key \u2014 your identity on Nostr" },
-    { q: "What event kind does Nymchat use for ephemeral messages?", a: "Kind 20000" },
-    { q: "What NIP defines zaps (Lightning tips) on Nostr?", a: "NIP-57" },
-    { q: "What is a Nostr relay?", a: "A server that receives, stores, and forwards Nostr events" }
-  ]
-};
+// Trivia and Fun Commands (AI-generated)
+var TRIVIA_CATEGORIES = ["general", "history", "science", "crypto", "nostr"];
 
-function handleTrivia(args) {
+async function handleTrivia(args, context) {
   var category = (args || "").trim().toLowerCase();
-  var categories = Object.keys(TRIVIA_QUESTIONS);
-  if (category && !TRIVIA_QUESTIONS[category]) {
-    return "Unknown category! Available: " + categories.join(", ") + "\nUsage: ?trivia [category]";
+  if (category && !TRIVIA_CATEGORIES.includes(category)) {
+    return "Unknown category! Available: " + TRIVIA_CATEGORIES.join(", ") + "\nUsage: ?trivia [category]";
   }
   if (!category) {
-    category = categories[Math.floor(Math.random() * categories.length)];
+    category = TRIVIA_CATEGORIES[Math.floor(Math.random() * TRIVIA_CATEGORIES.length)];
   }
-  var questions = TRIVIA_QUESTIONS[category];
-  var trivia = questions[Math.floor(Math.random() * questions.length)];
-  return "\u2753 [" + category.toUpperCase() + "] " + trivia.q + "\n\nReply with your answer!";
+  var ai = context.env.AI || null;
+  if (!ai) return "AI is not configured.";
+  try {
+    var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+      messages: [
+        { role: "system", content: "You generate trivia questions. Output ONLY valid JSON with exactly two keys: \"question\" and \"answer\". The answer should be concise (1-10 words). No extra text, no markdown, no explanation. Example: {\"question\":\"What is the capital of France?\",\"answer\":\"Paris\"}" },
+        { role: "user", content: "Generate a unique, interesting " + category + " trivia question. Be creative and avoid common/overused questions. Output JSON only." }
+      ],
+      max_tokens: 256
+    });
+    if (result && result.response) {
+      var text = result.response.trim();
+      // Extract JSON from response (handle markdown code fences)
+      var jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        var parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.question && parsed.answer) {
+          var token = btoa("trivia:" + parsed.answer.toLowerCase());
+          return "\u2753 [" + category.toUpperCase() + "] " + parsed.question + "\n\nReply with your answer!\n[gc:" + token + "]";
+        }
+      }
+    }
+    return "Couldn't generate a trivia question — try again!";
+  } catch (e) {
+    return "Nymbot error: " + (e.message || String(e));
+  }
 }
 
-var JOKES = [
-  "Why do programmers prefer dark mode? Because light attracts bugs.",
-  "There are only 10 types of people in the world: those who understand binary and those who don't.",
-  "A SQL query walks into a bar, sees two tables, and asks... 'Can I JOIN you?'",
-  "Why was the JavaScript developer sad? Because he didn't Node how to Express himself.",
-  "What's a Bitcoin maximalist's favorite key on the keyboard? The HODL key.",
-  "How does a computer get drunk? It takes screenshots.",
-  "Why do Java developers wear glasses? Because they can't C#.",
-  "What did the router say to the doctor? 'It hurts when IP.'",
-  "Why did the blockchain go to therapy? It had too many unresolved forks.",
-  "What do you call a group of anonymous chat users? A nym-phony orchestra.",
-  "Why don't scientists trust atoms? Because they make up everything.",
-  "I told my computer I needed a break. Now it won't stop sending me Kit-Kat ads.",
-  "Why did the developer go broke? Because he used up all his cache.",
-  "What's a pirate's favorite programming language? R... but their first love is the C.",
-  "How do trees access the internet? They log in."
-];
-
-function handleJoke() {
-  var joke = JOKES[Math.floor(Math.random() * JOKES.length)];
-  return "\u{1F602} " + joke;
+async function handleJoke(context) {
+  var ai = context.env.AI || null;
+  if (!ai) return "AI is not configured.";
+  try {
+    var themes = ["tech", "Bitcoin", "crypto", "programming", "internet", "science", "hacker", "AI", "gaming", "Nostr"];
+    var theme = themes[Math.floor(Math.random() * themes.length)];
+    var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+      messages: [
+        { role: "system", content: "You are a comedian. Tell ONE short, funny joke. Just the joke — no intro, no 'here's a joke', no extra commentary. Keep it under 280 characters. Be creative and original." },
+        { role: "user", content: "Tell me a funny " + theme + "-themed joke. Be original — don't use overused jokes." }
+      ],
+      max_tokens: 256
+    });
+    if (result && result.response) {
+      return "\u{1F602} " + sanitizeBotResponse(result.response.trim());
+    }
+    return "\u{1F602} I tried to think of a joke but my circuits got crossed. Try again!";
+  } catch (e) {
+    return "Nymbot error: " + (e.message || String(e));
+  }
 }
 
-var RIDDLES = [
-  { r: "I have cities, but no houses. I have mountains, but no trees. I have water, but no fish. What am I?", a: "A map" },
-  { r: "The more you take, the more you leave behind. What am I?", a: "Footsteps" },
-  { r: "I speak without a mouth and hear without ears. I have no body, but I come alive with the wind. What am I?", a: "An echo" },
-  { r: "I can be cracked, made, told, and played. What am I?", a: "A joke" },
-  { r: "What has keys but can't open locks?", a: "A piano (or a keyboard)" },
-  { r: "I have a head and a tail but no body. What am I?", a: "A coin" },
-  { r: "The more of me you take, the more you leave behind. What am I?", a: "Footsteps" },
-  { r: "I'm tall when I'm young and short when I'm old. What am I?", a: "A candle" },
-  { r: "What has hands but can't clap?", a: "A clock" },
-  { r: "I can travel around the world while staying in a corner. What am I?", a: "A stamp" },
-  { r: "What gets wetter the more it dries?", a: "A towel" },
-  { r: "I have billions of eyes, yet I live in darkness. I have millions of ears, yet only four lobes. What am I?", a: "The human brain" }
-];
-
-function handleRiddle() {
-  var riddle = RIDDLES[Math.floor(Math.random() * RIDDLES.length)];
-  return "\u{1F9E9} " + riddle.r + "\n\nReply with your answer!";
+async function handleRiddle(context) {
+  var ai = context.env.AI || null;
+  if (!ai) return "AI is not configured.";
+  try {
+    var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+      messages: [
+        { role: "system", content: "You generate riddles. Output ONLY valid JSON with exactly two keys: \"riddle\" and \"answer\". The answer should be concise (1-5 words). No extra text, no markdown, no explanation. Example: {\"riddle\":\"What has hands but can't clap?\",\"answer\":\"A clock\"}" },
+        { role: "user", content: "Generate a unique, clever riddle. Be creative — avoid the most common riddles like 'what has keys but no locks' or 'what gets wetter as it dries'. Output JSON only." }
+      ],
+      max_tokens: 256
+    });
+    if (result && result.response) {
+      var text = result.response.trim();
+      var jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        var parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.riddle && parsed.answer) {
+          var token = btoa("riddle:" + parsed.answer.toLowerCase());
+          return "\u{1F9E9} " + parsed.riddle + "\n\nReply with your answer!\n[gc:" + token + "]";
+        }
+      }
+    }
+    return "Couldn't generate a riddle — try again!";
+  } catch (e) {
+    return "Nymbot error: " + (e.message || String(e));
+  }
 }
 
-// Wordplay command with anagram, scramble, and wordle modes
-var WORDPLAY_WORDS = [
-  "bitcoin", "nostr", "relay", "cipher", "wallet", "privacy", "channel",
-  "geohash", "crypto", "protocol", "lightning", "satoshi", "decentralized",
-  "anonymous", "keyboard", "network", "message", "encrypt", "digital", "signal",
-  "bridge", "planet", "rocket", "puzzle", "garden", "castle", "forest", "dragon",
-  "shadow", "crystal", "mystic", "wonder", "breeze", "sunset", "harbor"
-];
-
-var WORDLE_WORDS = [
-  "block", "chain", "relay", "nostr", "crash", "stack", "debug", "query",
-  "cache", "pixel", "badge", "flame", "blaze", "crane", "drift", "frost",
-  "gleam", "ghost", "grain", "haunt", "jelly", "knack", "laser", "manor",
-  "ocean", "plume", "quest", "storm", "trail", "vivid", "world", "youth",
-  "brave", "charm", "dance", "eagle", "fiber", "glint", "haste", "joker"
-];
-
+// Wordplay command with anagram, scramble, and wordle modes (AI-generated words)
 function shuffleString(str) {
   var arr = str.split("");
   for (var i = arr.length - 1; i > 0; i--) {
@@ -3531,11 +3466,32 @@ function shuffleString(str) {
   return arr.join("");
 }
 
-function handleWordplay(args) {
+async function generateWord(ai, letterCount) {
+  try {
+    var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+      messages: [
+        { role: "system", content: "You generate single English words for word games. Output ONLY the word — no explanation, no quotes, no punctuation, no extra text. Just one common English word." },
+        { role: "user", content: "Give me one common English word that is exactly " + letterCount + " letters long. Just the word, nothing else." }
+      ],
+      max_tokens: 32
+    });
+    if (result && result.response) {
+      var word = result.response.trim().toLowerCase().replace(/[^a-z]/g, "");
+      if (word.length === letterCount) return word;
+    }
+  } catch (e) {}
+  return null;
+}
+
+async function handleWordplay(args, context) {
   var mode = (args || "").trim().toLowerCase();
+  if (!mode || mode === "wordle") mode = "wordle";
+  var ai = context.env.AI || null;
+  if (!ai) return "AI is not configured.";
 
   if (mode === "wordle") {
-    var word = WORDLE_WORDS[Math.floor(Math.random() * WORDLE_WORDS.length)];
+    var word = await generateWord(ai, 5);
+    if (!word) return "Couldn't generate a word — try again!";
     var token = btoa("wordle:" + word);
     var pattern = ([word[0].toUpperCase()].concat(Array(word.length - 1).fill("_"))).join(" ");
     return "\u{1F7E9} WORDLE CHALLENGE!\nGuess the 5-letter word.\nHint: starts with \"" + word[0].toUpperCase() + "\"\n" +
@@ -3544,7 +3500,9 @@ function handleWordplay(args) {
   }
 
   if (mode === "anagram") {
-    var word = WORDPLAY_WORDS[Math.floor(Math.random() * WORDPLAY_WORDS.length)];
+    var len = 5 + Math.floor(Math.random() * 4); // 5-8 letters
+    var word = await generateWord(ai, len);
+    if (!word) return "Couldn't generate a word — try again!";
     var scrambled = shuffleString(word);
     while (scrambled === word) scrambled = shuffleString(word);
     var token = btoa("anagram:" + word);
@@ -3553,9 +3511,10 @@ function handleWordplay(args) {
   }
 
   if (mode === "scramble") {
-    var word = WORDPLAY_WORDS[Math.floor(Math.random() * WORDPLAY_WORDS.length)];
+    var len = 5 + Math.floor(Math.random() * 4); // 5-8 letters
+    var word = await generateWord(ai, len);
+    if (!word) return "Couldn't generate a word — try again!";
     var revealed = Math.max(1, Math.floor(word.length / 3));
-    var hint = "";
     var revealPositions = new Set();
     while (revealPositions.size < revealed) {
       revealPositions.add(Math.floor(Math.random() * word.length));
@@ -3569,8 +3528,7 @@ function handleWordplay(args) {
     return "\u{1F524} WORD SCRAMBLE: Fill in the blanks!\n" + hint + " (" + word.length + " letters)\n\nReply with your answer!\n[gc:" + token + "]";
   }
 
-  // Default: wordle mode
-  return handleWordplay("wordle");
+  return "Unknown mode! Available: wordle, anagram, scramble\nUsage: ?wordplay [mode]";
 }
 
 function handleWordle(guess, answer) {
@@ -3642,6 +3600,13 @@ function handleGuess(guess, conversation) {
       result += "\n" + tokenTag;
     }
     return result;
+  }
+  // trivia / riddle: check if guess contains the answer (fuzzy match)
+  if (gameType === "trivia" || gameType === "riddle") {
+    if (guess === answer || answer.includes(guess) || guess.includes(answer)) {
+      return "\u{1F389} Correct! The answer was \"" + answer + "\"!";
+    }
+    return "\u274C Not quite! Try again. Reply with another guess." + (tokenTag ? "\n" + tokenTag : "");
   }
   // anagram / scramble: exact match
   if (guess === answer) {

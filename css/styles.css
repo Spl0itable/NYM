@@ -1879,6 +1879,39 @@ body.light-mode.chat-bubbles .read-more-btn {
     font-size: inherit;
 }
 
+.message-content .code-block-wrapper {
+    position: relative;
+}
+
+.message-content .code-block-wrapper pre {
+    margin: 0;
+}
+
+.message-content .code-copy-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: rgb(from var(--primary) r g b / 0.15);
+    color: var(--primary);
+    border: 1px solid rgb(from var(--primary) r g b / 0.3);
+    border-radius: var(--radius-xs);
+    padding: 2px 8px;
+    font-size: 0.75em;
+    font-family: var(--font-sans);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 1;
+}
+
+.message-content .code-block-wrapper:hover .code-copy-btn {
+    opacity: 1;
+}
+
+.message-content .code-copy-btn:hover {
+    background: rgb(from var(--primary) r g b / 0.3);
+}
+
 .message-content blockquote {
     border-left: 3px solid rgb(from var(--primary) r g b / 0.4);
     padding-left: 12px;
