@@ -2491,7 +2491,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.56.245";
+var NYMCHAT_VERSION = "3.56.246";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3381,21 +3381,20 @@ async function handleTrivia(args, context) {
   try {
     var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
       messages: [
-        { role: "system", content: "You generate trivia questions. Output ONLY valid JSON with exactly two keys: \"question\" and \"answer\". The answer should be concise (1-10 words). No extra text, no markdown, no explanation. Example: {\"question\":\"What is the capital of France?\",\"answer\":\"Paris\"}" },
-        { role: "user", content: "Generate a unique, interesting " + category + " trivia question. Be creative and avoid common/overused questions. Output JSON only." }
+        { role: "system", content: "You generate trivia questions. Use this EXACT format with no other text:\nQ: <question>\nA: <short answer>" },
+        { role: "user", content: "Generate one unique, interesting " + category + " trivia question with a concise answer (1-10 words). Use the exact Q:/A: format." }
       ],
       max_tokens: 256
     });
     if (result && result.response) {
       var text = String(result.response).trim();
-      // Extract JSON from response (handle markdown code fences)
-      var jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        var parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.question && parsed.answer) {
-          var token = btoa("trivia:" + parsed.answer.toLowerCase());
-          return "\u2753 [" + category.toUpperCase() + "] " + parsed.question + "\n\nReply with your answer!\n[gc:" + token + "]";
-        }
+      var qMatch = text.match(/Q:\s*(.+)/i);
+      var aMatch = text.match(/A:\s*(.+)/i);
+      if (qMatch && aMatch) {
+        var question = qMatch[1].trim();
+        var answer = aMatch[1].trim();
+        var token = btoa("trivia:" + answer.toLowerCase());
+        return "\u2753 [" + category.toUpperCase() + "] " + question + "\n\nReply with your answer!\n[gc:" + token + "]";
       }
     }
     return "Couldn't generate a trivia question — try again!";
@@ -3432,20 +3431,20 @@ async function handleRiddle(context) {
   try {
     var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
       messages: [
-        { role: "system", content: "You generate riddles. Output ONLY valid JSON with exactly two keys: \"riddle\" and \"answer\". The answer should be concise (1-5 words). No extra text, no markdown, no explanation. Example: {\"riddle\":\"What has hands but can't clap?\",\"answer\":\"A clock\"}" },
-        { role: "user", content: "Generate a unique, clever riddle. Be creative — avoid the most common riddles like 'what has keys but no locks' or 'what gets wetter as it dries'. Output JSON only." }
+        { role: "system", content: "You generate riddles. Use this EXACT format with no other text:\nR: <riddle>\nA: <short answer>" },
+        { role: "user", content: "Generate one unique, clever riddle with a concise answer (1-5 words). Be creative — avoid overused riddles. Use the exact R:/A: format." }
       ],
       max_tokens: 256
     });
     if (result && result.response) {
       var text = String(result.response).trim();
-      var jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        var parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.riddle && parsed.answer) {
-          var token = btoa("riddle:" + parsed.answer.toLowerCase());
-          return "\u{1F9E9} " + parsed.riddle + "\n\nReply with your answer!\n[gc:" + token + "]";
-        }
+      var rMatch = text.match(/R:\s*(.+)/i);
+      var aMatch = text.match(/A:\s*(.+)/i);
+      if (rMatch && aMatch) {
+        var riddle = rMatch[1].trim();
+        var answer = aMatch[1].trim();
+        var token = btoa("riddle:" + answer.toLowerCase());
+        return "\u{1F9E9} " + riddle + "\n\nReply with your answer!\n[gc:" + token + "]";
       }
     }
     return "Couldn't generate a riddle — try again!";

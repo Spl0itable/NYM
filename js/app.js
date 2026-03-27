@@ -19478,7 +19478,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.botCommands = {
             '?ask': { desc: 'Ask Nymbot a question (or @Nymbot)' },
             '?summarize': { desc: 'Summarize recent channel conversation' },
-            '?roll': { desc: 'Roll dice (e.g. ?roll 2d6)' },
             '?flip': { desc: 'Flip a coin' },
             '?8ball': { desc: 'Ask the magic 8-ball' },
             '?pick': { desc: 'Pick between options (e.g. ?pick a, b, c)' },
@@ -26477,7 +26476,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.245 ═══<br/>
+═══ Nymchat v3.56.246 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
