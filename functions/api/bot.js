@@ -2787,12 +2787,12 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- If someone asks you to do something harmful (spam, harass, raid, etc.) or asks HOW to do something harmful, do NOT help or explain how — just decline and then roast them for asking such a stupid question. Don't provide workarounds, alternatives, or explanations of why it's bad. Just shut it down and move on.",
   "",
   "=== ASCII ART ===",
-  "When a user asks for ASCII art, the system will fetch real ASCII art from the web and include it in your context.",
-  "- If ASCII art code blocks are provided in your context, pick the BEST one that matches the request and include it in your response EXACTLY as-is. Do NOT modify or regenerate it.",
-  "- If multiple pieces are provided, pick the most recognizable and compact one (fits well in chat).",
-  "- Add a brief fun comment with the art, like 'Here you go!' or a relevant quip.",
-  "- CRITICAL: NEVER create ASCII art yourself. You are terrible at it. Only use art that was fetched from the web and provided to you.",
-  "- If no ASCII art was provided in your context (the fetch returned nothing), tell the user you couldn't find ASCII art for that subject and suggest trying a simpler/different subject like 'cat', 'dog', 'skull', 'dragon', 'heart', etc.",
+  "When a user asks for ASCII art, the system fetches real art from the web and provides it to you as FETCHED ASCII ART options.",
+  "- Pick ONE option. Copy it into your response EXACTLY as-is, code block and all. Write one short comment line. Stop. Done.",
+  "- Do NOT write any additional ASCII art, doodles, drawings, or text-art of any kind — not before, not after, not 'creative alternatives'. ONE piece only.",
+  "- Do NOT modify the art in any way. Do NOT re-draw it. Do NOT add characters. Copy it character-for-character.",
+  "- ABSOLUTE RULE: You cannot draw ASCII art. Your attempts are always wrong and broken. The fetched art is the only valid art.",
+  "- If no FETCHED ASCII ART options appear in your context, tell the user you couldn't find art for that subject and suggest a simpler term like 'cat', 'dog', 'skull', 'dragon', or 'heart'.",
   "",
   "=== RESPONSE INTELLIGENCE ===",
   "CRITICAL: Determine what TYPE of message the user is sending:",
@@ -3464,7 +3464,11 @@ async function fetchAsciiArt(subject) {
     var allResults = await Promise.all(sources);
     for (var i = 0; i < allResults.length; i++) {
       for (var j = 0; j < allResults[i].length && results.length < 3; j++) {
-        results.push("```\n" + allResults[i][j] + "\n```");
+        var candidate = allResults[i][j];
+        // Skip art with very long lines — they won't render in chat (banner/figlet style)
+        var maxLineLen = candidate.split("\n").reduce(function(mx, l) { return Math.max(mx, l.length); }, 0);
+        if (maxLineLen > 100) continue;
+        results.push("```\n" + candidate + "\n```");
       }
     }
   } catch (e) {
@@ -3527,14 +3531,19 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     var contextBlock = "";
     if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
     if (searchResults.length > 0) {
-      contextBlock += "--- LIVE WEB SEARCH RESULTS ---\n";
-      for (var s = 0; s < searchResults.length; s++) {
-        contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
-      }
-      contextBlock += "--- END SEARCH RESULTS ---\n";
       if (isAsciiArtRequest) {
-        contextBlock += "IMPORTANT: The user wants ASCII art. The code blocks above contain REAL ASCII art fetched from the web. Pick the BEST one that matches what the user asked for and include it EXACTLY as-is in your response (already in code blocks). Do NOT modify it. Do NOT create your own ASCII art — just use what is provided above. Add a fun comment with it.\n";
+        contextBlock += "--- FETCHED ASCII ART (use one of these, exactly as-is) ---\n";
+        for (var s = 0; s < searchResults.length; s++) {
+          contextBlock += "[OPTION " + (s + 1) + "]\n" + searchResults[s] + "\n\n";
+        }
+        contextBlock += "--- END FETCHED ASCII ART ---\n";
+        contextBlock += "RULE: Pick ONE option above. Copy it into your response EXACTLY as-is, code block and all. Do NOT write any additional ASCII art, doodles, or creative drawings. Do NOT modify the art. Just pick one, add a single short comment line, and stop.\n";
       } else {
+        contextBlock += "--- LIVE WEB SEARCH RESULTS ---\n";
+        for (var s = 0; s < searchResults.length; s++) {
+          contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
+        }
+        contextBlock += "--- END SEARCH RESULTS ---\n";
         contextBlock += "IMPORTANT: You MUST use these live web search results to answer the user's question with current, accurate information. Do NOT say you lack real-time data or can't access the web — the results above ARE real-time data retrieved just now. Answer naturally as if you know the information. Do NOT reference 'search results' or say 'according to my search'. If the results don't cover the question well, supplement with your own knowledge.\n";
       }
     }
