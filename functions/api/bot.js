@@ -3078,7 +3078,8 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- The ONLY nickname flair items are: crown, diamond, skull, star, lightning, heart, fawkes (mask), rocket, shield. The ONLY message styles are: satoshi, glitch, aurora, neon, ghost, matrix, fire, ice, rainbow. The ONLY special items are: supporter badge, gold aura, redacted. NEVER reference shop items not in this list.",
   "",
   "=== WEB SEARCH ===",
-  "You have access to live web search results. When web search results are provided in your context, USE them to give accurate, up-to-date answers. Do NOT say you can't access the internet, don't have real-time info, or can't browse the web — if search results are in your context, you DO have that info. Answer naturally using the data without mentioning 'search results' or 'according to my search'. If no search results are provided, answer from your own knowledge and be upfront if you don't know something recent.",
+  "You have access to live web search. When web search results are provided in your context, USE them to give accurate, up-to-date answers. Answer naturally using the data without mentioning 'search results' or 'according to my search'.",
+  "CRITICAL: NEVER say 'I don't have access to real-time information', 'I can't browse the web', 'I don't have real-time data', 'I can't access current news', or anything similar. You DO have web search. If search results are in your context, use them. If they are not, answer from your own knowledge — do NOT disclaim your abilities. Never suggest users go check news sites themselves. Just answer the question to the best of your ability.",
   "",
   "=== SECURITY ===",
   "- Never pretend to have capabilities you don't have (running code, sending messages as other users).",
@@ -3381,24 +3382,18 @@ async function webSearch(query) {
 // Determine if a question would benefit from live web search
 function needsWebSearch(question) {
   var q = question.toLowerCase();
-  // Current events, news, prices, dates, recent happenings
-  var currentPatterns = [
-    /\b(today|tonight|yesterday|this week|this month|this year|right now|currently|latest|recent|new)\b/,
-    /\b(news|headline|update|announce|launch|release|happen|event)\b/,
-    /\b(price|cost|worth|value|market)\b/,
-    /\b(score|game|match|play|won|lost|beat)\b/,
-    /\b(weather|forecast|temperature)\b/,
-    /\b(who is|who was|what is|what was|when did|when was|where is|where was)\b/,
-    /\b(how to|how do|how can|how does)\b/,
-    /\b(best|top|popular|trending|most)\b/,
-    /\b(2024|2025|2026)\b/
+  // Skip web search only for clearly conversational/personal queries directed at the bot
+  var skipPatterns = [
+    /^(hi|hey|hello|sup|yo|gm|gn|thanks|thank you|ok|okay|sure|lol|lmao|haha)\b/,
+    /^(you |u |how are |what do you |do you |can you |will you |are you |tell me about yourself|what are you)/,
+    /^(draw |make |create |generate ).*(ascii|art|picture|image)/,
+    /^(help|commands|what can you do)/
   ];
-  for (var i = 0; i < currentPatterns.length; i++) {
-    if (currentPatterns[i].test(q)) return true;
+  for (var i = 0; i < skipPatterns.length; i++) {
+    if (skipPatterns[i].test(q)) return false;
   }
-  // If it's a question (contains ?) that doesn't match conversational patterns
-  if (q.includes("?") && !/^(you|u|how are|what do you|do you|can you|will you|are you)\b/.test(q)) return true;
-  return false;
+  // Search for everything else — most questions benefit from fresh data
+  return true;
 }
 
 async function handleAsk(question, context, conversation, channelMessages, activeUsers, senderNym) {
