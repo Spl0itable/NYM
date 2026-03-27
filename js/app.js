@@ -5918,6 +5918,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (profileOnly) {
             const ctxMention = document.getElementById('ctxMention');
             if (ctxMention) ctxMention.style.display = 'none';
+            const ctxTranslate = document.getElementById('ctxTranslate');
+            if (ctxTranslate) ctxTranslate.style.display = 'none';
             if (slapOption) slapOption.style.display = 'none';
             if (hugOption) hugOption.style.display = 'none';
             if (kickOption) kickOption.style.display = 'none';
@@ -26461,7 +26463,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.55.243 ═══<br/>
+═══ Nymchat v3.55.244 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
