@@ -3408,32 +3408,41 @@ async function fetchAsciiArt(subject) {
         var plainLines = body.split("\n").filter(function(l) { return l.trim().length > 0; });
         if (plainLines.length >= 3) return [body.trim()];
       }
-      // Extract from <pre> tags
+      // Helper to decode HTML entities and strip tags
+      function decodeArt(raw) {
+        return raw
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<[^>]+>/g, "")
+          .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+      }
+      function isValidArt(art) {
+        var lines = art.split("\n").filter(function(l) { return l.trim().length > 0; });
+        var hasArtChars = /[\/\\|_\-=+*#@~^(){}\[\]<>]/.test(art);
+        return lines.length >= 3 && hasArtChars && art.length >= 30 && art.length <= 5000;
+      }
+      // Extract from <pre> tags (most ASCII art sites use these)
       var arts = [];
       var preRegex = /<pre[^>]*>([\s\S]*?)<\/pre>/gi;
       var m;
       while ((m = preRegex.exec(body)) !== null && arts.length < 4) {
-        var art = m[1]
-          .replace(/<[^>]+>/g, "")
-          .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-          .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
-        var lines = art.split("\n").filter(function(l) { return l.trim().length > 0; });
-        var hasArtChars = /[\/\\|_\-=+*#@~^(){}\[\]<>]/.test(art);
-        if (lines.length >= 3 && hasArtChars && art.length >= 30 && art.length <= 5000) {
-          arts.push(art.trim());
+        var art = decodeArt(m[1]);
+        if (isValidArt(art)) arts.push(art.trim());
+      }
+      // Also try standalone <code> tags (not inside <pre>)
+      if (arts.length === 0) {
+        var codeRegex = /<code[^>]*>([\s\S]*?)<\/code>/gi;
+        while ((m = codeRegex.exec(body)) !== null && arts.length < 4) {
+          var cart = decodeArt(m[1]);
+          if (isValidArt(cart)) arts.push(cart.trim());
         }
       }
       // Also try <div class="ascii-art"> or similar containers
       if (arts.length === 0) {
         var divRegex = /<div[^>]+class="[^"]*art[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
         while ((m = divRegex.exec(body)) !== null && arts.length < 4) {
-          var dart = m[1].replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
-            .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-            .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
-          var dlines = dart.split("\n").filter(function(l) { return l.trim().length > 0; });
-          if (dlines.length >= 3 && dart.length >= 30 && dart.length <= 5000) {
-            arts.push(dart.trim());
-          }
+          var dart = decodeArt(m[1]);
+          if (isValidArt(dart)) arts.push(dart.trim());
         }
       }
       return arts;
@@ -3498,8 +3507,11 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     var searchResults = [];
     var isAsciiArtRequest = /\b(ascii\s*art|draw|sketch)\b/i.test(question) && /\b(ascii|art|draw|make|create|generate|show)\b/i.test(question);
     if (isAsciiArtRequest) {
-      // Extract the subject from the request (strip common prefixes)
-      var artSubject = question.replace(/^(draw|make|create|generate|show|give)\s+(me\s+)?(an?\s+)?(ascii\s*art\s*(of|for)?\s*)?/i, "").replace(/\s*(in|as|using)\s+ascii(\s*art)?$/i, "").trim();
+      // Extract the subject from the request (strip common prefixes and trailing "ascii art")
+      var artSubject = question
+        .replace(/^(draw|make|create|generate|show|give)\s+(me\s+)?(an?\s+)?(ascii\s*art\s*(of|for)?\s*)?/i, "")
+        .replace(/\s*(in|as|using)?\s*ascii(\s*art)?$/i, "")
+        .trim();
       if (!artSubject) artSubject = question;
       var asciiArtResults = await fetchAsciiArt(artSubject);
       if (asciiArtResults.length > 0) {
@@ -3509,8 +3521,9 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       searchResults = await webSearch(question);
     }
 
-    // Always include channel context when available — the model decides relevance
-    var channelCtx = buildChannelContext(channelMessages, activeUsers);
+    // Skip channel context for ASCII art requests — it contains previous bot responses with
+    // mangled art that confuses the model into referencing or regenerating old broken output
+    var channelCtx = isAsciiArtRequest ? "" : buildChannelContext(channelMessages, activeUsers);
     var contextBlock = "";
     if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
     if (searchResults.length > 0) {
