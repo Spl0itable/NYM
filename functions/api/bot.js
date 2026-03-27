@@ -2650,6 +2650,21 @@ async function onRequest(context) {
     response = "Error processing command: " + e.message;
   }
 
+  // Occasionally append a zap prompt to select commands
+  var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "trivia", "riddle", "news", "btc", "bitcoin", "price"];
+  var ZAP_PROMPTS = [
+    "⚡ Liked this response? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!",
+    "⚡ Found this helpful? Send a Bitcoin zap to show some love! If you don't know what or how to zap, just ask!",
+    "⚡ If this was useful, consider zapping this message with a few Bitcoin sats! If you don't know what or how to zap, just ask!",
+    "⚡ Tip jar is open — zap this message some Bitcoin if you enjoyed it! If you don't know what or how to zap, just ask!",
+    "⚡ Zap this message to tip with Bitcoin Lightning! If you don't know what or how to zap, just ask!",
+    "⚡ Want to say thanks? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!"
+  ];
+  if (ZAP_ELIGIBLE_COMMANDS.includes(command.toLowerCase()) && Math.random() < 0.15) {
+    var zapPrompt = ZAP_PROMPTS[Math.floor(Math.random() * ZAP_PROMPTS.length)];
+    response = response + "\n\n" + zapPrompt;
+  }
+
   // Prepend quote-reply for ?ask commands so the bot's response threads back
   // Quote the user's full published message (preserves the existing quote chain)
   // so that when a user swipe-replies to the bot, the thread continues naturally
