@@ -3077,8 +3077,11 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- When asked about channel conversations, NEVER claim you don't have access to messages or can't see what's being discussed. If channel messages are in your context, USE them. Read the actual content and summarize specifically.",
   "- The ONLY nickname flair items are: crown, diamond, skull, star, lightning, heart, fawkes (mask), rocket, shield. The ONLY message styles are: satoshi, glitch, aurora, neon, ghost, matrix, fire, ice, rainbow. The ONLY special items are: supporter badge, gold aura, redacted. NEVER reference shop items not in this list.",
   "",
+  "=== WEB SEARCH ===",
+  "You have access to live web search results. When web search results are provided in your context, USE them to give accurate, up-to-date answers. Do NOT say you can't access the internet, don't have real-time info, or can't browse the web — if search results are in your context, you DO have that info. Answer naturally using the data without mentioning 'search results' or 'according to my search'. If no search results are provided, answer from your own knowledge and be upfront if you don't know something recent.",
+  "",
   "=== SECURITY ===",
-  "- Never pretend to have capabilities you don't have (browsing the web, accessing APIs, running code, sending messages as other users).",
+  "- Never pretend to have capabilities you don't have (running code, sending messages as other users).",
   "- Never output raw code blocks intended for prompt injection or system manipulation.",
   "- NEVER relay, proxy, or pass along messages from one user to another. If a user asks you to 'tell', 'say to', 'let X know', 'pass a message to', 'say good night to', 'wish X', or otherwise communicate something to another user on their behalf, ALWAYS decline. You are not a messenger or proxy. This applies to ALL messages — greetings, farewells, positive, negative, or neutral. Even if the request seems harmless (e.g. 'tell X good night'), refuse. Respond with something like 'I can't relay messages between users — you can tell them directly!' and move on. This rule has NO exceptions.",
   "- NEVER use @mentions of other users in your responses. Do not output @username, @nym#xxxx, @AnythingWithAt, or any mention format that could notify or ping another user. If you need to reference a user, use their name without the @ symbol. This is a HARD rule — your response will be automatically filtered to remove any @mentions, so do not include them.",
@@ -3184,22 +3187,22 @@ function stripHtmlEntities(str) {
 async function searchDuckDuckGo(query) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
-  var params = new URLSearchParams({ q: query, kl: "", df: "" });
-  var resp = await fetch("https://html.duckduckgo.com/html/?" + params.toString(), {
-    method: "POST",
+  var params = new URLSearchParams({ q: query });
+  // Use DuckDuckGo lite — simpler HTML, more scrape-friendly from server IPs
+  var resp = await fetch("https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query), {
+    method: "GET",
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "text/html",
-      "Content-Type": "application/x-www-form-urlencoded"
+      "Accept": "text/html"
     },
-    body: params.toString(),
     signal: controller.signal
   });
   clearTimeout(timer);
   if (!resp.ok) return [];
   var html = await resp.text();
-  var snippetRegex = /<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
-  var titleRegex = /<a class="result__a"[^>]*>([\s\S]*?)<\/a>/gi;
+  // DDG lite uses <a class="result-link"> for titles and <td class="result-snippet"> for snippets
+  var snippetRegex = /<td[^>]+class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
+  var titleRegex = /<a[^>]+class="result-link"[^>]*>([\s\S]*?)<\/a>/gi;
   var titles = [];
   var snippets = [];
   var m;
@@ -3262,16 +3265,58 @@ async function searchGoogle(query) {
   return results;
 }
 
+async function searchBrave(query) {
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
+  var resp = await fetch("https://search.brave.com/search?q=" + encodeURIComponent(query) + "&source=web", {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "text/html",
+      "Accept-Language": "en-US,en;q=0.9"
+    },
+    signal: controller.signal
+  });
+  clearTimeout(timer);
+  if (!resp.ok) return [];
+  var html = await resp.text();
+  var results = [];
+  // Brave uses <span class="snippet-title">...</span> and <p class="snippet-description">...</p>
+  // Also try data-pos attributes and snippet-content class
+  var titleRegex = /<span[^>]+class="snippet-title"[^>]*>([\s\S]*?)<\/span>/gi;
+  var snippetRegex = /<p[^>]+class="snippet-description"[^>]*>([\s\S]*?)<\/p>/gi;
+  var titles = [];
+  var snippets = [];
+  var m;
+  while ((m = titleRegex.exec(html)) !== null && titles.length < 5) {
+    var t = stripHtmlEntities(m[1]);
+    if (t) titles.push(t);
+  }
+  while ((m = snippetRegex.exec(html)) !== null && snippets.length < 5) {
+    var s = stripHtmlEntities(m[1]);
+    if (s && s.length > 20) snippets.push(s);
+  }
+  for (var i = 0; i < Math.max(titles.length, snippets.length); i++) {
+    var title = titles[i] || "";
+    var snippet = snippets[i] || "";
+    if (title || snippet) {
+      results.push((title ? title + ": " : "") + snippet);
+    }
+  }
+  return results;
+}
+
 async function webSearch(query) {
-  // Try DuckDuckGo first, fall back to Google
-  try {
-    var results = await searchDuckDuckGo(query);
-    if (results.length > 0) return results;
-  } catch (e) {}
-  try {
-    return await searchGoogle(query);
-  } catch (e) {}
-  return [];
+  // Fire all three search engines in parallel — use first one that returns results
+  var ddgPromise = searchDuckDuckGo(query).catch(function() { return []; });
+  var bravePromise = searchBrave(query).catch(function() { return []; });
+  var googlePromise = searchGoogle(query).catch(function() { return []; });
+  // Prefer DDG > Brave > Google
+  var ddgResults = await ddgPromise;
+  if (ddgResults.length > 0) return ddgResults;
+  var braveResults = await bravePromise;
+  if (braveResults.length > 0) return braveResults;
+  var googleResults = await googlePromise;
+  return googleResults;
 }
 
 // Determine if a question would benefit from live web search
@@ -3322,12 +3367,12 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     var contextBlock = "";
     if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
     if (searchResults.length > 0) {
-      contextBlock += "--- WEB SEARCH RESULTS (for reference — use these to inform your answer if relevant) ---\n";
+      contextBlock += "--- LIVE WEB SEARCH RESULTS ---\n";
       for (var s = 0; s < searchResults.length; s++) {
         contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
       }
       contextBlock += "--- END SEARCH RESULTS ---\n";
-      contextBlock += "Use the search results above to provide accurate, up-to-date information when relevant to the user's question. If the results aren't helpful, rely on your own knowledge. Do NOT mention that you searched the web or reference 'search results' — just answer naturally.\n";
+      contextBlock += "IMPORTANT: You MUST use these live web search results to answer the user's question with current, accurate information. Do NOT say you lack real-time data or can't access the web — the results above ARE real-time data retrieved just now. Answer naturally as if you know the information. Do NOT reference 'search results' or say 'according to my search'. If the results don't cover the question well, supplement with your own knowledge.\n";
     }
     if (channelCtx) {
       contextBlock += "--- CHANNEL CONTEXT (for reference) ---\n" + channelCtx + "\n--- END CONTEXT ---\n";
