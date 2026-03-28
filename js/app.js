@@ -9968,8 +9968,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async loadSyncedSettings() {
-        // No synced settings in ephemeral-only mode
-        return;
+        // Skip for random/hardcore ephemeral modes (keypair changes, nothing to sync)
+        if (this.connectionMode === 'ephemeral') {
+            const keypairMode = localStorage.getItem('nym_keypair_mode') || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
+            if (keypairMode === 'random' || keypairMode === 'hardcore') return;
+        }
 
         // Request NIP-78 settings (kind 30078)
         const settingsSubscription = [
@@ -26613,7 +26616,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.250 ═══<br/>
+═══ Nymchat v3.56.251 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -26825,6 +26828,10 @@ async function checkSavedConnection() {
             nym._loadGroupConversations();
             nym._loadLeftGroups();
 
+            // Load synced settings from relay (groups, closed PMs, etc.)
+            // for persistent ephemeral users on new devices without localStorage
+            nym.loadSyncedSettings();
+
             if (isDeveloperLogin) {
                 // Developer login - load lightning address from their kind 0 profile
                 await nym.loadLightningAddress();
@@ -27006,6 +27013,10 @@ async function initializeNym() {
         // Restore persisted group conversations for this keypair
         nym._loadGroupConversations();
         nym._loadLeftGroups();
+
+        // Load synced settings from relay (groups, closed PMs, etc.)
+        // for persistent ephemeral users on new devices without localStorage
+        nym.loadSyncedSettings();
 
         if (isDeveloperLogin) {
             // Developer login - load lightning address from their kind 0 profile
