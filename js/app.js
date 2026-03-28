@@ -7047,8 +7047,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _extractQuoteChain(quoteContext) {
         const conversation = [];
         if (!quoteContext || !quoteContext.text) return conversation;
+        // Use fullText (preserves nested quotes) for bot conversation context
+        const rawText = quoteContext.fullText || quoteContext.text;
         // Parse the quoted text to extract nested quote layers
-        const lines = quoteContext.text.split('\n');
+        const lines = rawText.split('\n');
         let currentAuthor = null;
         let currentText = [];
         for (const line of lines) {
@@ -10851,7 +10853,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const mentionPattern = new RegExp(`^@${qAuthor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`);
                 const userMessage = event.content.replace(mentionPattern, '').trim();
                 // Reconstruct > @author: blockquote format for NYM display
-                const textLines = qText.split('\n');
+                // Strip nested quotes — only show the last message being quoted
+                const strippedQText = qText.split('\n').filter(line => !line.startsWith('>')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+                const textLines = strippedQText.split('\n');
                 const quoteLine = `> @${qAuthor}: ${textLines[0]}` +
                     (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
                 displayContent = userMessage ? `${quoteLine}\n\n${userMessage}` : quoteLine;
@@ -16035,7 +16039,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // so other Nostr clients see a normal mention, while NYM reconstructs the quote
             let wireContent = content;
             if (quoteData) {
-                tags.push(['nymquote', quoteData.author, quoteData.text]);
+                tags.push(['nymquote', quoteData.author, quoteData.fullText || quoteData.text]);
                 // Extract user's reply text (everything after the > quote block)
                 const lines = content.split('\n');
                 const nonQuoteLines = [];
@@ -16155,7 +16159,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Build wire content: if quoting, use @mention format instead of > blockquote
             let wireContent = content;
             if (quoteData) {
-                tags.push(['nymquote', quoteData.author, quoteData.text]);
+                tags.push(['nymquote', quoteData.author, quoteData.fullText || quoteData.text]);
                 const lines = content.split('\n');
                 const nonQuoteLines = [];
                 let pastQuote = false;
@@ -20109,7 +20113,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
         const strippedText = strippedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-        this.pendingQuote = { author, text: strippedText };
+        this.pendingQuote = { author, text: strippedText, fullText: text };
         const preview = document.getElementById('quotePreview');
         const authorEl = document.getElementById('quotePreviewAuthor');
         const textEl = document.getElementById('quotePreviewText');
@@ -20613,7 +20617,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Capture quote context before clearing (for bot reply support)
-        const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text } : null;
+        const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text, fullText: this.pendingQuote.fullText } : null;
         const quoteData = savedQuote; // Pass to publishMessage for nymquote tag
         const rawInput = content; // User's typed text before quote prepend
 
@@ -20680,7 +20684,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Capture quote context before clearing (for bot reply support)
-        const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text } : null;
+        const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text, fullText: this.pendingQuote.fullText } : null;
         const quoteData = savedQuote; // Pass to publishMessageAnonymous for nymquote tag
         const rawInput = content;
 
