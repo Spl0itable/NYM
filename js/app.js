@@ -11585,6 +11585,43 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 } catch (_) {}
             }
 
+            // Retroactively remove left groups that were re-added by
+            // early-arriving gift wraps before settings sync completed
+            if (this.leftGroups.size > 0) {
+                let groupsChanged = false;
+                for (const gid of this.leftGroups) {
+                    if (this.groupConversations.has(gid)) {
+                        this.groupConversations.delete(gid);
+                        const groupConvKey = this.getGroupConversationKey(gid);
+                        this.pmMessages.delete(groupConvKey);
+                        this.channelDOMCache.delete(groupConvKey);
+                        const pmList = document.getElementById('pmList');
+                        const item = pmList?.querySelector(`[data-group-id="${gid}"]`);
+                        if (item) item.remove();
+                        groupsChanged = true;
+                    }
+                }
+                if (groupsChanged) {
+                    this._saveGroupConversations();
+                    this.updateViewMoreButton('pmList');
+                }
+            }
+
+            // Retroactively remove closed PMs that were re-added by
+            // early-arriving gift wraps before settings sync completed
+            if (this.closedPMs.size > 0) {
+                for (const pk of this.closedPMs) {
+                    if (this.pmConversations.has(pk)) {
+                        this.pmConversations.delete(pk);
+                        const convKey = this.getPMConversationKey(pk);
+                        this.pmMessages.delete(convKey);
+                        const item = document.querySelector(`[data-pubkey="${pk}"]`);
+                        if (item) item.remove();
+                    }
+                }
+                this.updateViewMoreButton('pmList');
+            }
+
             this._updateNotificationBadge();
         } catch (error) {
         }
@@ -14266,6 +14303,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
+        // Determine message type early so we can decide whether to drop it
+        const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
+        const msgType = typeTag ? typeTag[1] : null;
+
+        // Drop messages for groups the user has left, unless it's a reinvite
+        if (this.leftGroups.has(groupId) && msgType !== 'group-invite' && msgType !== 'group-add-member') {
+            return;
+        }
+
         // Route group reactions (kind 7) before regular message processing
         if (rumor.kind === 7) {
             this.handleGroupReaction(rumor, senderPubkey);
@@ -14273,7 +14319,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Handle group-leave: remove the member from local state and show system message
-        const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
         if (typeTag && typeTag[1] === 'group-leave' && !isOwn) {
             const group = this.groupConversations.get(groupId);
             if (group) {
@@ -14336,7 +14381,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const removedName = this.getNymFromPubkey(removedPubkey);
             const removerName = this.getNymFromPubkey(senderPubkey);
             if (removedPubkey === this.pubkey) {
-                // We were removed — clean up the group locally
+                // We were removed — track as left so it doesn't reappear
+                this.leftGroups.add(groupId);
+                try { localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups])); } catch {}
                 this.groupConversations.delete(groupId);
                 this._saveGroupConversations();
                 const gck = this.getGroupConversationKey(groupId);
@@ -26519,7 +26566,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.248 ═══<br/>
+═══ Nymchat v3.56.249 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -28296,6 +28343,43 @@ async function applyNostrSettings(s) {
                 nym.updateViewMoreButton('pmList');
             }
         } catch (_) {}
+    }
+
+    // Retroactively remove left groups that were re-added by early-arriving
+    // gift-wrapped messages before this settings sync completed (e.g. new device)
+    if (nym.leftGroups.size > 0) {
+        let groupsChanged = false;
+        for (const gid of nym.leftGroups) {
+            if (nym.groupConversations.has(gid)) {
+                nym.groupConversations.delete(gid);
+                const groupConvKey = nym.getGroupConversationKey(gid);
+                nym.pmMessages.delete(groupConvKey);
+                nym.channelDOMCache.delete(groupConvKey);
+                const pmList = document.getElementById('pmList');
+                const item = pmList?.querySelector(`[data-group-id="${gid}"]`);
+                if (item) item.remove();
+                groupsChanged = true;
+            }
+        }
+        if (groupsChanged) {
+            nym._saveGroupConversations();
+            nym.updateViewMoreButton('pmList');
+        }
+    }
+
+    // Retroactively remove closed PMs that were re-added by early-arriving
+    // gift-wrapped messages before this settings sync completed (e.g. new device)
+    if (nym.closedPMs.size > 0) {
+        for (const pk of nym.closedPMs) {
+            if (nym.pmConversations.has(pk)) {
+                nym.pmConversations.delete(pk);
+                const convKey = nym.getPMConversationKey(pk);
+                nym.pmMessages.delete(convKey);
+                const item = document.querySelector(`[data-pubkey="${pk}"]`);
+                if (item) item.remove();
+            }
+        }
+        nym.updateViewMoreButton('pmList');
     }
 
     nym._updateNotificationBadge();
