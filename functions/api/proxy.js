@@ -13,8 +13,8 @@ const ALLOWED_MEDIA_TYPES = new Set([
   'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm',
 ]);
 
-// Max size for proxied resources (25 MB)
-const MAX_PROXY_SIZE = 25 * 1024 * 1024;
+// No hard size limit — rely on Cloudflare's streaming and Range request support
+// to handle large files without buffering the entire response into memory.
 
 // Max size for unfurl HTML fetch (512 KB)
 const MAX_UNFURL_SIZE = 512 * 1024;
@@ -28,7 +28,8 @@ const TRANSLATE_TIMEOUT = 8000;
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Range',
+  'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
 };
 
 export async function onRequest(context) {
@@ -48,15 +49,15 @@ export async function onRequest(context) {
     } else if (action === 'unfurl') {
       return await handleUnfurl(url.searchParams.get('url'));
     } else {
-      return await handleMediaProxy(url.searchParams.get('url'));
+      return await handleMediaProxy(url.searchParams.get('url'), request);
     }
   } catch (err) {
     return jsonResponse({ error: err.message || 'Internal error' }, 500);
   }
 }
 
-// Media Proxy
-async function handleMediaProxy(targetUrl) {
+// Media Proxy — supports Range requests for video/audio streaming
+async function handleMediaProxy(targetUrl, request) {
   if (!targetUrl) {
     return jsonResponse({ error: 'Missing url parameter' }, 400);
   }
@@ -72,24 +73,27 @@ async function handleMediaProxy(targetUrl) {
     return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
   }
 
+  // Forward Range header to upstream if present (for video/audio streaming)
+  const upstreamHeaders = {
+    'User-Agent': 'NymchatProxy/1.0',
+    'Accept': 'image/*, video/*, audio/*',
+  };
+  const rangeHeader = request.headers.get('Range');
+  if (rangeHeader) {
+    upstreamHeaders['Range'] = rangeHeader;
+  }
+
   const resp = await fetch(targetUrl, {
-    headers: {
-      'User-Agent': 'NymchatProxy/1.0',
-      'Accept': 'image/*, video/*, audio/*',
-    },
+    headers: upstreamHeaders,
     redirect: 'follow',
   });
 
-  if (!resp.ok) {
+  if (!resp.ok && resp.status !== 206) {
     return jsonResponse({ error: `Upstream returned ${resp.status}` }, 502);
   }
 
   const contentType = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  const contentLength = parseInt(resp.headers.get('content-length') || '0', 10);
-
-  if (contentLength > MAX_PROXY_SIZE) {
-    return jsonResponse({ error: 'Resource too large' }, 413);
-  }
+  const contentRange = resp.headers.get('content-range');
 
   // Allow media types and also common types that might serve images/video
   const isAllowed = ALLOWED_MEDIA_TYPES.has(contentType) ||
@@ -105,8 +109,18 @@ async function handleMediaProxy(targetUrl) {
   const headers = new Headers(CORS_HEADERS);
   headers.set('Content-Type', resp.headers.get('content-type') || 'application/octet-stream');
   headers.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
+  headers.set('Accept-Ranges', 'bytes');
+
   if (resp.headers.has('content-length')) {
     headers.set('Content-Length', resp.headers.get('content-length'));
+  }
+
+  // Pass through range response headers for 206 Partial Content
+  if (resp.status === 206) {
+    if (contentRange) {
+      headers.set('Content-Range', contentRange);
+    }
+    return new Response(resp.body, { status: 206, headers });
   }
 
   return new Response(resp.body, { status: 200, headers });
