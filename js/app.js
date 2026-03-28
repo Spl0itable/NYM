@@ -20094,8 +20094,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     setQuoteReply(author, text) {
-        // Strip nested quotes deeper than 4 levels (adding > on send makes it 5)
-        const MAX_NESTED = 4;
+        // Strip all nested quotes — only keep the last message being quoted
+        const MAX_NESTED = 1;
         const strippedLines = [];
         for (const line of text.split('\n')) {
             let depth = 0;
