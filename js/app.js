@@ -27108,7 +27108,7 @@ function nostrLoginStartRemoteSigner() {
         const secret = Array.from(secretBytes).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
 
         // Use a well-known relay for NIP-46 communication
-        const relayUrl = 'wss://relay.damus.io';
+        const relayUrl = 'wss://relay.primal.net';
 
         // Build nostrconnect:// URI per NIP-46
         const params = new URLSearchParams();
