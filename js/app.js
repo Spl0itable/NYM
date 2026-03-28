@@ -6163,7 +6163,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Use multiplexed relay pool when running on Cloudflare (or remote proxy)
             if (this.useRelayProxy) {
                 let poolConnected = false;
-                const maxRetries = this._isCloudflareHost ? 3 : 1;
+                const maxRetries = 2;
                 for (let attempt = 0; attempt < maxRetries; attempt++) {
                     try {
                         if (attempt > 0) {
@@ -6886,7 +6886,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const tryRestore = () => {
             attempts++;
-            if (attempts > 5) {
+            if (attempts > 2) {
                 // Give up restoring pool mode
                 clearTimeout(this._bgPoolReconnectTimer);
                 this._bgPoolReconnectTimer = null;
@@ -7317,13 +7317,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.retryPendingDMsOnReconnect();
                     })
                     .catch(() => {
-                        if (retries < 9) {
+                        if (retries < 1) {
                             attempt(retries + 1);
                         } else {
                             this._poolReconnecting = false;
                             this._poolReconnectRetries = 0;
-                            // Fall back to direct relay connections instead of staying disconnected
-                            console.warn('[NYM] Relay pool reconnect exhausted, falling back to direct connections');
+                            // 2 consecutive failures — fall back to direct relay connections
+                            console.warn('[NYM] Relay pool failed after 2 attempts, falling back to direct connections');
                             this._fallbackToDirectConnections();
                         }
                     });
@@ -7371,7 +7371,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this._poolSubscribeOnWorker(shard.id);
                     })
                     .catch(() => {
-                        if (retries < 9) {
+                        if (retries < 1) {
                             attempt(retries + 1);
                         } else {
                             this._shardReconnecting.delete(shardId);
