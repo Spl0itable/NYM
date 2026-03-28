@@ -5010,7 +5010,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // (browser throttles timers when backgrounded so keepalive may not fire)
         if (this.useRelayProxy) {
             const now = Date.now();
-            const STALE_MS = 180000; // >4 missed POOL:PING cycles (40s each) + margin for Tor/high-latency
+            const STALE_MS = 120000; // >3 missed POOL:PING cycles (30s each) + margin
             let closedAny = false;
             for (const p of this.poolSockets) {
                 if (p.ws && p.ws.readyState === WebSocket.OPEN) {
@@ -7480,7 +7480,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     ws.close();
                     reject(new Error(`Pool worker ${shard.id} connection timeout`));
                 }
-            }, 30000);
+            }, 5000);
 
             ws.onopen = () => {
                 clearTimeout(timeout);
@@ -7632,7 +7632,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             for (const p of this.poolSockets) {
                 if (p.ws && p.ws.readyState === WebSocket.OPEN) {
                     const silenceSec = (now - (p.lastMessage || 0)) / 1000;
-                    if (silenceSec > 150) {
+                    if (silenceSec > 90) {
                         p.ws.close();
                     }
                 }

@@ -77,7 +77,6 @@ export async function onRequest(context) {
   }
 
   // Keepalive: send periodic POOL:PING to prevent Cloudflare idle timeout
-  // 40s interval (instead of 30s) to give Tor/high-latency connections more breathing room
   let keepaliveTimer = setInterval(() => {
     try {
       if (serverOpen && server.readyState === 1) {
@@ -90,7 +89,7 @@ export async function onRequest(context) {
       clearInterval(keepaliveTimer);
       keepaliveTimer = null;
     }
-  }, 40000);
+  }, 30000);
 
   // Track failed relays to avoid wasting cycles
   const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
@@ -275,7 +274,7 @@ export async function onRequest(context) {
           upstreams.delete(relayUrl);
           schedulePoolStatus();
         }
-      }, 12000);
+      }, 8000);
 
       ws.addEventListener('open', () => {
         clearTimeout(timeout);
