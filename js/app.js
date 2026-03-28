@@ -9967,46 +9967,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         });
     }
 
-    async loadSyncedSettings() {
-        // Skip for random/hardcore ephemeral modes (keypair changes, nothing to sync)
-        if (this.connectionMode === 'ephemeral') {
-            const keypairMode = localStorage.getItem('nym_keypair_mode') || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
-            if (keypairMode === 'random' || keypairMode === 'hardcore') return;
-        }
-
-        // Request NIP-78 settings (kind 30078)
-        const settingsSubscription = [
-            "REQ",
-            "settings-" + Math.random().toString(36).substring(7),
-            {
-                kinds: [30078],
-                authors: [this.pubkey],
-                "#d": ["nym-settings"],
-                limit: 1
-            }
-        ];
-
-        this.sendToRelay(settingsSubscription);
-
-        // Request standard mute list (kind 10000)
-        const muteSubscription = [
-            "REQ",
-            "mutes-" + Math.random().toString(36).substring(7),
-            {
-                kinds: [10000],
-                authors: [this.pubkey],
-                limit: 1
-            }
-        ];
-
-        this.sendToRelay(muteSubscription);
-
-        // Close subscriptions after timeout
-        setTimeout(() => {
-            this.sendToRelay(["CLOSE", settingsSubscription[1]]);
-            this.sendToRelay(["CLOSE", muteSubscription[1]]);
-        }, 3000);
-    }
 
     async saveSyncedSettings() {
         if (!this.pubkey) return;
@@ -10021,6 +9981,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Save Nymchat-specific settings (kind 30078)
             const settingsData = {
+                v: 1,
                 theme: this.settings.theme,
                 sound: this.settings.sound,
                 autoscroll: this.settings.autoscroll,
@@ -10081,9 +10042,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 kind: 30078,
                 created_at: Math.floor(Date.now() / 1000),
                 tags: [
-                    ["d", "nym-settings"],
-                    ["title", "Nymchat Settings"],
-                    ["encrypted"]
+                    ["d", "nymchat-settings"]
                 ],
                 content: JSON.stringify(settingsData),
                 pubkey: this.pubkey
@@ -26829,8 +26788,7 @@ async function checkSavedConnection() {
             nym._loadLeftGroups();
 
             // Load synced settings from relay (groups, closed PMs, etc.)
-            // for persistent ephemeral users on new devices without localStorage
-            nym.loadSyncedSettings();
+            nostrSettingsLoad();
 
             if (isDeveloperLogin) {
                 // Developer login - load lightning address from their kind 0 profile
@@ -27015,8 +26973,7 @@ async function initializeNym() {
         nym._loadLeftGroups();
 
         // Load synced settings from relay (groups, closed PMs, etc.)
-        // for persistent ephemeral users on new devices without localStorage
-        nym.loadSyncedSettings();
+        nostrSettingsLoad();
 
         if (isDeveloperLogin) {
             // Developer login - load lightning address from their kind 0 profile
@@ -28099,8 +28056,9 @@ function applyLocalPurchasesToNostr(localCache) {
 }
 
 function nostrSettingsLoad() {
-    if (!isNostrLoggedIn()) return;
-    const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
+    const pubkey = isNostrLoggedIn()
+        ? localStorage.getItem('nym_nostr_login_pubkey')
+        : (nym && nym.pubkey);
     if (!pubkey) return;
 
     const subId = 'nymchat-settings-load-' + Math.random().toString(36).slice(2, 8);
