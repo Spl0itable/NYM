@@ -5010,7 +5010,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // (browser throttles timers when backgrounded so keepalive may not fire)
         if (this.useRelayProxy) {
             const now = Date.now();
-            const STALE_MS = 120000; // >3 missed POOL:PING cycles (30s each) + margin
+            const STALE_MS = 180000; // >4 missed POOL:PING cycles (40s each) + margin for Tor/high-latency
             let closedAny = false;
             for (const p of this.poolSockets) {
                 if (p.ws && p.ws.readyState === WebSocket.OPEN) {
@@ -5173,6 +5173,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (this.useRelayProxy) {
                 this._poolReconnecting = false; // Reset so schedule can run
                 this._poolReconnectRetries = 0;  // Reset backoff on network restore
+                this._lastPoolReconnectSchedule = 0; // Clear debounce for network restore
                 this._schedulePoolReconnect();
                 return;
             }
@@ -5312,8 +5313,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async attemptReconnection() {
         // Pool mode: delegate to the guarded pool reconnect
         if (this.useRelayProxy) {
-            this._poolReconnecting = false; // Allow a fresh attempt
-            this._schedulePoolReconnect();
+            // Don't reset _poolReconnecting — let _schedulePoolReconnect's guard prevent duplicate attempts
+            if (!this._poolReconnecting) {
+                this._schedulePoolReconnect();
+            }
             return;
         }
 
@@ -6174,15 +6177,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     } catch (poolErr) {
                         console.warn(`[NYM] Relay pool attempt ${attempt + 1}/${maxRetries} failed:`, poolErr.message);
                         if (attempt === maxRetries - 1) {
-                            // All retries exhausted
+                            // All retries exhausted — fall back to direct connections on any host
+                            console.warn('[NYM] Relay pool failed, falling back to direct connections');
                             if (!this._isCloudflareHost) {
-                                console.warn('[NYM] Relay pool failed, falling back to direct connections');
                                 this._fallbackToLocal();
-                                // Fall through to direct relay connection code below
                             } else {
-                                // On Cloudflare host, schedule background reconnect instead of throwing
-                                this._schedulePoolReconnect();
+                                // Temporarily disable pool mode to allow direct connections,
+                                // but schedule background reconnect to restore pool mode later
+                                this.useRelayProxy = false;
+                                this._schedulePoolReconnectInBackground();
                             }
+                            // Fall through to direct relay connection code below
                         }
                     }
                 }
@@ -6844,6 +6849,80 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         console.warn('[NYM] Remote API unreachable, falling back to direct connections');
     }
 
+    // Fall back from pool mode to direct relay connections (works on any host including Cloudflare).
+    // Unlike _fallbackToLocal, this does NOT mark the remote API as failed — only disables pool mode.
+    _fallbackToDirectConnections() {
+        if (!this.useRelayProxy) return; // Already in direct mode
+
+        // Close all pool sockets
+        for (const p of this.poolSockets) {
+            p._closing = true;
+            try { if (p.ws) p.ws.close(); } catch (_) {}
+        }
+        this.poolSockets = [];
+        this.poolSocket = null;
+        this.poolConnectedRelays = [];
+        this.poolReady = false;
+        this.relayPool.clear();
+        this._poolReconnecting = false;
+        this._poolReconnectRetries = 0;
+
+        // Disable pool mode so all relay methods use direct connections
+        this.useRelayProxy = false;
+        console.warn('[NYM] Pool mode disabled, switching to direct relay connections');
+
+        // Connect directly to relays
+        this.reconnectToBroadcastRelays();
+        if (this.currentGeohash) {
+            this.connectToGeoRelays(this.currentGeohash);
+        }
+    }
+
+    // Try to restore pool mode in the background (used after initial pool failure on Cloudflare).
+    // Periodically attempts to reconnect to the pool while direct connections are active.
+    _schedulePoolReconnectInBackground() {
+        if (this._bgPoolReconnectTimer) return;
+        let attempts = 0;
+
+        const tryRestore = () => {
+            attempts++;
+            if (attempts > 5) {
+                // Give up restoring pool mode
+                clearTimeout(this._bgPoolReconnectTimer);
+                this._bgPoolReconnectTimer = null;
+                return;
+            }
+            // Temporarily re-enable pool mode to attempt connection
+            this.useRelayProxy = true;
+            this._poolConnecting = false;
+            this._poolReconnecting = false;
+            this._connectToRelayPool()
+                .then(() => {
+                    // Pool restored — switch back to pool mode
+                    clearTimeout(this._bgPoolReconnectTimer);
+                    this._bgPoolReconnectTimer = null;
+                    console.log('[NYM] Pool mode restored');
+                    this._startPoolKeepalive();
+                    this._poolSubscribe();
+                    // Close direct relay connections (pool handles them now)
+                    this.relayPool.forEach((relay, url) => {
+                        try { if (relay.ws) relay.ws.close(); } catch (_) {}
+                    });
+                    this.relayPool.clear();
+                    this.updateConnectionStatus();
+                })
+                .catch(() => {
+                    // Failed — stay in direct mode
+                    this.useRelayProxy = false;
+                    const delay = Math.min(30000 * Math.pow(2, attempts - 1), 120000);
+                    this._bgPoolReconnectTimer = setTimeout(tryRestore, delay);
+                });
+        };
+
+        // First attempt after 30 seconds
+        this._bgPoolReconnectTimer = setTimeout(tryRestore, 30000);
+    }
+
     async _handleBotCommand(content, geohash, quoteContext, publishedContent) {
         if (!this.useRelayProxy) return;
         // Support @Nymbot mentions anywhere in the message as an alias for ?ask
@@ -7202,6 +7281,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this._poolReconnecting) return;
         if (!this.useRelayProxy) return;
 
+        // Debounce: prevent rapid-fire reconnect scheduling from multiple event handlers
+        const now = Date.now();
+        if (this._lastPoolReconnectSchedule && now - this._lastPoolReconnectSchedule < 2000) return;
+        this._lastPoolReconnectSchedule = now;
+
         const attempt = (retries) => {
             if (this._isAnyPoolOpen()) {
                 this._poolReconnecting = false;
@@ -7238,7 +7322,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         } else {
                             this._poolReconnecting = false;
                             this._poolReconnectRetries = 0;
-                            this.updateConnectionStatus('Disconnected - Click to reconnect');
+                            // Fall back to direct relay connections instead of staying disconnected
+                            console.warn('[NYM] Relay pool reconnect exhausted, falling back to direct connections');
+                            this._fallbackToDirectConnections();
                         }
                     });
             }, delay);
@@ -7299,9 +7385,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     _connectToRelayPool() {
         // Prevent concurrent connection attempts
+        if (this._poolConnecting) {
+            return Promise.reject(new Error('Connection already in progress'));
+        }
         if (this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.CONNECTING)) {
             return Promise.reject(new Error('Connection already in progress'));
         }
+        this._poolConnecting = true;
 
         // Gather all relay URLs
         let geoRelayUrls = [];
@@ -7339,6 +7429,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 p.then(() => {
                     if (!resolved) {
                         resolved = true;
+                        this._poolConnecting = false;
                         this.poolReady = true;
                         this.connected = true;
                         // Set legacy poolSocket to first open socket for external compat
@@ -7348,6 +7439,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }).catch(() => {
                     failures++;
                     if (failures === workerPromises.length && !resolved) {
+                        this._poolConnecting = false;
                         reject(new Error('All relay pool workers failed to connect'));
                     }
                 });
@@ -7388,7 +7480,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     ws.close();
                     reject(new Error(`Pool worker ${shard.id} connection timeout`));
                 }
-            }, 20000);
+            }, 30000);
 
             ws.onopen = () => {
                 clearTimeout(timeout);
@@ -7540,7 +7632,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             for (const p of this.poolSockets) {
                 if (p.ws && p.ws.readyState === WebSocket.OPEN) {
                     const silenceSec = (now - (p.lastMessage || 0)) / 1000;
-                    if (silenceSec > 90) {
+                    if (silenceSec > 150) {
                         p.ws.close();
                     }
                 }
