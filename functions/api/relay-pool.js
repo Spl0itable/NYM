@@ -109,6 +109,10 @@ export async function onRequest(context) {
   // Map<relayUrl, Array<geoMsg string>>
   const pendingGeoEvents = new Map();
 
+  // Connection batching state (used in cleanup)
+  let connectionTimer = null;
+  let connectionQueue = [];
+
   // Throttle pool status updates
   let statusTimer = null;
   function schedulePoolStatus() {
