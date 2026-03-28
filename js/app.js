@@ -11563,7 +11563,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Left groups — merge with local set so leaves aren't lost
             if (Array.isArray(settings.leftGroups)) {
                 for (const gid of settings.leftGroups) this.leftGroups.add(gid);
-                localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups]));
+                this._saveLeftGroups();
             }
 
             // Encrypted group conversations - decrypt with NIP-44 from self
@@ -13947,6 +13947,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
             if (!peerPubkey) return; // can't place the message without a peer
 
+            // Drop messages for PMs the user has deleted/closed
+            if (this.closedPMs.has(peerPubkey)) return;
+
             const conversationKey = this.getPMConversationKey(peerPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
 
@@ -14236,6 +14239,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         } catch (_) {}
     }
 
+    // Persist left-group IDs so they survive reload. Uses a per-pubkey key when
+    // pubkey is available, plus a global fallback for early init.
+    _saveLeftGroups() {
+        const json = JSON.stringify([...this.leftGroups]);
+        try { localStorage.setItem('nym_left_groups', json); } catch {}
+        if (this.pubkey) {
+            try { localStorage.setItem(`nym_left_groups_${this.pubkey}`, json); } catch {}
+        }
+    }
+
+    // Reload leftGroups for the current pubkey (called after pubkey is known)
+    _loadLeftGroups() {
+        if (!this.pubkey) return;
+        try {
+            const perUser = localStorage.getItem(`nym_left_groups_${this.pubkey}`);
+            if (perUser) {
+                const arr = JSON.parse(perUser);
+                for (const gid of arr) this.leftGroups.add(gid);
+            }
+        } catch (_) {}
+    }
+
     // Restore groups saved by _saveGroupConversations (called after pubkey is known)
     _loadGroupConversations() {
         if (!this.pubkey) return;
@@ -14344,7 +14369,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Re-invited to a group we previously left — clear the left state
             if (this.leftGroups.has(groupId)) {
                 this.leftGroups.delete(groupId);
-                try { localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups])); } catch {}
+                this._saveLeftGroups();
             }
             const grp = this.groupConversations.get(groupId);
             if (grp && !grp.createdBy) {
@@ -14359,7 +14384,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Re-added to a group we previously left — clear the left state
             if (this.leftGroups.has(groupId)) {
                 this.leftGroups.delete(groupId);
-                try { localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups])); } catch {}
+                this._saveLeftGroups();
             }
             const memberPubkeys = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
@@ -14383,7 +14408,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (removedPubkey === this.pubkey) {
                 // We were removed — track as left so it doesn't reappear
                 this.leftGroups.add(groupId);
-                try { localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups])); } catch {}
+                this._saveLeftGroups();
                 this.groupConversations.delete(groupId);
                 this._saveGroupConversations();
                 const gck = this.getGroupConversationKey(groupId);
@@ -14395,7 +14420,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     this.currentGroup = null;
                     this.inPMMode = false;
                     this.switchChannel(this.currentChannel || 'nym', this.currentChannel || 'nym');
-                    this.displaySystemMessage(`You were removed from "${groupName}" by ${removerName}.`);
+                    this.displaySystemMessage(`You were removed from "${this.escapeHtml(groupName)}" by ${this.escapeHtml(removerName)}.`);
                 }
             } else {
                 // Another member was kicked — update local state and show system notice
@@ -14807,7 +14832,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
         // Track the left group so it doesn't reappear from stale relay data
         this.leftGroups.add(groupId);
-        try { localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups])); } catch {}
+        this._saveLeftGroups();
 
         // Remove persisted entry
         try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) {}
@@ -15555,6 +15580,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             this.displaySystemMessage('PM conversation deleted');
         }
+    }
+
+    // Delete a PM without confirmation (used by /leave command)
+    deletePMDirect(pubkey) {
+        this.pmConversations.delete(pubkey);
+        const conversationKey = this.getPMConversationKey(pubkey);
+        this.pmMessages.delete(conversationKey);
+        this.closedPMs.add(pubkey);
+        try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
+        if (item) item.remove();
+        if (this.inPMMode && this.currentPM === pubkey) {
+            this.switchChannel('nym', 'nym');
+        }
+        this.displaySystemMessage('PM conversation deleted');
     }
 
     openPM(nym, pubkey) {
@@ -19615,7 +19656,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '/addmember': { desc: 'Add a member to the current group chat', fn: (args) => this.cmdAddMember(args) },
             '/groupinfo': { desc: 'Show members of the current group', fn: () => this.cmdGroupInfo() },
             '/share': { desc: 'Share current channel URL', fn: () => this.cmdShare() },
-            '/leave': { desc: 'Leave current channel', fn: () => this.cmdLeave() },
+            '/leave': { desc: 'Leave current channel, group chat, or PM', fn: () => this.cmdLeave() },
             '/quit': { desc: 'Disconnect from Nymchat', fn: () => this.cmdQuit() },
             '/poll': { desc: 'Create a poll', fn: () => this.cmdPoll() }
         };
@@ -20861,7 +20902,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
     async cmdLeave() {
         if (this.inPMMode) {
-            this.displaySystemMessage('Use /pm to switch channels or close PMs from the sidebar');
+            if (this.currentGroup) {
+                // Leave and delete the current group chat
+                this.leaveGroup(this.currentGroup);
+            } else if (this.currentPM) {
+                // Delete the current PM conversation
+                this.deletePMDirect(this.currentPM);
+            }
             return;
         }
 
@@ -21214,10 +21261,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const groupName = nameWords.join(' ').trim() ||
             [this.getNymFromPubkey(this.pubkey), ...resolvedMembers.slice(0, 2).map(pk => this.getNymFromPubkey(pk))].join(', ');
 
-        this.displaySystemMessage(`Creating group "${groupName}"...`);
+        this.displaySystemMessage(`Creating group "${this.escapeHtml(groupName)}"...`);
         const groupId = await this.createGroup(groupName, resolvedMembers);
         if (groupId) {
-            this.displaySystemMessage(`Group "${groupName}" created with ${resolvedMembers.length + 1} members`);
+            this.displaySystemMessage(`Group "${this.escapeHtml(groupName)}" created with ${resolvedMembers.length + 1} members`);
         }
     }
 
@@ -21262,7 +21309,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const isYou = pk === this.pubkey ? ' (you)' : '';
             return `  @${name}#${suffix}${isYou}`;
         }).join('\n');
-        this.displaySystemMessage(`Group: "${group.name}"\nMembers (${group.members.length}):\n${memberList}`);
+        this.displaySystemMessage(`Group: "${this.escapeHtml(group.name)}"\nMembers (${group.members.length}):\n${memberList}`);
     }
 
     openNewPMModal() {
@@ -21472,7 +21519,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const groupName = document.getElementById('pmGroupNameInput').value.trim() ||
                 [this.getNymFromPubkey(this.pubkey), ...this._newPMRecipients.slice(0, 2).map(r => r.nym)].join(', ');
             const memberPubkeys = this._newPMRecipients.map(r => r.pubkey);
-            this.displaySystemMessage(`Creating group "${groupName}"...`);
+            this.displaySystemMessage(`Creating group "${this.escapeHtml(groupName)}"...`);
             const groupId = await this.createGroup(groupName, memberPubkeys);
             if (groupId && initialMsg) {
                 this.sendGroupMessage(initialMsg, groupId);
@@ -26566,7 +26613,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.249 ═══<br/>
+═══ Nymchat v3.56.250 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -26774,6 +26821,10 @@ async function checkSavedConnection() {
             // Apply cached shop items (styles/flairs) to the new ephemeral identity
             nym.applyCachedShopItemsToNewIdentity();
 
+            // Restore persisted group conversations for this keypair
+            nym._loadGroupConversations();
+            nym._loadLeftGroups();
+
             if (isDeveloperLogin) {
                 // Developer login - load lightning address from their kind 0 profile
                 await nym.loadLightningAddress();
@@ -26951,6 +27002,10 @@ async function initializeNym() {
 
         // Apply cached shop items (styles/flairs) to the new ephemeral identity
         nym.applyCachedShopItemsToNewIdentity();
+
+        // Restore persisted group conversations for this keypair
+        nym._loadGroupConversations();
+        nym._loadLeftGroups();
 
         if (isDeveloperLogin) {
             // Developer login - load lightning address from their kind 0 profile
@@ -27657,6 +27712,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
 
     // Restore persisted groups for this identity before relay history arrives
     nym._loadGroupConversations();
+    nym._loadLeftGroups();
 
     // Update notification badge from persisted history
     nym._updateNotificationBadge();
@@ -28323,7 +28379,7 @@ async function applyNostrSettings(s) {
     // Left groups — merge with local set so leaves aren't lost by stale relay data
     if (Array.isArray(s.leftGroups)) {
         for (const gid of s.leftGroups) nym.leftGroups.add(gid);
-        localStorage.setItem('nym_left_groups', JSON.stringify([...nym.leftGroups]));
+        nym._saveLeftGroups();
     }
 
     // Encrypted group conversations - decrypt with NIP-44 from self
