@@ -659,6 +659,7 @@ class NYM {
         this.notificationLastReadTime = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
         this.notificationsEnabled = localStorage.getItem('nym_notifications_enabled') !== 'false';
         this.closedPMs = new Set(JSON.parse(localStorage.getItem('nym_closed_pms') || '[]'));
+        this.leftGroups = new Set(JSON.parse(localStorage.getItem('nym_left_groups') || '[]'));
         this.recentEmojis = [];
         this.allEmojis = {
             'smileys': ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '☺️', '😚', '😙', '🥲', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🫢', '🫣', '🤫', '🤔', '🫡', '🤐', '🤨', '😐', '😑', '😶', '🫥', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '😵‍💫', '🤯', '🤠', '🥳', '🥸', '😎', '🤓', '🧐', '😕', '🫤', '😟', '☹️', '🙁', '😮', '😯', '😲', '😳', '🥺', '🥹', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'],
@@ -967,8 +968,7 @@ class NYM {
         this.listExpansionStates = new Map();
         this.userLocation = null;
         this.userColors = new Map();
-        this.blurOthersImages = true;
-        this.imageBlurSettings = this.loadImageBlurSettings();
+        this.blurOthersImages = this.loadImageBlurSettings();
         this.sortByProximity = localStorage.getItem('nym_sort_proximity') === 'true';
         this.verifiedDeveloper = {
             npub: 'npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv',
@@ -3017,7 +3017,10 @@ ${code}
             }
             if (s.blurOthersImages !== undefined) {
                 this.blurOthersImages = s.blurOthersImages;
-                localStorage.setItem(`nym_image_blur_${this.pubkey}`, s.blurOthersImages.toString());
+                localStorage.setItem('nym_image_blur', s.blurOthersImages.toString());
+                if (this.pubkey) {
+                    localStorage.setItem(`nym_image_blur_${this.pubkey}`, s.blurOthersImages.toString());
+                }
             }
             if (s.lightningAddress) {
                 this.lightningAddress = s.lightningAddress;
@@ -10047,7 +10050,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 translateLanguage: this.settings.translateLanguage || '',
                 notificationsEnabled: this.notificationsEnabled !== false,
                 notificationLastReadTime: this.notificationLastReadTime || 0,
-                closedPMs: Array.from(this.closedPMs || [])
+                closedPMs: Array.from(this.closedPMs || []),
+                leftGroups: Array.from(this.leftGroups || [])
             };
 
             // Encrypt group conversations data with NIP-44 to self for privacy
@@ -11353,7 +11357,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Restore image blur settings
             if (settings.blurOthersImages !== undefined) {
                 this.blurOthersImages = settings.blurOthersImages;
-                localStorage.setItem(`nym_image_blur_${this.pubkey}`, settings.blurOthersImages.toString());
+                localStorage.setItem('nym_image_blur', settings.blurOthersImages.toString());
+                if (this.pubkey) {
+                    localStorage.setItem(`nym_image_blur_${this.pubkey}`, settings.blurOthersImages.toString());
+                }
             }
 
             // Restore proximity sorting preference
@@ -11547,10 +11554,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.notificationLastReadTime = settings.notificationLastReadTime;
                 localStorage.setItem('nym_notification_last_read', String(settings.notificationLastReadTime));
             }
-            // Closed PMs
+            // Closed PMs — merge with local set so deletions aren't lost
             if (Array.isArray(settings.closedPMs)) {
-                this.closedPMs = new Set(settings.closedPMs);
-                localStorage.setItem('nym_closed_pms', JSON.stringify(settings.closedPMs));
+                for (const pk of settings.closedPMs) this.closedPMs.add(pk);
+                localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs]));
+            }
+
+            // Left groups — merge with local set so leaves aren't lost
+            if (Array.isArray(settings.leftGroups)) {
+                for (const gid of settings.leftGroups) this.leftGroups.add(gid);
+                localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups]));
             }
 
             // Encrypted group conversations - decrypt with NIP-44 from self
@@ -14283,6 +14296,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // group-invite: the rumor author is always the group creator — persist this so
         // non-creating members know who owns the group without relying on local state.
         if (typeTag && typeTag[1] === 'group-invite') {
+            // Re-invited to a group we previously left — clear the left state
+            if (this.leftGroups.has(groupId)) {
+                this.leftGroups.delete(groupId);
+                try { localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups])); } catch {}
+            }
             const grp = this.groupConversations.get(groupId);
             if (grp && !grp.createdBy) {
                 grp.createdBy = senderPubkey;
@@ -14293,6 +14311,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // group-add-member: show as system message, not a chat bubble.
         if (typeTag && typeTag[1] === 'group-add-member') {
+            // Re-added to a group we previously left — clear the left state
+            if (this.leftGroups.has(groupId)) {
+                this.leftGroups.delete(groupId);
+                try { localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups])); } catch {}
+            }
             const memberPubkeys = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
                 .map(t => t[1]);
@@ -14735,6 +14758,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 await this._sendGiftWrapsAsync(otherMembers, rumor, null);
             }
         }
+        // Track the left group so it doesn't reappear from stale relay data
+        this.leftGroups.add(groupId);
+        try { localStorage.setItem('nym_left_groups', JSON.stringify([...this.leftGroups])); } catch {}
+
         // Remove persisted entry
         try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) {}
         this.groupConversations.delete(groupId);
@@ -14805,6 +14832,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const allMembers = [...new Set(members)];
 
         if (!existing) {
+            // Don't re-show groups the user previously left
+            if (this.leftGroups.has(groupId)) return;
             this.groupConversations.set(groupId, {
                 name, members: allMembers, lastMessageTime: timestamp, createdBy: null
             });
@@ -24662,15 +24691,23 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     loadImageBlurSettings() {
-        const saved = localStorage.getItem(`nym_image_blur_${this.pubkey}`);
-        if (saved !== null) {
-            return saved === 'true';
+        // Try per-pubkey key first, then fall back to global key (for ephemeral
+        // users whose pubkeys change each session)
+        if (this.pubkey) {
+            const saved = localStorage.getItem(`nym_image_blur_${this.pubkey}`);
+            if (saved !== null) return saved === 'true';
         }
+        const global = localStorage.getItem('nym_image_blur');
+        if (global !== null) return global === 'true';
         return true; // Default to blur
     }
 
     saveImageBlurSettings() {
-        localStorage.setItem(`nym_image_blur_${this.pubkey}`, this.blurOthersImages.toString());
+        // Always save a global key so ephemeral users keep their preference
+        localStorage.setItem('nym_image_blur', this.blurOthersImages.toString());
+        if (this.pubkey) {
+            localStorage.setItem(`nym_image_blur_${this.pubkey}`, this.blurOthersImages.toString());
+        }
     }
 
     toggleImageBlur() {
@@ -26482,7 +26519,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.247 ═══<br/>
+═══ Nymchat v3.56.248 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -27568,6 +27605,9 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Fetch Nostr follow list (kind:3 contact list) for search in New Message modal
     nym.fetchNostrFollowList(pubkey);
 
+    // Reload blur setting now that pubkey is known
+    nym.blurOthersImages = nym.loadImageBlurSettings();
+
     // Restore persisted groups for this identity before relay history arrives
     nym._loadGroupConversations();
 
@@ -27686,7 +27726,8 @@ async function nostrSettingsSave() {
             translateLanguage: nym.settings.translateLanguage || '',
             notificationsEnabled: nym.notificationsEnabled !== false,
             notificationLastReadTime: nym.notificationLastReadTime || 0,
-            closedPMs: Array.from(nym.closedPMs || [])
+            closedPMs: Array.from(nym.closedPMs || []),
+            leftGroups: Array.from(nym.leftGroups || [])
         };
 
         // Encrypt group conversations data with NIP-44 to self for privacy
@@ -28136,6 +28177,7 @@ async function applyNostrSettings(s) {
     // Blur images
     if (typeof s.blurOthersImages === 'boolean') {
         nym.blurOthersImages = s.blurOthersImages;
+        localStorage.setItem('nym_image_blur', String(s.blurOthersImages));
         if (nym.pubkey) {
             localStorage.setItem(`nym_image_blur_${nym.pubkey}`, String(s.blurOthersImages));
         }
@@ -28225,10 +28267,16 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_notification_last_read', String(s.notificationLastReadTime));
     }
 
-    // Closed PMs
+    // Closed PMs — merge with local set so deletions aren't lost by stale relay data
     if (Array.isArray(s.closedPMs)) {
-        nym.closedPMs = new Set(s.closedPMs);
-        localStorage.setItem('nym_closed_pms', JSON.stringify(s.closedPMs));
+        for (const pk of s.closedPMs) nym.closedPMs.add(pk);
+        localStorage.setItem('nym_closed_pms', JSON.stringify([...nym.closedPMs]));
+    }
+
+    // Left groups — merge with local set so leaves aren't lost by stale relay data
+    if (Array.isArray(s.leftGroups)) {
+        for (const gid of s.leftGroups) nym.leftGroups.add(gid);
+        localStorage.setItem('nym_left_groups', JSON.stringify([...nym.leftGroups]));
     }
 
     // Encrypted group conversations - decrypt with NIP-44 from self
