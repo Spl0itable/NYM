@@ -6159,20 +6159,35 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Use multiplexed relay pool when running on Cloudflare (or remote proxy)
             if (this.useRelayProxy) {
-                try {
-                    await this._connectToRelayPool();
-                } catch (poolErr) {
-                    // Remote relay pool unreachable — fall back to direct relay connections
-                    if (!this._isCloudflareHost) {
-                        console.warn('[NYM] Relay pool failed, falling back to direct connections:', poolErr.message);
-                        this._fallbackToLocal();
-                        // Fall through to direct relay connection code below
-                    } else {
-                        throw poolErr;
+                let poolConnected = false;
+                const maxRetries = this._isCloudflareHost ? 3 : 1;
+                for (let attempt = 0; attempt < maxRetries; attempt++) {
+                    try {
+                        if (attempt > 0) {
+                            const delay = Math.min(2000 * Math.pow(2, attempt - 1), 8000);
+                            this.updateConnectionStatus(`Reconnecting (attempt ${attempt + 1})...`);
+                            await new Promise(r => setTimeout(r, delay));
+                        }
+                        await this._connectToRelayPool();
+                        poolConnected = true;
+                        break;
+                    } catch (poolErr) {
+                        console.warn(`[NYM] Relay pool attempt ${attempt + 1}/${maxRetries} failed:`, poolErr.message);
+                        if (attempt === maxRetries - 1) {
+                            // All retries exhausted
+                            if (!this._isCloudflareHost) {
+                                console.warn('[NYM] Relay pool failed, falling back to direct connections');
+                                this._fallbackToLocal();
+                                // Fall through to direct relay connection code below
+                            } else {
+                                // On Cloudflare host, schedule background reconnect instead of throwing
+                                this._schedulePoolReconnect();
+                            }
+                        }
                     }
                 }
 
-                if (this.useRelayProxy) {
+                if (this.useRelayProxy && poolConnected) {
                     this.connected = true;
                     this._startPoolKeepalive();
                     document.getElementById('messageInput').disabled = false;
@@ -7373,10 +7388,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     ws.close();
                     reject(new Error(`Pool worker ${shard.id} connection timeout`));
                 }
-            }, 10000);
+            }, 20000);
 
             ws.onopen = () => {
                 clearTimeout(timeout);
+                wasOpen = true;
 
                 // Send RELAYS config for this shard
                 ws.send(JSON.stringify(['RELAYS', {
@@ -7439,11 +7455,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             };
 
+            let wasOpen = false;
+            let errorRejected = false;
+
             ws.onclose = () => {
                 clearTimeout(timeout);
 
                 // Skip reconnect logic if this socket was intentionally closed
                 if (poolEntry._closing) return;
+
+                // If we never opened, onerror already rejected — don't schedule reconnects
+                // (the caller's retry loop handles reconnection for initial failures)
+                if (!wasOpen) {
+                    if (!errorRejected) reject(new Error(`Pool worker ${shard.id} closed before open`));
+                    return;
+                }
 
                 // Clear this worker's connected relays and re-merge
                 poolEntry.connectedRelays = [];
@@ -7465,6 +7491,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             ws.onerror = () => {
                 clearTimeout(timeout);
+                errorRejected = true;
                 reject(new Error(`Pool worker ${shard.id} connection error`));
             };
         });
@@ -26575,7 +26602,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.251 ═══<br/>
+═══ Nymchat v3.56.252 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
