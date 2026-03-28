@@ -7787,6 +7787,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async connectToRelay(relayUrl, type = 'relay') {
+        // Pool mode: all relay connections are managed by the multiplexed pool worker
+        if (this.useRelayProxy) return;
+
         // Block known-bad relays entirely - never connect
         if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com' || relayUrl === 'wss://nostr-server-production.up.railway.app') {
             return; // Silently skip blocked relays
@@ -7908,8 +7911,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this.updateConnectionStatus();
 
                     // Reconnect ALL relay types (broadcast, nosflare, AND read relays)
+                    // Pool mode handles its own reconnections — skip individual relay reconnect
                     // For previously connected relays, always attempt reconnection (no blacklist check)
-                    if (this.connected && (wasConnected || !this.blacklistedRelays.has(relayUrl))) {
+                    if (!this.useRelayProxy && this.connected && (wasConnected || !this.blacklistedRelays.has(relayUrl))) {
                         // Track disconnections
                         if (!this.reconnectingRelays) {
                             this.reconnectingRelays = new Set();
@@ -25916,7 +25920,16 @@ async function changeRelay() {
 
     nym.displaySystemMessage('Switching relay...');
     try {
-        await nym.connectToRelay(newRelayUrl);
+        if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
+            // Pool mode: add this relay to the pool config
+            if (!nym.allRelayUrls.includes(newRelayUrl)) {
+                nym.allRelayUrls.push(newRelayUrl);
+            }
+            nym._poolSendRelayConfig();
+            nym.displaySystemMessage(`Added ${newRelayUrl} to relay pool.`);
+        } else {
+            await nym.connectToRelay(newRelayUrl);
+        }
     } catch (_) {
         nym.displaySystemMessage('Failed to connect to relay.');
     }
@@ -28495,6 +28508,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Pre-connect to a broadcast relay for instant connection
     async function preConnect() {
+        // Pool mode: pool handles all connections after login
+        if (nym.useRelayProxy) return;
         for (const relayUrl of nym.defaultRelays) {
             await nym.connectToRelay(relayUrl, 'relay');
             const r = nym.relayPool.get(relayUrl);
@@ -28675,18 +28690,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
-            // Try to reconnect to expired blacklisted relays
-            expiredRelays.forEach(relayUrl => {
-                if (nym.defaultRelays.includes(relayUrl) && !nym.relayPool.has(relayUrl)) {
-                    nym.connectToRelay(relayUrl, 'relay').then(() => {
-                            const r = nym.relayPool.get(relayUrl);
-                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                nym.subscribeToSingleRelay(relayUrl);
-                                nym.updateConnectionStatus();
-                            }
-                        });
-                }
-            });
+            // Try to reconnect to expired blacklisted relays (direct mode only)
+            if (!nym.useRelayProxy) {
+                expiredRelays.forEach(relayUrl => {
+                    if (nym.defaultRelays.includes(relayUrl) && !nym.relayPool.has(relayUrl)) {
+                        nym.connectToRelay(relayUrl, 'relay').then(() => {
+                                const r = nym.relayPool.get(relayUrl);
+                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                    nym.subscribeToSingleRelay(relayUrl);
+                                    nym.updateConnectionStatus();
+                                }
+                            });
+                    }
+                });
+            }
         }
     }, 60000); // Check every minute
 
