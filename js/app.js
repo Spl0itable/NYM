@@ -10031,7 +10031,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         };
                     }
                     const groupJson = JSON.stringify(groupData);
-                    const encrypted = await this.encryptNIP44(this.pubkey, groupJson);
+                    const encrypted = await this.encryptNIP44(groupJson, this.pubkey);
                     if (encrypted) {
                         settingsData.encryptedGroups = encrypted;
                     }
@@ -11531,7 +11531,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Encrypted group conversations - decrypt with NIP-44 from self
             if (settings.encryptedGroups && typeof settings.encryptedGroups === 'string') {
                 try {
-                    const groupJson = await this.decryptNIP44(this.pubkey, settings.encryptedGroups);
+                    const groupJson = await this.decryptNIP44(settings.encryptedGroups, this.pubkey);
                     if (groupJson) {
                         const groupData = JSON.parse(groupJson);
                         for (const [groupId, group] of Object.entries(groupData)) {
@@ -27814,7 +27814,7 @@ async function nostrSettingsSave() {
                     };
                 }
                 const groupJson = JSON.stringify(groupData);
-                const encrypted = await nym.encryptNIP44(pubkey, groupJson);
+                const encrypted = await nym.encryptNIP44(groupJson, pubkey);
                 if (encrypted) {
                     settingsPayload.encryptedGroups = encrypted;
                 }
@@ -28134,7 +28134,7 @@ function nostrSettingsLoad() {
 }
 
 async function applyNostrSettings(s) {
-    if (!s || typeof s !== 'object' || !s.v) return;
+    if (!s || typeof s !== 'object') return;
 
     // Theme
     if (s.theme && typeof s.theme === 'string') {
@@ -28354,7 +28354,7 @@ async function applyNostrSettings(s) {
     // Encrypted group conversations - decrypt with NIP-44 from self
     if (s.encryptedGroups && typeof s.encryptedGroups === 'string') {
         try {
-            const groupJson = await nym.decryptNIP44(nym.pubkey, s.encryptedGroups);
+            const groupJson = await nym.decryptNIP44(s.encryptedGroups, nym.pubkey);
             if (groupJson) {
                 const groupData = JSON.parse(groupJson);
                 for (const [groupId, group] of Object.entries(groupData)) {
