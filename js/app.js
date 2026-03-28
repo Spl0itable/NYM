@@ -5999,10 +5999,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.updateKeywordList();
             input.value = '';
 
-            // Hide messages containing this keyword
+            // Hide messages containing this keyword (check both content and nickname)
             document.querySelectorAll('.message').forEach(msg => {
                 const content = msg.querySelector('.message-content');
-                if (content && content.textContent.toLowerCase().includes(keyword)) {
+                const author = msg.dataset.author || '';
+                const contentMatch = content && content.textContent.toLowerCase().includes(keyword);
+                const nickMatch = this.parseNymFromDisplay(author).toLowerCase().includes(keyword);
+                if (contentMatch || nickMatch) {
                     msg.classList.add('blocked');
                 }
             });
@@ -6017,14 +6020,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.saveBlockedKeywords();
         this.updateKeywordList();
 
-        // Re-check all messages
+        // Re-check all messages (check both content and nickname against remaining keywords)
         document.querySelectorAll('.message').forEach(msg => {
-            const author = msg.dataset.author;
+            const author = msg.dataset.author || '';
             const content = msg.querySelector('.message-content');
 
             if (content && !this.blockedUsers.has(author)) {
+                const contentText = content.textContent.toLowerCase();
+                const cleanNick = this.parseNymFromDisplay(author).toLowerCase();
                 const hasBlockedKeyword = Array.from(this.blockedKeywords).some(kw =>
-                    content.textContent.toLowerCase().includes(kw)
+                    contentText.includes(kw) || (cleanNick && cleanNick.includes(kw))
                 );
 
                 if (!hasBlockedKeyword) {
@@ -6051,9 +6056,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     }
 
-    hasBlockedKeyword(text) {
+    hasBlockedKeyword(text, nickname) {
         const lowerText = text.toLowerCase();
-        return Array.from(this.blockedKeywords).some(keyword => lowerText.includes(keyword));
+        const lowerNick = nickname ? this.parseNymFromDisplay(nickname).toLowerCase() : '';
+        return Array.from(this.blockedKeywords).some(keyword =>
+            lowerText.includes(keyword) || (lowerNick && lowerNick.includes(keyword))
+        );
     }
 
     generateRandomNym() {
@@ -10847,8 +10855,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.discoveredGeohashes.add(geohash);
             }
 
-            // Check if user is blocked or message contains blocked keywords
-            if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content)) {
+            // Check if user is blocked or message/nickname contains blocked keywords
+            if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content, nym)) {
                 return;
             }
 
@@ -11746,6 +11754,31 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Hide messages with blocked keywords after mute list loads
             this.hideMessagesWithBlockedKeywords();
+        }
+
+        // Re-render current view to retroactively apply blocks to messages
+        // that loaded before the mute list synced
+        if (mutedPubkeys.length > 0 || mutedWords.length > 0) {
+            this.rerenderCurrentView();
+        }
+    }
+
+    rerenderCurrentView() {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+
+        if (this.inPMMode) {
+            const conversationKey = this.currentGroup
+                ? this.getGroupConversationKey(this.currentGroup)
+                : this.currentPM;
+            if (conversationKey) {
+                this.renderMessagesWithVirtualScroll(container, conversationKey, false, true);
+            }
+        } else {
+            const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+            if (storageKey) {
+                this.renderMessagesWithVirtualScroll(container, storageKey, false);
+            }
         }
     }
 
@@ -14186,7 +14219,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // re-renders fresh when the user opens this PM.
                 this.channelDOMCache.delete(conversationKey);
                 if (!isOwn) {
-                    const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.isNymBlocked(msg.author);
+                    const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.isNymBlocked(msg.author) || this.hasBlockedKeyword(msg.content, msg.author);
                     if (!msg.isHistorical) {
                         // Live message: full notification with sound/popup
                         this.updateUnreadCount(conversationKey);
@@ -14608,7 +14641,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         }
 
-        const senderBlocked = this.blockedUsers.has(senderPubkey) || this.isNymBlocked(msg.author);
+        const senderBlocked = this.blockedUsers.has(senderPubkey) || this.isNymBlocked(msg.author) || this.hasBlockedKeyword(msg.content, msg.author);
         if (this.inPMMode && this.currentGroup === groupId) {
             // displayMessage already filters blocked senders; no extra check needed here
             this.displayMessage(msg);
@@ -17767,7 +17800,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Check if nym is blocked or message contains blocked keywords or is spam
         if (this.blockedUsers.has(message.author) ||
-            this.hasBlockedKeyword(message.content) ||
+            this.hasBlockedKeyword(message.content, message.author) ||
             this.isSpamMessage(message.content)) {
             // Don't create the element at all for blocked/spam content
             return;
@@ -21760,25 +21793,26 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     hideMessagesWithBlockedKeywords() {
-        // Hide messages in current DOM that contain blocked keywords
+        // Hide messages in current DOM that contain blocked keywords (check both content and nickname)
         document.querySelectorAll('.message').forEach(msg => {
             const content = msg.querySelector('.message-content');
-            if (content) {
-                const hasBlockedKeyword = Array.from(this.blockedKeywords).some(kw =>
-                    content.textContent.toLowerCase().includes(kw)
-                );
+            const author = msg.dataset.author || '';
+            const contentText = content ? content.textContent.toLowerCase() : '';
+            const cleanNick = this.parseNymFromDisplay(author).toLowerCase();
+            const hasBlocked = Array.from(this.blockedKeywords).some(kw =>
+                contentText.includes(kw) || (cleanNick && cleanNick.includes(kw))
+            );
 
-                if (hasBlockedKeyword) {
-                    msg.style.display = 'none';
-                    msg.classList.add('blocked');
-                }
+            if (hasBlocked) {
+                msg.style.display = 'none';
+                msg.classList.add('blocked');
             }
         });
 
         // Mark messages as blocked in stored messages
         this.messages.forEach((channelMessages, channel) => {
             channelMessages.forEach(msg => {
-                if (this.hasBlockedKeyword(msg.content)) {
+                if (this.hasBlockedKeyword(msg.content, msg.author)) {
                     msg.blocked = true;
                 }
             });
@@ -21787,7 +21821,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Mark PM messages as blocked
         this.pmMessages.forEach((conversationMessages, conversationKey) => {
             conversationMessages.forEach(msg => {
-                if (this.hasBlockedKeyword(msg.content)) {
+                if (this.hasBlockedKeyword(msg.content, msg.author)) {
                     msg.blocked = true;
                 }
             });
@@ -23161,7 +23195,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
             if (this.blockedUsers.has(msg.pubkey) || this.isNymBlocked(msg.author) || msg.blocked) return false;
-            if (this.hasBlockedKeyword(msg.content)) return false;
+            if (this.hasBlockedKeyword(msg.content, msg.author)) return false;
             if (this.isSpamMessage(msg.content)) return false;
             return true;
         }).sort((a, b) => {
@@ -23180,6 +23214,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.deletedEventIds.has(msg.id)) return false;
             // Check if message is from blocked user
             if (this.blockedUsers.has(msg.pubkey) || msg.blocked) return false;
+            // Check if message content or nickname matches blocked keywords
+            if (this.hasBlockedKeyword(msg.content, msg.author)) return false;
             // Check if message content is spam
             if (this.isSpamMessage(msg.content)) return false;
             if (msg.conversationKey !== conversationKey) return false;
@@ -26707,7 +26743,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.252 ═══<br/>
+═══ Nymchat v3.56.253 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
