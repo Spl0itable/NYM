@@ -26588,7 +26588,7 @@ function showAbout() {
 ═══ Nymchat v3.56.256 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
-Your nym: ${nym.nym || 'Not set'}<br/>
+Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
 <br/>
 Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br/>
 <br/>
@@ -26596,7 +26596,7 @@ Nymchat is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_bla
 Made with ♥ by <a href="https://nostrservices.com" target="_blank" rel="noopener" style="color: var(--secondary)">21 Million LLC</a><br/>
 Lead developer: <a href="https://njump.me/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas#a8df</a><br/>
 <a href="static/tos.html" target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> | <a href="static/pp.html" target="_blank" rel="noopener" style="color: var(--secondary)">Privacy Policy</a><br/>
-`);
+`, 'system', { html: true });
 }
 
 // Function to check for saved connection on page load
