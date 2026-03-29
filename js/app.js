@@ -3236,6 +3236,10 @@ ${code}
             channelName = channelInput.substring(2);
         }
 
+        // Sanitize channel name
+        channelName = this.sanitizeChannelName(channelName);
+        if (!channelName) return;
+
         if (this.isValidGeohash(channelName)) {
             if (!this.channels.has(channelName)) {
                 this.addChannel(channelName, channelName);
@@ -4693,7 +4697,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     handleChannelSearch(searchTerm) {
-        const term = searchTerm.toLowerCase().trim();
+        const term = this.sanitizeChannelName(searchTerm.trim());
         const resultsDiv = document.getElementById('channelSearchResults');
 
         // Filter existing channels
@@ -4701,7 +4705,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Show create/join prompt if search term exists
         if (term.length > 0) {
-            // Check if the term as-is is a valid geohash (don't sanitize — treat the exact input)
             const isGeohash = this.isValidGeohash(term);
             const exists = Array.from(this.channels.keys()).some(k => k.toLowerCase() === term);
 
@@ -6116,6 +6119,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const noun = nouns[Math.floor(Math.random() * nouns.length)];
 
         return `${adj}_${noun}#${suffix}`;
+    }
+
+    // Sanitize channel names: allow letters (including international), digits, underscores, hyphens only.
+    // Strips everything else (spaces, URLs, special chars) and lowercases.
+    sanitizeChannelName(name) {
+        if (!name) return '';
+        return name.toLowerCase().replace(/[^\p{L}\p{N}_-]/gu, '');
     }
 
     stripPubkeySuffix(nym) {
@@ -10890,7 +10900,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Strip any existing #suffix from n tag (bitchat includes it, Nymchat adds its own)
             const rawNym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : null;
             const nym = rawNym || this.getNymFromPubkey(event.pubkey);
-            const geohash = geohashTag ? geohashTag[1] : '';
+            const geohash = geohashTag ? this.sanitizeChannelName(geohashTag[1]) : '';
 
             // Block impersonation: drop events using reserved nym "nymbot"
             // unless they come from the verified bot pubkey
@@ -15705,6 +15715,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         let cleanContent = content.replace(/<[^>]*>/g, '');
         cleanContent = cleanContent.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
 
+        // Strip blockquoted lines so mentions inside quoted text don't trigger notifications
+        cleanContent = cleanContent.split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n');
+
         return nymPattern.test(cleanContent);
     }
 
@@ -18779,10 +18792,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             wrapper.classList.toggle('has-value', term.length > 0);
         }
 
+        const validChannelPattern = /^#[\p{L}\p{N}_-]+$/u;
         items.forEach(item => {
             const channelNameEl = item.querySelector('.channel-name');
             const channelName = channelNameEl ? channelNameEl.textContent.toLowerCase() : '';
-            if (term.length === 0 || channelName.includes(term)) {
+            // Hide channels with invalid names (spaces, special chars, URLs)
+            if (!validChannelPattern.test(channelName)) {
+                item.style.display = 'none';
+                item.classList.add('search-hidden');
+            } else if (term.length === 0 || channelName.includes(term)) {
                 item.style.display = 'flex';
                 item.classList.remove('search-hidden');
             } else {
@@ -19846,7 +19864,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         <div class="autocomplete-item ${index === 0 ? 'selected' : ''}"
                 data-nym="${this.escapeHtml(user.nym)}"
                 data-pubkey="${user.pubkey}">
-            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${user.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${this.escapeHtml(user.displayNym)}</strong>
+            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${user.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
         </div>
     `;
             }).join('');
@@ -19977,10 +19995,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
         });
 
-        // Filter by search
+        // Filter by search, excluding invalid channel names
+        const validChannelPattern = /^[\p{L}\p{N}_-]+$/u;
         const searchLower = search.toLowerCase();
         let matches = Array.from(channelMap.values())
-            .filter(ch => ch.name.toLowerCase().includes(searchLower));
+            .filter(ch => validChannelPattern.test(ch.name) && ch.name.toLowerCase().includes(searchLower));
 
         // Sort: current first, then joined with messages, then joined, then by name
         matches.sort((a, b) => {
@@ -20808,8 +20827,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             channel = channel.substring(1);
         }
 
+        // Sanitize: only allow letters (including international), digits, underscores, hyphens
+        channel = this.sanitizeChannelName(channel);
+
         if (!channel) {
-            this.displaySystemMessage('Please provide a channel name.');
+            this.displaySystemMessage('Invalid channel name. Only letters, numbers, underscores, and hyphens are allowed.');
             return;
         }
 
@@ -23105,6 +23127,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const list = document.getElementById('channelList');
         const key = geohash || channel;
 
+        // Reject invalid channel names (must be letters, digits, underscores, hyphens only)
+        if (key && !/^[\p{L}\p{N}_-]+$/u.test(key)) {
+            return;
+        }
+
         // Don't add blocked channels
         if (this.isChannelBlocked(channel, geohash)) {
             return;
@@ -23411,7 +23438,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const saved = localStorage.getItem('nym_user_joined_channels');
         if (saved) {
             try {
-                return JSON.parse(saved);
+                const channels = JSON.parse(saved);
+                // Filter out invalid channel names (legacy data with spaces/special chars)
+                return channels.filter(ch => ch && /^[\p{L}\p{N}_-]+$/u.test(ch));
             } catch (error) {
                 return [];
             }
@@ -26553,7 +26582,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.255 ═══<br/>
+═══ Nymchat v3.56.256 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -28649,6 +28678,8 @@ async function routeToUrlChannel() {
         if (channelInput.startsWith('g:')) {
             channelName = channelInput.substring(2);
         }
+        // Sanitize channel name
+        channelName = nym.sanitizeChannelName(channelName);
         if (nym.isValidGeohash(channelName)) {
             nym.addChannel(channelName, channelName);
             nym.switchChannel(channelName, channelName);
