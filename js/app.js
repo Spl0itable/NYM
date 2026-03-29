@@ -6238,6 +6238,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     // Switch to pinned landing channel (or PM-only mode landing)
                     setTimeout(() => {
                         if (window.pendingChannel || window.urlChannelRouted) return;
+                        // Don't override if user already navigated (e.g. joined a channel from search, created a group)
+                        if (this.navigationHistory.length > 0) return;
                         if (this.settings.groupChatPMOnlyMode) {
                             this.navigateToLatestPMOrGroup();
                         } else {
@@ -6378,6 +6380,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             setTimeout(() => {
                 // Skip if a URL channel is pending or was already routed
                 if (window.pendingChannel || window.urlChannelRouted) return;
+                // Don't override if user already navigated (e.g. joined a channel from search, created a group)
+                if (this.navigationHistory.length > 0) return;
 
                 if (this.settings.groupChatPMOnlyMode) {
                     this.navigateToLatestPMOrGroup();
@@ -10176,7 +10180,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             chatLayout: this.settings.chatLayout || 'irc',
             nickStyle: this.settings.nickStyle || 'fancy',
             colorMode: localStorage.getItem('nym_color_mode') || 'auto',
-            wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'none',
+            wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'geometric',
             wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
             powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
             hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
@@ -13873,8 +13877,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
             if (!peerPubkey) return; // can't place the message without a peer
 
-            // Drop messages for PMs the user has deleted/closed
-            if (this.closedPMs.has(peerPubkey)) return;
+            // Re-open closed PMs when a new message arrives from the peer
+            if (this.closedPMs.has(peerPubkey)) {
+                this.closedPMs.delete(peerPubkey);
+                try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+            }
 
             const conversationKey = this.getPMConversationKey(peerPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
@@ -14302,6 +14309,31 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 grp.createdBy = senderPubkey;
                 this._saveGroupConversations();
             }
+
+            // Send notification for group invites
+            if (!isOwn && !this.blockedUsers.has(senderPubkey)) {
+                const inviterName = this.getNymFromPubkey(senderPubkey);
+                const inviteBody = rumor.content || `You've been added to group "${groupName}"`;
+                const inviteTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
+                const isHistorical = (Math.floor(Date.now() / 1000) - inviteTsSec) > 10;
+                const groupConvKeyForNotif = this.getGroupConversationKey(groupId);
+                if (!isHistorical) {
+                    this.showNotification(`Group invite: ${groupName}`, inviteBody, {
+                        type: 'group',
+                        groupId,
+                        id: groupConvKeyForNotif,
+                        pubkey: senderPubkey
+                    });
+                } else {
+                    this._addNotificationToHistory(`Group invite: ${groupName}`, inviteBody, {
+                        type: 'group',
+                        groupId,
+                        id: groupConvKeyForNotif,
+                        pubkey: senderPubkey
+                    }, inviteTsSec * 1000);
+                }
+            }
+
             // Fall through to display the invite message inline
         }
 
@@ -14753,7 +14785,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const otherMembers = group.members.filter(pk => pk !== this.pubkey);
             if (otherMembers.length > 0) {
                 const now = Math.floor(Date.now() / 1000);
-                const leaveContent = `${this.nym} left the group.`;
+                const suffix = this.getPubkeySuffix(this.pubkey);
+                const leaveContent = `${this.nym}#${suffix} left the group.`;
                 const tags = group.members.map(pk => ['p', pk]);
                 tags.push(['g', groupId]);
                 tags.push(['subject', group.name]);
@@ -15402,8 +15435,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             : this.parseNymFromDisplay(nym);
 
         if (!this.pmConversations.has(pubkey)) {
-            // Don't re-show PMs the user previously closed
-            if (this.closedPMs.has(pubkey)) return;
+            // Re-open closed PMs when a new conversation is initiated
+            if (this.closedPMs.has(pubkey)) {
+                this.closedPMs.delete(pubkey);
+                try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+            }
 
             this.pmConversations.set(pubkey, {
                 nym: baseNym,
@@ -26585,7 +26621,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.256 ═══<br/>
+═══ Nymchat v3.56.257 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -28213,11 +28249,16 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_low_data_mode', String(s.lowDataMode));
     }
 
-    // Group chat & PM only mode
+    // Group chat & PM only mode — only apply navigation side-effects when
+    // the mode actually changes, to avoid kicking the user out of the
+    // channel they just navigated to (settings sync is async).
     if (typeof s.groupChatPMOnlyMode === 'boolean') {
+        const changed = nym.settings.groupChatPMOnlyMode !== s.groupChatPMOnlyMode;
         nym.settings.groupChatPMOnlyMode = s.groupChatPMOnlyMode;
         localStorage.setItem('nym_groupchat_pm_only_mode', String(s.groupChatPMOnlyMode));
-        nym.applyGroupChatPMOnlyMode(s.groupChatPMOnlyMode);
+        if (changed) {
+            nym.applyGroupChatPMOnlyMode(s.groupChatPMOnlyMode);
+        }
     }
 
     // Pinned channels
