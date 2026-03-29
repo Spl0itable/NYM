@@ -2088,7 +2088,7 @@ TRANSFER TO PUBKEY
 
         } catch (error) {
             document.getElementById('zapStatus').className = 'zap-status error';
-            document.getElementById('zapStatus').innerHTML = `❌ Failed: ${error.message}`;
+            document.getElementById('zapStatus').textContent = `❌ Failed: ${error.message}`;
 
             // Show retry button
             setTimeout(() => {
@@ -3931,7 +3931,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // Update the location info element
             const locationInfoItem = document.getElementById('locationInfoItem');
             if (locationInfoItem) {
-                locationInfoItem.innerHTML = `<strong>Location:</strong> ${locationInfo}`;
+                locationInfoItem.innerHTML = `<strong>Location:</strong> ${this.escapeHtml(locationInfo)}`;
             }
         } catch (error) {
             const locationInfoItem = document.getElementById('locationInfoItem');
@@ -4659,13 +4659,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (connectedRelays.length > 0 || writeOnlyRelays.length > 0) {
             html += '<div style="margin-bottom: 10px;"><strong style="color: var(--primary);">Connected Relays:</strong><br/>';
             connectedRelays.slice(0, 20).forEach(url => {
-                html += `<div style="font-size: 11px; margin-left: 10px;">• ${url}</div>`;
+                html += `<div style="font-size: 11px; margin-left: 10px;">• ${this.escapeHtml(url)}</div>`;
             });
             if (connectedRelays.length > 20) {
                 html += `<div style="font-size: 11px; margin-left: 10px; color: var(--text-dim);">... and ${connectedRelays.length - 20} more</div>`;
             }
             writeOnlyRelays.forEach(url => {
-                html += `<div style="font-size: 11px; margin-left: 10px;">• ${url} (write-only)</div>`;
+                html += `<div style="font-size: 11px; margin-left: 10px;">• ${this.escapeHtml(url)} (write-only)</div>`;
             });
             html += '</div>';
         }
@@ -9635,7 +9635,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         } catch (error) {
             document.getElementById('zapStatus').className = 'zap-status';
-            document.getElementById('zapStatus').innerHTML = `Failed: ${error.message}`;
+            document.getElementById('zapStatus').textContent = `Failed: ${error.message}`;
         }
     }
 
@@ -14876,7 +14876,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             ).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
             : `<div class="group-icon-wrap">${groupSvg}</div>`;
 
-        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="delete-pm" onclick="event.stopPropagation(); nym.deleteGroup('${groupId}')">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
+        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="delete-pm" data-group-id="${this.escapeHtml(groupId)}" onclick="event.stopPropagation(); nym.deleteGroup(this.dataset.groupId)">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
     }
 
     // Update the stacked reader avatars for group messages using waterfall logic:
@@ -17821,7 +17821,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             </div>
                             <div class="file-offer-info">
                                 <div class="file-offer-name" title="${this.escapeHtml(offer.name)}">${this.escapeHtml(offer.name)}</div>
-                                <div class="file-offer-meta">${this.formatFileSize(offer.size)} • ${offer.type || 'Unknown type'}${isTorrent ? ' • Torrent' : ''}</div>
+                                <div class="file-offer-meta">${this.formatFileSize(offer.size)} • ${this.escapeHtml(offer.type || 'Unknown type')}${isTorrent ? ' • Torrent' : ''}</div>
                             </div>
                         </div>
                         ${statusHtml}
@@ -23379,11 +23379,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 menu.className = 'channel-context-menu active';
                 menu.style.left = e.pageX + 'px';
                 menu.style.top = e.pageY + 'px';
-                menu.innerHTML = `
-        <div class="context-menu-item" onclick="nym.removeChannel('${channel}', '${geohash}'); this.parentElement.remove();">
-            Leave Channel
-        </div>
-    `;
+                const menuItem = document.createElement('div');
+                menuItem.className = 'context-menu-item';
+                menuItem.textContent = 'Leave Channel';
+                menuItem.addEventListener('click', () => {
+                    this.removeChannel(channel, geohash);
+                    menu.remove();
+                });
+                menu.appendChild(menuItem);
 
                 // Remove any existing channel context menu
                 document.querySelectorAll('.channel-context-menu').forEach(m => m.remove());
@@ -23924,10 +23927,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const resultsDiv = document.getElementById('gifResults');
 
         resultsDiv.innerHTML = gifs.map(gif => {
-            const url = gif.images.fixed_height.url;
+            const url = this.escapeHtml(gif.images.fixed_height.url);
             return `
     <div class="gif-item" data-gif-url="${url}">
-        <img src="${url}" alt="${gif.title}">
+        <img src="${url}" alt="${this.escapeHtml(gif.title || '')}">
     </div>
 `;
         }).join('');
@@ -24801,7 +24804,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Now render with proper nyms
         listElement.innerHTML = blockedArray.map(pubkey => {
-            const nym = this.getNymFromPubkey(pubkey);
+            const nym = this.escapeHtml(this.getNymFromPubkey(pubkey));
             return `
     <div class="blocked-item">
         <span>${nym}</span>
@@ -27308,7 +27311,8 @@ async function _nip46HandleEvent(event) {
         if (response.result === 'auth_url') {
             // Remote signer requires auth — show URL to user
             const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
-            statusEl.innerHTML = `Signer requires authorization. <a href="${response.error}" target="_blank" rel="noopener" style="color: var(--secondary)">Open auth page</a>`;
+            const safeUrl = (response.error && /^https?:\/\//i.test(response.error)) ? response.error.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'})[m]) : '#';
+            statusEl.innerHTML = `Signer requires authorization. <a href="${safeUrl}" target="_blank" rel="noopener" style="color: var(--secondary)">Open auth page</a>`;
             return;
         }
 
