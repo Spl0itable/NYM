@@ -19,7 +19,7 @@ A lightweight, yet feature-rich, ephemeral chat client built on [Nostr](https://
 
 ## Overview
 
-Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (PWA) chat messenger that uses [Nostr](https://github.com/nostr-protocol/nostr)'s ephemeral events (kind 20000) for regular and geohash-based location channels and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting.
+Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (PWA) chat messenger that uses [Nostr](https://github.com/nostr-protocol/nostr)'s ephemeral events (kind 20000) for non-geohash and geohash-based location channels and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) encrypted events (kind 1059) for private messages. No registration required - just pick a nym and start chatting.
 
 ![Nymchat Screenshot](https://nymchat.app/images/nymchat-app.png)
 
@@ -30,8 +30,8 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - **Auto-Ephemeral Mode** - Auto-start ephemeral sessions without a welcome screen
 
 ### Channels
-- **Regular Channels** - Non-geohash channels (kind 20000)
 - **Geohash Channels** - Location-based channels using geohash encoding (kind 20000)
+- **Non-Geohash Channels** - Non-geohash channels (kind 20000)
 - **Channel Sharing** - Generate shareable URLs for channels
 - **Channel Pinning** - Pin frequently used channels to the top of your list
 - **Proximity Sorting** - Sort geohash channels by distance from your location
@@ -64,8 +64,8 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 ## Protocol Implementation
 
 ### Channels
-- Regular event `kind 20000` with `['g', channel]` tag
 - Geohash event `kind 20000` with `['g', geohash]` tag
+- Non-Geohash event `kind 20000` with `['g', channel]` tag
 - Tag `['n', nym]` for nickname
 
 ### Private Messages & Group Chats

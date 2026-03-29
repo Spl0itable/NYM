@@ -47,7 +47,7 @@
             },
             {
                 title: 'Channels',
-                body: 'Browse and switch regular or geohash channels. Use the search feature to find and join regular or geohash channels. Geohash is for location-based chat using geohash codes (e.g., #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location.',
+                body: 'Browse and switch geohash or non-geohash channels. Use the search feature to find and join geohash or non-geohash channels. Geohash is for location-based chat using geohash codes (e.g., #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location.',
                 selector: '#channelList',
                 onBefore: ensureSidebarOpenOnMobile
             },
@@ -6121,13 +6121,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return `${adj}_${noun}#${suffix}`;
     }
 
-    // Sanitize channel names: allow letters (including international), digits, underscores, hyphens only.
+    // Sanitize channel names: allow letters (including international) and digits only.
     // Strips everything else (spaces, URLs, special chars) and lowercases.
     sanitizeChannelName(name) {
         if (!name) return '';
         const lower = name.toLowerCase();
         // Reject names containing any invalid characters instead of stripping them
-        if (!/^[\p{L}\p{N}_-]+$/u.test(lower)) return '';
+        if (!/^[\p{L}\p{N}]+$/u.test(lower)) return '';
         return lower;
     }
 
@@ -18831,7 +18831,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             wrapper.classList.toggle('has-value', term.length > 0);
         }
 
-        const validChannelPattern = /^#[\p{L}\p{N}_-]+$/u;
+        const validChannelPattern = /^#[\p{L}\p{N}]+$/u;
         items.forEach(item => {
             const channelNameEl = item.querySelector('.channel-name');
             const channelName = channelNameEl ? channelNameEl.textContent.toLowerCase() : '';
@@ -20035,7 +20035,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         });
 
         // Filter by search, excluding invalid channel names
-        const validChannelPattern = /^[\p{L}\p{N}_-]+$/u;
+        const validChannelPattern = /^[\p{L}\p{N}]+$/u;
         const searchLower = search.toLowerCase();
         let matches = Array.from(channelMap.values())
             .filter(ch => validChannelPattern.test(ch.name) && ch.name.toLowerCase().includes(searchLower));
@@ -20866,11 +20866,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             channel = channel.substring(1);
         }
 
-        // Sanitize: only allow letters (including international), digits, underscores, hyphens
+        // Sanitize: only allow letters (including international) and digits
         channel = this.sanitizeChannelName(channel);
 
         if (!channel) {
-            this.displaySystemMessage('Invalid channel name. Only letters, numbers, underscores, and hyphens are allowed.');
+            this.displaySystemMessage('Invalid channel name. Only letters and numbers are allowed.');
             return;
         }
 
@@ -23166,8 +23166,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const list = document.getElementById('channelList');
         const key = geohash || channel;
 
-        // Reject invalid channel names (must be letters, digits, underscores, hyphens only)
-        if (key && !/^[\p{L}\p{N}_-]+$/u.test(key)) {
+        // Reject invalid channel names (must be letters and digits only)
+        if (key && !/^[\p{L}\p{N}]+$/u.test(key)) {
             return;
         }
 
@@ -23478,8 +23478,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (saved) {
             try {
                 const channels = JSON.parse(saved);
-                // Filter out invalid channel names (legacy data with spaces/special chars)
-                return channels.filter(ch => ch && /^[\p{L}\p{N}_-]+$/u.test(ch));
+                // Filter out invalid channel names (legacy data with spaces/special chars/underscores/hyphens)
+                return channels.filter(ch => ch && /^[\p{L}\p{N}]+$/u.test(ch));
             } catch (error) {
                 return [];
             }
@@ -26621,7 +26621,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.257 ═══<br/>
+═══ Nymchat v3.56.258 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>

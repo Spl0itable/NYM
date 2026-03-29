@@ -2491,7 +2491,7 @@ var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-icon.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.56.257";
+var NYMCHAT_VERSION = "3.56.258";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2853,7 +2853,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "A: Nymchat uses ephemeral connections only. Temporary keypairs are auto-generated for maximum anonymity. Your identity exists only for the current session and leaves no trace when you disconnect. No accounts, no registration, no persistent data.",
   "",
   "Q: How do channels work?",
-  "A: Nymchat uses ephemeral regular and geohash channels — location-based chat rooms using geohash codes (e.g. #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location. All channel messages are temporary and exist only during active sessions.",
+  "A: Nymchat uses ephemeral geohash and non-geohash channels — location-based chat rooms using geohash codes (e.g. #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location. All channel messages are temporary and exist only during active sessions.",
   "",
   "Q: How do private messages and group chats work?",
   "A: PMs and group chats use Nostr's NIP-17 encryption standard for end-to-end encrypted communication that can't be linked to your session. Only you and your recipient(s) can read the messages. You can enable forward secrecy for disappearing messages in Settings. To send a PM, use /pm nym#xxxx or click a user's nym and select 'Private Message'. Each user is identified by their nym + a 4-character suffix from their public key (e.g. cyber_wolf#a3f2).",
