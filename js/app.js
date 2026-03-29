@@ -6125,7 +6125,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Strips everything else (spaces, URLs, special chars) and lowercases.
     sanitizeChannelName(name) {
         if (!name) return '';
-        return name.toLowerCase().replace(/[^\p{L}\p{N}_-]/gu, '');
+        const lower = name.toLowerCase();
+        // Reject names containing any invalid characters instead of stripping them
+        if (!/^[\p{L}\p{N}_-]+$/u.test(lower)) return '';
+        return lower;
     }
 
     stripPubkeySuffix(nym) {
