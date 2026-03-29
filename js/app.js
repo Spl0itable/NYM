@@ -28241,7 +28241,7 @@ function nostrSettingsLoad() {
         kinds: [1059],
         '#p': [pubkey],
         '#d': ['nymchat-settings'],
-        limit: 5
+        limit: 1
     };
 
     // Pool mode: send REQ through the multiplexed pool workers
@@ -28569,7 +28569,10 @@ async function applyNostrSettings(s) {
     }
 
     nym._updateNotificationBadge();
-    nym.displaySystemMessage('Settings synced from Nostr relays.');
+    if (!nym._settingsSyncMessageShown) {
+        nym._settingsSyncMessageShown = true;
+        nym.displaySystemMessage('Settings synced from Nostr relays.');
+    }
 }
 
 // Sign-out button
