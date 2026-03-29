@@ -21068,7 +21068,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             })
             .join(', ');
 
-        this.displaySystemMessage(`Online nyms in this channel: ${users || 'none'}`);
+        this.displaySystemMessage(`Online nyms in this channel: ${users || 'none'}`, 'system', { html: true });
     }
 
     async cmdClear() {
@@ -22157,14 +22157,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             const targetNym = this.getNymFromPubkey(targetPubkey);
             const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
-            this.displaySystemMessage(`Checking if @${displayNym} can receive zaps...`);
+            this.displaySystemMessage(`Checking if @${displayNym} can receive zaps...`, 'system', { html: true });
 
             const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
 
             if (lnAddress) {
                 this.showProfileZapModal(targetPubkey, targetNym, lnAddress);
             } else {
-                this.displaySystemMessage(`@${displayNym} cannot receive zaps (no lightning address set)`);
+                this.displaySystemMessage(`@${displayNym} cannot receive zaps (no lightning address set)`, 'system', { html: true });
             }
             return;
         }
@@ -22217,7 +22217,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Check for lightning address
         const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
-        this.displaySystemMessage(`Checking if @${displayNym} can receive zaps...`);
+        this.displaySystemMessage(`Checking if @${displayNym} can receive zaps...`, 'system', { html: true });
 
         const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
 
@@ -22225,7 +22225,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Show zap modal for profile zap (no messageId)
             this.showProfileZapModal(targetPubkey, targetNym, lnAddress);
         } else {
-            this.displaySystemMessage(`@${displayNym} cannot receive zaps (no lightning address set)`);
+            this.displaySystemMessage(`@${displayNym} cannot receive zaps (no lightning address set)`, 'system', { html: true });
         }
     }
 
@@ -26631,7 +26631,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.259 ═══<br/>
+═══ Nymchat v3.56.260 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
