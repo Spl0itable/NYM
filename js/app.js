@@ -10109,47 +10109,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         try {
+            const settingsData = this._buildSettingsPayload();
 
-            // Save Nymchat-specific settings (kind 30078)
-            const settingsData = {
-                v: 1,
-                theme: this.settings.theme,
-                sound: this.settings.sound,
-                autoscroll: this.settings.autoscroll,
-                showTimestamps: this.settings.showTimestamps,
-                timeFormat: this.settings.timeFormat,
-                sortByProximity: this.settings.sortByProximity,
-                blurOthersImages: this.blurOthersImages,
-                pinnedChannels: Array.from(this.pinnedChannels),
-                blockedChannels: Array.from(this.blockedChannels),
-                userJoinedChannels: Array.from(this.userJoinedChannels),
-                hiddenChannels: Array.from(this.hiddenChannels || []),
-                blockedUsers: Array.from(this.blockedUsers || []),
-                blockedKeywords: Array.from(this.blockedKeywords || []),
-                lightningAddress: this.lightningAddress,
-                dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
-                dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
-                readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,  // Default true
-                typingIndicatorsEnabled: this.settings.typingIndicatorsEnabled !== false,  // Default true
-                pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
-                chatLayout: this.settings.chatLayout || 'irc',
-                nickStyle: this.settings.nickStyle || 'fancy',
-                colorMode: localStorage.getItem('nym_color_mode') || 'auto',
-                wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'none',
-                wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
-                powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
-                hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
-                textSize: this.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
-                lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
-                groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false,
-                translateLanguage: this.settings.translateLanguage || '',
-                notificationsEnabled: this.notificationsEnabled !== false,
-                notificationLastReadTime: this.notificationLastReadTime || 0,
-                closedPMs: Array.from(this.closedPMs || []),
-                leftGroups: Array.from(this.leftGroups || [])
-            };
-
-            // Encrypt group conversations data with NIP-44 to self for privacy
+            // Include group conversations directly in the payload
             try {
                 if (this.groupConversations && this.groupConversations.size > 0) {
                     const groupData = {};
@@ -10161,32 +10123,113 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             createdBy: group.createdBy
                         };
                     }
-                    const groupJson = JSON.stringify(groupData);
-                    const encrypted = await this.encryptNIP44(groupJson, this.pubkey);
-                    if (encrypted) {
-                        settingsData.encryptedGroups = encrypted;
-                    }
+                    settingsData.groupConversations = groupData;
                 }
             } catch (_) {}
 
-            const settingsEvent = {
-                kind: 30078,
-                created_at: Math.floor(Date.now() / 1000),
-                tags: [
-                    ["d", "nymchat-settings"]
-                ],
-                content: JSON.stringify(settingsData),
-                pubkey: this.pubkey
-            };
-
-            // Sign and send settings event
-            try {
-                const signedSettingsEvent = await this.signEvent(settingsEvent);
-                if (signedSettingsEvent) this.sendToRelay(["EVENT", signedSettingsEvent]);
-            } catch (_) {}
-
+            await this._publishEncryptedSettings(settingsData);
         } catch (error) {
         }
+    }
+
+    // Build the settings payload object shared by both save paths
+    _buildSettingsPayload() {
+        return {
+            v: 2,
+            theme: this.settings.theme,
+            sound: this.settings.sound,
+            autoscroll: this.settings.autoscroll,
+            showTimestamps: this.settings.showTimestamps,
+            timeFormat: this.settings.timeFormat,
+            sortByProximity: this.settings.sortByProximity,
+            blurOthersImages: this.blurOthersImages,
+            pinnedChannels: Array.from(this.pinnedChannels),
+            blockedChannels: Array.from(this.blockedChannels),
+            userJoinedChannels: Array.from(this.userJoinedChannels),
+            hiddenChannels: Array.from(this.hiddenChannels || []),
+            blockedUsers: Array.from(this.blockedUsers || []),
+            blockedKeywords: Array.from(this.blockedKeywords || []),
+            lightningAddress: this.lightningAddress,
+            dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
+            dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
+            readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,
+            typingIndicatorsEnabled: this.settings.typingIndicatorsEnabled !== false,
+            pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
+            chatLayout: this.settings.chatLayout || 'irc',
+            nickStyle: this.settings.nickStyle || 'fancy',
+            colorMode: localStorage.getItem('nym_color_mode') || 'auto',
+            wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'none',
+            wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
+            powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
+            hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
+            textSize: this.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
+            lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
+            groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false,
+            translateLanguage: this.settings.translateLanguage || '',
+            notificationsEnabled: this.notificationsEnabled !== false,
+            notificationLastReadTime: this.notificationLastReadTime || 0,
+            closedPMs: Array.from(this.closedPMs || []),
+            leftGroups: Array.from(this.leftGroups || [])
+        };
+    }
+
+    // Encrypt settings into a self-addressed gift wrap (kind 1059) and publish.
+    // Adds a d-tag on the outer wrap so relays can be queried for it.
+    async _publishEncryptedSettings(settingsData) {
+        const NT = window.NostrTools;
+        const now = Math.floor(Date.now() / 1000);
+        const rumor = {
+            kind: 30078,
+            created_at: now,
+            tags: [['d', 'nymchat-settings']],
+            content: JSON.stringify(settingsData),
+            pubkey: this.pubkey
+        };
+        rumor.id = NT.getEventHash(rumor);
+
+        const outerTags = [['p', this.pubkey], ['d', 'nymchat-settings']];
+
+        if (this.privkey) {
+            // Local privkey fast path
+            const ckSeal = NT.nip44.getConversationKey(this.privkey, this.pubkey);
+            const sealContent = NT.nip44.encrypt(JSON.stringify(rumor), ckSeal);
+            const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
+            const seal = NT.finalizeEvent(sealUnsigned, this.privkey);
+
+            const ephSk = NT.generateSecretKey();
+            const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
+            const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+            const wrapUnsigned = {
+                kind: 1059, content: wrapContent, created_at: this.randomNow(),
+                tags: outerTags
+            };
+            const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
+            this.sendDMToRelays(['EVENT', wrapped]);
+            return;
+        }
+
+        // Extension or NIP-46 remote signer path
+        const useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
+        const useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
+        if (!useExt && !useN46) return;
+
+        const sealContent = useExt
+            ? await window.nostr.nip44.encrypt(this.pubkey, JSON.stringify(rumor))
+            : await _nip46Encrypt(this.pubkey, JSON.stringify(rumor));
+        const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
+        const seal = useExt
+            ? await window.nostr.signEvent(sealUnsigned)
+            : await _nip46SignEvent(sealUnsigned);
+
+        const ephSk = NT.generateSecretKey();
+        const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
+        const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+        const wrapUnsigned = {
+            kind: 1059, content: wrapContent, created_at: this.randomNow(),
+            tags: outerTags
+        };
+        const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
+        this.sendDMToRelays(['EVENT', wrapped]);
     }
 
     discoverChannels() {
@@ -13544,18 +13587,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return true;
         }
 
-        // Extension-only path (seal via extension, wrap locally)
-        if (window.nostr?.nip44?.encrypt && window.nostr?.signEvent) {
+        // Extension or NIP-46 remote signer path (seal via signer, wrap locally)
+        const _useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
+        const _useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
+        if (_useExt || _useN46) {
             const NT = window.NostrTools;
 
             rumor.id = NT.getEventHash(rumor);
 
-            // Seal (kind 13) signed by identity in extension
-            const sealContent = await window.nostr.nip44.encrypt(recipientPubkey, JSON.stringify(rumor));
+            // Seal (kind 13) signed by identity via extension or remote signer
+            const sealContent = _useExt
+                ? await window.nostr.nip44.encrypt(recipientPubkey, JSON.stringify(rumor))
+                : await _nip46Encrypt(recipientPubkey, JSON.stringify(rumor));
             const sealUnsigned = {
                 kind: 13, content: sealContent, created_at: this.randomNow(), tags: []
             };
-            const seal = await window.nostr.signEvent(sealUnsigned);
+            const seal = _useExt
+                ? await window.nostr.signEvent(sealUnsigned)
+                : await _nip46SignEvent(sealUnsigned);
 
             // GiftWrap (kind 1059) with local ephemeral
             const ephSk = NT.generateSecretKey();
@@ -13589,11 +13638,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Send a self-wrap so our own message is retrievable from relays after reload.
             if (recipientPubkey !== this.pubkey) {
                 try {
-                    const selfSealContent = await window.nostr.nip44.encrypt(this.pubkey, JSON.stringify(rumor));
+                    const selfSealContent = _useExt
+                        ? await window.nostr.nip44.encrypt(this.pubkey, JSON.stringify(rumor))
+                        : await _nip46Encrypt(this.pubkey, JSON.stringify(rumor));
                     const selfSealUnsigned = {
                         kind: 13, content: selfSealContent, created_at: this.randomNow(), tags: []
                     };
-                    const selfSeal = await window.nostr.signEvent(selfSealUnsigned);
+                    const selfSeal = _useExt
+                        ? await window.nostr.signEvent(selfSealUnsigned)
+                        : await _nip46SignEvent(selfSealUnsigned);
                     const selfEphSk = NT.generateSecretKey();
                     const selfCkWrap = NT.nip44.getConversationKey(selfEphSk, this.pubkey);
                     const selfWrapContent = NT.nip44.encrypt(JSON.stringify(selfSeal), selfCkWrap);
@@ -13654,7 +13707,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return true;
         }
 
-        throw new Error('No signing/encryption available for NIP-17 (need local privkey or extension)');
+        throw new Error('No signing/encryption available for NIP-17 (need local privkey, extension, or remote signer)');
     }
 
     // Receive NIP-17 (GiftWrap 1059): unwrap, verify, store
@@ -13879,8 +13932,26 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Validate rumor and identity
             // Accept kind 14 (DM), kind 15 (file), kind 69420 (Nymchat receipt),
-            // and kind 7 (group reaction gift-wrapped to the group)
-            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7)) {
+            // kind 7 (group reaction gift-wrapped to the group),
+            // and kind 30078 (encrypted settings sync)
+            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 30078)) {
+                return;
+            }
+
+            // Route encrypted settings events to settings handler
+            if (rumor.kind === 30078) {
+                const isOwn = !!this.pubkey && rumor.pubkey === this.pubkey;
+                if (isOwn) {
+                    try {
+                        const s = JSON.parse(rumor.content);
+                        const rumorTs = rumor.created_at || 0;
+                        // Only apply if newer than what we've already loaded
+                        if (rumorTs > (this._lastSettingsSyncTs || 0)) {
+                            this._lastSettingsSyncTs = rumorTs;
+                            await applyNostrSettings(s);
+                        }
+                    } catch (_) {}
+                }
                 return;
             }
             if (typeof rumor.content !== 'string') {
@@ -14773,7 +14844,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // True when a local privkey is available OR a NIP-07 extension exposes
     // the required nip44 encrypt + signEvent methods.
     _canSendGiftWraps() {
-        return !!this.privkey || !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
+        return !!this.privkey
+            || !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent)
+            || (this.nostrLoginMethod === 'nip46' && !!(_nip46State && _nip46State.connected));
     }
 
     _sendGiftWraps(members, rumor, expirationTs) {
@@ -14797,8 +14870,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        // Extension path
-        if (!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent)) return;
+        // Extension or NIP-46 remote signer path
+        const useExtension = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
+        const useNip46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
+        if (!useExtension && !useNip46) return;
 
         const NT = window.NostrTools;
         // Compute rumor id once
@@ -14807,12 +14882,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         for (const pubkey of members) {
             try {
-                // Seal via extension (ECDH done inside extension)
-                const sealContent = await window.nostr.nip44.encrypt(pubkey, JSON.stringify(rumorWithId));
+                // Seal: encrypt rumor to recipient via extension or remote signer
+                const sealContent = useExtension
+                    ? await window.nostr.nip44.encrypt(pubkey, JSON.stringify(rumorWithId))
+                    : await _nip46Encrypt(pubkey, JSON.stringify(rumorWithId));
                 const sealUnsigned = {
                     kind: 13, content: sealContent, created_at: this.randomNow(), tags: []
                 };
-                const seal = await window.nostr.signEvent(sealUnsigned);
+                const seal = useExtension
+                    ? await window.nostr.signEvent(sealUnsigned)
+                    : await _nip46SignEvent(sealUnsigned);
 
                 // Wrap with local ephemeral keypair
                 const ephSk = NT.generateSecretKey();
@@ -14833,7 +14912,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
                 }
             } catch (e) {
-                console.warn('[GiftWrap] Extension wrap failed for', pubkey, e);
+                console.warn('[GiftWrap] Remote wrap failed for', pubkey, e);
             }
         }
     }
@@ -23834,16 +23913,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     clearUnreadCount(channel) {
-        const storageKey = channel.startsWith('#') && !this.isValidGeohash(channel.substring(1))
-            ? channel.substring(1)
-            : channel;
-
-        this.unreadCounts.set(storageKey, 0);
+        this.unreadCounts.set(channel, 0);
 
         // Handle PM unread counts using conversation key
-        if (storageKey.startsWith('pm-')) {
+        if (channel.startsWith('pm-')) {
             // Extract the other user's pubkey from conversation key
-            const keys = storageKey.substring(3).split('-');
+            const keys = channel.substring(3).split('-');
             const otherPubkey = keys.find(k => k !== this.pubkey);
             if (otherPubkey) {
                 const badge = document.querySelector(`[data-pubkey="${otherPubkey}"] .unread-badge`);
@@ -23851,25 +23926,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     badge.style.display = 'none';
                 }
             }
-        } else if (storageKey.startsWith('group-')) {
+        } else if (channel.startsWith('group-')) {
             // Group chat unread counts
-            const groupId = storageKey.substring(6);
+            const groupId = channel.substring(6);
             const badge = document.querySelector(`[data-group-id="${groupId}"] .unread-badge`);
             if (badge) {
                 badge.style.display = 'none';
             }
         } else {
-            // Regular channel unread counts
+            // Regular channel unread counts — match updateUnreadCount selector logic
             let selector;
             if (channel.startsWith('#')) {
-                const channelName = channel.substring(1);
-                if (this.isValidGeohash(channelName)) {
-                    // It's a geohash
-                    selector = `[data-geohash="${channelName}"]`;
-                } else {
-                    // It's a standard channel with # prefix in display
-                    selector = `[data-channel="${channelName}"][data-geohash=""]`;
-                }
+                selector = `[data-geohash="${channel.substring(1)}"]`;
             } else {
                 selector = `[data-channel="${channel}"][data-geohash=""]`;
             }
@@ -26743,7 +26811,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.253 ═══<br/>
+═══ Nymchat v3.56.254 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
@@ -27907,17 +27975,6 @@ function nostrLogout() {
     nym.displaySystemMessage('Nostr identity logged out. Settings will no longer sync.');
 }
 
-// Nostr Settings Sync (kind 30078)
-async function nostrSettingsSign(event) {
-    if (nym.nostrLoginMethod === 'extension' && window.nostr?.signEvent) {
-        return await window.nostr.signEvent(event);
-    } else if (nym.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected) {
-        return await _nip46SignEvent(event);
-    } else if (nym.nostrLoginSecretKey) {
-        return window.NostrTools.finalizeEvent(event, nym.nostrLoginSecretKey);
-    }
-    throw new Error('No signing method available for Nostr login.');
-}
 
 async function nostrSettingsSave() {
     // For ephemeral users, delegate to the instance method which handles all modes
@@ -27927,49 +27984,12 @@ async function nostrSettingsSave() {
         }
         return;
     }
-    const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
-    if (!pubkey) return;
+    if (!nym || !nym.pubkey) return;
 
     try {
-        const settingsPayload = {
-            v: 1,
-            theme: nym.settings.theme,
-            sound: nym.settings.sound,
-            autoscroll: nym.settings.autoscroll,
-            showTimestamps: nym.settings.showTimestamps,
-            timeFormat: nym.settings.timeFormat || '12hr',
-            sortByProximity: nym.settings.sortByProximity,
-            dmForwardSecrecyEnabled: !!nym.settings.dmForwardSecrecyEnabled,
-            dmTTLSeconds: nym.settings.dmTTLSeconds || 86400,
-            readReceiptsEnabled: nym.settings.readReceiptsEnabled !== false,
-            typingIndicatorsEnabled: nym.settings.typingIndicatorsEnabled !== false,
-            nickStyle: nym.settings.nickStyle || 'fancy',
-            colorMode: localStorage.getItem('nym_color_mode') || 'auto',
-            wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'none',
-            wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
-            chatLayout: nym.settings.chatLayout || 'irc',
-            lightningAddress: localStorage.getItem('nym_lightning_address_global') || '',
-            powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
-            hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
-            blurOthersImages: nym.blurOthersImages !== false,
-            pinnedLandingChannel: nym.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
-            textSize: nym.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
-            lowDataMode: nym.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
-            groupChatPMOnlyMode: nym.settings.groupChatPMOnlyMode || false,
-            pinnedChannels: Array.from(nym.pinnedChannels || []),
-            blockedChannels: Array.from(nym.blockedChannels || []),
-            userJoinedChannels: Array.from(nym.userJoinedChannels || []),
-            hiddenChannels: Array.from(nym.hiddenChannels || []),
-            blockedUsers: Array.from(nym.blockedUsers || []),
-            blockedKeywords: Array.from(nym.blockedKeywords || []),
-            translateLanguage: nym.settings.translateLanguage || '',
-            notificationsEnabled: nym.notificationsEnabled !== false,
-            notificationLastReadTime: nym.notificationLastReadTime || 0,
-            closedPMs: Array.from(nym.closedPMs || []),
-            leftGroups: Array.from(nym.leftGroups || [])
-        };
+        const settingsPayload = nym._buildSettingsPayload();
 
-        // Encrypt group conversations data with NIP-44 to self for privacy
+        // Include group conversations directly (entire event is encrypted)
         try {
             if (nym.groupConversations && nym.groupConversations.size > 0) {
                 const groupData = {};
@@ -27981,24 +28001,11 @@ async function nostrSettingsSave() {
                         createdBy: group.createdBy
                     };
                 }
-                const groupJson = JSON.stringify(groupData);
-                const encrypted = await nym.encryptNIP44(groupJson, pubkey);
-                if (encrypted) {
-                    settingsPayload.encryptedGroups = encrypted;
-                }
+                settingsPayload.groupConversations = groupData;
             }
         } catch (_) {}
 
-        const event = {
-            kind: 30078,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [['d', 'nymchat-settings']],
-            content: JSON.stringify(settingsPayload),
-            pubkey: pubkey
-        };
-
-        const signedEvent = await nostrSettingsSign(event);
-        nym.sendToRelay(['EVENT', signedEvent]);
+        await nym._publishEncryptedSettings(settingsPayload);
     } catch (err) {
         console.warn('[NostrSync] Failed to save settings to relays:', err.message);
     }
@@ -28231,13 +28238,11 @@ function nostrSettingsLoad() {
 
     const subId = 'nymchat-settings-load-' + Math.random().toString(36).slice(2, 8);
     const filter = {
-        kinds: [30078],
-        authors: [pubkey],
+        kinds: [1059],
+        '#p': [pubkey],
         '#d': ['nymchat-settings'],
-        limit: 1
+        limit: 5
     };
-
-    let received = false;
 
     // Pool mode: send REQ through the multiplexed pool workers
     if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
@@ -28245,12 +28250,7 @@ function nostrSettingsLoad() {
             try {
                 const msg = JSON.parse(evt.data);
                 if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
-                    if (received) return;
-                    received = true;
-                    try {
-                        const s = JSON.parse(msg[2].content);
-                        applyNostrSettings(s);
-                    } catch (_) {}
+                    nym.handleGiftWrapDM(msg[2]).catch(() => {});
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
                     nym._poolRemoveMessageListener(handler);
@@ -28277,12 +28277,7 @@ function nostrSettingsLoad() {
             try {
                 const msg = JSON.parse(evt.data);
                 if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
-                    if (received) return;
-                    received = true;
-                    try {
-                        const s = JSON.parse(msg[2].content);
-                        applyNostrSettings(s);
-                    } catch (_) {}
+                    nym.handleGiftWrapDM(msg[2]).catch(() => {});
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
                     relay.ws.removeEventListener('message', handler);
@@ -28519,23 +28514,21 @@ async function applyNostrSettings(s) {
         nym._saveLeftGroups();
     }
 
-    // Encrypted group conversations - decrypt with NIP-44 from self
-    if (s.encryptedGroups && typeof s.encryptedGroups === 'string') {
-        try {
-            const groupJson = await nym.decryptNIP44(s.encryptedGroups, nym.pubkey);
-            if (groupJson) {
-                const groupData = JSON.parse(groupJson);
-                for (const [groupId, group] of Object.entries(groupData)) {
-                    if (!nym.groupConversations.has(groupId)) {
-                        nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
-                        const g = nym.groupConversations.get(groupId);
-                        if (g && group.createdBy) g.createdBy = group.createdBy;
-                    }
-                }
-                nym._saveGroupConversations();
-                nym.updateViewMoreButton('pmList');
+    // Group conversations encrypted inside a gift wrap
+    const applyGroupData = (groupData) => {
+        for (const [groupId, group] of Object.entries(groupData)) {
+            if (!nym.groupConversations.has(groupId)) {
+                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
+                const g = nym.groupConversations.get(groupId);
+                if (g && group.createdBy) g.createdBy = group.createdBy;
             }
-        } catch (_) {}
+        }
+        nym._saveGroupConversations();
+        nym.updateViewMoreButton('pmList');
+    };
+
+    if (s.groupConversations && typeof s.groupConversations === 'object') {
+        try { applyGroupData(s.groupConversations); } catch (_) {}
     }
 
     // Retroactively remove left groups that were re-added by early-arriving
