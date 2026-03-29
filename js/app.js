@@ -980,6 +980,14 @@ class NYM {
             title: 'Nymchat Bot'
         };
         this.verifiedBotPubkeys = new Set([this.verifiedBot.pubkey]);
+        // Seed nymbot into users map so it always appears in sidebar and mention autocomplete
+        this.users.set(this.verifiedBot.pubkey, {
+            nym: 'Nymbot',
+            pubkey: this.verifiedBot.pubkey,
+            lastSeen: Date.now(),
+            status: 'online',
+            channels: new Set()
+        });
         this.isFlutterWebView = navigator.userAgent.includes('NYMApp') ||
             navigator.userAgent.includes('Flutter');
 
@@ -19902,7 +19910,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 return `
         <div class="autocomplete-item ${index === 0 ? 'selected' : ''}"
                 data-nym="${this.escapeHtml(user.nym)}"
-                data-pubkey="${user.pubkey}">
+                data-pubkey="${user.pubkey}"
+                onclick="nym.selectSpecificAutocomplete('${this.escapeHtml(user.nym)}', '${user.pubkey}')">
             <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${user.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
         </div>
     `;
@@ -20059,7 +20068,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const joinedClass = ch.isJoined ? ' joined' : '';
                 return `
         <div class="autocomplete-item channel-ac-item${joinedClass} ${index === 0 ? 'selected' : ''}"
-                data-channel="${this.escapeHtml(ch.name)}">
+                data-channel="${this.escapeHtml(ch.name)}"
+                onclick="nym.selectChannelAutocompleteItem('${this.escapeHtml(ch.name)}')">
             <strong>#${this.escapeHtml(ch.name)}</strong>${currentBadge}${locationHtml}${msgCountHtml}
         </div>
     `;
@@ -26621,7 +26631,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.258 ═══<br/>
+═══ Nymchat v3.56.259 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
