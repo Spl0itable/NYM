@@ -6047,12 +6047,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.blockedKeywords.size === 0) {
             list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked keywords</div>';
         } else {
-            list.innerHTML = Array.from(this.blockedKeywords).map(keyword => `
+            list.innerHTML = Array.from(this.blockedKeywords).map(keyword => {
+                const safeAttr = this.escapeHtml(keyword);
+                return `
                 <div class="keyword-item">
-                    <span>${this.escapeHtml(keyword)}</span>
-                    <button class="remove-keyword-btn" onclick="nym.removeBlockedKeyword('${this.escapeHtml(keyword).replace(/'/g, "\\'")}')">Remove</button>
-                </div>
-            `).join('');
+                    <span>${safeAttr}</span>
+                    <button class="remove-keyword-btn" data-keyword="${safeAttr}">Remove</button>
+                </div>`;
+            }).join('');
+            list.querySelectorAll('.remove-keyword-btn').forEach(btn => {
+                btn.addEventListener('click', () => this.removeBlockedKeyword(btn.dataset.keyword));
+            });
         }
     }
 
@@ -6124,12 +6129,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const suffixMatch = nym.match(/#([0-9a-f]{4})$/i);
         if (suffixMatch) {
             const baseName = nym.substring(0, nym.length - 5);
-            return `${baseName}<span class="nym-suffix">#${suffixMatch[1]}</span>`;
+            return `${this.escapeHtml(baseName)}<span class="nym-suffix">#${suffixMatch[1]}</span>`;
         }
 
         // Get last 4 characters of pubkey
         const suffix = pubkey ? pubkey.slice(-4) : '????';
-        return `${nym}<span class="nym-suffix">#${suffix}</span>`;
+        return `${this.escapeHtml(nym)}<span class="nym-suffix">#${suffix}</span>`;
     }
 
     updateSidebarAvatar() {
@@ -6212,7 +6217,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
                     // Set initial channel label
                     if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
-                        const channelLabel = `#${this.currentChannel}`;
+                        const channelLabel = `#${this.escapeHtml(this.currentChannel)}`;
                         const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
                         document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
                     }
@@ -6348,7 +6353,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Set initial channel label
             if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
-                const channelLabel = `#${this.currentChannel}`;
+                const channelLabel = `#${this.escapeHtml(this.currentChannel)}`;
                 const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
                 document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
             }
@@ -14328,7 +14333,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     this.currentGroup = null;
                     this.inPMMode = false;
                     this.switchChannel(this.currentChannel || 'nym', this.currentChannel || 'nym');
-                    this.displaySystemMessage(`You were removed from "${this.escapeHtml(groupName)}" by ${this.escapeHtml(removerName)}.`);
+                    this.displaySystemMessage(`You were removed from "${groupName}" by ${removerName}.`);
                 }
             } else {
                 // Another member was kicked — update local state and show system notice
@@ -18219,9 +18224,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => {
             const trimmedCode = code.trim();
             const formattedCode = trimmedCode.replace(/\n/g, '<br/>');
-            const escapedRaw = trimmedCode.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+            const encodedRaw = btoa(unescape(encodeURIComponent(trimmedCode)));
             const idx = codePlaceholders.length;
-            codePlaceholders.push(`<div class="code-block-wrapper"><pre><code>${formattedCode}</code></pre><button class="code-copy-btn" onclick="navigator.clipboard.writeText('${escapedRaw}'.replace(/\\\\n/g,'\\n')).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)}).catch(()=>{})">Copy</button></div>`);
+            codePlaceholders.push(`<div class="code-block-wrapper"><pre><code>${formattedCode}</code></pre><button class="code-copy-btn" data-code="${encodedRaw}" onclick="try{navigator.clipboard.writeText(decodeURIComponent(escape(atob(this.dataset.code)))).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)}).catch(()=>{})}catch(e){}">Copy</button></div>`);
             return `\uFDD0${idx}\uFDD1`;
         });
         formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
@@ -18320,7 +18325,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         const location = this.getGeohashLocation(channelName);
                         title = `Geohash channel`;
                         if (location) {
-                            title += `: ${location}`;
+                            title += `: ${this.escapeHtml(location)}`;
                         }
                     } else {
                         title = `Channel: #${channelName}`;
@@ -18481,11 +18486,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         input.focus();
     }
 
-    displaySystemMessage(content, type = 'system') {
+    displaySystemMessage(content, type = 'system', { html = false } = {}) {
         const container = document.getElementById('messagesContainer');
         const messageEl = document.createElement('div');
         messageEl.className = type === 'action' ? 'action-message' : 'system-message';
-        messageEl.innerHTML = content;
+        if (html) {
+            messageEl.innerHTML = content;
+        } else {
+            messageEl.textContent = content;
+        }
         container.appendChild(messageEl);
 
         this._scheduleScrollToBottom();
@@ -18721,15 +18730,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 // Create new element for a user not previously in the list
                 const wrapper = document.createElement('div');
                 wrapper.innerHTML = `<div class="user-item list-item ${userColorClass}"
-                        onclick="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}', null, null, true)"
-                        oncontextmenu="nym.showContextMenu(event, '${this.escapeHtml(displayNym)}', '${user.pubkey}', null, null, true)"
                         data-pubkey="${user.pubkey}"
                         data-nym="${this.escapeHtml(baseNym)}">
                     <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" data-avatar-pubkey="${user.pubkey}" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">
                     <span class="user-status ${user.effectiveStatus}"></span>
                     <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
                 </div>`;
-                fragment.appendChild(wrapper.firstElementChild);
+                const itemEl = wrapper.firstElementChild;
+                const ctxHandler = (e) => this.showContextMenu(e, displayNym, user.pubkey, null, null, true);
+                itemEl.addEventListener('click', ctxHandler);
+                itemEl.addEventListener('contextmenu', ctxHandler);
+                fragment.appendChild(itemEl);
             }
         });
 
@@ -19833,10 +19844,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const acAvatarSrc = this.getAvatarUrl(user.pubkey);
                 return `
         <div class="autocomplete-item ${index === 0 ? 'selected' : ''}"
-                data-nym="${user.nym}"
-                data-pubkey="${user.pubkey}"
-                onclick="nym.selectSpecificAutocomplete('${user.nym}', '${user.pubkey}')">
-            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${user.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
+                data-nym="${this.escapeHtml(user.nym)}"
+                data-pubkey="${user.pubkey}">
+            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${user.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${this.escapeHtml(user.displayNym)}</strong>
         </div>
     `;
             }).join('');
@@ -19991,8 +20001,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const joinedClass = ch.isJoined ? ' joined' : '';
                 return `
         <div class="autocomplete-item channel-ac-item${joinedClass} ${index === 0 ? 'selected' : ''}"
-                data-channel="${this.escapeHtml(ch.name)}"
-                onclick="nym.selectChannelAutocompleteItem('${this.escapeHtml(ch.name)}')">
+                data-channel="${this.escapeHtml(ch.name)}">
             <strong>#${this.escapeHtml(ch.name)}</strong>${currentBadge}${locationHtml}${msgCountHtml}
         </div>
     `;
@@ -20897,7 +20906,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const matchList = matches.map(m =>
                 `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
             ).join(', ');
-            this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+            this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true });
             this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
             return;
         }
@@ -21083,7 +21092,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const matchList = matches.map(m =>
                     `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                 ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true });
                 this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
                 return;
             }
@@ -21110,13 +21119,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         if (sent) {
             const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
-            this.displaySystemMessage(`Invitation sent to ${displayNym} for ${channelInfo}`);
+            this.displaySystemMessage(`Invitation sent to ${displayNym} for ${this.escapeHtml(channelInfo)}`, 'system', { html: true });
 
             // Also send a mention in the current channel
             const publicNotice = `@${matchedNym} you've been invited to this channel! Check your PMs for details.`;
             await this.publishMessage(publicNotice, this.currentChannel, this.currentGeohash);
         } else {
-            this.displaySystemMessage(`Failed to send invitation to ${this.formatNymWithPubkey(matchedNym, targetPubkey)}`);
+            this.displaySystemMessage(`Failed to send invitation to ${this.formatNymWithPubkey(matchedNym, targetPubkey)}`, 'system', { html: true });
         }
     }
 
@@ -21177,10 +21186,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const groupName = nameWords.join(' ').trim() ||
             [this.getNymFromPubkey(this.pubkey), ...resolvedMembers.slice(0, 2).map(pk => this.getNymFromPubkey(pk))].join(', ');
 
-        this.displaySystemMessage(`Creating group "${this.escapeHtml(groupName)}"...`);
+        this.displaySystemMessage(`Creating group "${groupName}"...`);
         const groupId = await this.createGroup(groupName, resolvedMembers);
         if (groupId) {
-            this.displaySystemMessage(`Group "${this.escapeHtml(groupName)}" created with ${resolvedMembers.length + 1} members`);
+            this.displaySystemMessage(`Group "${groupName}" created with ${resolvedMembers.length + 1} members`);
         }
     }
 
@@ -21225,7 +21234,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const isYou = pk === this.pubkey ? ' (you)' : '';
             return `  @${name}#${suffix}${isYou}`;
         }).join('\n');
-        this.displaySystemMessage(`Group: "${this.escapeHtml(group.name)}"\nMembers (${group.members.length}):\n${memberList}`);
+        this.displaySystemMessage(`Group: "${group.name}"\nMembers (${group.members.length}):\n${memberList}`);
     }
 
     openNewPMModal() {
@@ -21271,12 +21280,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const header = query ? '' : '<div class="pm-suggestion-header">From your Nostr follows</div>';
         const html = header + followMatches.slice(0, 10).map(m => {
             const suffix = this.getPubkeySuffix(m.pubkey);
-            const safeNym = m.nym.replace(/'/g, "\\'");
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
-            return `<div class="pm-suggestion-item" onclick="nym.addNewPMRecipient('${m.pubkey}','${safeNym}')"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span><span class="pm-suggestion-follow-badge">following</span></div>`;
+            return `<div class="pm-suggestion-item" data-pubkey="${m.pubkey}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span><span class="pm-suggestion-follow-badge">following</span></div>`;
         }).join('');
 
         suggestions.innerHTML = html;
+        suggestions.querySelectorAll('.pm-suggestion-item[data-pubkey]').forEach(el => {
+            el.addEventListener('click', () => this.addNewPMRecipient(el.dataset.pubkey, el.dataset.nym));
+        });
         suggestions.style.display = 'block';
     }
 
@@ -21301,7 +21312,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     const nym = this.stripPubkeySuffix(this.getNymFromPubkey(pk));
                     const suffix = this.getPubkeySuffix(pk);
                     const avatarSrc = this.escapeHtml(this.getAvatarUrl(pk));
-                    suggestions.innerHTML = `<div class="pm-suggestion-item" onclick="nym.addNewPMRecipient('${pk}','${this.escapeHtml(nym).replace(/'/g,"\\'")}')"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pk}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span></div>`;
+                    suggestions.innerHTML = `<div class="pm-suggestion-item" data-pubkey="${pk}" data-nym="${this.escapeHtml(nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pk}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span></div>`;
+                    suggestions.querySelector('.pm-suggestion-item').addEventListener('click', () => this.addNewPMRecipient(pk, nym));
                     suggestions.style.display = 'block';
                 };
                 renderPubkeySuggestion();
@@ -21353,11 +21365,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         suggestions.innerHTML = matches.slice(0, 10).map(m => {
             const suffix = this.getPubkeySuffix(m.pubkey);
-            const safeNym = m.nym.replace(/'/g, "\\'");
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
             const followBadge = m.isFollow ? '<span class="pm-suggestion-follow-badge">following</span>' : '';
-            return `<div class="pm-suggestion-item" onclick="nym.addNewPMRecipient('${m.pubkey}','${safeNym}')"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span>${followBadge}</div>`;
+            return `<div class="pm-suggestion-item" data-pubkey="${m.pubkey}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span>${followBadge}</div>`;
         }).join('');
+        suggestions.querySelectorAll('.pm-suggestion-item[data-pubkey]').forEach(el => {
+            el.addEventListener('click', () => this.addNewPMRecipient(el.dataset.pubkey, el.dataset.nym));
+        });
         suggestions.style.display = 'block';
     }
 
@@ -21435,7 +21449,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const groupName = document.getElementById('pmGroupNameInput').value.trim() ||
                 [this.getNymFromPubkey(this.pubkey), ...this._newPMRecipients.slice(0, 2).map(r => r.nym)].join(', ');
             const memberPubkeys = this._newPMRecipients.map(r => r.pubkey);
-            this.displaySystemMessage(`Creating group "${this.escapeHtml(groupName)}"...`);
+            this.displaySystemMessage(`Creating group "${groupName}"...`);
             const groupId = await this.createGroup(groupName, memberPubkeys);
             if (groupId && initialMsg) {
                 this.sendGroupMessage(initialMsg, groupId);
@@ -21680,7 +21694,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.saveBlockedUsers();
         this.showMessagesFromUnblockedUser(targetPubkey);
 
-        this.displaySystemMessage(`Unblocked ${this.formatNymWithPubkey(targetNym, targetPubkey)}`);
+        this.displaySystemMessage(`Unblocked ${this.formatNymWithPubkey(targetNym, targetPubkey)}`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
 
@@ -21766,7 +21780,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const matchList = matches.map(m =>
                     `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                 ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true });
                 this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
                 return;
             }
@@ -21839,7 +21853,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const matchList = matches.map(m =>
                     `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                 ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+                this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true });
                 this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
                 return;
             }
@@ -22117,7 +22131,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const matchList = matches.map(m =>
                 `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
             ).join(', ');
-            this.displaySystemMessage(`Multiple users found with nym "${searchNym}": ${matchList}`);
+            this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true });
             this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
             return;
         }
@@ -22767,7 +22781,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         const isGeo = geohash && this.isValidGeohash(geohash);
-        const displayName = geohash ? `#${geohash}` : `#${channel}`;
+        const displayName = geohash ? `#${this.escapeHtml(geohash)}` : `#${this.escapeHtml(channel)}`;
         let fullTitle = displayName;
 
         // Add channel type label
@@ -22776,7 +22790,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const location = this.getGeohashLocation(geohash);
 
             if (location) {
-                fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a></font>`;
+                const safeLocation = this.escapeHtml(location);
+                const encodedLocation = encodeURIComponent(location);
+                fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${encodedLocation}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${safeLocation}</a></font>`;
 
                 if (this.userLocation && this.settings.sortByProximity) {
                     try {
@@ -22785,7 +22801,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             this.userLocation.lat, this.userLocation.lng,
                             coords.lat, coords.lng
                         );
-                        fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${location}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${location}</a> (${distance.toFixed(1)}km)</font>`;
+                        fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${encodedLocation}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${safeLocation}</a> (${distance.toFixed(1)}km)</font>`;
                     } catch (e) {
                     }
                 }
@@ -23109,14 +23125,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             const isGeo = geohash && this.isValidGeohash(geohash);
-            const displayName = geohash ? `#${geohash}` : `#${channel}`;
+            const displayName = geohash ? `#${this.escapeHtml(geohash)}` : `#${this.escapeHtml(channel)}`;
 
             // Get location information for geohash channels
             let locationHint = '';
             if (isGeo) {
                 const location = this.getGeohashLocation(geohash);
                 if (location) {
-                    locationHint = ` title="${location}"`;
+                    locationHint = ` title="${this.escapeHtml(location)}"`;
                 }
             }
 
@@ -23125,8 +23141,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 item.classList.add('pinned');
             }
 
+            const safeChannel = this.escapeHtml(channel);
+            const safeGeohash = this.escapeHtml(geohash);
+
             const pinButton = `
-    <span class="pin-btn ${isPinned ? 'pinned' : ''}" data-channel="${channel}" data-geohash="${geohash}">
+    <span class="pin-btn ${isPinned ? 'pinned' : ''}" data-channel="${safeChannel}" data-geohash="${safeGeohash}">
         <svg viewBox="0 0 24 24">
             <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/>
         </svg>
@@ -23134,7 +23153,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 `;
 
             const hideButton = `
-    <span class="hide-btn" data-channel="${channel}" data-geohash="${geohash}" title="Hide channel">
+    <span class="hide-btn" data-channel="${safeChannel}" data-geohash="${safeGeohash}" title="Hide channel">
         <svg viewBox="0 0 24 24">
             <path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.8 11.8 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/>
         </svg>
@@ -24878,8 +24897,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             '<': '&lt;',
             '>': '&gt;',
             '"': '&quot;',
+            "'": '&#x27;',
         };
-        return String(text).replace(/[&<>"]/g, m => map[m]);
+        return String(text).replace(/[&<>"']/g, m => map[m]);
     }
 
     abbreviateNumber(n) {
@@ -24976,7 +24996,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const matchList = matches.map(m =>
                 `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
             ).join(', ');
-            this.displaySystemMessage(`Multiple users found: ${matchList}`);
+            this.displaySystemMessage(`Multiple users found: ${matchList}`, 'system', { html: true });
             this.displaySystemMessage('Please specify using the #xxxx suffix');
             return null;
         }
@@ -26530,7 +26550,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.254 ═══<br/>
+═══ Nymchat v3.56.255 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.nym || 'Not set'}<br/>
