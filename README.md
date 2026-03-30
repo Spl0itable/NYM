@@ -215,12 +215,6 @@ Please feel free to submit a Pull Request.
 
 See the [releases page](https://github.com/Spl0itable/NYM/releases) for each update's changes.
 
-## License
-
-Copyright 21 Million LLC
-
-Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) - see the [LICENSE](LICENSE) file for details. https://www.gnu.org/licenses/agpl-3.0.html
-
 ## Legal
 
 If you choose to use Nymchat on 21 Million LLC operated infrastructure and domain (nymchat.app), your use is subject to the below Terms of Service and Privacy Policy.
@@ -230,4 +224,10 @@ If you choose to use Nymchat on 21 Million LLC operated infrastructure and domai
 
 ## Contact
 
-Created and operated by 21 Million LLC - Lead developer: [@Luxas#a8df](https://nostr.band/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv)
+Created and operated by [21 Million LLC](https://nostrservices.com) - Lead developer: [@Luxas#a8df](https://nostr.band/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv)
+
+## License
+
+Copyright 21 Million LLC
+
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) - see the [LICENSE](LICENSE) file for details. https://www.gnu.org/licenses/agpl-3.0.html
