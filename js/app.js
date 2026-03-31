@@ -3975,6 +3975,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // Mark as user-joined
                 this.userJoinedChannels.add(geohash);
                 this.saveUserChannels();
+                this._debouncedNostrSettingsSave();
 
                 this.displaySystemMessage(`Joined geohash channel #${geohash}`);
             }, 100);
@@ -10203,6 +10204,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         };
     }
 
+    // Debounced nostrSettingsSave — coalesces rapid state changes (e.g. incoming
+    // group messages) into a single Nostr publish.  Delay defaults to 5 seconds.
+    _debouncedNostrSettingsSave(delayMs = 5000) {
+        if (this._settingsSaveTimer) clearTimeout(this._settingsSaveTimer);
+        this._settingsSaveTimer = setTimeout(() => {
+            this._settingsSaveTimer = null;
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        }, delayMs);
+    }
+
     // Encrypt settings into a self-addressed gift wrap (kind 1059) and publish.
     // Adds a d-tag on the outer wrap so relays can be queried for it.
     async _publishEncryptedSettings(settingsData) {
@@ -13889,6 +13900,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.closedPMs.has(peerPubkey)) {
                 this.closedPMs.delete(peerPubkey);
                 try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+                this._debouncedNostrSettingsSave();
             }
 
             const conversationKey = this.getPMConversationKey(peerPubkey);
@@ -14292,6 +14304,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.groupConversations.set(groupId, group);
                 this.updateGroupConversationUI(groupId);
                 this._saveGroupConversations();
+                this._debouncedNostrSettingsSave();
                 if (this.inPMMode && this.currentGroup === groupId) {
                     this.openGroup(groupId); // refresh header member count
                     this.displaySystemMessage(rumor.content || `${this.getNymFromPubkey(senderPubkey)} left the group.`);
@@ -14311,11 +14324,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.leftGroups.has(groupId)) {
                 this.leftGroups.delete(groupId);
                 this._saveLeftGroups();
+                this._debouncedNostrSettingsSave();
             }
             const grp = this.groupConversations.get(groupId);
             if (grp && !grp.createdBy) {
                 grp.createdBy = senderPubkey;
                 this._saveGroupConversations();
+                this._debouncedNostrSettingsSave();
             }
 
             // Send notification for group invites
@@ -14357,6 +14372,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 .map(t => t[1]);
             this.addGroupConversation(groupId, groupName, memberPubkeys, (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000);
             this._saveGroupConversations();
+            this._debouncedNostrSettingsSave();
             if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
                 this.openGroup(groupId);
                 this.displaySystemMessage(rumor.content);
@@ -14377,6 +14393,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this._saveLeftGroups();
                 this.groupConversations.delete(groupId);
                 this._saveGroupConversations();
+                this._debouncedNostrSettingsSave();
                 const gck = this.getGroupConversationKey(groupId);
                 this.pmMessages.delete(gck);
                 this.channelDOMCache.delete(gck);
@@ -14395,6 +14412,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     grp.members = grp.members.filter(pk => pk !== removedPubkey);
                     this.groupConversations.set(groupId, grp);
                     this._saveGroupConversations();
+                    this._debouncedNostrSettingsSave();
                     this.updateGroupConversationUI(groupId);
                     if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
                         this.openGroup(groupId);
@@ -14476,6 +14494,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Update or create group conversation entry
         this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000);
         this._saveGroupConversations();
+        this._debouncedNostrSettingsSave(15000); // longer delay for routine messages
         this.moveGroupToTop(groupId, tsSec * 1000);
 
         // Clear typing indicator for sender (they sent a message, so they stopped typing)
@@ -14607,6 +14626,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         this.updateGroupConversationUI(groupId);
         this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         // Refresh header if currently viewing this group
         if (this.inPMMode && this.currentGroup === groupId) {
             this.openGroup(groupId);
@@ -14868,6 +14888,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         group.members = group.members.filter(pk => pk !== pubkey);
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.updateGroupConversationUI(groupId);
         this.openGroup(groupId); // refresh header member count
         this.displaySystemMessage(content);
@@ -15447,6 +15468,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.closedPMs.has(pubkey)) {
                 this.closedPMs.delete(pubkey);
                 try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+                this._debouncedNostrSettingsSave();
             }
 
             this.pmConversations.set(pubkey, {
@@ -15732,6 +15754,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (this.closedPMs.has(pubkey)) {
             this.closedPMs.delete(pubkey);
             try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+            this._debouncedNostrSettingsSave();
         }
 
         // Add to PM conversations if not exists
@@ -18522,6 +18545,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Save after quick join
         this.saveUserChannels();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
 
@@ -18929,6 +18953,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         this.savePinnedChannels();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.updateChannelPins();
     }
 
@@ -18980,6 +19005,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         this.saveHiddenChannels();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.applyHiddenChannels();
     }
 
@@ -20894,6 +20920,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.switchChannel(channel, channel);
         this.userJoinedChannels.add(channel);
         this.saveUserChannels();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     async cmdLeave() {
@@ -21768,7 +21795,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.displaySystemMessage(`Unblocked ${this.formatNymWithPubkey(targetNym, targetPubkey)}`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
-
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
     showMessagesFromUnblockedUser(pubkey) {
@@ -22680,6 +22707,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const key = geohash || channel;
         this.blockedChannels.add(key);
         this.saveBlockedChannels();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
         // Remove from DOM immediately
         const selector = geohash ?
@@ -22707,6 +22735,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const key = geohash || channel;
         this.blockedChannels.delete(key);
         this.saveBlockedChannels();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
         // Re-add the channel to the sidebar
         if (geohash) {
@@ -22771,6 +22800,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     unhideChannelFromSettings(key) {
         this.hiddenChannels.delete(key);
         this.saveHiddenChannels();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.applyHiddenChannels();
         this.updateHiddenChannelsList();
     }
@@ -23431,6 +23461,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Save the updated channel list
         this.saveUserChannels();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
         this.displaySystemMessage(`Left channel ${geohash ? '#' + geohash : '#' + channel}`);
     }
@@ -26631,7 +26662,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.56.260 ═══<br/>
+═══ Nymchat v3.56.261 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
