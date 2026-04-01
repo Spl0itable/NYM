@@ -1624,7 +1624,9 @@
     </div>
 
     <!-- JavaScript -->
+    <script src="js/marmot-bundle.js"></script>
     <script src="js/nostr-tools.js"></script>
+    <script src="js/mls.js"></script>
     <script src="js/app.js"></script>
 
     <!-- QRCode library for Lightning invoices -->
@@ -1642,6 +1644,11 @@
                 <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim);">
                     <input type="checkbox" id="enableNotificationsCheckbox" checked onchange="nym.toggleNotificationsEnabled(this.checked)" style="accent-color: var(--primary); cursor: pointer;">
                     Enable notifications
+                </label>
+                <br>
+                <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim); margin-top: 6px; margin-left: 20px;">
+                    <input type="checkbox" id="groupMentionsOnlyCheckbox" onchange="nym.toggleGroupMentionsOnly(this.checked)" style="accent-color: var(--primary); cursor: pointer;">
+                    Only notify for mentions in group chats
                 </label>
             </div>
             <div class="notifications-modal-body" id="notificationsModalBody">
