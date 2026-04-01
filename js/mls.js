@@ -24,6 +24,9 @@ class NymMLS {
         this._processedEventIds = new Set();
         // Timestamp of init — skip kind 445 events older than this on reload
         this._initTimestamp = 0;
+        // Persisted set of event IDs (kind 444 + 445) that already triggered notifications.
+        // Prevents re-firing desktop/sound notifications on app reload.
+        this._notifiedEventIds = new Set();
     }
 
     // ──────────────────────────────────────────────────────────
@@ -75,6 +78,9 @@ class NymMLS {
         if (this._groupMap.size > 0) {
             this._initTimestamp = Math.floor(Date.now() / 1000) - 5; // 5s grace for in-flight events
         }
+
+        // Load persisted notification tracking from localStorage
+        this._loadNotifiedEventIds();
 
         this._initialized = true;
         // Initialization complete
@@ -869,10 +875,17 @@ class NymMLS {
             this._processedEventIds = new Set(arr.slice(500));
         }
 
+        // Check if this event already triggered a notification in a prior session
+        const alreadyNotified = this.wasNotified(event.id);
+
         const { messages, membersChanged } = await this.handleGroupEvents(entry.nymGroupId, [event]);
         for (const msg of messages) {
+            msg._alreadyNotified = alreadyNotified;
             this.nym._handleMLSMessage(msg);
         }
+
+        // Mark this event as notified (persists to localStorage)
+        if (!alreadyNotified) this.markNotified(event.id);
         // After processing a commit (member add/remove), refresh the member list
         if (membersChanged) {
             const updatedMembers = this._getGroupMembers(entry.marmotGroup);
@@ -982,6 +995,51 @@ class NymMLS {
         for (const [nymId, mlsId] of Object.entries(data)) {
             this._nymToMls.set(nymId, mlsId);
         }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  Notification dedup persistence (survives reload)
+    // ──────────────────────────────────────────────────────────
+
+    _notifiedStorageKey() {
+        return `nym_mls_notified_${this.nym.pubkey}`;
+    }
+
+    _loadNotifiedEventIds() {
+        try {
+            const raw = localStorage.getItem(this._notifiedStorageKey());
+            if (raw) {
+                const arr = JSON.parse(raw);
+                this._notifiedEventIds = new Set(arr);
+            }
+        } catch (e) {
+            this._notifiedEventIds = new Set();
+        }
+    }
+
+    _saveNotifiedEventIds() {
+        try {
+            // Keep last 500 to prevent unbounded growth
+            let arr = [...this._notifiedEventIds];
+            if (arr.length > 500) arr = arr.slice(-500);
+            localStorage.setItem(this._notifiedStorageKey(), JSON.stringify(arr));
+        } catch (e) {}
+    }
+
+    /**
+     * Check whether an event has already triggered a notification.
+     * If not, mark it as notified and persist.
+     * Returns true if this is the FIRST time (should notify), false if already seen.
+     */
+    markNotified(eventId) {
+        if (this._notifiedEventIds.has(eventId)) return false;
+        this._notifiedEventIds.add(eventId);
+        this._saveNotifiedEventIds();
+        return true;
+    }
+
+    wasNotified(eventId) {
+        return this._notifiedEventIds.has(eventId);
     }
 
     // ──────────────────────────────────────────────────────────

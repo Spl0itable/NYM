@@ -13784,11 +13784,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                         const welcomeSender = rumor.pubkey || seal?.pubkey || 'unknown';
                         const senderNym = this.getNymFromPubkey(welcomeSender);
-                        this.showNotification(`Group invite: ${result.groupName}`,
-                            `${senderNym} added you to "${result.groupName}" (MLS encrypted)`, {
+                        const welcomeTitle = `Group invite: ${result.groupName}`;
+                        const welcomeBody = `${senderNym} added you to "${result.groupName}" (MLS encrypted)`;
+                        const welcomeOpts = {
                             type: 'group', groupId: result.nymGroupId,
                             id: this.getGroupConversationKey(result.nymGroupId), pubkey: welcomeSender
-                        });
+                        };
+                        // Only fire a live notification if we haven't already notified for this event
+                        if (this.mls.markNotified(event.id)) {
+                            this.showNotification(welcomeTitle, welcomeBody, welcomeOpts);
+                        } else {
+                            this._addNotificationToHistory(welcomeTitle, welcomeBody, welcomeOpts);
+                        }
                     }
                 } catch (e) {
                     console.warn('[MLS] Welcome handling failed:', e);
@@ -14499,9 +14506,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (shouldNotify && !(this.inPMMode && this.currentGroup === groupId)) {
                 const group = this.groupConversations.get(groupId);
                 const groupName = group?.name || 'MLS Group';
-                this.showNotification(`${groupName}: ${senderNym}`, msg.content, {
-                    type: 'group', groupId, id: groupConvKey, pubkey: msg.pubkey
-                });
+                const notifTitle = `${groupName}: ${senderNym}`;
+                const notifOpts = { type: 'group', groupId, id: groupConvKey, pubkey: msg.pubkey };
+                // If this event was already notified in a prior session, add silently to history
+                if (msg._alreadyNotified) {
+                    this._addNotificationToHistory(notifTitle, msg.content, notifOpts);
+                } else {
+                    this.showNotification(notifTitle, msg.content, notifOpts);
+                }
             }
             // Send read receipt (gift-wrapped) if viewing the group
             if (this.inPMMode && this.currentGroup === groupId && this._canSendGiftWraps() && sharedId) {
@@ -27185,7 +27197,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.57.261 ═══<br/>
+═══ Nymchat v3.57.262 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
