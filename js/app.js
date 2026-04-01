@@ -15675,8 +15675,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         document.getElementById('currentChannel').innerHTML = headerHtml;
         const lockSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
         const metaText = group.isMLS
-            ? `${lockSvg}End-to-end encrypted group chat`
-            : `${lockSvg}End-to-end encrypted group chat`;
+            ? `${lockSvg}End-to-end encrypted group chat (MLS)`
+            : `${lockSvg}End-to-end encrypted group chat (NIP-17)`;
         document.getElementById('channelMeta').innerHTML = metaText;
 
         const shareBtn = document.getElementById('shareChannelBtn');
