@@ -3042,7 +3042,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "=== FRIENDS SYSTEM ===",
   "Nymchat has a friends list feature. Users can add other nyms as friends for quick access and filtering.",
-  "HOW TO ADD/REMOVE A FRIEND: Right-click (or long-press on mobile) a user's message > select 'Add Friend'. If already a friend, the option shows 'Remove Friend'. Friends are shown with a 👤 badge next to their name in the context menu.",
+  "HOW TO ADD/REMOVE A FRIEND: Click a user's nickname on any message > select 'Add Friend'. If already a friend, the option shows 'Remove Friend'. Friends are shown with a 👤 badge next to their name in the context menu.",
   "FRIENDS LIST: View and manage your friends in Settings > Friends. Each friend has a 'Remove' button.",
   "FRIEND-BASED FILTERING:",
   "- Accept PMs: In Settings > DM Security, users can set 'Accept PMs' to 'Friends only' — this blocks DMs and group chat invites from non-friends.",
