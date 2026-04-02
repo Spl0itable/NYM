@@ -6568,6 +6568,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.closeSubscriptionsForRelay(url);
             this.subscribeToSingleRelay(url);
         });
+
+        // Re-send channel-targeted subscriptions lost during disconnect
+        this._resubscribeChannels();
     }
 
     closeSubscriptionsForRelay(relayUrl) {
@@ -7440,6 +7443,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this._shardReconnecting.delete(shardId);
                         this._startPoolKeepalive();
                         this._poolSubscribeOnWorker(shard.id);
+                        // Re-send channel-targeted subscriptions to the reconnected shard
+                        this._resubscribeChannels();
                     })
                     .catch(() => {
                         if (retries < 1) {
@@ -7916,6 +7921,28 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const geoFilters = this._buildGeoFilters(since1h);
         this._poolSendToRole('geo', ["REQ", geoSubId, ...geoFilters]);
         this._poolSendToRole('discovered', ["REQ", geoSubId, ...geoFilters]);
+
+        // Re-subscribe to channel-targeted subscriptions that were lost on disconnect
+        this._resubscribeChannels();
+    }
+
+    // Re-subscribe to active channel subscriptions after a relay reconnection.
+    // Clears stale tracking state so subscribeToChannelTargeted() will re-send REQs.
+    _resubscribeChannels() {
+        // Clear stale channel tracking — old subscription IDs are invalid after reconnect
+        this.channelLoadedFromRelays.clear();
+        this.channelSubscriptions.clear();
+
+        // Re-subscribe to current channel immediately
+        if (this.currentChannel) {
+            this.subscribeToChannelTargeted(this.currentChannel, 'geohash');
+        }
+
+        // Re-load joined channels and common geohashes with a small delay
+        // to avoid overwhelming relays right after reconnection
+        setTimeout(() => {
+            this.loadJoinedChannelsFromRelays();
+        }, 1000);
     }
 
     // Re-shard and update relay config across all workers.
@@ -27528,7 +27555,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.264 ═══<br/>
+═══ Nymchat v3.58.265 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
