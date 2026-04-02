@@ -6,7 +6,7 @@ buildscript {
     dependencies {
         // AGP 8.5.1+ for automatic 16 KB page-size support
         classpath 'com.android.tools.build:gradle:8.7.3'
-        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0'
     }
 }
 
@@ -46,6 +46,12 @@ subprojects { project ->
             compileOptions {
                 sourceCompatibility = JavaVersion.VERSION_17
                 targetCompatibility = JavaVersion.VERSION_17
+            }
+            // Ensure 16 KB page alignment for library modules
+            packaging {
+                jniLibs {
+                    useLegacyPackaging = false
+                }
             }
         }
     }

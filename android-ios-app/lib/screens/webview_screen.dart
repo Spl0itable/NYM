@@ -16,6 +16,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:app_links/app_links.dart';
 import 'package:nym_bar/services/notification_service.dart';
 import 'package:nym_bar/services/fips_ble_bridge.dart';
+import 'package:nym_bar/services/unified_push_service.dart';
 
 class WebViewScreen extends StatefulWidget {
 const WebViewScreen({super.key});
@@ -45,30 +46,36 @@ bool _isLightMode = false;
 
 // ASCII logo loaded from asset file (protected from accidental modifications)
 String _asciiLogo = '';
+bool _webViewInitialized = false;
+
+// Native in-app notification overlay (bypasses iOS WebView rendering issues)
+final List<_InAppNotification> _nativeNotifications = [];
+int _notificationIdCounter = 0;
 
 @override
 void initState() {
-  super.initState();
-  _loadAsciiLogo();
-  _requestLocationPermission();
-  _requestCameraPermission();
-  _initializeWebView();
-  if (!kIsWeb) {
-    _scheduleCacheClear();
-    _initializeAppLinks();
-  }
-  _notificationSubscription = NotificationService().payloadStream.listen(_handleDeepLink);
+super.initState();
+_loadAsciiLogo();
+_requestLocationPermission();
+_requestCameraPermission();
+_initializeWebView();
+if (!kIsWeb) {
+_scheduleCacheClear();
+_initializeAppLinks();
+}
+_notificationSubscription = NotificationService().payloadStream.listen(_handleDeepLink);
+_initializeUnifiedPush();
 }
 
 Future<void> _loadAsciiLogo() async {
-  try {
-    final logo = await rootBundle.loadString('assets/text/nymchat_logo.txt');
-    if (mounted) {
-      setState(() => _asciiLogo = logo);
-    }
-  } catch (e) {
-    debugPrint('[ASCII Logo] Failed to load: $e');
-  }
+try {
+final logo = await rootBundle.loadString('assets/text/nymchat_logo.txt');
+if (mounted) {
+setState(() => _asciiLogo = logo);
+}
+} catch (e) {
+debugPrint('[ASCII Logo] Failed to load: $e');
+}
 }
 
 Future<void> _initializeAppLinks() async {
@@ -97,27 +104,70 @@ debugPrint('[App Links] Stream error: $err');
 );
 }
 
+Future<void> _initializeUnifiedPush() async {
+if (kIsWeb) return;
+
+final unifiedPush = UnifiedPushService();
+
+// Set up callback to inject endpoint into PWA when received
+unifiedPush.onEndpointReceived = (endpoint) {
+debugPrint('[UnifiedPush] Endpoint received: $endpoint');
+_injectUnifiedPushEndpoint(endpoint);
+};
+
+// Set up callback for incoming messages
+unifiedPush.onMessageReceived = (message) {
+debugPrint('[UnifiedPush] Message received: $message');
+// Messages are automatically shown as local notifications by the service
+};
+
+// Check if a distributor is available and register
+final hasDistributor = await unifiedPush.hasDistributor();
+if (hasDistributor) {
+debugPrint('[UnifiedPush] Distributor available, registering...');
+await unifiedPush.register();
+} else {
+debugPrint('[UnifiedPush] No distributor available. User needs to install one (e.g., ntfy app)');
+}
+}
+
+void _injectUnifiedPushEndpoint(String endpoint) {
+if (!_webViewInitialized) {
+debugPrint('[UnifiedPush] WebView not initialized yet');
+return;
+}
+
+final escaped = endpoint.replaceAll("'", "\\'");
+_controller.runJavaScript('''
+(function() {
+window.unifiedPushEndpoint = '$escaped';
+window.dispatchEvent(new CustomEvent('unifiedpush-endpoint', {
+detail: { endpoint: '$escaped' }
+}));
+if (window.nym && typeof window.nym.setUnifiedPushEndpoint === 'function') {
+window.nym.setUnifiedPushEndpoint('$escaped');
+}
+console.log('[NYM Bridge] UnifiedPush endpoint injected');
+})();
+''');
+}
+
 void _handleAppLink(Uri uri) {
 String deepLinkPath;
 
 // Convert URI to deep link path
 if (uri.scheme == 'nymchat') {
-// nymchat://channel/geohash or nymchat://pm/nym
-deepLinkPath = uri.path.isEmpty ? '/${uri.host}${uri.path}' : uri.path;
+deepLinkPath = uri.path.isEmpty ? '/\${uri.host}\${uri.path}' : uri.path;
 } else if (uri.host == 'web.nymchat.app' || uri.host == 'nymchat.app') {
-// https://web.nymchat.app/#geohash or https://web.nymchat.app/channel/geohash
 if (uri.fragment.isNotEmpty) {
-// Hash fragment URL
-deepLinkPath = '#${uri.fragment}';
+deepLinkPath = '#\${uri.fragment}';
 } else if (uri.path.isNotEmpty && uri.path != '/') {
 deepLinkPath = uri.path;
 } else {
-// Just the base URL, go to home
 deepLinkPath = '';
 }
 } else {
-// Unknown domain, treat as potential deep link
-deepLinkPath = uri.path.isNotEmpty ? uri.path : (uri.fragment.isNotEmpty ? '#${uri.fragment}' : '');
+deepLinkPath = uri.path.isNotEmpty ? uri.path : (uri.fragment.isNotEmpty ? '#\${uri.fragment}' : '');
 }
 
 debugPrint('[App Links] Converted to deep link path: $deepLinkPath');
@@ -173,12 +223,19 @@ params = const PlatformWebViewControllerCreationParams();
 }
 _controller = WebViewController.fromPlatformCreationParams(params);
 
-// Android: configure WebView for file uploads
+// Android: configure WebView for file uploads and performance
 if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
 final platformController = _controller.platform;
 if (platformController is AndroidWebViewController) {
 // Enable mixed content (HTTPS page loading HTTP resources) for file uploads
 platformController.setMediaPlaybackRequiresUserGesture(false);
+
+// Enable hardware-accelerated rendering for smoother scrolling
+// Use Surface mode for better performance (default is Texture which is slower)
+AndroidWebViewController.enableDebugging(false);
+
+// Set text zoom to 100% for consistent rendering
+platformController.setTextZoom(100);
 
 // Surface JS console output to Flutter logs to aid debugging
 try {
@@ -226,6 +283,7 @@ _controller
 onPageStarted: (url) => setState(() => _isLoading = true),
 onPageFinished: (url) {
 setState(() => _isLoading = false);
+_webViewInitialized = true;
 _injectNotificationBridge();
 _pendingDeepLink = null;
 // Handle pending PM navigation after page load
@@ -380,6 +438,52 @@ debugPrint('[NYM Bridge] Copied plain text to clipboard');
 }
 },
 )
+..addJavaScriptChannel(
+'FlutterNavigation',
+onMessageReceived: (message) async {
+debugPrint('[NYM Bridge] FlutterNavigation received: ${message.message}');
+try {
+final data = jsonDecode(message.message) as Map<String, dynamic>;
+final action = data['action'] as String?;
+
+if (action == 'back') {
+final canGoBack = await _controller.canGoBack();
+if (canGoBack) {
+await _controller.goBack();
+}
+} else if (action == 'forward') {
+final canGoForward = await _controller.canGoForward();
+if (canGoForward) {
+await _controller.goForward();
+}
+}
+} catch (e) {
+debugPrint('[NYM Bridge] Navigation error: $e');
+}
+},
+)
+..addJavaScriptChannel(
+'FlutterInAppNotification',
+onMessageReceived: (message) {
+debugPrint('[NYM Bridge] FlutterInAppNotification received: ${message.message}');
+try {
+final data = jsonDecode(message.message) as Map<String, dynamic>;
+final title = data['title'] as String? ?? 'Notification';
+final body = data['body'] as String? ?? '';
+final time = data['time'] as String?;
+final channelInfo = data['channelInfo'] as Map<String, dynamic>?;
+
+_showNativeNotification(
+title: title,
+body: body,
+time: time,
+channelInfo: channelInfo,
+);
+} catch (e) {
+debugPrint('[NYM Bridge] In-app notification error: $e');
+}
+},
+)
 ..setOnJavaScriptAlertDialog((request) async {
 await _showDialog(
 title: 'Alert',
@@ -464,6 +568,82 @@ void _injectNotificationBridge() {
 if (kIsWeb) {
 return;
 }
+
+// Inject performance optimizations for smoother WebView rendering
+_controller.runJavaScript('''
+(function() {
+if (window.nymPerformanceOptimized) return;
+window.nymPerformanceOptimized = true;
+
+// Request high-priority rendering
+if (document.body) {
+document.body.style.webkitOverflowScrolling = 'touch';
+document.body.style.overscrollBehavior = 'none';
+}
+
+// Optimize CSS animations for GPU acceleration
+const style = document.createElement('style');
+style.id = 'nym-perf-style';
+style.textContent = `
+/* Force GPU compositing for smoother animations */
+* {
+-webkit-backface-visibility: hidden;
+backface-visibility: hidden;
+}
+
+/* Optimize scrolling containers */
+.scrollable, [style*="overflow"], [class*="scroll"] {
+-webkit-overflow-scrolling: touch !important;
+will-change: scroll-position;
+}
+
+/* Reduce paint areas for animated elements */
+.notification, .modal, .popup, [class*="animate"], [class*="slide"], [class*="fade"] {
+will-change: transform, opacity;
+transform: translateZ(0);
+}
+
+/* Disable expensive effects on low-end devices */
+@media (prefers-reduced-motion: reduce) {
+*, *::before, *::after {
+animation-duration: 0.01ms !important;
+animation-iteration-count: 1 !important;
+transition-duration: 0.01ms !important;
+}
+}
+`;
+document.head.appendChild(style);
+
+// Throttle scroll events for better performance
+let scrollTimeout;
+const throttledScroll = (callback) => {
+return () => {
+if (!scrollTimeout) {
+scrollTimeout = requestAnimationFrame(() => {
+callback();
+scrollTimeout = null;
+});
+}
+};
+};
+
+// Optimize IntersectionObserver if heavily used
+if (window.IntersectionObserver) {
+const OriginalIO = window.IntersectionObserver;
+window.IntersectionObserver = function(callback, options) {
+// Use larger threshold steps for less frequent callbacks
+const optimizedOptions = {
+...options,
+threshold: options?.threshold || [0, 0.25, 0.5, 0.75, 1]
+};
+return new OriginalIO(callback, optimizedOptions);
+};
+window.IntersectionObserver.prototype = OriginalIO.prototype;
+}
+
+console.log('[NYM Bridge] Performance optimizations applied');
+})();
+''');
 
 // Inject CSS to disable text selection (prevents long-press text highlighting)
 // while still allowing clipboard operations via JavaScript
@@ -770,28 +950,184 @@ transform: scale(1.2);
 cursor: pointer;
 }
 
-/* Fix in-app notification popup for WebView environment */
-/* Account for safe area and ensure visibility */
-.notification {
+/* iOS WebView notification fixes - more specific selector to avoid conflicts */
+/* The issue: backdrop-filter causes iOS WebView rendering problems */
+body > .notification {
 position: fixed !important;
-top: env(safe-area-inset-top, 20px) !important;
-right: 20px !important;
-z-index: 99999 !important;
-max-width: calc(100vw - 40px) !important;
+top: max(env(safe-area-inset-top, 20px), 50px) !important;
+right: 16px !important;
+left: auto !important;
+z-index: 2147483647 !important;
+max-width: calc(100vw - 32px) !important;
+min-width: 280px !important;
 pointer-events: auto !important;
+/* Disable backdrop-filter on iOS WebView - it causes elements to become invisible */
+backdrop-filter: none !important;
+-webkit-backdrop-filter: none !important;
+/* Use solid background instead */
+background: rgba(20, 20, 35, 0.98) !important;
+/* Force GPU compositing layer */
+-webkit-transform: translate3d(0, 0, 0) !important;
+transform: translate3d(0, 0, 0) !important;
+-webkit-backface-visibility: hidden !important;
+backface-visibility: hidden !important;
+/* Ensure animation doesn't break visibility */
 opacity: 1 !important;
 visibility: visible !important;
+display: block !important;
 }
 
-/* Ensure notification is above all WebView overlays */
-.notification-title,
-.notification-body,
-.notification-time {
-pointer-events: auto !important;
+/* Fix slideIn animation for iOS - override with compatible animation */
+@-webkit-keyframes nymSlideInIOS {
+from {
+-webkit-transform: translate3d(100%, 0, 0);
+transform: translate3d(100%, 0, 0);
+opacity: 0;
+}
+to {
+-webkit-transform: translate3d(0, 0, 0);
+transform: translate3d(0, 0, 0);
+opacity: 1;
+}
+}
+
+@keyframes nymSlideInIOS {
+from {
+transform: translate3d(100%, 0, 0);
+opacity: 0;
+}
+to {
+transform: translate3d(0, 0, 0);
+opacity: 1;
+}
+}
+
+/* Apply iOS-safe animation to notifications */
+body > .notification {
+-webkit-animation: nymSlideInIOS 0.3s ease-out forwards !important;
+animation: nymSlideInIOS 0.3s ease-out forwards !important;
+}
+
+/* Ensure notification children are visible */
+body > .notification .notification-title,
+body > .notification .notification-body,
+body > .notification .notification-time {
+opacity: 1 !important;
+visibility: visible !important;
+display: block !important;
+mix-blend-mode: normal !important;
 }
 \`;
 document.head.appendChild(style);
 console.log('[NYM Bridge] Injected checkbox/radio CSS fixes and notification positioning');
+
+// iOS WebView: Send in-app notifications to Flutter native overlay
+// iOS WKWebView has fundamental CSS rendering issues that prevent
+// DOM-based notifications from displaying correctly. Solution: bypass
+// the WebView entirely and render notifications as native Flutter widgets.
+const isIOSWebView = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+if (isIOSWebView) {
+console.log('[NYM Bridge] iOS detected - installing native notification bridge');
+
+// Override nym.showNotification to send to Flutter instead of creating DOM elements
+const overrideShowNotification = function() {
+if (window.nym && typeof window.nym.showNotification === 'function' && !window.nym._nymFlutterOverridden) {
+console.log('[NYM Bridge] Overriding nym.showNotification for Flutter native notifications');
+window.nym._nymFlutterOverridden = true;
+const originalShowNotification = window.nym.showNotification.bind(window.nym);
+window.nym.showNotification = function(title, body, channelInfo) {
+console.log('[NYM Bridge] nym.showNotification intercepted:', title, body);
+
+// Play sound (if enabled in PWA settings)
+if (window.nym.settings && window.nym.settings.sound !== 'none') {
+try {
+window.nym.playSound(window.nym.settings.sound);
+} catch (e) {}
+}
+
+// Send browser notification (for system tray)
+try {
+if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+new Notification(title, { body: body, data: { channelInfo: channelInfo } });
+}
+} catch (e) {}
+
+// Send to Flutter native overlay (bypasses WebView rendering issues)
+if (window.FlutterInAppNotification && window.FlutterInAppNotification.postMessage) {
+const message = JSON.stringify({
+title: title || 'Notification',
+body: body || '',
+time: new Date().toLocaleTimeString(),
+channelInfo: channelInfo || null
+});
+window.FlutterInAppNotification.postMessage(message);
+console.log('[NYM Bridge] Sent to Flutter native overlay:', message);
+} else {
+// Fallback: call original (DOM-based) if Flutter channel not available
+console.warn('[NYM Bridge] FlutterInAppNotification not available, falling back to DOM');
+originalShowNotification(title, body, channelInfo);
+}
+};
+return true;
+}
+return false;
+};
+
+// Try to override immediately and poll until nym object is available
+if (!overrideShowNotification()) {
+const checkInterval = setInterval(function() {
+if (overrideShowNotification()) {
+clearInterval(checkInterval);
+console.log('[NYM Bridge] Successfully hooked nym.showNotification');
+}
+}, 200);
+// Stop polling after 30 seconds
+setTimeout(function() { clearInterval(checkInterval); }, 30000);
+}
+
+// Also use MutationObserver as a safety net to catch any notifications
+// that might slip through (e.g., from other code paths)
+const processedNotifs = new WeakSet();
+const notifObserver = new MutationObserver(function(mutations) {
+mutations.forEach(function(mutation) {
+mutation.addedNodes.forEach(function(node) {
+if (node.nodeType === 1 && node.classList && node.classList.contains('notification')) {
+if (processedNotifs.has(node)) return;
+processedNotifs.add(node);
+
+console.log('[NYM Bridge] Detected DOM notification, hiding and forwarding to Flutter');
+
+// Extract content
+const titleEl = node.querySelector('.notification-title');
+const bodyEl = node.querySelector('.notification-body');
+const timeEl = node.querySelector('.notification-time');
+
+const title = titleEl ? titleEl.textContent : 'Notification';
+const body = bodyEl ? bodyEl.textContent : '';
+const time = timeEl ? timeEl.textContent : new Date().toLocaleTimeString();
+
+// Hide the DOM element immediately
+node.style.cssText = 'display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important;';
+
+// Send to Flutter native overlay
+if (window.FlutterInAppNotification && window.FlutterInAppNotification.postMessage) {
+window.FlutterInAppNotification.postMessage(JSON.stringify({
+title: title,
+body: body,
+time: time,
+channelInfo: null
+}));
+}
+
+// Remove from DOM
+setTimeout(function() { if (node.parentNode) node.remove(); }, 50);
+}
+});
+});
+});
+notifObserver.observe(document.body, { childList: true, subtree: true });
+console.log('[NYM Bridge] MutationObserver safety net installed');
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // macOS Input Accessory Bar Fix
@@ -1487,6 +1823,68 @@ setTimeout(sendThemeToFlutter, 50);
 setInterval(sendThemeToFlutter, 5000);
 
 console.log('[NYM Bridge] Theme color bridge ready');
+
+// ═══════════════════════════════════════════════════════════════════════
+// Navigation Bridge - Mouse back/forward buttons and keyboard shortcuts
+// ═══════════════════════════════════════════════════════════════════════
+
+console.log('[NYM Bridge] Setting up navigation bridge...');
+
+// Handle mouse back/forward buttons (button 3 = back, button 4 = forward)
+document.addEventListener('mouseup', function(e) {
+if (e.button === 3) {
+// Mouse back button
+e.preventDefault();
+console.log('[NYM Bridge] Mouse back button pressed');
+if (window.FlutterNavigation && window.FlutterNavigation.postMessage) {
+window.FlutterNavigation.postMessage(JSON.stringify({ action: 'back' }));
+} else if (window.history.length > 1) {
+window.history.back();
+}
+} else if (e.button === 4) {
+// Mouse forward button
+e.preventDefault();
+console.log('[NYM Bridge] Mouse forward button pressed');
+if (window.FlutterNavigation && window.FlutterNavigation.postMessage) {
+window.FlutterNavigation.postMessage(JSON.stringify({ action: 'forward' }));
+} else {
+window.history.forward();
+}
+}
+}, true);
+
+// Also listen for auxclick which may fire on some browsers/platforms
+document.addEventListener('auxclick', function(e) {
+if (e.button === 3 || e.button === 4) {
+e.preventDefault();
+}
+}, true);
+
+// Handle keyboard shortcuts for navigation (Alt+Left, Alt+Right)
+document.addEventListener('keydown', function(e) {
+// Alt+Left = back, Alt+Right = forward
+if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+// Only if not typing in an input field
+const tag = document.activeElement?.tagName?.toLowerCase();
+if (tag === 'input' || tag === 'textarea' || document.activeElement?.isContentEditable) {
+return; // Let input handle it
+}
+
+e.preventDefault();
+const action = e.key === 'ArrowLeft' ? 'back' : 'forward';
+console.log('[NYM Bridge] Keyboard navigation:', action);
+
+if (window.FlutterNavigation && window.FlutterNavigation.postMessage) {
+window.FlutterNavigation.postMessage(JSON.stringify({ action: action }));
+} else if (action === 'back') {
+window.history.back();
+} else {
+window.history.forward();
+}
+}
+}, true);
+
+console.log('[NYM Bridge] Navigation bridge ready');
 
 // Lightweight fetch logger for debugging Android upload issues
 try {
@@ -2211,6 +2609,14 @@ debugPrint('[Media Picker] Error: $e');
 
 void _handleDeepLink(String payload) {
 debugPrint('[Deep Link] Handling payload: $payload');
+
+// If webview is already initialized, use JavaScript navigation to preserve localStorage
+// This prevents the app from clearing user state when clicking notifications
+if (_webViewInitialized && !kIsWeb) {
+_handleDeepLinkViaJS(payload);
+return;
+}
+
 final target = _resolveDeepLink(payload);
 if (target == null) return;
 
@@ -2230,6 +2636,109 @@ debugPrint('[Deep Link] Launching external: $target');
 _launchExternalBrowser(target.toString());
 }
 }
+
+/// Handle deep links via JavaScript to preserve localStorage/session state
+void _handleDeepLinkViaJS(String payload) {
+debugPrint('[Deep Link] Handling via JS to preserve localStorage: $payload');
+
+final trimmed = payload.trim();
+
+// Escape for JavaScript string
+final escapedPayload = trimmed
+.replaceAll('\\', '\\\\')
+.replaceAll("'", "\\'")
+.replaceAll('\n', '\\n');
+
+_controller.runJavaScript('''
+(function() {
+console.log('[NYM Bridge] Deep link received via JS:', '$escapedPayload');
+
+const payload = '$escapedPayload';
+
+// Handle PM deep links
+if (payload.startsWith('/pm/')) {
+let pmPath = payload.substring(4);
+let pubkey = null;
+
+// Check for query parameters
+if (pmPath.includes('?')) {
+const queryStart = pmPath.indexOf('?');
+const queryString = pmPath.substring(queryStart + 1);
+pmPath = pmPath.substring(0, queryStart);
+
+// Parse pubkey from query string
+const params = new URLSearchParams(queryString);
+pubkey = params.get('pubkey');
+}
+
+const nym = decodeURIComponent(pmPath);
+console.log('[NYM Bridge] PM deep link - nym:', nym, 'pubkey:', pubkey);
+
+// Try to open PM using PWA's API
+const tryOpenPM = (retryCount) => {
+if (retryCount > 10) {
+console.warn('[NYM Bridge] PM open timed out');
+return;
+}
+
+if (typeof nym === 'undefined' || !window.nym) {
+setTimeout(() => tryOpenPM(retryCount + 1), 300);
+return;
+}
+
+if (pubkey && window.nym.openUserPM) {
+console.log('[NYM Bridge] Opening PM by pubkey:', pubkey);
+window.nym.openUserPM(nym || 'User', pubkey);
+} else if (nym && window.nym.openUserPMByNym) {
+console.log('[NYM Bridge] Opening PM by nym:', nym);
+window.nym.openUserPMByNym(nym);
+}
+};
+
+tryOpenPM(0);
+return;
+}
+
+// Handle channel deep links
+if (payload.startsWith('/channel/')) {
+const parts = payload.substring(9).split('/');
+let geohash;
+if (parts.length >= 2) {
+geohash = parts[1].toLowerCase();
+} else if (parts.length > 0) {
+geohash = parts[0].toLowerCase();
+}
+
+if (geohash && window.nym && window.nym.switchChannel) {
+console.log('[NYM Bridge] Switching to channel:', geohash);
+window.nym.switchChannel(geohash);
+} else if (geohash) {
+// Fallback: update hash
+window.location.hash = geohash;
+}
+return;
+}
+
+// Handle hash fragments
+if (payload.startsWith('#')) {
+console.log('[NYM Bridge] Setting hash:', payload);
+window.location.hash = payload.substring(1);
+return;
+}
+
+// For other payloads, try treating as geohash
+if (/^[0-9bcdefghjkmnpqrstuvwxyz]+\$/i.test(payload) && payload.length <= 12) {
+console.log('[NYM Bridge] Treating as geohash:', payload);
+if (window.nym && window.nym.switchChannel) {
+window.nym.switchChannel(payload.toLowerCase());
+} else {
+window.location.hash = payload.toLowerCase();
+}
+}
+})();
+''');
+}
+
 
 void _handlePendingPMNym() {
 if (_pendingPMNym == null && _pendingPMPubkey == null) return;
@@ -2438,6 +2947,24 @@ disposeFIPSBLE();
 super.dispose();
 }
 
+/// Handle Android back button - navigate in webview history before closing app
+Future<bool> _handleBackButton() async {
+if (kIsWeb) return true;
+
+try {
+final canGoBack = await _controller.canGoBack();
+if (canGoBack) {
+debugPrint('[Navigation] WebView going back');
+await _controller.goBack();
+return false; // Don't close the app
+}
+} catch (e) {
+debugPrint('[Navigation] Error checking canGoBack: $e');
+}
+
+return true; // Allow app to close
+}
+
 @override
 Widget build(BuildContext context) {
 // Dynamic theme color from PWA (synced via JavaScript bridge)
@@ -2446,7 +2973,17 @@ final mediaQuery = MediaQuery.of(context);
 final topPadding = mediaQuery.padding.top;
 final bottomPadding = mediaQuery.padding.bottom;
 
-return Scaffold(
+return PopScope(
+canPop: false,
+onPopInvokedWithResult: (didPop, result) async {
+if (didPop) return;
+
+final shouldPop = await _handleBackButton();
+if (shouldPop && context.mounted) {
+Navigator.of(context).pop();
+}
+},
+child: Scaffold(
 backgroundColor: appBgColor,
 body: Stack(
 children: [
@@ -2502,14 +3039,6 @@ child: Center(
 child: Column(
 mainAxisAlignment: MainAxisAlignment.center,
 children: [
-Image.asset(
-'assets/images/NYM-favicon-circle.png',
-width: 160,
-height: 160,
-fit: BoxFit.contain,
-opacity: const AlwaysStoppedAnimation(0.95),
-),
-const SizedBox(height: 32),
 Text(
 _asciiLogo,
 style: const TextStyle(
@@ -2540,8 +3069,271 @@ strokeWidth: 3,
 ),
 ),
 ),
+// Native in-app notification overlay (iOS fix)
+..._buildNativeNotifications(),
 ],
+),
+),
+);
+}
+
+List<Widget> _buildNativeNotifications() {
+return _nativeNotifications.map((notif) {
+final index = _nativeNotifications.indexOf(notif);
+return Positioned(
+top: MediaQuery.of(context).padding.top + 16 + (index * 90),
+right: 16,
+left: 16,
+child: Material(
+color: Colors.transparent,
+child: _NativeNotificationCard(
+notification: notif,
+isLightMode: _isLightMode,
+onTap: () => _handleNativeNotificationTap(notif),
+onDismiss: () => _dismissNativeNotification(notif.id),
+),
+),
+);
+}).toList();
+}
+
+void _showNativeNotification({
+required String title,
+required String body,
+String? time,
+Map<String, dynamic>? channelInfo,
+}) {
+final id = _notificationIdCounter++;
+final notif = _InAppNotification(
+id: id,
+title: title,
+body: body,
+time: time ?? _formatTime(DateTime.now()),
+channelInfo: channelInfo,
+);
+
+setState(() {
+_nativeNotifications.add(notif);
+// Limit to 3 notifications visible at once
+while (_nativeNotifications.length > 3) {
+_nativeNotifications.removeAt(0);
+}
+});
+
+// Auto-dismiss after 4 seconds
+Future.delayed(const Duration(seconds: 4), () {
+if (mounted) {
+_dismissNativeNotification(id);
+}
+});
+
+debugPrint('[Native Notif] Showing: $title - $body');
+}
+
+void _dismissNativeNotification(int id) {
+setState(() {
+_nativeNotifications.removeWhere((n) => n.id == id);
+});
+}
+
+void _handleNativeNotificationTap(_InAppNotification notif) {
+_dismissNativeNotification(notif.id);
+
+final channelInfo = notif.channelInfo;
+if (channelInfo != null) {
+final type = channelInfo['type'] as String?;
+final pubkey = channelInfo['pubkey'] as String?;
+final channel = channelInfo['channel'] as String?;
+final geohash = channelInfo['geohash'] as String?;
+final groupId = channelInfo['groupId'] as String?;
+final nym = channelInfo['nym'] as String?;
+
+String? jsCode;
+if (type == 'pm' && (nym != null || pubkey != null)) {
+final nymArg = nym != null ? "'$nym'" : "null";
+final pubkeyArg = pubkey ?? '';
+jsCode = "if(window.nym && window.nym.openUserPM) window.nym.openUserPM($nymArg, '$pubkeyArg');";
+} else if (type == 'group' && groupId != null) {
+jsCode = "if(window.nym && window.nym.openGroup) window.nym.openGroup('$groupId');";
+} else if (type == 'geohash' && (channel != null || geohash != null)) {
+final ch = channel ?? '';
+final gh = geohash ?? '';
+jsCode = "if(window.nym && window.nym.switchChannel) window.nym.switchChannel('$ch', '$gh');";
+}
+
+if (jsCode != null) {
+_controller.runJavaScript(jsCode);
+debugPrint('[Native Notif] Executing: $jsCode');
+}
+}
+}
+
+String _formatTime(DateTime dt) {
+final h = dt.hour;
+final m = dt.minute.toString().padLeft(2, '0');
+final s = dt.second.toString().padLeft(2, '0');
+final period = h >= 12 ? 'PM' : 'AM';
+final h12 = h > 12 ? h - 12 : (h == 0 ? 12 : h);
+return ' 24h12: 24m: 24s  24period';
+}
+}
+
+/// Data class for native in-app notifications
+class _InAppNotification {
+final int id;
+final String title;
+final String body;
+final String time;
+final Map<String, dynamic>? channelInfo;
+
+_InAppNotification({
+required this.id,
+required this.title,
+required this.body,
+required this.time,
+this.channelInfo,
+});
+}
+
+/// Native notification card widget
+class _NativeNotificationCard extends StatefulWidget {
+final _InAppNotification notification;
+final bool isLightMode;
+final VoidCallback onTap;
+final VoidCallback onDismiss;
+
+const _NativeNotificationCard({
+required this.notification,
+required this.isLightMode,
+required this.onTap,
+required this.onDismiss,
+});
+
+@override
+State<_NativeNotificationCard> createState() => _NativeNotificationCardState();
+}
+
+class _NativeNotificationCardState extends State<_NativeNotificationCard>
+with SingleTickerProviderStateMixin {
+late AnimationController _controller;
+late Animation<Offset> _slideAnimation;
+late Animation<double> _fadeAnimation;
+
+@override
+void initState() {
+super.initState();
+_controller = AnimationController(
+duration: const Duration(milliseconds: 300),
+vsync: this,
+);
+_slideAnimation = Tween<Offset>(
+begin: const Offset(1.0, 0.0),
+end: Offset.zero,
+).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+_fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(_controller);
+_controller.forward();
+}
+
+@override
+void dispose() {
+_controller.dispose();
+super.dispose();
+}
+
+@override
+Widget build(BuildContext context) {
+final bgColor = widget.isLightMode
+? const Color(0xFFF5F5F2)
+: const Color(0xFF141423);
+final borderColor = widget.isLightMode
+? const Color(0xFF00AAAA)
+: const Color(0xFF00FFFF);
+final titleColor = widget.isLightMode
+? const Color(0xFF006666)
+: const Color(0xFF00FFFF);
+final bodyColor = widget.isLightMode
+? const Color(0xFF333333)
+: const Color(0xFFFFFFFF);
+final timeColor = widget.isLightMode
+? const Color(0xFF666666)
+: const Color(0xFF888888);
+
+return SlideTransition(
+position: _slideAnimation,
+child: FadeTransition(
+opacity: _fadeAnimation,
+child: Dismissible(
+key: ValueKey(widget.notification.id),
+direction: DismissDirection.horizontal,
+onDismissed: (_) => widget.onDismiss(),
+child: GestureDetector(
+onTap: widget.onTap,
+child: Container(
+padding: const EdgeInsets.all(16),
+decoration: BoxDecoration(
+color: bgColor,
+borderRadius: BorderRadius.circular(12),
+border: Border.all(color: borderColor.withValues(alpha: 0.5), width: 1),
+boxShadow: [
+BoxShadow(
+color: Colors.black.withValues(alpha: 0.3),
+blurRadius: 16,
+offset: const Offset(0, 4),
+),
+],
+),
+child: Row(
+children: [
+Expanded(
+child: Column(
+crossAxisAlignment: CrossAxisAlignment.start,
+mainAxisSize: MainAxisSize.min,
+children: [
+Text(
+widget.notification.title,
+style: TextStyle(
+color: titleColor,
+fontSize: 13,
+fontWeight: FontWeight.bold,
+letterSpacing: 0.5,
+),
+maxLines: 1,
+overflow: TextOverflow.ellipsis,
+),
+const SizedBox(height: 4),
+Text(
+widget.notification.body,
+style: TextStyle(
+color: bodyColor,
+fontSize: 14,
+),
+maxLines: 2,
+overflow: TextOverflow.ellipsis,
+),
+const SizedBox(height: 4),
+Text(
+widget.notification.time,
+style: TextStyle(
+color: timeColor,
+fontSize: 11,
+),
+),
+],
+),
+),
+const SizedBox(width: 8),
+Icon(
+Icons.chevron_right,
+color: timeColor,
+size: 20,
+),
+],
+),
+),
+),
+),
 ),
 );
 }
 }
+
