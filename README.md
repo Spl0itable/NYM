@@ -38,8 +38,7 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 
 ### Messaging
 - **Private Messages** - End-to-end encrypted 1:1 PMs using [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) (kind 14 rumor format) wrapped in NIP-59 gift wraps
-- **MLS Group Chats (Marmot Protocol)** - End-to-end encrypted group messaging using the [Marmot Protocol](https://github.com/nicobao/NIP-EE) (MLS / [RFC 9420](https://www.rfc-editor.org/rfc/rfc9420)), providing forward secrecy and post-compromise security for group conversations. Uses kind 443 (KeyPackage), kind 444 (Welcome), and kind 445 (group messages). Falls back to NIP-17 automatically if MLS is unavailable.
-- **Private Group Chats (Legacy)** - End-to-end encrypted multi-party group chats via [NIP-59](https://github.com/nostr-protocol/nips/blob/master/59.md); each message is individually gift-wrapped per member with an ephemeral sender key and a randomized envelope timestamp (±2 h) so relays cannot correlate group membership or timing
+- **Private Group Chats** - End-to-end encrypted multi-party group chats via [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) / [NIP-59](https://github.com/nostr-protocol/nips/blob/master/59.md); each message is individually gift-wrapped per member with an ephemeral sender key and a randomized envelope timestamp (±2 h) so relays cannot correlate group membership or timing
 - **Rich Text** - Markdown support for bold, italic, strikethrough, code blocks, and quotes
 - **Message Reactions** - React to messages with emojis ([NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md))
 - **Auto-Reply** - Set away messages with `/brb` command
@@ -74,15 +73,6 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - Each gift wrap uses a one-time ephemeral sender key; the `created_at` timestamp is randomized ±2 hours so relays cannot correlate senders, recipients, or timing
 - Group chats send one gift wrap per member — each individually encrypted to that member's public key
 
-### MLS Group Chats (Marmot Protocol)
-- Based on the [Messaging Layer Security (MLS)](https://www.rfc-editor.org/rfc/rfc9420) protocol via [Marmot Protocol](https://github.com/marmot-protocol/marmot)
-- `kind 443` — KeyPackage publication (pre-keys for group invitations)
-- `kind 444` — Welcome messages (gift-wrapped to invited members)
-- `kind 445` — Group messages (encrypted with epoch-level keys from the MLS ratchet tree)
-- Provides forward secrecy and post-compromise security — compromising a single key does not expose past or future messages
-- Falls back to legacy NIP-17 gift wraps automatically when MLS is unavailable
-- Typing indicators, reactions, and read receipts work across both NIP-17 and MLS groups
-
 ### Reactions & Zaps
 - Reaction events `kind 7` (NIP-25) with `['k', originalKind]` tag for proper categorization
 - Lightning zaps `kind 9735` (NIP-57) with full invoice generation and payment tracking
@@ -102,7 +92,7 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - `/quit` - Disconnect from Nymchat
 
 **Group Chat Commands:**
-- `/group @user1 @user2 [name]` - Create a new private group (uses MLS when available)
+- `/group @user1 @user2 [name]` - Create a new private group
 - `/invite @nym` - In a channel: invite user to the channel. In a group chat: add a new member to the group
 - `/addmember @nym` - Add a member to the current group chat
 - `/groupinfo` - Show members of the current group

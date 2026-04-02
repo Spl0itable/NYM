@@ -2491,7 +2491,7 @@ var BOT_AVATAR = "https://nymchat.app/images/nymbot-icon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-banner.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.58.267";
+var NYMCHAT_VERSION = "3.58.268";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2856,16 +2856,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "A: Nymchat uses ephemeral geohash and non-geohash channels — location-based chat rooms using geohash codes (e.g. #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location. All channel messages are temporary and exist only during active sessions.",
   "",
   "Q: How do private messages and group chats work?",
-  "A: PMs and group chats use Nostr's NIP-17 encryption standard for end-to-end encrypted communication that can't be linked to your session. Only you and your recipient(s) can read the messages. You can enable forward secrecy for disappearing messages in Settings. To send a PM, use /pm nym#xxxx or click a user's nym and select 'Private Message'. Each user is identified by their nym + a 4-character suffix from their public key (e.g. cyber_wolf#a3f2). Group chats now also support the Marmot Protocol (MLS) for advanced encrypted group messaging — see below.",
-  "",
-  "Q: What is the Marmot Protocol?",
-  "A: The Marmot Protocol is Nymchat's implementation of Messaging Layer Security (MLS, RFC 9420) for end-to-end encrypted group chats. It provides forward secrecy and post-compromise security on top of Nostr, meaning that compromising a single key does not expose past or future messages. MLS groups use a cryptographic ratchet tree where each membership change (adding or removing a member) advances the group to a new epoch with fresh keys. Nymchat uses MLS automatically for group chats when all members support it, and falls back to legacy NIP-17 gift wraps if a member does not have MLS support.",
-  "",
-  "Q: How does the Marmot Protocol differ from regular NIP-17 group encryption?",
-  "A: NIP-17 encrypts each message individually with NIP-44 and wraps it in gift wraps for each recipient. The Marmot Protocol (MLS) instead maintains a shared group state with a ratchet tree — every time the group changes (member added/removed), the encryption epoch advances and new keys are derived. This gives true forward secrecy (past messages stay safe if a key leaks) and post-compromise security (future messages are safe after a compromise is resolved). MLS messages are Nostr kind 445 events, while invitations use kind 444 (Welcome) and member pre-keys use kind 443 (KeyPackage).",
-  "",
-  "Q: What are MLS KeyPackages?",
-  "A: KeyPackages (kind 443 events) are pre-keys that users publish to Nostr relays so they can be invited to MLS groups. When someone creates a group or adds a member, the creator fetches the invitee's KeyPackage to build the group's ratchet tree. KeyPackages are automatically managed by Nymchat — users don't need to do anything manually.",
+  "A: PMs and group chats use Nostr's NIP-17 encryption standard for end-to-end encrypted communication that can't be linked to your session. Only you and your recipient(s) can read the messages. You can enable forward secrecy for disappearing messages in Settings. To send a PM, use /pm nym#xxxx or click a user's nym and select 'Private Message'. Each user is identified by their nym + a 4-character suffix from their public key (e.g. cyber_wolf#a3f2). Group chats use NIP-17 gift wraps — each message is individually encrypted and sent to every group member.",
   "",
   "Q: What is Lightning integration and how do zaps work?",
   "A: Nymchat integrates Lightning Network for instant Bitcoin micropayments called 'zaps.' You can tip messages you appreciate or send Bitcoin directly to users. To receive zaps, set a Lightning address in the 'Your Nym' section where you can also edit avatar and bio (format: user@domain.com). To send a zap, click a user's nym and select 'Zap Bitcoin' or use /zap @nym. Preset amounts: 100, 500, 1000, 5000 sats, or custom amount with optional comment. Zaps are displayed in real-time on messages.",
@@ -3033,12 +3024,10 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Start a DM: /pm @nym, or click a user > Send PM.",
   "DMs are end-to-end encrypted with NIP-44 + NIP-17 gift wraps.",
   "Group chats: /group @user1 @user2 [GroupName] — creates an encrypted group.",
-  "Group chats use the Marmot Protocol (MLS) when all members support it, providing forward secrecy and post-compromise security via a ratchet tree that advances epochs on every membership change.",
-  "If a member lacks MLS support, the group falls back to legacy NIP-17 gift wraps.",
-  "MLS group messages (kind 445) are stored locally because they cannot be re-decrypted from relays — message history lives on your device.",
-  "/addmember @user — add someone to an existing group (advances the MLS epoch).",
+  "Group chats use NIP-17 gift wraps for end-to-end encrypted group messaging.",
+  "/addmember @user — add someone to an existing group.",
   "/groupinfo — show current group members.",
-  "Remove members via the context menu (also advances the MLS epoch).",
+  "Remove members via the context menu.",
   "",
   "=== FRIENDS SYSTEM ===",
   "Nymchat has a friends list feature. Users can add other nyms as friends for quick access and filtering.",
@@ -3079,7 +3068,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "=== NOSTR PROTOCOL ===",
   "Nymchat uses the Nostr protocol. Messages are cryptographically signed events published to relays.",
-  "Kind 20000 = ephemeral channel messages. Kind 1059 = encrypted DMs (NIP-17 gift wraps). Kind 443 = MLS KeyPackages. Kind 444 = MLS Welcome (group invitations). Kind 445 = MLS encrypted group messages.",
+  "Kind 20000 = ephemeral channel messages. Kind 1059 = encrypted DMs and group chats (NIP-17 gift wraps).",
   "Events include g-tags for geohash routing and n-tags for nym identity.",
   "Multiple relays for redundancy. Nostr is censorship-resistant — no central server.",
   "",

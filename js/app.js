@@ -558,9 +558,6 @@ class NYM {
         this.pmConversations = new Map();
         this.groupConversations = new Map();
         this.currentGroup = null;
-        this.mls = null;
-        this._mlsReady = false;
-        this._mlsRelayBootDone = false;
         this._newPMRecipients = [];
         this.groupMessageReaders = new Map();
         this._unfurlCache = new Map();
@@ -7691,11 +7688,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         this.updateConnectionStatus();
 
-        // Trigger deferred MLS boot once relays are connected
-        if (this.poolConnectedRelays.length > 0) {
-            this._onRelaysConnected();
-            this._checkMlsRepublish();
-        }
     }
 
     // Keep legacy this.poolSocket pointing to first open socket for external compat
@@ -7803,14 +7795,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 }
             );
 
-            // MLS group messages: subscribe to kind 445 for groups we belong to
-            if (this.mls && this.mls._initialized && this.mls._groupMap.size > 0) {
-                const mlsGroupIds = [];
-                for (const [nostrGroupId] of this.mls._groupMap) {
-                    mlsGroupIds.push(nostrGroupId);
-                }
-                filters.push({ kinds: [445], '#h': mlsGroupIds, limit: 200 });
-            }
         }
 
         return filters;
@@ -7902,12 +7886,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this._poolSendToRole('geo', ["CLOSE", this._lastGeoSubId]);
             this._poolSendToRole('discovered', ["CLOSE", this._lastGeoSubId]);
         }
-        // Close dedicated MLS subscription — critical filters now include MLS groups
-        if (this._lastMlsSubId) {
-            this._poolSendToRole('critical', ["CLOSE", this._lastMlsSubId]);
-            this._lastMlsSubId = null;
-        }
-
         const since1h = Math.floor(Date.now() / 1000) - 3600;
 
         // Critical shards (default + DM relays): full subscription set
@@ -10266,37 +10244,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             name: group.name,
                             members: group.members,
                             lastMessageTime: group.lastMessageTime,
-                            createdBy: group.createdBy,
-                            isMLS: group.isMLS || false,
-                            mlsGroupId: group.mlsGroupId || null
+                            createdBy: group.createdBy
                         };
                     }
                     settingsData.groupConversations = groupData;
                 }
             } catch (_) {}
-
-            // Sync MLS message history across devices (when enabled)
-            if (this.settings.syncMLSHistory !== false && this.mls) {
-                try {
-                    const mlsHistory = {};
-                    for (const [groupId, group] of this.groupConversations) {
-                        if (group.isMLS && group.mlsGroupId) {
-                            const msgs = this.mls.loadPersistedMessages(groupId);
-                            if (msgs.length > 0) {
-                                // Sync only last 50 messages per group with minimal fields
-                                mlsHistory[group.mlsGroupId] = msgs.slice(-50).map(m => ({
-                                    id: m.id, pubkey: m.pubkey, content: m.content,
-                                    created_at: m.created_at,
-                                    tags: (m.tags || []).filter(t => t[0] === 'x')
-                                }));
-                            }
-                        }
-                    }
-                    if (Object.keys(mlsHistory).length > 0) {
-                        settingsData.mlsMessageHistory = mlsHistory;
-                    }
-                } catch (_) {}
-            }
 
             await this._publishEncryptedSettings(settingsData);
         } catch (error) {
@@ -11514,14 +11467,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.handleZapReceipt(event);
         } else if (event.kind === 1059) {
             await this.handleGiftWrapDM(event);
-        } else if (event.kind === 445) {
-            // MLS group message — route to NymMLS for decryption
-            // Kind 445 MLS group event received from pool
-            if (this.mls && this.mls._initialized) {
-                this.mls._handleIncomingGroupEvent(event);
-            } else {
-                console.warn('[MLS] Received kind 445 but MLS not initialized');
-            }
         } else if (event.kind === 10000) {
             // Handle mute list of users/keywords
             this.handleMuteList(event);
@@ -12534,7 +12479,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (group) {
                     const now = Math.floor(Date.now() / 1000);
                     const reactionTags = [['g', groupId], ['e', messageId], ['k', '14']];
-                    if (group.isMLS && group.mlsGroupId) reactionTags.push(['h', group.mlsGroupId]);
                     const reactionRumor = {
                         kind: 7,
                         created_at: now,
@@ -12636,7 +12580,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (group) {
                     const now = Math.floor(Date.now() / 1000);
                     const unreactTags = [['g', groupId], ['e', messageId], ['k', '14'], ['action', 'remove']];
-                    if (group.isMLS && group.mlsGroupId) unreactTags.push(['h', group.mlsGroupId]);
                     const reactionRumor = {
                         kind: 7,
                         created_at: now,
@@ -13056,28 +12999,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (!rumor || !rumor.tags) return null;
         let status = null;
         let groupId = null;
-        let mlsGroupId = null;
         for (const tag of rumor.tags) {
             if (Array.isArray(tag)) {
                 if (tag[0] === 'typing') status = tag[1]; // 'start' or 'stop'
                 if (tag[0] === 'g') groupId = tag[1];
-                if (tag[0] === 'h') mlsGroupId = tag[1];
-            }
-        }
-        // For MLS groups, resolve the shared nostrGroupId to local nymGroupId
-        if (mlsGroupId) {
-            const resolved = this._resolveMLSGroupId(mlsGroupId);
-            if (resolved) groupId = resolved;
-        }
-
-        // If the groupId still doesn't match any local group, try to find the
-        // MLS group by sender membership (handles format mismatches in h tag)
-        if (groupId && !this.groupConversations.has(groupId) && rumor.pubkey) {
-            for (const [gid, grp] of this.groupConversations) {
-                if (grp.isMLS && grp.members && grp.members.includes(rumor.pubkey)) {
-                    groupId = gid;
-                    break;
-                }
             }
         }
 
@@ -13125,11 +13050,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const group = this.groupConversations.get(this.currentGroup);
             if (!group) return;
             tags.push(['g', this.currentGroup]);
-            // For MLS groups, include the shared nostrGroupId so all members
-            // can resolve to their local nymGroupId (each member generates a different UUID)
-            if (group.isMLS && group.mlsGroupId) {
-                tags.push(['h', group.mlsGroupId]);
-            }
             const otherMembers = group.members.filter(pk => pk !== this.pubkey);
             if (otherMembers.length === 0) return;
 
@@ -13882,70 +13802,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Validate rumor and identity
             // Accept kind 14 (DM), kind 15 (file), kind 69420 (Nymchat receipt),
             // kind 7 (group reaction gift-wrapped to the group),
-            // kind 444 (MLS Welcome), and kind 30078 (encrypted settings sync)
-            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 444 && rumor.kind !== 30078)) {
-                return;
-            }
-
-            // Route MLS Welcome events (kind 444) to MLS handler
-            if (rumor.kind === 444 && this.mls && this.mls._initialized) {
-                try {
-                    const result = await this.mls.handleWelcome(rumor);
-                    if (result) {
-                        // Check if a NIP-17 legacy invite already created a duplicate
-                        // group for this MLS group — if so, remove the duplicate
-                        for (const [existingId, existingGrp] of this.groupConversations) {
-                            if (existingId !== result.nymGroupId && existingGrp.mlsGroupId === result.nostrGroupId) {
-                                // Duplicate found — migrate messages and remove old entry
-                                const oldKey = this.getGroupConversationKey(existingId);
-                                const newKey = this.getGroupConversationKey(result.nymGroupId);
-                                const oldMsgs = this.pmMessages.get(oldKey) || [];
-                                if (oldMsgs.length > 0) {
-                                    if (!this.pmMessages.has(newKey)) this.pmMessages.set(newKey, []);
-                                    const newMsgs = this.pmMessages.get(newKey);
-                                    for (const m of oldMsgs) {
-                                        if (!newMsgs.some(nm => nm.id === m.id)) newMsgs.push(m);
-                                    }
-                                }
-                                this.pmMessages.delete(oldKey);
-                                this.groupConversations.delete(existingId);
-                                const pmList = document.getElementById('pmList');
-                                const oldItem = pmList?.querySelector(`[data-group-id="${existingId}"]`);
-                                if (oldItem) oldItem.remove();
-                                break;
-                            }
-                        }
-
-                        // Create the group in the sidebar
-                        this.addGroupConversation(result.nymGroupId, result.groupName, result.members || [this.pubkey], Date.now());
-                        const grp = this.groupConversations.get(result.nymGroupId);
-                        if (grp) {
-                            grp.isMLS = true;
-                            grp.mlsGroupId = result.nostrGroupId;
-                        }
-                        this._saveGroupConversations();
-                        // Subscribe to kind 445 events for this new group without
-                        // tearing down the critical subscription (channels, DMs, profiles).
-                        this._poolSubscribeMLS();
-
-                        const welcomeSender = rumor.pubkey || seal?.pubkey || 'unknown';
-                        const senderNym = this.getNymFromPubkey(welcomeSender);
-                        const welcomeTitle = `Group invite: ${result.groupName}`;
-                        const welcomeBody = `${senderNym} added you to "${result.groupName}" (MLS encrypted)`;
-                        const welcomeOpts = {
-                            type: 'group', groupId: result.nymGroupId,
-                            id: this.getGroupConversationKey(result.nymGroupId), pubkey: welcomeSender
-                        };
-                        // Only fire a live notification if we haven't already notified for this event
-                        if (this.mls.markNotified(event.id)) {
-                            this.showNotification(welcomeTitle, welcomeBody, welcomeOpts);
-                        } else {
-                            this._addNotificationToHistory(welcomeTitle, welcomeBody, welcomeOpts);
-                        }
-                    }
-                } catch (e) {
-                    console.warn('[MLS] Welcome handling failed:', e);
-                }
+            // and kind 30078 (encrypted settings sync)
+            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 30078)) {
                 return;
             }
 
@@ -14094,19 +13952,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             // Route group messages before 1:1 PM logic
-            // For MLS groups, resolve the shared nostrGroupId ('h' or legacy 'mls_group' tag)
-            // to the local nymGroupId so messages land in the correct MLS group
-            const hTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'h' && typeof t[1] === 'string')
-                      || (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'mls_group' && typeof t[1] === 'string');
-            if (hTag) {
-                const localGroupId = this._resolveMLSGroupId(hTag[1]);
-                if (localGroupId) {
-                    // Rewrite the 'g' tag to use our local nymGroupId
-                    const gTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g');
-                    if (gTag) gTag[1] = localGroupId;
-                    else rumor.tags.push(['g', localGroupId]);
-                }
-            }
             const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && typeof t[1] === 'string');
             if (groupTag) {
                 await this.handleGroupMessage(rumor, event, senderPubkey, isOwn);
@@ -14445,290 +14290,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return `group-${groupId}`;
     }
 
-    // Resolve a shared MLS nostrGroupId to the local nymGroupId
-    _resolveMLSGroupId(nostrGroupId) {
-        if (!nostrGroupId) return null;
-        // Check the MLS manager first (fastest)
-        if (this.mls) {
-            for (const [nymId, mlsId] of this.mls._nymToMls) {
-                if (mlsId === nostrGroupId) return nymId;
-            }
-        }
-        // Fallback: scan groupConversations
-        for (const [gid, grp] of this.groupConversations) {
-            if (grp.mlsGroupId === nostrGroupId) return gid;
-        }
-        return null;
-    }
-
-    //  MLS (Marmot Protocol) integration
-    _initMLS() {
-        if (!window.NymMLS || !window.MarmotMLS) return;
-        if (this.mls) this.mls.destroy();
-        this.mls = new window.NymMLS(this);
-        this.mls.init().then(async () => {
-            // Restore nymToMls mappings from groupConversations that have mlsGroupId
-            const failedGroups = [];
-            for (const [groupId, group] of this.groupConversations) {
-                if (group.isMLS && group.mlsGroupId) {
-                    this.mls._nymToMls.set(groupId, group.mlsGroupId);
-                    // If the MLS group was loaded from storage, register it
-                    if (!this.mls._groupMap.has(group.mlsGroupId)) {
-                        try {
-                            const g = await this.mls.client?.getGroup(group.mlsGroupId);
-                            if (g) {
-                                this.mls._groupMap.set(group.mlsGroupId, { marmotGroup: g, nymGroupId: groupId });
-                            } else {
-                                failedGroups.push(groupId);
-                            }
-                        } catch (e) {
-                            console.warn('[MLS] Could not restore MLS group', group.mlsGroupId.slice(0, 16), ':', e.message);
-                            failedGroups.push(groupId);
-                            // Mark group as needing re-invitation so the UI can inform the user
-                            group._mlsStateCorrupted = true;
-                        }
-                    }
-                }
-            }
-            // For groups whose MLS state was lost, request a fresh Welcome
-            // from the group admin by fetching recent kind 444 events
-            if (failedGroups.length > 0) {
-                console.warn('[MLS]', failedGroups.length, 'group(s) need re-invitation — requesting fresh Welcomes');
-                this._requestMLSReinvitations(failedGroups);
-            }
-            // Load persisted MLS messages for all MLS groups (even if state
-            // restoration failed — persisted plaintext should still display)
-            for (const [groupId, group] of this.groupConversations) {
-                if (group.isMLS && group.mlsGroupId) {
-                    const savedMsgs = this.mls.loadPersistedMessages(groupId);
-                    if (savedMsgs.length > 0) {
-                        const groupConvKey = this.getGroupConversationKey(groupId);
-                        if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
-                        const list = this.pmMessages.get(groupConvKey);
-                        for (const msg of savedMsgs) {
-                            // Use shared ID from x tag if available
-                            const xTag = (msg.tags || []).find(t => t[0] === 'x' && t[1]);
-                            const msgId = xTag ? xTag[1] : msg.id;
-                            // Deduplicate
-                            if (list.some(m => m.id === msgId || m.nymMessageId === msgId)) continue;
-                            list.push({
-                                id: msgId, nymMessageId: msgId,
-                                author: this.getNymFromPubkey(msg.pubkey) || msg.pubkey?.slice(0, 8),
-                                pubkey: msg.pubkey,
-                                content: msg.content,
-                                created_at: msg.created_at,
-                                _seq: ++this._msgSeq,
-                                timestamp: new Date((msg.created_at || 0) * 1000),
-                                isOwn: msg.pubkey === this.pubkey,
-                                isPM: true, isGroup: true, isMLS: true,
-                                groupId, conversationKey: groupConvKey,
-                                conversationPubkey: null, eventKind: 445,
-                                deliveryStatus: 'delivered'
-                            });
-                        }
-                        list.sort((a, b) => (a.created_at || 0) - (b.created_at || 0) || (a._seq || 0) - (b._seq || 0));
-                        if (list.length > 100) this.pmMessages.set(groupConvKey, list.slice(-100));
-                        this.channelDOMCache.delete(groupConvKey);
-                        // Update lastMessageTime for correct sidebar ordering
-                        const lastMsg = list[list.length - 1];
-                        if (lastMsg?.created_at) {
-                            const ts = lastMsg.created_at * 1000;
-                            if (ts > (group.lastMessageTime || 0)) {
-                                group.lastMessageTime = ts;
-                            }
-                        }
-                    }
-                }
-            }
-            // Fetch profiles for MLS group members we don't have yet
-            const unknownMemberPks = new Set();
-            for (const [groupId, group] of this.groupConversations) {
-                if (group.isMLS && group.members) {
-                    for (const pk of group.members) {
-                        if (pk !== this.pubkey && !this.users.has(pk)) unknownMemberPks.add(pk);
-                    }
-                }
-            }
-            if (unknownMemberPks.size > 0) {
-                const subId = 'mls-profiles-' + Math.random().toString(36).slice(2);
-                try {
-                    this.sendRequestToFewRelays(["REQ", subId, { kinds: [0], authors: [...unknownMemberPks], limit: unknownMemberPks.size }]);
-                    // After profiles arrive, update stored message authors
-                    setTimeout(() => {
-                        try { this.sendToRelay(["CLOSE", subId]); } catch (_) {}
-                        this._refreshMLSMessageAuthors();
-                    }, 8000);
-                } catch (_) {}
-            }
-
-            this._mlsReady = true;
-            // Re-order sidebar to reflect persisted message timestamps
-            this.reorderPMs();
-            // Subscribe to kind 445 events for restored MLS groups
-            if (this.mls._groupMap.size > 0) {
-                this._poolSubscribeMLS();
-            }
-            // Always publish fresh KeyPackages on init (not just when groups
-            // exist) so that re-invitation Welcomes can be processed.
-            if (this.poolConnectedRelays && this.poolConnectedRelays.length > 0) {
-                this._onRelaysConnected();
-            }
-        }).catch(e => console.warn('[MLS] init error:', e));
-    }
-
-    // Called when relay pool first reports connected relays — triggers deferred MLS work
-    _onRelaysConnected() {
-        if (!this._mlsReady || !this.mls || this._mlsRelayBootDone) return;
-        this._mlsRelayBootDone = true;
-        this._mlsKpRelayCount = this.poolConnectedRelays?.length || 0;
-        // Relays connected, publishing KeyPackages
-        this.mls.publishKeyPackages();
-    }
-
-    // Re-publish KeyPackage when significantly more relays become available
-    _checkMlsRepublish() {
-        if (!this._mlsRelayBootDone || !this.mls) return;
-        const now = this.poolConnectedRelays?.length || 0;
-        if (this._mlsKpRelayCount < 5 && now >= 5 && !this._mlsKpRepublished) {
-            this._mlsKpRepublished = true;
-            // More relays available, re-publishing KeyPackage
-            this.mls.republishKeyPackage();
-        }
-    }
-
-    // Subscribe to kind 445 events for MLS groups as a SEPARATE subscription
-    // so the critical subscription (channels, DMs, profiles) is not interrupted.
-    _poolSubscribeMLS() {
-        if (!this.mls || !this.mls._initialized || this.mls._groupMap.size === 0) return;
-
-        // Close previous MLS-specific subscription if any
-        if (this._lastMlsSubId) {
-            if (this.useRelayProxy) {
-                this._poolSendToRole('critical', ["CLOSE", this._lastMlsSubId]);
-            } else {
-                try { this.sendToRelay(["CLOSE", this._lastMlsSubId]); } catch (_) {}
-            }
-        }
-
-        const mlsGroupIds = [];
-        for (const [nostrGroupId] of this.mls._groupMap) {
-            mlsGroupIds.push(nostrGroupId);
-        }
-
-        const subId = Math.random().toString(36).substring(2);
-        this._lastMlsSubId = subId;
-        const req = ["REQ", subId, { kinds: [445], '#h': mlsGroupIds, limit: 200 }];
-        if (this.useRelayProxy) {
-            this._poolSendToRole('critical', req);
-        } else {
-            try { this.sendToRelay(req); } catch (_) {}
-        }
-    }
-
-    // Request fresh Welcome events for MLS groups whose state was lost on reload.
-    // Fetches recent kind 444 gift-wrapped events addressed to us which may
-    // contain the Welcome needed to re-join the group.
-    _requestMLSReinvitations(failedGroupIds) {
-        if (!this.mls || failedGroupIds.length === 0) return;
-        // Fetch recent kind 444 events (Welcomes) addressed to us
-        const subId = 'mls-rejoin-' + Math.random().toString(36).slice(2);
-        const since = Math.floor(Date.now() / 1000) - 86400 * 7; // last 7 days
-        try {
-            this.sendRequestToFewRelays(["REQ", subId, {
-                kinds: [1059], '#p': [this.pubkey], since, limit: 50
-            }]);
-            setTimeout(() => {
-                try { this.sendToRelay(["CLOSE", subId]); } catch (_) {}
-            }, 10000);
-        } catch (_) {}
-    }
-
-    // Handle a decrypted MLS application message routed from NymMLS
-    _handleMLSMessage(msg) {
-        if (!msg || !msg.nymGroupId) return;
-        const groupId = msg.nymGroupId;
-        const groupConvKey = this.getGroupConversationKey(groupId);
-        const isOwn = msg.pubkey === this.pubkey;
-
-        // Fetch profile for unknown senders so nicknames display correctly
-        if (!isOwn && !this.users.has(msg.pubkey)) {
-            this.fetchProfileDirect(msg.pubkey);
-        }
-
-        const senderNym = this.getNymFromPubkey(msg.pubkey) || msg.pubkey.slice(0, 8);
-
-        // Use the shared nymMessageId from the 'x' tag (set by sender) so all members
-        // have the same message ID — needed for reactions, receipts, etc.
-        const xTag = (msg.tags || []).find(t => t[0] === 'x' && t[1]);
-        const sharedId = xTag ? xTag[1] : (msg.id || this.generateUUID());
-
-        if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
-        const list = this.pmMessages.get(groupConvKey);
-
-        // Deduplicate by shared ID
-        if (list.some(m => m.id === sharedId || m.nymMessageId === sharedId)) return;
-
-        const tsSec = msg.created_at || Math.floor(Date.now() / 1000);
-        const displayMsg = {
-            id: sharedId,
-            nymMessageId: sharedId,
-            author: senderNym,
-            pubkey: msg.pubkey,
-            content: msg.content,
-            created_at: tsSec,
-            _seq: ++this._msgSeq,
-            timestamp: new Date(tsSec * 1000),
-            isOwn,
-            isPM: true,
-            isGroup: true,
-            isMLS: true,
-            groupId,
-            conversationKey: groupConvKey,
-            conversationPubkey: null,
-            eventKind: 445,
-            deliveryStatus: 'delivered'
-        };
-
-        list.push(displayMsg);
-        list.sort((a, b) => {
-            const dt = (a.created_at || 0) - (b.created_at || 0);
-            return dt !== 0 ? dt : (a._seq || 0) - (b._seq || 0);
-        });
-        if (list.length > 100) this.pmMessages.set(groupConvKey, list.slice(-100));
-        this.channelDOMCache.delete(groupConvKey);
-        this.moveGroupToTop(groupId);
-
-        if (this.inPMMode && this.currentGroup === groupId) {
-            this.displayMessage(displayMsg);
-        }
-
-        // Notification for non-own messages
-        if (!isOwn) {
-            if (!(this.inPMMode && this.currentGroup === groupId)) {
-                // Not viewing this group — update unread count
-                this.updateUnreadCount(groupConvKey);
-            }
-            // Show notification unless user has mentions-only enabled and isn't mentioned
-            const shouldNotify = !this.groupNotifyMentionsOnly || this.isMentioned(msg.content);
-            if (shouldNotify && !(this.inPMMode && this.currentGroup === groupId)) {
-                const group = this.groupConversations.get(groupId);
-                const groupName = group?.name || 'MLS Group';
-                const notifTitle = `${groupName}: ${senderNym}`;
-                const notifOpts = { type: 'group', groupId, id: groupConvKey, pubkey: msg.pubkey };
-                // If this event was already notified in a prior session, add silently to history
-                if (msg._alreadyNotified) {
-                    this._addNotificationToHistory(notifTitle, msg.content, notifOpts);
-                } else {
-                    this.showNotification(notifTitle, msg.content, notifOpts);
-                }
-            }
-            // Send read receipt (gift-wrapped) if viewing the group
-            if (this.inPMMode && this.currentGroup === groupId && this._canSendGiftWraps() && sharedId) {
-                this.sendNymReceipt(sharedId, 'read', msg.pubkey);
-            }
-        }
-    }
-
     // Persist all known groups to localStorage so Nostr users see them after refresh
     _saveGroupConversations() {
         if (!this.pubkey) return;
@@ -14755,45 +14316,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     memberProfiles,
                     lastMessageTime: group.lastMessageTime,
                     createdBy: group.createdBy,
-                    isMLS: group.isMLS || false,
-                    mlsGroupId: group.mlsGroupId || null
                 };
             }
             localStorage.setItem(`nym_groups_${this.pubkey}`, JSON.stringify(data));
         } catch (_) {}
-    }
-
-    // Update author fields in stored MLS messages after profiles have been fetched.
-    // Called after the profile request timeout so that kind 0 events have been processed.
-    _refreshMLSMessageAuthors() {
-        let updated = false;
-        for (const [groupId, group] of this.groupConversations) {
-            if (!group.isMLS) continue;
-            const groupConvKey = this.getGroupConversationKey(groupId);
-            const list = this.pmMessages.get(groupConvKey);
-            if (!list) continue;
-            for (const msg of list) {
-                if (!msg.pubkey) continue;
-                const freshName = msg.isOwn ? this.nym : this.getNymFromPubkey(msg.pubkey);
-                if (freshName && freshName !== msg.author) {
-                    msg.author = freshName;
-                    updated = true;
-                }
-            }
-        }
-        if (updated) {
-            // Invalidate DOM caches so re-render picks up updated names
-            for (const [groupId, group] of this.groupConversations) {
-                if (group.isMLS) this.channelDOMCache.delete(this.getGroupConversationKey(groupId));
-            }
-            // Re-render if currently viewing an MLS group
-            if (this.inPMMode && this.currentGroup) {
-                const grp = this.groupConversations.get(this.currentGroup);
-                if (grp?.isMLS) this.openGroup(this.currentGroup);
-            }
-            // Persist updated profile snapshots so future restores use fresh names
-            this._saveGroupConversations();
-        }
     }
 
     // Persist left-group IDs so they survive reload. Uses a per-pubkey key when
@@ -14847,12 +14373,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 }
                 if (!this.groupConversations.has(groupId)) {
                     this.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
-                    // Restore createdBy and MLS fields which addGroupConversation doesn't accept
+                    // Restore createdBy which addGroupConversation doesn't accept
                     const g = this.groupConversations.get(groupId);
                     if (g) {
                         if (group.createdBy) g.createdBy = group.createdBy;
-                        if (group.isMLS) g.isMLS = true;
-                        if (group.mlsGroupId) g.mlsGroupId = group.mlsGroupId;
                     }
                 }
             }
@@ -14940,7 +14464,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this._debouncedNostrSettingsSave();
                 if (this.inPMMode && this.currentGroup === groupId) {
                     this.openGroup(groupId); // refresh header member count
-                    this.displaySystemMessage(rumor.content || `${this.getNymFromPubkey(senderPubkey)} left the group.`);
+                    // Fetch profile so nickname displays correctly
+                    if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+                    this.displaySystemMessage(`${this.getNymFromPubkey(senderPubkey)} left the group.`);
                 }
             }
             return;
@@ -14968,6 +14494,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Send notification for group invites
             if (!isOwn && !this.blockedUsers.has(senderPubkey)) {
+                // Fetch profile so the inviter's nickname displays correctly
+                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
                 const inviterName = this.getNymFromPubkey(senderPubkey);
                 const inviteBody = rumor.content || `You've been added to group "${groupName}"`;
                 const inviteTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
@@ -15003,12 +14531,30 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const memberPubkeys = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
                 .map(t => t[1]);
+            // Determine who was added by comparing new member list with existing group
+            const existingGroup = this.groupConversations.get(groupId);
+            const existingMembers = existingGroup ? new Set(existingGroup.members) : new Set();
+            const newMembers = memberPubkeys.filter(pk => !existingMembers.has(pk));
             this.addGroupConversation(groupId, groupName, memberPubkeys, (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000);
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
             if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
                 this.openGroup(groupId);
-                this.displaySystemMessage(rumor.content);
+                // Reconstruct the system message locally with fresh nicknames
+                // instead of using rumor.content which may have stale names
+                const fetchPromises = [];
+                for (const pk of newMembers) {
+                    if (!this.users.has(pk)) fetchPromises.push(this.fetchProfileDirect(pk));
+                }
+                if (!this.users.has(senderPubkey)) fetchPromises.push(this.fetchProfileDirect(senderPubkey));
+                if (fetchPromises.length > 0) await Promise.all(fetchPromises);
+                const inviterName = this.getNymFromPubkey(senderPubkey);
+                if (newMembers.length > 0) {
+                    const addedNames = newMembers.map(pk => this.getNymFromPubkey(pk)).join(', ');
+                    this.displaySystemMessage(`${addedNames} was added by ${inviterName}.`);
+                } else {
+                    this.displaySystemMessage(rumor.content);
+                }
             }
             return;
         }
@@ -15018,6 +14564,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const kickTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'kick' && t[1]);
             if (!kickTag) return;
             const removedPubkey = kickTag[1];
+            // Fetch profiles so nicknames display correctly instead of anon#xxxx
+            const profileFetches = [];
+            if (!this.users.has(removedPubkey)) profileFetches.push(this.fetchProfileDirect(removedPubkey));
+            if (!this.users.has(senderPubkey)) profileFetches.push(this.fetchProfileDirect(senderPubkey));
+            if (profileFetches.length > 0) await Promise.all(profileFetches);
             const removedName = this.getNymFromPubkey(removedPubkey);
             const removerName = this.getNymFromPubkey(senderPubkey);
             if (removedPubkey === this.pubkey) {
@@ -15184,9 +14735,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    // Create a new private group and send invites to all members.
-    // Attempts MLS (Marmot Protocol) first for E2EE with metadata protection;
-    // falls back to NIP-17 pairwise gift wraps if MLS is unavailable.
+    // Create a new private group and send invites to all members via NIP-17 gift wraps.
     async createGroup(name, memberPubkeys) {
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Creating groups requires a logged-in account (not anonymous mode)');
@@ -15196,41 +14745,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Always include self as a member
         const allMembers = [...new Set([...memberPubkeys, this.pubkey])];
 
-        // MLS path
-        if (this.mls && this.mls._initialized) {
-            try {
-                const result = await this.mls.createGroup(name, memberPubkeys);
-                if (result) {
-                    const groupId = result.nymGroupId;
-                    // Only include successfully invited members + self
-                    const successMembers = allMembers.filter(pk =>
-                        pk === this.pubkey || !(result.failedInvites || []).includes(pk)
-                    );
-                    this.addGroupConversation(groupId, name, successMembers, Date.now());
-                    const grp = this.groupConversations.get(groupId);
-                    if (grp) {
-                        grp.createdBy = this.pubkey;
-                        grp.isMLS = true;
-                        grp.mlsGroupId = result.nostrGroupId;
-                    }
-                    this._saveGroupConversations();
-                    if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-                    this.openGroup(groupId);
-                    // Subscribe to kind 445 for this new MLS group without disrupting channels
-                    this._poolSubscribeMLS();
-                    // MLS group created successfully
-                    if (result.failedInvites && result.failedInvites.length > 0) {
-                        const names = result.failedInvites.map(pk => this.getNymFromPubkey(pk) || pk.slice(0, 8));
-                        this.displaySystemMessage(`Could not invite ${names.join(', ')} — they need MLS support. They can be added later.`);
-                    }
-                    return groupId;
-                }
-            } catch (e) {
-                console.warn('[MLS] createGroup failed, falling back to NIP-17:', e);
-            }
-        }
-
-        // NIP-17 fallback
         const groupId = this.generateUUID();
         const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this.generateUUID();
@@ -15259,7 +14773,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return groupId;
     }
 
-    // Add a new member to an existing group (MLS or NIP-17)
+    // Add a new member to an existing group via NIP-17
     async addMemberToGroup(groupId, newMemberPubkey) {
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Adding members requires a logged-in account');
@@ -15275,43 +14789,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return false;
         }
 
-        // MLS path
-        if (group.isMLS && this.mls && this.mls._initialized) {
-            try {
-                const added = await this.mls.addMember(groupId, newMemberPubkey);
-                if (added) {
-                    group.members = [...group.members, newMemberPubkey];
-                    this.groupConversations.set(groupId, group);
-                    this.updateGroupConversationUI(groupId);
-                    this._saveGroupConversations();
-                    if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-                    const newMemberName = this.getNymFromPubkey(newMemberPubkey);
-                    const inviterName = this.getNymFromPubkey(this.pubkey);
-                    // Also send a NIP-17 fallback invite so the new member gets a
-                    // notification even if their client doesn't support MLS yet
-                    if (this.mls._nymToMls.has(groupId)) {
-                        this.mls._sendLegacyInvite(groupId, group.name, group.members, newMemberPubkey, this.mls._nymToMls.get(groupId));
-                    }
-                    if (this.inPMMode && this.currentGroup === groupId) {
-                        this.openGroup(groupId);
-                        this.displaySystemMessage(`${newMemberName} was added by ${inviterName}.`);
-                    }
-                    return true;
-                } else {
-                    console.warn('[MLS] addMember returned false — MLS group state may not be restored');
-                    this.displaySystemMessage('Failed to add member. The MLS group state may need to be re-established.');
-                    return false;
-                }
-            } catch (e) {
-                console.warn('[MLS] addMember failed:', e);
-                this.displaySystemMessage('Failed to add member to MLS group: ' + e.message);
-                return false;
-            }
-        }
-
-        // NIP-17 fallback (only for non-MLS groups)
         group.members = [...group.members, newMemberPubkey];
         this.groupConversations.set(groupId, group);
+
+        // Fetch profile for the new member if we don't have it yet so nicknames display correctly
+        if (!this.users.has(newMemberPubkey)) {
+            await this.fetchProfileDirect(newMemberPubkey);
+        }
 
         const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this.generateUUID();
@@ -15421,8 +14905,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
-    // Send a message to a group.
-    // MLS groups use kind 445 (single encrypted event); NIP-17 groups use gift wraps (one per member).
+    // Send a message to a group via NIP-17 gift wraps (one per member).
     async sendGroupMessage(content, groupId) {
         if (!content || !content.trim()) return false;
         if (!this._canSendGiftWraps()) {
@@ -15432,46 +14915,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         const group = this.groupConversations.get(groupId);
         if (!group) return false;
-
-        // MLS path
-        if (group.isMLS && this.mls && this.mls._initialized) {
-            // Display optimistically
-            const now = Math.floor(Date.now() / 1000);
-            const nymMessageId = this.generateUUID();
-            const groupConvKey = this.getGroupConversationKey(groupId);
-            if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
-            const msg = {
-                id: nymMessageId, author: this.nym, pubkey: this.pubkey, content,
-                created_at: now, _seq: ++this._msgSeq, timestamp: new Date(now * 1000),
-                isOwn: true, isPM: true, isGroup: true, isMLS: true, groupId,
-                conversationKey: groupConvKey, conversationPubkey: null,
-                eventKind: 445, nymMessageId, deliveryStatus: 'sent'
-            };
-            const gList = this.pmMessages.get(groupConvKey);
-            gList.push(msg);
-            gList.sort((a, b) => (a.created_at || 0) - (b.created_at || 0) || (a._seq || 0) - (b._seq || 0));
-            if (gList.length > 100) this.pmMessages.set(groupConvKey, gList.slice(-100));
-            this.channelDOMCache.delete(groupConvKey);
-            this.moveGroupToTop(groupId);
-            if (this.inPMMode && this.currentGroup === groupId) this.displayMessage(msg);
-
-            const sent = await this.mls.sendMessage(groupId, content, nymMessageId);
-            if (sent) {
-                // Persist the sent message locally (MLS messages can't be re-decrypted from relays)
-                this.mls.persistSentMessage(groupId, {
-                    pubkey: this.pubkey, content, created_at: now,
-                    kind: 9, tags: [['x', nymMessageId]], id: nymMessageId, nymGroupId: groupId
-                });
-                return true;
-            }
-            // MLS send failed — do NOT fall through to NIP-17 for MLS groups
-            // as mixing protocols corrupts the message history on reload
-            console.warn('[MLS] sendMessage failed for MLS group');
-            this.displaySystemMessage('Failed to send message. The MLS group state may need to be re-established.');
-            return false;
-        }
-
-        // NIP-17 fallback path
         const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this.generateUUID();
 
@@ -15553,17 +14996,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     async leaveGroup(groupId) {
         const group = this.groupConversations.get(groupId);
 
-        // MLS path
-        if (group?.isMLS && this.mls && this.mls._initialized) {
-            try {
-                await this.mls.leaveGroup(groupId);
-            } catch (e) {
-                console.warn('[MLS] leaveGroup failed:', e);
-            }
-        }
-
         // NIP-17 leave notification
-        if (group && !group.isMLS && this._canSendGiftWraps()) {
+        if (group && this._canSendGiftWraps()) {
             const otherMembers = group.members.filter(pk => pk !== this.pubkey);
             if (otherMembers.length > 0) {
                 const now = Math.floor(Date.now() / 1000);
@@ -15610,8 +15044,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.leaveGroup(groupId);
     }
 
-    // Remove a member from the current group (owner only).
-    // MLS groups use MLS Remove Proposal + Commit; NIP-17 groups use gift-wrapped rumor.
+    // Remove a member from the current group (owner only) via NIP-17 gift-wrapped rumor.
     async kickFromGroup(pubkey) {
         this.closeContextMenu();
         const groupId = this.currentGroup;
@@ -15620,30 +15053,14 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (!group || group.createdBy !== this.pubkey) return;
         if (!group.members.includes(pubkey)) return;
 
+        // Fetch profile if we don't have it yet so the nickname displays correctly
+        if (!this.users.has(pubkey)) {
+            await this.fetchProfileDirect(pubkey);
+        }
+
         const kickedName = this.getNymFromPubkey(pubkey);
         const kickerName = this.getNymFromPubkey(this.pubkey);
         const content = `${kickedName} was removed by ${kickerName}.`;
-
-        // MLS path
-        if (group.isMLS && this.mls && this.mls._initialized) {
-            try {
-                const removed = await this.mls.removeMember(groupId, pubkey);
-                if (removed) {
-                    group.members = group.members.filter(pk => pk !== pubkey);
-                    this.groupConversations.set(groupId, group);
-                    this._saveGroupConversations();
-                    if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-                    this.updateGroupConversationUI(groupId);
-                    this.openGroup(groupId);
-                    this.displaySystemMessage(content);
-                    return;
-                }
-            } catch (e) {
-                console.warn('[MLS] removeMember failed, falling back to NIP-17:', e);
-            }
-        }
-
-        // NIP-17 fallback
         const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this.generateUUID();
 
@@ -15942,9 +15359,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         document.getElementById('currentChannel').innerHTML = headerHtml;
         const lockSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
-        const metaText = group.isMLS
-            ? `${lockSvg}End-to-end encrypted group chat (MLS)`
-            : `${lockSvg}End-to-end encrypted group chat (NIP-17)`;
+        const metaText = `${lockSvg}End-to-end encrypted group chat`;
         document.getElementById('channelMeta').innerHTML = metaText;
 
         const shareBtn = document.getElementById('shareChannelBtn');
@@ -27130,12 +26545,6 @@ async function showSettings() {
         acceptPMsSel.value = nym.settings.acceptPMs || 'enabled';
     }
 
-    // Fill in sync MLS history setting
-    const syncMLSSel = document.getElementById('syncMLSHistorySelect');
-    if (syncMLSSel) {
-        syncMLSSel.value = nym.settings.syncMLSHistory !== false ? 'true' : 'false';
-    }
-
     // Fill in disappearing message controls
     const dmEnabledSel = document.getElementById('dmForwardSecrecySelect');
     const dmTtlSel = document.getElementById('dmTTLSelect');
@@ -27255,13 +26664,6 @@ async function saveSettings() {
     if (acceptPMsEl) {
         nym.settings.acceptPMs = acceptPMsEl.value;
         localStorage.setItem('nym_accept_pms', acceptPMsEl.value);
-    }
-
-    // Read and save sync MLS history setting
-    const syncMLSEl = document.getElementById('syncMLSHistorySelect');
-    if (syncMLSEl) {
-        nym.settings.syncMLSHistory = syncMLSEl.value === 'true';
-        localStorage.setItem('nym_sync_mls_history', String(nym.settings.syncMLSHistory));
     }
 
     // Read disappearing message controls
@@ -27604,7 +27006,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.267 ═══<br/>
+═══ Nymchat v3.58.268 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -27816,9 +27218,6 @@ async function checkSavedConnection() {
             nym._loadGroupConversations();
             nym._loadLeftGroups();
 
-            // Initialize MLS (Marmot Protocol) for E2EE group messaging
-            nym._initMLS();
-
             // Load synced settings from relay (groups, closed PMs, etc.)
             nostrSettingsLoad();
 
@@ -28003,9 +27402,6 @@ async function initializeNym() {
         // Restore persisted group conversations for this keypair
         nym._loadGroupConversations();
         nym._loadLeftGroups();
-
-        // Initialize MLS (Marmot Protocol) for E2EE group messaging
-        nym._initMLS();
 
         // Load synced settings from relay (groups, closed PMs, etc.)
         nostrSettingsLoad();
@@ -28718,9 +28114,6 @@ function applyNostrLogin(pubkey, secretKey, method) {
     nym._loadGroupConversations();
     nym._loadLeftGroups();
 
-    // Initialize MLS (Marmot Protocol) for E2EE group messaging
-    nym._initMLS();
-
     // Update notification badge from persisted history
     nym._updateNotificationBadge();
 
@@ -28801,36 +28194,12 @@ async function nostrSettingsSave() {
                         name: group.name,
                         members: group.members,
                         lastMessageTime: group.lastMessageTime,
-                        createdBy: group.createdBy,
-                        isMLS: group.isMLS || false,
-                        mlsGroupId: group.mlsGroupId || null
+                        createdBy: group.createdBy
                     };
                 }
                 settingsPayload.groupConversations = groupData;
             }
         } catch (_) {}
-
-        // Sync MLS message history across devices (when enabled)
-        if (nym.settings.syncMLSHistory !== false && nym.mls) {
-            try {
-                const mlsHistory = {};
-                for (const [groupId, group] of nym.groupConversations) {
-                    if (group.isMLS && group.mlsGroupId) {
-                        const msgs = nym.mls.loadPersistedMessages(groupId);
-                        if (msgs.length > 0) {
-                            mlsHistory[group.mlsGroupId] = msgs.slice(-50).map(m => ({
-                                id: m.id, pubkey: m.pubkey, content: m.content,
-                                created_at: m.created_at,
-                                tags: (m.tags || []).filter(t => t[0] === 'x')
-                            }));
-                        }
-                    }
-                }
-                if (Object.keys(mlsHistory).length > 0) {
-                    settingsPayload.mlsMessageHistory = mlsHistory;
-                }
-            } catch (_) {}
-        }
 
         await nym._publishEncryptedSettings(settingsPayload);
     } catch (err) {
@@ -29387,8 +28756,6 @@ async function applyNostrSettings(s) {
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (group.createdBy) g.createdBy = group.createdBy;
-                    if (group.isMLS) g.isMLS = true;
-                    if (group.mlsGroupId) g.mlsGroupId = group.mlsGroupId;
                 }
             }
         }
@@ -29398,70 +28765,6 @@ async function applyNostrSettings(s) {
 
     if (s.groupConversations && typeof s.groupConversations === 'object') {
         try { applyGroupData(s.groupConversations); } catch (_) {}
-    }
-
-    // Sync MLS history setting
-    if (typeof s.syncMLSHistory === 'boolean') {
-        nym.settings.syncMLSHistory = s.syncMLSHistory;
-        localStorage.setItem('nym_sync_mls_history', String(s.syncMLSHistory));
-    }
-
-    // Restore MLS message history from synced settings (cross-device sync)
-    if (s.mlsMessageHistory && typeof s.mlsMessageHistory === 'object') {
-        try {
-            for (const [nostrGroupId, msgs] of Object.entries(s.mlsMessageHistory)) {
-                if (!Array.isArray(msgs) || msgs.length === 0) continue;
-                // Find the local group that maps to this MLS nostrGroupId
-                let localGroupId = null;
-                for (const [gid, grp] of nym.groupConversations) {
-                    if (grp.mlsGroupId === nostrGroupId) { localGroupId = gid; break; }
-                }
-                if (!localGroupId) continue;
-
-                // Merge synced messages into localStorage (don't overwrite newer local data)
-                const storageKey = `nym_mls_msgs_${nym.pubkey}_${nostrGroupId}`;
-                const existing = (() => { try { return JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { return []; } })();
-                const existingIds = new Set(existing.map(m => m.id));
-                let merged = false;
-                for (const msg of msgs) {
-                    if (msg.id && !existingIds.has(msg.id)) {
-                        existing.push(msg);
-                        merged = true;
-                    }
-                }
-                if (merged) {
-                    existing.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
-                    if (existing.length > 200) existing.splice(0, existing.length - 200);
-                    localStorage.setItem(storageKey, JSON.stringify(existing));
-
-                    // Also load into in-memory messages for display
-                    const groupConvKey = nym.getGroupConversationKey(localGroupId);
-                    if (!nym.pmMessages.has(groupConvKey)) nym.pmMessages.set(groupConvKey, []);
-                    const list = nym.pmMessages.get(groupConvKey);
-                    for (const msg of msgs) {
-                        const xTag = (msg.tags || []).find(t => t[0] === 'x' && t[1]);
-                        const msgId = xTag ? xTag[1] : msg.id;
-                        if (list.some(m => m.id === msgId || m.nymMessageId === msgId)) continue;
-                        list.push({
-                            id: msgId, nymMessageId: msgId,
-                            author: nym.getNymFromPubkey(msg.pubkey) || msg.pubkey?.slice(0, 8),
-                            pubkey: msg.pubkey, content: msg.content,
-                            created_at: msg.created_at, _seq: ++nym._msgSeq,
-                            timestamp: new Date((msg.created_at || 0) * 1000),
-                            isOwn: msg.pubkey === nym.pubkey,
-                            isPM: true, isGroup: true, isMLS: true,
-                            groupId: localGroupId, conversationKey: groupConvKey,
-                            conversationPubkey: null, eventKind: 445,
-                            deliveryStatus: 'delivered'
-                        });
-                    }
-                    list.sort((a, b) => (a.created_at || 0) - (b.created_at || 0) || (a._seq || 0) - (b._seq || 0));
-                    if (list.length > 100) nym.pmMessages.set(groupConvKey, list.slice(-100));
-                    nym.channelDOMCache.delete(groupConvKey);
-                }
-            }
-            nym.reorderPMs();
-        } catch (_) {}
     }
 
     // Retroactively remove left groups that were re-added by early-arriving

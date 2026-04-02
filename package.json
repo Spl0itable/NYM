@@ -1,12 +1,6 @@
 {
   "private": true,
   "license": "AGPL-3.0-only",
-  "dependencies": {
-    "@internet-privacy/marmot-ts": "^0.4.0",
-    "@noble/curves": "^1.8.0",
-    "@noble/hashes": "^1.7.0",
-    "ts-mls": "^1.6.2"
-  },
   "devDependencies": {
     "esbuild": "^0.27.4"
   }
