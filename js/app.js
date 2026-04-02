@@ -7894,6 +7894,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this._poolSendToRole('geo', ["CLOSE", this._lastGeoSubId]);
             this._poolSendToRole('discovered', ["CLOSE", this._lastGeoSubId]);
         }
+        // Close dedicated MLS subscription — critical filters now include MLS groups
+        if (this._lastMlsSubId) {
+            this._poolSendToRole('critical', ["CLOSE", this._lastMlsSubId]);
+            this._lastMlsSubId = null;
+        }
 
         const since1h = Math.floor(Date.now() / 1000) - 3600;
 
@@ -13867,8 +13872,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             grp.mlsGroupId = result.nostrGroupId;
                         }
                         this._saveGroupConversations();
-                        // Re-subscribe pool so kind 445 events for this group are requested
-                        this._poolSubscribe();
+                        // Subscribe to kind 445 events for this new group without
+                        // tearing down the critical subscription (channels, DMs, profiles).
+                        this._poolSubscribeMLS();
 
                         const welcomeSender = rumor.pubkey || seal?.pubkey || 'unknown';
                         const senderNym = this.getNymFromPubkey(welcomeSender);
@@ -14502,9 +14508,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this._mlsReady = true;
             // Re-order sidebar to reflect persisted message timestamps
             this.reorderPMs();
-            // Re-subscribe pool so kind 445 events for restored groups are requested
+            // Subscribe to kind 445 events for restored MLS groups
             if (this.mls._groupMap.size > 0) {
-                this._poolSubscribe();
+                this._poolSubscribeMLS();
             }
             // If relays are already connected, publish now; otherwise _onRelaysConnected will handle it
             if (this.poolConnectedRelays && this.poolConnectedRelays.length > 0) {
@@ -14530,6 +14536,35 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this._mlsKpRepublished = true;
             // More relays available, re-publishing KeyPackage
             this.mls.republishKeyPackage();
+        }
+    }
+
+    // Subscribe to kind 445 events for MLS groups as a SEPARATE subscription
+    // so the critical subscription (channels, DMs, profiles) is not interrupted.
+    _poolSubscribeMLS() {
+        if (!this.mls || !this.mls._initialized || this.mls._groupMap.size === 0) return;
+
+        // Close previous MLS-specific subscription if any
+        if (this._lastMlsSubId) {
+            if (this.useRelayProxy) {
+                this._poolSendToRole('critical', ["CLOSE", this._lastMlsSubId]);
+            } else {
+                try { this.sendToRelay(["CLOSE", this._lastMlsSubId]); } catch (_) {}
+            }
+        }
+
+        const mlsGroupIds = [];
+        for (const [nostrGroupId] of this.mls._groupMap) {
+            mlsGroupIds.push(nostrGroupId);
+        }
+
+        const subId = "nym-mls-" + Math.random().toString(36).substring(7);
+        this._lastMlsSubId = subId;
+        const req = ["REQ", subId, { kinds: [445], '#h': mlsGroupIds, limit: 200 }];
+        if (this.useRelayProxy) {
+            this._poolSendToRole('critical', req);
+        } else {
+            try { this.sendToRelay(req); } catch (_) {}
         }
     }
 
@@ -14625,9 +14660,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         try {
             const data = {};
             for (const [groupId, group] of this.groupConversations) {
+                // Snapshot kind 0 profile data for each member so nicknames and
+                // avatars can be restored immediately without waiting for relays.
+                const memberProfiles = {};
+                if (group.members) {
+                    for (const pk of group.members) {
+                        const user = this.users.get(pk);
+                        const avatar = this.userAvatars?.get(pk);
+                        if (user || avatar) {
+                            memberProfiles[pk] = {};
+                            if (user?.nym) memberProfiles[pk].name = user.nym;
+                            if (avatar) memberProfiles[pk].picture = avatar;
+                        }
+                    }
+                }
                 data[groupId] = {
                     name: group.name,
                     members: group.members,
+                    memberProfiles,
                     lastMessageTime: group.lastMessageTime,
                     createdBy: group.createdBy,
                     isMLS: group.isMLS || false,
@@ -14666,6 +14716,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const grp = this.groupConversations.get(this.currentGroup);
                 if (grp?.isMLS) this.openGroup(this.currentGroup);
             }
+            // Persist updated profile snapshots so future restores use fresh names
+            this._saveGroupConversations();
         }
     }
 
@@ -14699,6 +14751,23 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (!raw) return;
             const data = JSON.parse(raw);
             for (const [groupId, group] of Object.entries(data)) {
+                // Pre-populate users Map and avatar cache from saved kind 0 profile
+                // snapshots so nicknames/avatars display immediately on restore
+                // instead of showing "anon" while waiting for relay profile fetches.
+                if (group.memberProfiles) {
+                    for (const [pk, profile] of Object.entries(group.memberProfiles)) {
+                        if (profile.name && !this.users.has(pk)) {
+                            this.users.set(pk, {
+                                nym: profile.name,
+                                pubkey: pk,
+                                lastSeen: 0,
+                            });
+                        }
+                        if (profile.picture && this.userAvatars && !this.userAvatars.has(pk)) {
+                            this.userAvatars.set(pk, profile.picture);
+                        }
+                    }
+                }
                 if (!this.groupConversations.has(groupId)) {
                     this.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
                     // Restore createdBy and MLS fields which addGroupConversation doesn't accept
@@ -15070,8 +15139,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     this._saveGroupConversations();
                     if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
                     this.openGroup(groupId);
-                    // Re-subscribe so pool requests kind 445 for this new group
-                    this._poolSubscribe();
+                    // Subscribe to kind 445 for this new MLS group without disrupting channels
+                    this._poolSubscribeMLS();
                     // MLS group created successfully
                     if (result.failedInvites && result.failedInvites.length > 0) {
                         const names = result.failedInvites.map(pk => this.getNymFromPubkey(pk) || pk.slice(0, 8));
@@ -27457,7 +27526,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.262 ═══<br/>
+═══ Nymchat v3.58.263 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
