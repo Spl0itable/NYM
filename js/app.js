@@ -4423,7 +4423,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // responses as part of the same logical subscription, or create one.
         let subId = this.channelSubscriptions.get(channelKey);
         if (!subId) {
-            subId = 'nym-ch-' + Math.random().toString(36).substring(7);
+            subId = Math.random().toString(36).substring(2);
             this.channelSubscriptions.set(channelKey, subId);
         }
 
@@ -6612,7 +6612,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Geo/discovered relays only get kind 20000
         if (isGeo) {
-            const subId = "nym-geo-" + Math.random().toString(36).substring(7);
+            const subId = Math.random().toString(36).substring(2);
             if (!relay.subscriptions) relay.subscriptions = new Set();
             relay.subscriptions.add(subId);
             const filters = this._buildGeoFilters(since1h);
@@ -6621,7 +6621,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         // Critical (default + DM) relays get the full subscription set
-        const subId = "nym-" + Math.random().toString(36).substring(7);
+        const subId = Math.random().toString(36).substring(2);
 
         // Track this subscription
         if (!relay.subscriptions) {
@@ -6645,7 +6645,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Mark as loaded to prevent duplicate requests
         this.channelLoadedFromRelays.add(channelKey);
 
-        const subId = "nym-ch-" + Math.random().toString(36).substring(7);
+        const subId = Math.random().toString(36).substring(2);
         const since1h = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
         let filters = [];
 
@@ -6765,7 +6765,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         if (filters.length === 0) return;
 
-        const subId = "nym-batch-" + Math.random().toString(36).substring(7);
+        const subId = Math.random().toString(36).substring(2);
 
         // Multiplexed pool mode
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
@@ -7755,9 +7755,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             ? this._buildGeoFilters(since1h)
             : this._buildCriticalFilters(since1h);
 
-        const subId = isGeoOrDiscovered
-            ? "nym-geo-" + Math.random().toString(36).substring(7)
-            : "nym-" + Math.random().toString(36).substring(7);
+        const subId = Math.random().toString(36).substring(2);
 
         const msg = JSON.stringify(["REQ", subId, ...filters]);
         try { p.ws.send(msg); } catch (_) {}
@@ -7863,7 +7861,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const zapFilter = this._buildZapReceiptFilter();
         if (!zapFilter) return;
 
-        const newSubId = "nym-zap-" + Math.random().toString(36).substring(7);
+        const newSubId = Math.random().toString(36).substring(2);
 
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             // Close previous zap subscription
@@ -7910,13 +7908,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const since1h = Math.floor(Date.now() / 1000) - 3600;
 
         // Critical shards (default + DM relays): full subscription set
-        const criticalSubId = "nym-" + Math.random().toString(36).substring(7);
+        const criticalSubId = Math.random().toString(36).substring(2);
         this._lastCriticalSubId = criticalSubId;
         const criticalFilters = this._buildCriticalFilters(since1h);
         this._poolSendToRole('critical', ["REQ", criticalSubId, ...criticalFilters]);
 
         // Geo + discovered shards: only kind 20000
-        const geoSubId = "nym-geo-" + Math.random().toString(36).substring(7);
+        const geoSubId = Math.random().toString(36).substring(2);
         this._lastGeoSubId = geoSubId;
         const geoFilters = this._buildGeoFilters(since1h);
         this._poolSendToRole('geo', ["REQ", geoSubId, ...geoFilters]);
@@ -10605,7 +10603,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.lastPMSyncTime - 300, // 5-min buffer before last known event
                 Math.floor(Date.now() / 1000) - 604800 // at most 7 days back
             );
-            const catchupReq = JSON.stringify(['REQ', 'nym-pm-catchup-' + Date.now(),
+            const catchupReq = JSON.stringify(['REQ', Math.random().toString(36).substring(2),
                 { kinds: [1059], '#p': [this.pubkey], since, limit: 200 }
             ]);
             this.relayPool.forEach(relay => {
@@ -14587,7 +14585,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             mlsGroupIds.push(nostrGroupId);
         }
 
-        const subId = "nym-mls-" + Math.random().toString(36).substring(7);
+        const subId = Math.random().toString(36).substring(2);
         this._lastMlsSubId = subId;
         const req = ["REQ", subId, { kinds: [445], '#h': mlsGroupIds, limit: 200 }];
         if (this.useRelayProxy) {
@@ -27555,7 +27553,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.265 ═══<br/>
+═══ Nymchat v3.58.266 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -28808,7 +28806,7 @@ function nostrPurchasesLoad() {
         }
     } catch (_) {}
 
-    const subId = 'nymchat-purchases-load-' + Math.random().toString(36).slice(2, 8);
+    const subId = Math.random().toString(36).substring(2);
     const filter = {
         kinds: [30078],
         authors: [pubkey],
@@ -29014,7 +29012,7 @@ function nostrSettingsLoad() {
         : (nym && nym.pubkey);
     if (!pubkey) return;
 
-    const subId = 'nymchat-settings-load-' + Math.random().toString(36).slice(2, 8);
+    const subId = Math.random().toString(36).substring(2);
     const filter = {
         kinds: [1059],
         '#p': [pubkey],
@@ -29242,8 +29240,25 @@ async function applyNostrSettings(s) {
 
     // User joined channels
     if (Array.isArray(s.userJoinedChannels)) {
-        nym.userJoinedChannels = new Set(s.userJoinedChannels);
+        s.userJoinedChannels.forEach(key => {
+            nym.userJoinedChannels.add(key);
+            if (!nym.channels.has(key)) {
+                if (nym.isValidGeohash(key)) {
+                    nym.addChannel(key, key);
+                } else {
+                    nym.addChannel(key, '');
+                }
+            }
+        });
+
         localStorage.setItem('nym_user_joined_channels', JSON.stringify(s.userJoinedChannels));
+        localStorage.setItem('nym_user_channels', JSON.stringify(
+            s.userJoinedChannels.map(key => ({
+                key: key,
+                channel: nym.isValidGeohash(key) ? key : key,
+                geohash: nym.isValidGeohash(key) ? key : ''
+            }))
+        ));
     }
 
     // Hidden channels

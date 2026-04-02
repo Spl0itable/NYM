@@ -6705,7 +6705,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const ws = relay.ws;
 
-        const subId = "nym-" + Math.random().toString(36).substring(7);
+        const subId = Math.random().toString(36).substring(2);
 
         // Track this subscription
         if (!relay.subscriptions) {
@@ -6765,7 +6765,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Mark as loaded to prevent duplicate requests
         this.channelLoadedFromRelays.add(channelKey);
 
-        const subId = "nym-ch-" + Math.random().toString(36).substring(7);
+        const subId = Math.random().toString(36).substring(2);
         const since1h = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
         let filters = [];
 
@@ -6862,7 +6862,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         if (filters.length === 0) return;
 
-        const subId = "nym-batch-" + Math.random().toString(36).substring(7);
+        const subId = Math.random().toString(36).substring(2);
 
         // Multiplexed pool mode
         if (this.useRelayProxy && this.poolSocket && this.poolSocket.readyState === WebSocket.OPEN) {
@@ -7196,7 +7196,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _poolSubscribe() {
         if (!this.poolSocket || this.poolSocket.readyState !== WebSocket.OPEN) return;
 
-        const subId = "nym-" + Math.random().toString(36).substring(7);
+        const subId = Math.random().toString(36).substring(2);
         const since1h = Math.floor(Date.now() / 1000) - 3600;
 
         const filters = [];
@@ -9975,7 +9975,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.lastPMSyncTime - 300, // 5-min buffer before last known event
                 Math.floor(Date.now() / 1000) - 604800 // at most 7 days back
             );
-            const catchupReq = JSON.stringify(['REQ', 'nym-pm-catchup-' + Date.now(),
+            const catchupReq = JSON.stringify(['REQ', Math.random().toString(36).substring(2),
                 { kinds: [1059], '#p': [this.pubkey], since, limit: 200 }
             ]);
             this.relayPool.forEach(relay => {
@@ -25086,7 +25086,7 @@ function nostrPurchasesLoad() {
         }
     } catch (_) {}
 
-    const subId = 'nymchat-purchases-load-' + Math.random().toString(36).slice(2, 8);
+    const subId = Math.random().toString(36).substring(2);
     const filter = {
         kinds: [30078],
         authors: [pubkey],
@@ -25293,7 +25293,7 @@ function nostrSettingsLoad() {
     const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
     if (!pubkey) return;
 
-    const subId = 'nymchat-settings-load-' + Math.random().toString(36).slice(2, 8);
+    const subId = Math.random().toString(36).substring(2);
     const filter = {
         kinds: [30078],
         authors: [pubkey],
@@ -25527,8 +25527,25 @@ function applyNostrSettings(s) {
 
     // User joined channels
     if (Array.isArray(s.userJoinedChannels)) {
-        nym.userJoinedChannels = new Set(s.userJoinedChannels);
+        s.userJoinedChannels.forEach(key => {
+            nym.userJoinedChannels.add(key);
+            if (!nym.channels.has(key)) {
+                if (nym.isValidGeohash(key)) {
+                    nym.addChannel(key, key);
+                } else {
+                    nym.addChannel(key, '');
+                }
+            }
+        });
+
         localStorage.setItem('nym_user_joined_channels', JSON.stringify(s.userJoinedChannels));
+        localStorage.setItem('nym_user_channels', JSON.stringify(
+            s.userJoinedChannels.map(key => ({
+                key: key,
+                channel: nym.isValidGeohash(key) ? key : key,
+                geohash: nym.isValidGeohash(key) ? key : ''
+            }))
+        ));
     }
 
     // Hidden channels
