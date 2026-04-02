@@ -25530,11 +25530,7 @@ function applyNostrSettings(s) {
         s.userJoinedChannels.forEach(key => {
             nym.userJoinedChannels.add(key);
             if (!nym.channels.has(key)) {
-                if (nym.isValidGeohash(key)) {
-                    nym.addChannel(key, key);
-                } else {
-                    nym.addChannel(key, '');
-                }
+                nym.addChannel(key, key);
             }
         });
 
@@ -25542,8 +25538,8 @@ function applyNostrSettings(s) {
         localStorage.setItem('nym_user_channels', JSON.stringify(
             s.userJoinedChannels.map(key => ({
                 key: key,
-                channel: nym.isValidGeohash(key) ? key : key,
-                geohash: nym.isValidGeohash(key) ? key : ''
+                channel: key,
+                geohash: key
             }))
         ));
     }
