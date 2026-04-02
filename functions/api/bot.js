@@ -2491,7 +2491,7 @@ var BOT_AVATAR = "https://nymchat.app/images/nymbot-icon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-banner.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.58.263";
+var NYMCHAT_VERSION = "3.58.264";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2941,7 +2941,9 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Auto-scroll, Show Timestamps, Time Format (12h/24h)",
   "- Random Nickname Style: fancy (adjective_noun) or simple (nym1234)",
   "- Pinned Landing Channel: channel to load on app start",
-  "- Blur Images from Others: blur until clicked",
+  "- Blur Images from Others: blur until clicked (options: off, all others, non-friends only)",
+  "- Friends: view and manage your friends list",
+  "- Notify Friends Only: only receive notifications from friends",
   "- Blocked Keywords/Phrases, Hide Non-Pinned Channels, Hidden/Blocked Channels, Blocked Users",
   "- Low Data Mode: reduces relay connections",
   "- Performance Mode: auto/enabled/disabled — reduces visual effects (disables blur, simplifies animations, lowers 3D globe quality) for better performance on older or low-end devices. Auto mode detects device capabilities and activates automatically on weaker hardware",
@@ -3037,6 +3039,16 @@ var NYMBOT_SYSTEM_PROMPT = [
   "/addmember @user — add someone to an existing group (advances the MLS epoch).",
   "/groupinfo — show current group members.",
   "Remove members via the context menu (also advances the MLS epoch).",
+  "",
+  "=== FRIENDS SYSTEM ===",
+  "Nymchat has a friends list feature. Users can add other nyms as friends for quick access and filtering.",
+  "HOW TO ADD/REMOVE A FRIEND: Right-click (or long-press on mobile) a user's message > select 'Add Friend'. If already a friend, the option shows 'Remove Friend'. Friends are shown with a 👤 badge next to their name in the context menu.",
+  "FRIENDS LIST: View and manage your friends in Settings > Friends. Each friend has a 'Remove' button.",
+  "FRIEND-BASED FILTERING:",
+  "- Accept PMs: In Settings > DM Security, users can set 'Accept PMs' to 'Friends only' — this blocks DMs and group chat invites from non-friends.",
+  "- Blur images: In Settings, 'Blur Images from Others' can be set to 'Friends only' — images from non-friends are blurred until clicked, while friends' images show normally.",
+  "- Notifications: 'Notify friends only' option in Settings > Notifications — only receive notifications from friends.",
+  "Friends are saved locally and synced across sessions via Nostr settings sync.",
   "",
   "=== BITCOIN & ZAPS ===",
   "Lightning zaps: send Bitcoin tips to users who have a Lightning address set.",

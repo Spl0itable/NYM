@@ -994,6 +994,8 @@ class NYM {
             status: 'online',
             channels: new Set()
         });
+        // Seed nymbot avatar so it shows in sidebar and user list instead of robohash
+        this.userAvatars.set(this.verifiedBot.pubkey, 'https://nymchat.app/images/nymbot-icon.png');
         this.isFlutterWebView = navigator.userAgent.includes('NYMApp') ||
             navigator.userAgent.includes('Flutter');
 
@@ -27526,7 +27528,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.263 ═══<br/>
+═══ Nymchat v3.58.264 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
