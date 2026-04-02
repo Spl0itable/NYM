@@ -2491,7 +2491,7 @@ var BOT_AVATAR = "https://nymchat.app/images/nymbot-icon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-banner.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.58.268";
+var NYMCHAT_VERSION = "3.58.269";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2856,7 +2856,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "A: Nymchat uses ephemeral geohash and non-geohash channels — location-based chat rooms using geohash codes (e.g. #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location. All channel messages are temporary and exist only during active sessions.",
   "",
   "Q: How do private messages and group chats work?",
-  "A: PMs and group chats use Nostr's NIP-17 encryption standard for end-to-end encrypted communication that can't be linked to your session. Only you and your recipient(s) can read the messages. You can enable forward secrecy for disappearing messages in Settings. To send a PM, use /pm nym#xxxx or click a user's nym and select 'Private Message'. Each user is identified by their nym + a 4-character suffix from their public key (e.g. cyber_wolf#a3f2). Group chats use NIP-17 gift wraps — each message is individually encrypted and sent to every group member.",
+  "A: PMs and group chats use Nostr's NIP-17 encryption standard for end-to-end encrypted communication that can't be linked to your session. Only you and your recipient(s) can read the messages. You can enable forward secrecy for disappearing messages in Settings. To send a PM, use /pm nym#xxxx or click a user's nym and select 'Private Message'. Each user is identified by their nym + a 4-character suffix from their public key (e.g. cyber_wolf#a3f2). Group chats use NIP-17 gift wraps with enhanced security: each message is individually encrypted using rotating ephemeral recipient keys so an observer can never correlate group membership or link messages to real identities. The ephemeral keys use a forward-ratcheting chain for forward secrecy — old keys are deleted so past messages can't be decrypted even if a current key is compromised.",
   "",
   "Q: What is Lightning integration and how do zaps work?",
   "A: Nymchat integrates Lightning Network for instant Bitcoin micropayments called 'zaps.' You can tip messages you appreciate or send Bitcoin directly to users. To receive zaps, set a Lightning address in the 'Your Nym' section where you can also edit avatar and bio (format: user@domain.com). To send a zap, click a user's nym and select 'Zap Bitcoin' or use /zap @nym. Preset amounts: 100, 500, 1000, 5000 sats, or custom amount with optional comment. Zaps are displayed in real-time on messages.",
@@ -2965,6 +2965,15 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Read receipts: enabled by default — others see when you read their DMs. Toggle in Settings > DM Security.",
   "Typing indicators: enabled by default — others see when you're typing. Toggle in Settings > DM Security.",
   "",
+  "=== ENHANCED GROUP CHAT SECURITY ===",
+  "Group chats use rotating ephemeral recipient keys to prevent timing-based metadata attacks.",
+  "In standard NIP-17, an observer can see N gift wraps appear simultaneously to N pubkeys and infer group membership. Nymchat eliminates this by rotating recipient pubkeys on every message.",
+  "How it works: Each member generates a fresh ephemeral keypair when they send a message. The new public key is advertised inside the encrypted rumor (ephemeral_pk tag). Future messages to that member use their ephemeral key instead of their real pubkey. To an outside observer, every message goes to/from never-before-seen one-time pubkeys — no link to real identities.",
+  "Forward secrecy: Ephemeral keys use a forward-ratcheting chain (each key derived from the previous via HKDF). Old keys are deleted, making past messages unrecoverable from key material. Partial chat history (up to 100 of the latest messages per group) is preserved via encrypted settings backup.",
+  "Post-compromise recovery: If a key is compromised, the key-resync mechanism broadcasts a fresh ephemeral key to all group members via real pubkeys, re-establishing the secure chain.",
+  "Automatic resync: When a user sends their first message after 24+ hours of inactivity, the app auto-fires a key-resync so all members have their fresh key.",
+  "Backward compatible: Old clients ignore the unknown tag. New clients fall back to real pubkeys for members who haven't upgraded yet. Existing groups upgrade organically.",
+  "",
   "=== THEMES & APPEARANCE (in Settings > Theme & Appearance) ===",
   "Themes: bitchat (Bitcoin orange, default), ghost (monochrome), matrix (green), cyber (magenta/cyan), amber (gold/orange), hacker (cyan/green).",
   "Color mode: auto (follows system), light, or dark. Each theme has light and dark variants.",
@@ -3024,7 +3033,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Start a DM: /pm @nym, or click a user > Send PM.",
   "DMs are end-to-end encrypted with NIP-44 + NIP-17 gift wraps.",
   "Group chats: /group @user1 @user2 [GroupName] — creates an encrypted group.",
-  "Group chats use NIP-17 gift wraps for end-to-end encrypted group messaging.",
+  "Group chats use NIP-17 gift wraps with rotating ephemeral recipient keys for enhanced privacy: timing-attack resistance (every message uses one-time pubkeys so observers can't infer group membership), forward secrecy (ratcheting key chain deletes old keys), and post-compromise recovery (automatic key-resync after inactivity).",
   "/addmember @user — add someone to an existing group.",
   "/groupinfo — show current group members.",
   "Remove members via the context menu.",
@@ -3068,7 +3077,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "=== NOSTR PROTOCOL ===",
   "Nymchat uses the Nostr protocol. Messages are cryptographically signed events published to relays.",
-  "Kind 20000 = ephemeral channel messages. Kind 1059 = encrypted DMs and group chats (NIP-17 gift wraps).",
+  "Kind 20000 = ephemeral channel messages. Kind 1059 = encrypted DMs and group chats (NIP-17 gift wraps with rotating ephemeral keys for group chat timing-attack resistance and forward secrecy).",
   "Events include g-tags for geohash routing and n-tags for nym identity.",
   "Multiple relays for redundancy. Nostr is censorship-resistant — no central server.",
   "",
