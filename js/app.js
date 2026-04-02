@@ -569,6 +569,7 @@ class NYM {
         this._followListFetched = false;
         this.unreadCounts = new Map();
         this.blockedUsers = new Set();
+        this.friends = new Set();
         this.blockedKeywords = new Set();
         this.blockedChannels = new Set();
         this.discoveredGeohashes = new Set();
@@ -662,6 +663,7 @@ class NYM {
         this.notificationLastReadTime = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
         this.notificationsEnabled = localStorage.getItem('nym_notifications_enabled') !== 'false';
         this.groupNotifyMentionsOnly = localStorage.getItem('nym_group_notify_mentions_only') === 'true';
+        this.notifyFriendsOnly = localStorage.getItem('nym_notify_friends_only') === 'true';
         this.closedPMs = new Set(JSON.parse(localStorage.getItem('nym_closed_pms') || '[]'));
         this.leftGroups = new Set(JSON.parse(localStorage.getItem('nym_left_groups') || '[]'));
         this.recentEmojis = [];
@@ -4859,6 +4861,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.applyColorMode();
             this.setupColorModeListener();
             this.loadBlockedUsers();
+            this.loadFriends();
             this.loadBlockedKeywords();
             this.loadBlockedChannels();
             this.loadPinnedChannels();
@@ -5599,6 +5602,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.closeContextMenu();
         });
 
+        document.getElementById('ctxFriend').addEventListener('click', () => {
+            if (this.contextMenuData) {
+                this.toggleFriend(this.contextMenuData.pubkey);
+            }
+            this.closeContextMenu();
+        });
+
         document.getElementById('ctxBlock').addEventListener('click', () => {
             if (this.contextMenuData) {
                 // Pass the pubkey directly as the argument
@@ -5803,7 +5813,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 : this.isVerifiedBot(pubkey)
                     ? '<span class="verified-badge" title="Nymchat Bot" style="margin-left: 4px;">✓</span>'
                     : '';
-            let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}${verifiedBadge}`;
+            const ctxFriendBadge = pubkey !== this.pubkey && this.isFriend(pubkey)
+                ? '<span class="friend-badge" title="Friend"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle; margin-left: 3px; opacity: 0.7;"><circle cx="6" cy="5" r="2.5" /><path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" /><line x1="13" y1="6" x2="13" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /><line x1="11" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg></span>'
+                : '';
+            let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}${verifiedBadge}${ctxFriendBadge}`;
             if (this.isVerifiedDeveloper(pubkey)) {
                 nymHtml += `<div class="context-menu-dev-label">Nymchat Developer</div>`;
             } else if (this.isVerifiedBot(pubkey)) {
@@ -5882,6 +5895,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } else {
                 zapOption.style.display = 'none';
             }
+        }
+
+        // Hide friend option if it's your own message, toggle label
+        const friendOption = document.getElementById('ctxFriend');
+        if (pubkey === this.pubkey) {
+            friendOption.style.display = 'none';
+        } else {
+            friendOption.style.display = 'block';
+            const isFriend = this.friends.has(pubkey);
+            const friendSvg = isFriend
+                ? '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle; margin-right: 8px;"><circle cx="6" cy="5" r="2.5" /><path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" stroke-linecap="round" /><line x1="11" y1="8" x2="15" y2="8" stroke-linecap="round" stroke-width="1.5" /></svg>'
+                : '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle; margin-right: 8px;"><circle cx="6" cy="5" r="2.5" /><path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" stroke-linecap="round" /><line x1="13" y1="6" x2="13" y2="10" stroke-linecap="round" stroke-width="1.5" /><line x1="11" y1="8" x2="15" y2="8" stroke-linecap="round" stroke-width="1.5" /></svg>';
+            friendOption.innerHTML = friendSvg + (isFriend ? 'Remove Friend' : 'Add Friend');
         }
 
         // Hide block option if it's your own message
@@ -7860,15 +7886,26 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _poolSubscribe() {
         if (!this._isAnyPoolOpen()) return;
 
+        // Close previous subscriptions to avoid duplicate event streams
+        if (this._lastCriticalSubId) {
+            this._poolSendToRole('critical', ["CLOSE", this._lastCriticalSubId]);
+        }
+        if (this._lastGeoSubId) {
+            this._poolSendToRole('geo', ["CLOSE", this._lastGeoSubId]);
+            this._poolSendToRole('discovered', ["CLOSE", this._lastGeoSubId]);
+        }
+
         const since1h = Math.floor(Date.now() / 1000) - 3600;
 
         // Critical shards (default + DM relays): full subscription set
         const criticalSubId = "nym-" + Math.random().toString(36).substring(7);
+        this._lastCriticalSubId = criticalSubId;
         const criticalFilters = this._buildCriticalFilters(since1h);
         this._poolSendToRole('critical', ["REQ", criticalSubId, ...criticalFilters]);
 
         // Geo + discovered shards: only kind 20000
         const geoSubId = "nym-geo-" + Math.random().toString(36).substring(7);
+        this._lastGeoSubId = geoSubId;
         const geoFilters = this._buildGeoFilters(since1h);
         this._poolSendToRole('geo', ["REQ", geoSubId, ...geoFilters]);
         this._poolSendToRole('discovered', ["REQ", geoSubId, ...geoFilters]);
@@ -10181,6 +10218,29 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             } catch (_) {}
 
+            // Sync MLS message history across devices (when enabled)
+            if (this.settings.syncMLSHistory !== false && this.mls) {
+                try {
+                    const mlsHistory = {};
+                    for (const [groupId, group] of this.groupConversations) {
+                        if (group.isMLS && group.mlsGroupId) {
+                            const msgs = this.mls.loadPersistedMessages(groupId);
+                            if (msgs.length > 0) {
+                                // Sync only last 50 messages per group with minimal fields
+                                mlsHistory[group.mlsGroupId] = msgs.slice(-50).map(m => ({
+                                    id: m.id, pubkey: m.pubkey, content: m.content,
+                                    created_at: m.created_at,
+                                    tags: (m.tags || []).filter(t => t[0] === 'x')
+                                }));
+                            }
+                        }
+                    }
+                    if (Object.keys(mlsHistory).length > 0) {
+                        settingsData.mlsMessageHistory = mlsHistory;
+                    }
+                } catch (_) {}
+            }
+
             await this._publishEncryptedSettings(settingsData);
         } catch (error) {
         }
@@ -10202,6 +10262,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             userJoinedChannels: Array.from(this.userJoinedChannels),
             hiddenChannels: Array.from(this.hiddenChannels || []),
             blockedUsers: Array.from(this.blockedUsers || []),
+            friends: Array.from(this.friends || []),
             blockedKeywords: Array.from(this.blockedKeywords || []),
             lightningAddress: this.lightningAddress,
             dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
@@ -10222,9 +10283,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             translateLanguage: this.settings.translateLanguage || '',
             notificationsEnabled: this.notificationsEnabled !== false,
             groupNotifyMentionsOnly: this.groupNotifyMentionsOnly || false,
+            notifyFriendsOnly: this.notifyFriendsOnly || false,
             notificationLastReadTime: this.notificationLastReadTime || 0,
             closedPMs: Array.from(this.closedPMs || []),
-            leftGroups: Array.from(this.leftGroups || [])
+            leftGroups: Array.from(this.leftGroups || []),
+            acceptPMs: this.settings.acceptPMs || 'enabled',
+            syncMLSHistory: this.settings.syncMLSHistory !== false
         };
     }
 
@@ -13771,6 +13835,30 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 try {
                     const result = await this.mls.handleWelcome(rumor);
                     if (result) {
+                        // Check if a NIP-17 legacy invite already created a duplicate
+                        // group for this MLS group — if so, remove the duplicate
+                        for (const [existingId, existingGrp] of this.groupConversations) {
+                            if (existingId !== result.nymGroupId && existingGrp.mlsGroupId === result.nostrGroupId) {
+                                // Duplicate found — migrate messages and remove old entry
+                                const oldKey = this.getGroupConversationKey(existingId);
+                                const newKey = this.getGroupConversationKey(result.nymGroupId);
+                                const oldMsgs = this.pmMessages.get(oldKey) || [];
+                                if (oldMsgs.length > 0) {
+                                    if (!this.pmMessages.has(newKey)) this.pmMessages.set(newKey, []);
+                                    const newMsgs = this.pmMessages.get(newKey);
+                                    for (const m of oldMsgs) {
+                                        if (!newMsgs.some(nm => nm.id === m.id)) newMsgs.push(m);
+                                    }
+                                }
+                                this.pmMessages.delete(oldKey);
+                                this.groupConversations.delete(existingId);
+                                const pmList = document.getElementById('pmList');
+                                const oldItem = pmList?.querySelector(`[data-group-id="${existingId}"]`);
+                                if (oldItem) oldItem.remove();
+                                break;
+                            }
+                        }
+
                         // Create the group in the sidebar
                         this.addGroupConversation(result.nymGroupId, result.groupName, result.members || [this.pubkey], Date.now());
                         const grp = this.groupConversations.get(result.nymGroupId);
@@ -13948,8 +14036,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             // Route group messages before 1:1 PM logic
-            // For MLS groups, resolve the shared nostrGroupId ('h' tag) to the local nymGroupId
-            const hTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'h' && typeof t[1] === 'string');
+            // For MLS groups, resolve the shared nostrGroupId ('h' or legacy 'mls_group' tag)
+            // to the local nymGroupId so messages land in the correct MLS group
+            const hTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'h' && typeof t[1] === 'string')
+                      || (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'mls_group' && typeof t[1] === 'string');
             if (hTag) {
                 const localGroupId = this._resolveMLSGroupId(hTag[1]);
                 if (localGroupId) {
@@ -14088,6 +14178,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         return;
                     }
                 }
+            }
+
+            // Filter PMs based on acceptPMs setting
+            if (!isOwn && this.settings.acceptPMs !== 'enabled') {
+                if (this.settings.acceptPMs === 'disabled') return;
+                if (this.settings.acceptPMs === 'friends' && !this.isFriend(senderPubkey)) return;
             }
 
             // Get sender name from kind 0 profile (not from rumor tags)
@@ -14338,9 +14434,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 await Promise.all(restorePromises);
                 // Groups restored from state store
             }
-            // Load persisted MLS messages for restored groups
+            // Load persisted MLS messages for all MLS groups (even if state
+            // restoration failed — persisted plaintext should still display)
             for (const [groupId, group] of this.groupConversations) {
-                if (group.isMLS && group.mlsGroupId && this.mls._nymToMls.has(groupId)) {
+                if (group.isMLS && group.mlsGroupId) {
                     const savedMsgs = this.mls.loadPersistedMessages(groupId);
                     if (savedMsgs.length > 0) {
                         const groupConvKey = this.getGroupConversationKey(groupId);
@@ -14659,6 +14756,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (!groupTag) return;
         const groupId = groupTag[1];
         const groupConvKey = this.getGroupConversationKey(groupId);
+
+        // Filter group invites based on acceptPMs setting
+        if (!isOwn && this.settings.acceptPMs !== 'enabled' && !this.groupConversations.has(groupId)) {
+            if (this.settings.acceptPMs === 'disabled') return;
+            if (this.settings.acceptPMs === 'friends' && !this.isFriend(senderPubkey)) return;
+        }
 
         // Drop all messages from blocked senders, including group invites.
         if (!isOwn && (this.blockedUsers.has(senderPubkey) || this.isNymBlocked(this.getNymFromPubkey(senderPubkey)))) {
@@ -15050,13 +15153,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     return true;
                 } else {
                     console.warn('[MLS] addMember returned false — MLS group state may not be restored');
+                    this.displaySystemMessage('Failed to add member. The MLS group state may need to be re-established.');
+                    return false;
                 }
             } catch (e) {
-                console.warn('[MLS] addMember failed, falling back to NIP-17:', e);
+                console.warn('[MLS] addMember failed:', e);
+                this.displaySystemMessage('Failed to add member to MLS group: ' + e.message);
+                return false;
             }
         }
 
-        // NIP-17 fallback
+        // NIP-17 fallback (only for non-MLS groups)
         group.members = [...group.members, newMemberPubkey];
         this.groupConversations.set(groupId, group);
 
@@ -15211,8 +15318,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 });
                 return true;
             }
-            // If MLS send failed, fall through to NIP-17
-            console.warn('[MLS] sendMessage failed, falling back to NIP-17');
+            // MLS send failed — do NOT fall through to NIP-17 for MLS groups
+            // as mixing protocols corrupts the message history on reload
+            console.warn('[MLS] sendMessage failed for MLS group');
+            this.displaySystemMessage('Failed to send message. The MLS group state may need to be re-established.');
+            return false;
         }
 
         // NIP-17 fallback path
@@ -18204,6 +18314,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const flairHtml = this.getFlairForUser(message.pubkey);
         const supporterBadge = userShopItems?.supporter ?
             '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
+        const friendBadge = !message.isOwn && this.isFriend(message.pubkey)
+            ? '<span class="friend-badge" title="Friend"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle; margin-left: 3px; opacity: 0.7;"><circle cx="6" cy="5" r="2.5" /><path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" /><line x1="13" y1="6" x2="13" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /><line x1="11" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg></span>'
+            : '';
 
         const messageEl = document.createElement('div');
 
@@ -18449,7 +18562,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}</span>&gt;</span>
+    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span>&gt;</span>
     <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${editedBubble}${bubbleTime}</span></span>
     ${editedIRC}
     ${hoverButtons}
@@ -18550,11 +18663,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         // Apply blur to images if settings enabled and not own message
-        if (!message.isOwn && this.blurOthersImages) {
-            const images = messageEl.querySelectorAll('img');
-            images.forEach(img => {
-                img.classList.add('blurred');
-            });
+        if (!message.isOwn) {
+            const shouldBlur = this.blurOthersImages === true ||
+                (this.blurOthersImages === 'friends' && !this.isFriend(message.pubkey));
+            if (shouldBlur) {
+                const images = messageEl.querySelectorAll('img');
+                images.forEach(img => {
+                    img.classList.add('blurred');
+                });
+            }
         }
 
         // Always insert messages in correct created_at order to prevent out-of-order display.
@@ -24642,6 +24759,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
         if (this.isNymBlocked(baseTitle)) return;
 
+        // Skip notifications from non-friends if friends-only is enabled
+        if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
+
         // Skip bot digest messages that mass-mention users
         if (body && body.includes('10 recent messages:')) return;
 
@@ -24727,6 +24847,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
         if (this.isNymBlocked(baseTitle)) return;
+
+        // Skip notifications from non-friends if friends-only is enabled
+        if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
 
         // Skip bot digest messages that mass-mention users
         if (body && body.includes('10 recent messages:')) return;
@@ -24840,6 +24963,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     }
 
+    toggleNotifyFriendsOnly(enabled) {
+        this.notifyFriendsOnly = enabled;
+        localStorage.setItem('nym_notify_friends_only', String(enabled));
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    }
+
     openNotificationsModal() {
         // Mark all as read
         this.notificationLastReadTime = Date.now();
@@ -24855,6 +24984,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (checkbox) checkbox.checked = this.notificationsEnabled;
         const mentionsCheckbox = document.getElementById('groupMentionsOnlyCheckbox');
         if (mentionsCheckbox) mentionsCheckbox.checked = this.groupNotifyMentionsOnly;
+        const friendsOnlyCheckbox = document.getElementById('notifyFriendsOnlyCheckbox');
+        if (friendsOnlyCheckbox) friendsOnlyCheckbox.checked = this.notifyFriendsOnly;
 
         // Filter to last 24 hours and exclude blocked users
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
@@ -25354,39 +25485,54 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10),
             groupChatPMOnlyMode: localStorage.getItem('nym_groupchat_pm_only_mode') === 'true',
             translateLanguage: localStorage.getItem('nym_translate_language') || '',
-            performanceMode: localStorage.getItem('nym_performance_mode') || 'auto'
+            performanceMode: localStorage.getItem('nym_performance_mode') || 'auto',
+            acceptPMs: localStorage.getItem('nym_accept_pms') || 'enabled',
+            syncMLSHistory: localStorage.getItem('nym_sync_mls_history') !== 'false' // default true
         };
     }
 
     loadImageBlurSettings() {
         // Try per-pubkey key first, then fall back to global key (for ephemeral
-        // users whose pubkeys change each session)
+        // users whose pubkeys change each session).
+        // Returns true, false, or 'friends'
         if (this.pubkey) {
             const saved = localStorage.getItem(`nym_image_blur_${this.pubkey}`);
-            if (saved !== null) return saved === 'true';
+            if (saved !== null) {
+                if (saved === 'friends') return 'friends';
+                return saved === 'true';
+            }
         }
         const global = localStorage.getItem('nym_image_blur');
-        if (global !== null) return global === 'true';
+        if (global !== null) {
+            if (global === 'friends') return 'friends';
+            return global === 'true';
+        }
         return true; // Default to blur
     }
 
     saveImageBlurSettings() {
         // Always save a global key so ephemeral users keep their preference
-        localStorage.setItem('nym_image_blur', this.blurOthersImages.toString());
+        const val = String(this.blurOthersImages);
+        localStorage.setItem('nym_image_blur', val);
         if (this.pubkey) {
-            localStorage.setItem(`nym_image_blur_${this.pubkey}`, this.blurOthersImages.toString());
+            localStorage.setItem(`nym_image_blur_${this.pubkey}`, val);
         }
     }
 
     toggleImageBlur() {
         this.blurOthersImages = !this.blurOthersImages;
         this.saveImageBlurSettings();
+        this.reapplyImageBlur();
+    }
 
-        // Update all existing images
+    reapplyImageBlur() {
         document.querySelectorAll('.message img').forEach(img => {
             const messageEl = img.closest('.message');
             if (messageEl && !messageEl.classList.contains('self')) {
-                if (this.blurOthersImages) {
+                const pubkey = messageEl.dataset.pubkey;
+                const shouldBlur = this.blurOthersImages === true ||
+                    (this.blurOthersImages === 'friends' && !this.isFriend(pubkey));
+                if (shouldBlur) {
                     img.classList.add('blurred');
                 } else {
                     img.classList.remove('blurred');
@@ -25536,6 +25682,92 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             this.sendRequestToFewRelays(subscription);
         });
+    }
+
+    loadFriends() {
+        const saved = localStorage.getItem('nym_friends');
+        if (saved) {
+            this.friends = new Set(JSON.parse(saved));
+        }
+        this.updateFriendsList();
+    }
+
+    saveFriends() {
+        localStorage.setItem('nym_friends', JSON.stringify(Array.from(this.friends)));
+    }
+
+    isFriend(pubkey) {
+        return this.friends.has(pubkey);
+    }
+
+    async toggleFriend(target) {
+        let targetPubkey;
+        if (/^[0-9a-f]{64}$/i.test(target)) {
+            targetPubkey = target.toLowerCase();
+        } else {
+            targetPubkey = await this.findUserPubkey(target);
+            if (!targetPubkey) return;
+        }
+
+        const targetNym = this.getNymFromPubkey(targetPubkey);
+        const cleanNym = this.getCleanNym ? this.getCleanNym(targetNym) : targetNym.replace(/<[^>]*>/g, '');
+
+        if (this.friends.has(targetPubkey)) {
+            this.friends.delete(targetPubkey);
+            this.saveFriends();
+            this.displaySystemMessage(`Removed ${cleanNym} from friends`);
+        } else {
+            this.friends.add(targetPubkey);
+            this.saveFriends();
+            this.displaySystemMessage(`Added ${cleanNym} as a friend`);
+        }
+
+        this.updateFriendsList();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    }
+
+    removeFriendByPubkey(pubkey) {
+        this.friends.delete(pubkey);
+        this.saveFriends();
+
+        const nym = this.getNymFromPubkey(pubkey);
+        this.displaySystemMessage(`Removed ${nym} from friends`);
+        this.updateFriendsList();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    }
+
+    updateFriendsList() {
+        const list = document.getElementById('friendsList');
+        if (!list) return;
+        if (this.friends.size === 0) {
+            list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No friends added</div>';
+        } else {
+            list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">Loading...</div>';
+            this.loadFriendsListAsync(list);
+        }
+    }
+
+    async loadFriendsListAsync(listElement) {
+        if (!this.nymCache) {
+            this.nymCache = {};
+        }
+
+        const friendsArray = Array.from(this.friends);
+        const uncachedPubkeys = friendsArray.filter(pk => !this.nymCache[pk]);
+
+        if (uncachedPubkeys.length > 0) {
+            await this.fetchMetadataForBlockedUsers(uncachedPubkeys);
+        }
+
+        listElement.innerHTML = friendsArray.map(pubkey => {
+            const nym = this.escapeHtml(this.getNymFromPubkey(pubkey));
+            return `
+    <div class="blocked-item">
+        <span>${nym}</span>
+        <button class="unblock-btn" onclick="nym.removeFriendByPubkey('${pubkey}')">Remove</button>
+    </div>
+`;
+        }).join('');
     }
 
     escapeHtml(text) {
@@ -26545,7 +26777,7 @@ async function showSettings() {
     // Load blur settings
     const blurSelect = document.getElementById('blurImagesSelect');
     if (blurSelect) {
-        blurSelect.value = nym.blurOthersImages ? 'true' : 'false';
+        blurSelect.value = nym.blurOthersImages === 'friends' ? 'friends' : (nym.blurOthersImages ? 'true' : 'false');
     }
 
     // Load auto-ephemeral setting (hidden, kept for compatibility)
@@ -26741,8 +26973,21 @@ async function showSettings() {
     }
 
     nym.updateBlockedList();
+    nym.updateFriendsList();
     nym.updateKeywordList();
     nym.updateBlockedChannelsList();
+
+    // Fill in accept PMs setting
+    const acceptPMsSel = document.getElementById('acceptPMsSelect');
+    if (acceptPMsSel) {
+        acceptPMsSel.value = nym.settings.acceptPMs || 'enabled';
+    }
+
+    // Fill in sync MLS history setting
+    const syncMLSSel = document.getElementById('syncMLSHistorySelect');
+    if (syncMLSSel) {
+        syncMLSSel.value = nym.settings.syncMLSHistory !== false ? 'true' : 'false';
+    }
 
     // Fill in disappearing message controls
     const dmEnabledSel = document.getElementById('dmForwardSecrecySelect');
@@ -26832,7 +27077,8 @@ async function saveSettings() {
     const showTimestamps = document.getElementById('timestampSelect').value === 'true';
     const timeFormat = document.getElementById('timeFormatSelect').value;
     const sortByProximity = document.getElementById('proximitySelect').value === 'true';
-    const blurImages = document.getElementById('blurImagesSelect').value === 'true';
+    const blurImagesVal = document.getElementById('blurImagesSelect').value;
+    const blurImages = blurImagesVal === 'friends' ? 'friends' : blurImagesVal === 'true';
     const nickStyle = document.getElementById('nickStyleSelect').value;
 
     // Save color mode
@@ -26856,6 +27102,20 @@ async function saveSettings() {
     // Apply blur settings
     nym.blurOthersImages = blurImages;
     nym.saveImageBlurSettings();
+
+    // Read and save accept PMs setting
+    const acceptPMsEl = document.getElementById('acceptPMsSelect');
+    if (acceptPMsEl) {
+        nym.settings.acceptPMs = acceptPMsEl.value;
+        localStorage.setItem('nym_accept_pms', acceptPMsEl.value);
+    }
+
+    // Read and save sync MLS history setting
+    const syncMLSEl = document.getElementById('syncMLSHistorySelect');
+    if (syncMLSEl) {
+        nym.settings.syncMLSHistory = syncMLSEl.value === 'true';
+        localStorage.setItem('nym_sync_mls_history', String(nym.settings.syncMLSHistory));
+    }
 
     // Read disappearing message controls
     const dmEnabled = document.getElementById('dmForwardSecrecySelect').value === 'true';
@@ -27197,7 +27457,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.57.262 ═══<br/>
+═══ Nymchat v3.58.262 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -28403,6 +28663,28 @@ async function nostrSettingsSave() {
             }
         } catch (_) {}
 
+        // Sync MLS message history across devices (when enabled)
+        if (nym.settings.syncMLSHistory !== false && nym.mls) {
+            try {
+                const mlsHistory = {};
+                for (const [groupId, group] of nym.groupConversations) {
+                    if (group.isMLS && group.mlsGroupId) {
+                        const msgs = nym.mls.loadPersistedMessages(groupId);
+                        if (msgs.length > 0) {
+                            mlsHistory[group.mlsGroupId] = msgs.slice(-50).map(m => ({
+                                id: m.id, pubkey: m.pubkey, content: m.content,
+                                created_at: m.created_at,
+                                tags: (m.tags || []).filter(t => t[0] === 'x')
+                            }));
+                        }
+                    }
+                }
+                if (Object.keys(mlsHistory).length > 0) {
+                    settingsPayload.mlsMessageHistory = mlsHistory;
+                }
+            } catch (_) {}
+        }
+
         await nym._publishEncryptedSettings(settingsPayload);
     } catch (err) {
         console.warn('[NostrSync] Failed to save settings to relays:', err.message);
@@ -28807,8 +29089,8 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_hide_non_pinned', String(s.hideNonPinned));
     }
 
-    // Blur images
-    if (typeof s.blurOthersImages === 'boolean') {
+    // Blur images (supports boolean or 'friends')
+    if (typeof s.blurOthersImages === 'boolean' || s.blurOthersImages === 'friends') {
         nym.blurOthersImages = s.blurOthersImages;
         localStorage.setItem('nym_image_blur', String(s.blurOthersImages));
         if (nym.pubkey) {
@@ -28881,6 +29163,18 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_blocked', JSON.stringify(s.blockedUsers));
     }
 
+    // Friends
+    if (Array.isArray(s.friends)) {
+        nym.friends = new Set(s.friends);
+        localStorage.setItem('nym_friends', JSON.stringify(s.friends));
+    }
+
+    // Accept PMs setting
+    if (s.acceptPMs) {
+        nym.settings.acceptPMs = s.acceptPMs;
+        localStorage.setItem('nym_accept_pms', s.acceptPMs);
+    }
+
     // Blocked keywords
     if (Array.isArray(s.blockedKeywords)) {
         nym.blockedKeywords = new Set(s.blockedKeywords);
@@ -28901,6 +29195,10 @@ async function applyNostrSettings(s) {
     if (typeof s.groupNotifyMentionsOnly === 'boolean') {
         nym.groupNotifyMentionsOnly = s.groupNotifyMentionsOnly;
         localStorage.setItem('nym_group_notify_mentions_only', String(s.groupNotifyMentionsOnly));
+    }
+    if (typeof s.notifyFriendsOnly === 'boolean') {
+        nym.notifyFriendsOnly = s.notifyFriendsOnly;
+        localStorage.setItem('nym_notify_friends_only', String(s.notifyFriendsOnly));
     }
 
     // Notification last read time (take the later of local vs relay)
@@ -28940,6 +29238,70 @@ async function applyNostrSettings(s) {
 
     if (s.groupConversations && typeof s.groupConversations === 'object') {
         try { applyGroupData(s.groupConversations); } catch (_) {}
+    }
+
+    // Sync MLS history setting
+    if (typeof s.syncMLSHistory === 'boolean') {
+        nym.settings.syncMLSHistory = s.syncMLSHistory;
+        localStorage.setItem('nym_sync_mls_history', String(s.syncMLSHistory));
+    }
+
+    // Restore MLS message history from synced settings (cross-device sync)
+    if (s.mlsMessageHistory && typeof s.mlsMessageHistory === 'object') {
+        try {
+            for (const [nostrGroupId, msgs] of Object.entries(s.mlsMessageHistory)) {
+                if (!Array.isArray(msgs) || msgs.length === 0) continue;
+                // Find the local group that maps to this MLS nostrGroupId
+                let localGroupId = null;
+                for (const [gid, grp] of nym.groupConversations) {
+                    if (grp.mlsGroupId === nostrGroupId) { localGroupId = gid; break; }
+                }
+                if (!localGroupId) continue;
+
+                // Merge synced messages into localStorage (don't overwrite newer local data)
+                const storageKey = `nym_mls_msgs_${nym.pubkey}_${nostrGroupId}`;
+                const existing = (() => { try { return JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { return []; } })();
+                const existingIds = new Set(existing.map(m => m.id));
+                let merged = false;
+                for (const msg of msgs) {
+                    if (msg.id && !existingIds.has(msg.id)) {
+                        existing.push(msg);
+                        merged = true;
+                    }
+                }
+                if (merged) {
+                    existing.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+                    if (existing.length > 200) existing.splice(0, existing.length - 200);
+                    localStorage.setItem(storageKey, JSON.stringify(existing));
+
+                    // Also load into in-memory messages for display
+                    const groupConvKey = nym.getGroupConversationKey(localGroupId);
+                    if (!nym.pmMessages.has(groupConvKey)) nym.pmMessages.set(groupConvKey, []);
+                    const list = nym.pmMessages.get(groupConvKey);
+                    for (const msg of msgs) {
+                        const xTag = (msg.tags || []).find(t => t[0] === 'x' && t[1]);
+                        const msgId = xTag ? xTag[1] : msg.id;
+                        if (list.some(m => m.id === msgId || m.nymMessageId === msgId)) continue;
+                        list.push({
+                            id: msgId, nymMessageId: msgId,
+                            author: nym.getNymFromPubkey(msg.pubkey) || msg.pubkey?.slice(0, 8),
+                            pubkey: msg.pubkey, content: msg.content,
+                            created_at: msg.created_at, _seq: ++nym._msgSeq,
+                            timestamp: new Date((msg.created_at || 0) * 1000),
+                            isOwn: msg.pubkey === nym.pubkey,
+                            isPM: true, isGroup: true, isMLS: true,
+                            groupId: localGroupId, conversationKey: groupConvKey,
+                            conversationPubkey: null, eventKind: 445,
+                            deliveryStatus: 'delivered'
+                        });
+                    }
+                    list.sort((a, b) => (a.created_at || 0) - (b.created_at || 0) || (a._seq || 0) - (b._seq || 0));
+                    if (list.length > 100) nym.pmMessages.set(groupConvKey, list.slice(-100));
+                    nym.channelDOMCache.delete(groupConvKey);
+                }
+            }
+            nym.reorderPMs();
+        } catch (_) {}
     }
 
     // Retroactively remove left groups that were re-added by early-arriving

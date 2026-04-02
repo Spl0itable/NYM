@@ -5807,6 +5807,26 @@ body.light-mode .color-mode-btn.active {
     text-shadow: 0 0 10px rgba(255, 215, 0, 0.3);
 }
 
+.friend-badge {
+    display: inline-flex;
+    align-items: center;
+    color: #4fc3f7;
+}
+
+.friend-badge svg {
+    fill: #4fc3f7;
+    stroke: #4fc3f7;
+}
+
+body.light-mode .friend-badge {
+    color: #0288d1;
+}
+
+body.light-mode .friend-badge svg {
+    fill: #0288d1;
+    stroke: #0288d1;
+}
+
 .shop-header {
     flex-direction: column;
     align-items: flex-start;

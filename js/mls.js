@@ -616,7 +616,8 @@ class NymMLS {
         tags.push(['subject', groupName]);
         tags.push(['type', 'group-invite']);
         tags.push(['x', this.nym.generateUUID()]);
-        tags.push(['mls_group', nostrGroupId]); // hint for MLS-capable clients
+        // Use 'h' tag so the receiver can resolve it to their local MLS group
+        tags.push(['h', nostrGroupId]);
 
         const rumor = { kind: 14, created_at: now, tags, content: `You've been added to group "${groupName}".`, pubkey: this.nym.pubkey };
         await this.nym._sendGiftWrapsAsync([recipientPubkey], rumor, null);
@@ -744,6 +745,20 @@ class NymMLS {
             return { nymGroupId, groupName, nostrGroupId, members: this._getGroupMembers(group) };
         } catch (e) {
             console.warn('[MLS] handleWelcome failed:', e);
+            // If the KeyPackage is stale (private key lost from local store),
+            // rotate it so future invites use a fresh one
+            if (e.message && e.message.includes('KeyPackage')) {
+                console.warn('[MLS] Stale KeyPackage detected — rotating...');
+                try {
+                    await this._deleteOldKeyPackageEvents();
+                    // Force Marmot to create a fresh KeyPackage
+                    const relays = [...this.nym.bitchatDMRelays];
+                    await this.client.keyPackages.create({ relays });
+                    console.log('[MLS] Fresh KeyPackage published after stale KP error');
+                } catch (kpErr) {
+                    console.warn('[MLS] KeyPackage rotation failed:', kpErr);
+                }
+            }
             return null;
         }
     }
@@ -1057,6 +1072,10 @@ class NymMLS {
             // Keep last 200 messages per group
             if (msgs.length > 200) msgs.splice(0, msgs.length - 200);
             localStorage.setItem(key, JSON.stringify(msgs));
+            // Debounced sync to Nostr so history is available cross-device
+            if (this.nym.settings.syncMLSHistory && typeof this.nym._debouncedNostrSettingsSave === 'function') {
+                this.nym._debouncedNostrSettingsSave(30000); // 30s debounce
+            }
         } catch (e) {
             console.warn('[MLS] Failed to persist message:', e);
         }
