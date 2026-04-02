@@ -59,17 +59,23 @@ class NymMLS {
             keyPackageStore: new M.KeyPackageStore(keyPackageBackend),
         });
 
-        // Load all existing groups from storage
+        // Load existing groups from storage individually so one
+        // corrupted group doesn't cause ALL groups to fail
         try {
             const storedIds = await groupStateBackend.list();
-            if (storedIds.length > 0) {
-                const groups = await this.client.loadAllGroups();
-                for (const group of groups) {
-                    this._registerGroup(group);
+            for (const gid of storedIds) {
+                try {
+                    const group = await this.client.getGroup(gid);
+                    if (group) this._registerGroup(group);
+                } catch (e) {
+                    const hex = this._bytesToHex(gid);
+                    console.warn('[MLS] Failed to load group', hex.slice(0, 16), '— removing stale state:', e.message);
+                    // Remove corrupted state so it doesn't block future loads
+                    try { await groupStateBackend.remove(gid); } catch (_) {}
                 }
             }
         } catch (e) {
-            console.warn('[MLS] Failed to load groups:', e);
+            console.warn('[MLS] Failed to list groups:', e);
         }
 
         // If groups were loaded from storage, set init timestamp so we skip
@@ -643,6 +649,8 @@ class NymMLS {
             // (needed for reactions, read receipts, etc. to match across devices)
             const tags = nymMessageId ? [['x', nymMessageId]] : [];
             await entry.marmotGroup.sendChatMessage(content, tags);
+            // Persist state after sending so ratchet advances survive reload
+            try { await entry.marmotGroup.save(); } catch (_) {}
             return true;
         } catch (e) {
             console.warn('[MLS] sendMessage failed:', e);
@@ -747,7 +755,7 @@ class NymMLS {
             console.warn('[MLS] handleWelcome failed:', e);
             // If the KeyPackage is stale (private key lost from local store),
             // rotate it so future invites use a fresh one
-            if (e.message && e.message.includes('KeyPackage')) {
+            if (e.message && (e.message.includes('KeyPackage') || e.message.includes('key package') || e.message.includes('matching secret') || e.message.includes('No matching'))) {
                 console.warn('[MLS] Stale KeyPackage detected — rotating...');
                 try {
                     await this._deleteOldKeyPackageEvents();
@@ -816,6 +824,12 @@ class NymMLS {
             }
         } catch (e) {
             console.warn('[MLS] ingest failed:', e);
+        }
+
+        // Persist group state after processing events so the MLS ratchet
+        // state survives page reload (prevents "Group not found" on restart)
+        if (messages.length > 0 || membersChanged) {
+            try { await entry.marmotGroup.save(); } catch (_) {}
         }
 
         return { messages, membersChanged };

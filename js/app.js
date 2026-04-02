@@ -953,6 +953,9 @@ class NYM {
         this.avatarBlobInflight = new Map();
         this.bannerBlobCache = new Map();
         this.bannerBlobInflight = new Map();
+        this._proxyFetchQueue = [];
+        this._proxyFetchActive = 0;
+        this._proxyFetchMaxConcurrent = 3;
         this.profileFetchedAt = new Map();
         this.profileFetchQueue = [];
         this.profileFetchTimer = null;
@@ -8610,7 +8613,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.avatarBlobCache.has(pubkey)) return Promise.resolve();
         if (this.avatarBlobInflight.has(pubkey)) return this.avatarBlobInflight.get(pubkey);
         const fetchUrl = this.getProxiedMediaUrl(url);
-        const p = fetch(fetchUrl, { mode: 'cors' })
+        const p = this._throttledProxyFetch(fetchUrl, { mode: 'cors' })
             .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
             .then(blob => {
                 // Revoke old blob URL if avatar changed
@@ -8634,7 +8637,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.bannerBlobCache.has(pubkey)) return Promise.resolve();
         if (this.bannerBlobInflight.has(pubkey)) return this.bannerBlobInflight.get(pubkey);
         const fetchUrl = this.getProxiedMediaUrl(url);
-        const p = fetch(fetchUrl, { mode: 'cors' })
+        const p = this._throttledProxyFetch(fetchUrl, { mode: 'cors' })
             .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
             .then(blob => {
                 const old = this.bannerBlobCache.get(pubkey);
@@ -8666,6 +8669,28 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     closeContextMenu() {
         document.getElementById('contextMenu').classList.remove('active');
         document.getElementById('contextMenuOverlay').classList.remove('active');
+    }
+
+    // Enqueue a fetch through the concurrency-limited proxy queue.
+    // Returns a Promise that resolves/rejects like a normal fetch.
+    _throttledProxyFetch(url, opts) {
+        return new Promise((resolve, reject) => {
+            this._proxyFetchQueue.push({ url, opts, resolve, reject });
+            this._drainProxyFetchQueue();
+        });
+    }
+
+    _drainProxyFetchQueue() {
+        while (this._proxyFetchActive < this._proxyFetchMaxConcurrent && this._proxyFetchQueue.length > 0) {
+            const { url, opts, resolve, reject } = this._proxyFetchQueue.shift();
+            this._proxyFetchActive++;
+            fetch(url, opts)
+                .then(resolve, reject)
+                .finally(() => {
+                    this._proxyFetchActive--;
+                    this._drainProxyFetchQueue();
+                });
+        }
     }
 
     // Returns the base URL for the Cloudflare proxy endpoint (translation, media, unfurl).
@@ -14443,29 +14468,33 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.mls = new window.NymMLS(this);
         this.mls.init().then(async () => {
             // Restore nymToMls mappings from groupConversations that have mlsGroupId
-            const restorePromises = [];
+            const failedGroups = [];
             for (const [groupId, group] of this.groupConversations) {
                 if (group.isMLS && group.mlsGroupId) {
                     this.mls._nymToMls.set(groupId, group.mlsGroupId);
                     // If the MLS group was loaded from storage, register it
                     if (!this.mls._groupMap.has(group.mlsGroupId)) {
-                        restorePromises.push(
-                            this.mls.client?.getGroup(group.mlsGroupId).then(g => {
-                                if (g) {
-                                    this.mls._groupMap.set(group.mlsGroupId, { marmotGroup: g, nymGroupId: groupId });
-                                    // Group restored from state store
-                                }
-                            }).catch(e => {
-                                console.warn('[MLS] Could not restore MLS group', group.mlsGroupId.slice(0, 16), ':', e.message);
-                            })
-                        );
+                        try {
+                            const g = await this.mls.client?.getGroup(group.mlsGroupId);
+                            if (g) {
+                                this.mls._groupMap.set(group.mlsGroupId, { marmotGroup: g, nymGroupId: groupId });
+                            } else {
+                                failedGroups.push(groupId);
+                            }
+                        } catch (e) {
+                            console.warn('[MLS] Could not restore MLS group', group.mlsGroupId.slice(0, 16), ':', e.message);
+                            failedGroups.push(groupId);
+                            // Mark group as needing re-invitation so the UI can inform the user
+                            group._mlsStateCorrupted = true;
+                        }
                     }
                 }
             }
-            // Wait for all group restorations to complete before marking ready
-            if (restorePromises.length > 0) {
-                await Promise.all(restorePromises);
-                // Groups restored from state store
+            // For groups whose MLS state was lost, request a fresh Welcome
+            // from the group admin by fetching recent kind 444 events
+            if (failedGroups.length > 0) {
+                console.warn('[MLS]', failedGroups.length, 'group(s) need re-invitation — requesting fresh Welcomes');
+                this._requestMLSReinvitations(failedGroups);
             }
             // Load persisted MLS messages for all MLS groups (even if state
             // restoration failed — persisted plaintext should still display)
@@ -14539,7 +14568,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (this.mls._groupMap.size > 0) {
                 this._poolSubscribeMLS();
             }
-            // If relays are already connected, publish now; otherwise _onRelaysConnected will handle it
+            // Always publish fresh KeyPackages on init (not just when groups
+            // exist) so that re-invitation Welcomes can be processed.
             if (this.poolConnectedRelays && this.poolConnectedRelays.length > 0) {
                 this._onRelaysConnected();
             }
@@ -14593,6 +14623,24 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         } else {
             try { this.sendToRelay(req); } catch (_) {}
         }
+    }
+
+    // Request fresh Welcome events for MLS groups whose state was lost on reload.
+    // Fetches recent kind 444 gift-wrapped events addressed to us which may
+    // contain the Welcome needed to re-join the group.
+    _requestMLSReinvitations(failedGroupIds) {
+        if (!this.mls || failedGroupIds.length === 0) return;
+        // Fetch recent kind 444 events (Welcomes) addressed to us
+        const subId = 'mls-rejoin-' + Math.random().toString(36).slice(2);
+        const since = Math.floor(Date.now() / 1000) - 86400 * 7; // last 7 days
+        try {
+            this.sendRequestToFewRelays(["REQ", subId, {
+                kinds: [1059], '#p': [this.pubkey], since, limit: 50
+            }]);
+            setTimeout(() => {
+                try { this.sendToRelay(["CLOSE", subId]); } catch (_) {}
+            }, 10000);
+        } catch (_) {}
     }
 
     // Handle a decrypted MLS application message routed from NymMLS
@@ -14788,6 +14836,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                                 nym: profile.name,
                                 pubkey: pk,
                                 lastSeen: 0,
+                                status: 'offline',
+                                channels: new Set()
                             });
                         }
                         if (profile.picture && this.userAvatars && !this.userAvatars.has(pk)) {
@@ -19427,6 +19477,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 user.status = baseStatus;
             }
             user.nym = nym; // Update nym in case it changed
+            if (!user.channels) user.channels = new Set();
             user.channels.add(channelKey);
         }
 
@@ -19508,7 +19559,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.users.forEach((user, pubkey) => {
             if (Date.now() - user.lastSeen < 300000 &&
                 !this.blockedUsers.has(user.nym) &&
-                user.channels.has(currentChannelKey)) {
+                user.channels && user.channels.has(currentChannelKey)) {
                 channelUserCount++;
             }
         });
@@ -27553,7 +27604,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.266 ═══<br/>
+═══ Nymchat v3.58.267 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
