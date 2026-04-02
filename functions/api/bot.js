@@ -2487,7 +2487,7 @@ function signEvent(evt, privkeyHex) {
   return evt;
 }
 var BOT_NYM = "Nymbot";
-var BOT_AVATAR = "https://nymchat.app/images/NYM-favicon.png";
+var BOT_AVATAR = "https://nymchat.app/images/nymbot-icon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-banner.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
