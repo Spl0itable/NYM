@@ -558,7 +558,6 @@ class NYM {
         this.pmConversations = new Map();
         this.groupConversations = new Map();
         this.groupEphemeralKeys = new Map();
-        this._ephemeralSubIds = [];
         this.currentGroup = null;
         this._newPMRecipients = [];
         this.groupMessageReaders = new Map();
@@ -6571,9 +6570,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.subscribeToSingleRelay(url);
         });
 
-        // Subscribe to ephemeral pubkeys as independent REQs
-        this._refreshEphemeralSubscriptions();
-
         // Re-send channel-targeted subscriptions lost during disconnect
         this._resubscribeChannels();
     }
@@ -7759,11 +7755,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const msg = JSON.stringify(["REQ", subId, ...filters]);
         try { p.ws.send(msg); } catch (_) {}
-
-        // Also subscribe to ephemeral pubkeys on critical shards
-        if (!isGeoOrDiscovered) {
-            this._refreshEphemeralSubscriptions();
-        }
     }
 
     // Build geo-only filters (kind 20000) for geo/discovered relay shards
@@ -7805,7 +7796,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
                 { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 }
             );
-            // Ephemeral pubkey subscriptions are sent as independent REQs
+
+            // Subscribe to ephemeral pubkeys in SEPARATE filters so the relay
+            // cannot link them to our real pubkey via a single subscription.
+            const ephPks = this._getAllSelfEphemeralPubkeys();
+            for (const ephPk of ephPks) {
+                filters.push({ kinds: [1059], "#p": [ephPk], limit: 100 });
+            }
         }
 
         return filters;
@@ -7912,51 +7909,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this._poolSendToRole('geo', ["REQ", geoSubId, ...geoFilters]);
         this._poolSendToRole('discovered', ["REQ", geoSubId, ...geoFilters]);
 
-        // Subscribe to ephemeral pubkeys as independent REQs (metadata separation)
-        this._refreshEphemeralSubscriptions();
-
         // Re-subscribe to channel-targeted subscriptions that were lost on disconnect
         this._resubscribeChannels();
-    }
-
-    // Send independent REQ subscriptions for each ephemeral pubkey.
-    // Each gets its own subscription ID so relays cannot link them to
-    // the real pubkey or to each other via a single request.
-    _refreshEphemeralSubscriptions() {
-        // Close previous ephemeral subscriptions
-        for (const oldSubId of this._ephemeralSubIds) {
-            if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                this._poolSend(['CLOSE', oldSubId]);
-            } else {
-                const closeMsg = JSON.stringify(['CLOSE', oldSubId]);
-                this.relayPool.forEach(relay => {
-                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        try { relay.ws.send(closeMsg); } catch (_) {}
-                    }
-                });
-            }
-        }
-        this._ephemeralSubIds = [];
-
-        const ephPks = this._getAllSelfEphemeralPubkeys();
-        if (!ephPks.length) return;
-
-        for (const ephPk of ephPks) {
-            const subId = Math.random().toString(36).substring(2);
-            this._ephemeralSubIds.push(subId);
-            const filter = { kinds: [1059], "#p": [ephPk], limit: 100 };
-
-            if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                this._poolSend(['REQ', subId, filter]);
-            } else {
-                const msg = JSON.stringify(['REQ', subId, filter]);
-                this.relayPool.forEach((relay, url) => {
-                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                        try { relay.ws.send(msg); } catch (_) {}
-                    }
-                });
-            }
-        }
     }
 
     // Re-subscribe to active channel subscriptions after a relay reconnection.
@@ -10323,8 +10277,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     const historyData = {};
                     for (const [convKey, messages] of this.pmMessages) {
                         if (convKey.startsWith('group-') && messages.length > 0) {
-                            // Store last 25 messages, stripped to essential fields
-                            historyData[convKey] = messages.slice(-25).map(m => ({
+                            // Store last 100 messages, stripped to essential fields
+                            historyData[convKey] = messages.slice(-100).map(m => ({
                                 id: m.id,
                                 pubkey: m.pubkey,
                                 content: m.content,
@@ -10407,33 +10361,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     async _publishEncryptedSettings(settingsData) {
         const NT = window.NostrTools;
         const now = Math.floor(Date.now() / 1000);
-
-        // NIP-44 max plaintext is 65535 bytes. Content is encrypted twice:
-        // rumor → seal (NIP-44 encrypt + base64 ≈ 1.5x expansion) → wrap (NIP-44 encrypt).
-        // So the rumor JSON must be small enough that the seal JSON stays under 65535.
-        const MAX_PLAINTEXT = 28000;
-        let content = JSON.stringify(settingsData);
-        if (content.length > MAX_PLAINTEXT) {
-            // Drop message history first (heaviest, least critical)
-            delete settingsData.groupMessageHistory;
-            content = JSON.stringify(settingsData);
-        }
-        if (content.length > MAX_PLAINTEXT) {
-            // Drop ephemeral keys next
-            delete settingsData.groupEphemeralKeys;
-            content = JSON.stringify(settingsData);
-        }
-        if (content.length > MAX_PLAINTEXT) {
-            // Drop group conversations as last resort
-            delete settingsData.groupConversations;
-            content = JSON.stringify(settingsData);
-        }
-
         const rumor = {
             kind: 30078,
             created_at: now,
             tags: [['d', 'nymchat-settings']],
-            content,
+            content: JSON.stringify(settingsData),
             pubkey: this.pubkey
         };
         rumor.id = NT.getEventHash(rumor);
@@ -10693,35 +10625,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.lastPMSyncTime - 300, // 5-min buffer before last known event
                 Math.floor(Date.now() / 1000) - 604800 // at most 7 days back
             );
-            const mkSubId = () => Math.random().toString(36).substring(2);
-
-            // Real pubkey catch-up REQ
-            const realFilter = { kinds: [1059], '#p': [this.pubkey], since, limit: 200 };
-
-            // Ephemeral pubkey catch-up REQs (independent to prevent linking)
+            // Separate REQs for real pubkey and each ephemeral pubkey to prevent linking
+            const subId = () => Math.random().toString(36).substring(2);
+            const realReq = JSON.stringify(['REQ', subId(),
+                { kinds: [1059], '#p': [this.pubkey], since, limit: 200 }
+            ]);
             const ephPks = this._getAllSelfEphemeralPubkeys();
-
-            if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                // Pool mode: send through pool proxy to critical shards
-                this._poolSendToRole('critical', ['REQ', mkSubId(), realFilter]);
-                for (const pk of ephPks) {
-                    this._poolSendToRole('critical', ['REQ', mkSubId(), { kinds: [1059], '#p': [pk], since, limit: 100 }]);
+            const ephReqs = ephPks.map(pk => JSON.stringify(['REQ', subId(),
+                { kinds: [1059], '#p': [pk], since, limit: 100 }
+            ]));
+            this.relayPool.forEach(relay => {
+                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                    relay.ws.send(realReq);
+                    for (const req of ephReqs) relay.ws.send(req);
                 }
-            } else {
-                // Direct mode: send to all connected relays
-                const realReq = JSON.stringify(['REQ', mkSubId(), realFilter]);
-                const ephReqs = ephPks.map(pk => JSON.stringify(['REQ', mkSubId(),
-                    { kinds: [1059], '#p': [pk], since, limit: 100 }
-                ]));
-                this.relayPool.forEach(relay => {
-                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        try { relay.ws.send(realReq); } catch (_) {}
-                        for (const req of ephReqs) {
-                            try { relay.ws.send(req); } catch (_) {}
-                        }
-                    }
-                });
-            }
+            });
         }
 
         if (this.pendingDMs.size === 0) return;
@@ -14567,16 +14485,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     // Collect ephemeral pubkeys we should subscribe to on relays.
-    // Only includes current + last few per group to avoid overwhelming relays.
-    // All keys are still retained for decryption via _tryDecryptWithEphemeralKeys.
+    // Includes the current key + prev window per group.
     _getAllSelfEphemeralPubkeys() {
-        const MAX_SUB_KEYS_PER_GROUP = 5;
         const pks = new Set();
         for (const [, ek] of this.groupEphemeralKeys) {
             if (ek.self) {
                 pks.add(ek.self.current.pk);
-                const prevSlice = ek.self.prev.slice(0, MAX_SUB_KEYS_PER_GROUP);
-                for (const prev of prevSlice) {
+                for (const prev of ek.self.prev) {
                     pks.add(prev.pk);
                 }
             }
@@ -15433,10 +15348,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Send gift wraps using ephemeral recipient keys when available
         await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
         this._saveEphemeralKeys();
-
-        // Refresh relay subscriptions so we receive messages to our new ephemeral key
-        this._refreshEphemeralSubscriptions();
-
         return true;
     }
 
@@ -27485,7 +27396,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.270 ═══<br/>
+═══ Nymchat v3.58.269 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -28700,7 +28611,7 @@ async function nostrSettingsSave() {
                 const historyData = {};
                 for (const [convKey, messages] of nym.pmMessages) {
                     if (convKey.startsWith('group-') && messages.length > 0) {
-                        historyData[convKey] = messages.slice(-25).map(m => ({
+                        historyData[convKey] = messages.slice(-100).map(m => ({
                             id: m.id,
                             pubkey: m.pubkey,
                             content: m.content,
