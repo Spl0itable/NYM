@@ -38,7 +38,7 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 
 ### Messaging
 - **Private Messages** - End-to-end encrypted 1:1 PMs using [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) (kind 14 rumor format) wrapped in NIP-59 gift wraps
-- **Private Group Chats** - End-to-end encrypted multi-party group chats via [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) / [NIP-59](https://github.com/nostr-protocol/nips/blob/master/59.md); each message is individually gift-wrapped per member with an ephemeral sender key and a randomized envelope timestamp (±2 h)
+- **Private Group Chats** - End-to-end encrypted multi-party group chats via [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) / [NIP-59](https://github.com/nostr-protocol/nips/blob/master/59.md); each message is individually gift-wrapped per member with an ephemeral sender key and a randomized envelope timestamp (±2 h) so relays cannot correlate group membership or timing
 - **Rich Text** - Markdown support for bold, italic, strikethrough, code blocks, and quotes
 - **Message Reactions** - React to messages with emojis ([NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md))
 - **Auto-Reply** - Set away messages with `/brb` command
@@ -70,7 +70,7 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 
 ### Private Messages & Group Chats (NIP-17)
 - NIP-17 `kind 14` rumor (message content + metadata) sealed inside NIP-59 `kind 1059` gift wraps
-- Each gift wrap uses a one-time ephemeral sender key; the `created_at` timestamp is randomized ±2 hours
+- Each gift wrap uses a one-time ephemeral sender key; the `created_at` timestamp is randomized ±2 hours so relays cannot correlate senders, recipients, or timing
 - Group chats send one gift wrap per member — each individually encrypted to that member's public key
 
 ### Reactions & Zaps
