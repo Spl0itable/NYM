@@ -14677,6 +14677,65 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return ek;
     }
 
+    // Merge synced ephemeral keys into the local set for a group
+    _mergeEphemeralKeys(groupId, syncedEntry) {
+        const synced = this._deserializeEphemeralEntry(syncedEntry);
+        const local = this.groupEphemeralKeys.get(groupId);
+
+        if (!local) {
+            // No local keys — just use synced
+            this.groupEphemeralKeys.set(groupId, synced);
+            this._invalidateEphPkCache();
+            return;
+        }
+
+        // Merge member keys: prefer the most recently seen ephemeral pk.
+        // If synced has a key we don't, add it. If both have one, keep
+        // whichever is non-null (synced may be from a more recent message
+        // seen by the other device).
+        if (synced.members) {
+            for (const [realPk, ephPk] of Object.entries(synced.members)) {
+                if (!local.members[realPk]) {
+                    local.members[realPk] = ephPk;
+                }
+            }
+        }
+
+        // Merge self keys: collect all secret keys from both devices so
+        // we can decrypt messages sent to any of our ephemeral pubkeys.
+        if (synced.self) {
+            if (!local.self) {
+                local.self = synced.self;
+            } else {
+                // Collect all known pks to deduplicate
+                const knownPks = new Set();
+                knownPks.add(local.self.current.pk);
+                for (const k of local.self.prev) knownPks.add(k.pk);
+
+                // Add synced current if we don't have it
+                if (!knownPks.has(synced.self.current.pk)) {
+                    local.self.prev.push(synced.self.current);
+                    knownPks.add(synced.self.current.pk);
+                }
+
+                // Add any synced prev keys we don't have
+                for (const k of synced.self.prev) {
+                    if (!knownPks.has(k.pk)) {
+                        local.self.prev.push(k);
+                        knownPks.add(k.pk);
+                    }
+                }
+            }
+        }
+
+        // Merge lastSendTime — keep the most recent
+        if (synced._lastSendTime && (!local._lastSendTime || synced._lastSendTime > local._lastSendTime)) {
+            local._lastSendTime = synced._lastSendTime;
+        }
+
+        this._invalidateEphPkCache();
+    }
+
     // Save ephemeral keys to localStorage.
     _saveEphemeralKeys() {
         if (!this.pubkey) return;
@@ -27485,7 +27544,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.270 ═══<br/>
+═══ Nymchat v3.58.271 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -29283,14 +29342,11 @@ async function applyNostrSettings(s) {
         try { applyGroupData(s.groupConversations); } catch (_) {}
     }
 
-    // Restore ephemeral keys from settings sync (timing-attack mitigation)
+    // Restore ephemeral keys from settings sync
     if (s.groupEphemeralKeys && typeof s.groupEphemeralKeys === 'object') {
         try {
             for (const [groupId, entry] of Object.entries(s.groupEphemeralKeys)) {
-                // Only apply if we don't already have keys for this group (local takes priority)
-                if (!nym.groupEphemeralKeys.has(groupId)) {
-                    nym.groupEphemeralKeys.set(groupId, nym._deserializeEphemeralEntry(entry));
-                }
+                nym._mergeEphemeralKeys(groupId, entry);
             }
             nym._saveEphemeralKeys();
         } catch (_) {}
