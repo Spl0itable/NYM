@@ -14511,7 +14511,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Returns their ephemeral pk if known, otherwise their real pk.
     _getEncryptionPubkey(groupId, realPubkey) {
         const ek = this.groupEphemeralKeys.get(groupId);
-        if (ek && ek.members[realPubkey]) {
+        if (!ek) return realPubkey;
+
+        // Self-copy: use our own current ephemeral key so even the
+        // self-addressed gift wrap doesn't reveal our real pubkey.
+        if (realPubkey === this.pubkey && ek.self && ek.self.current) {
+            return ek.self.current.pk;
+        }
+
+        if (ek.members[realPubkey]) {
             return ek.members[realPubkey];
         }
         return realPubkey; // fallback to real pubkey
@@ -27486,7 +27494,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.272 ═══<br/>
+═══ Nymchat v3.58.273 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
