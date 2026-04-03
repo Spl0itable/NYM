@@ -557,6 +557,7 @@ class NYM {
         this.channels = new Map();
         this.pmConversations = new Map();
         this.groupConversations = new Map();
+        this.groupEphemeralKeys = new Map();
         this.currentGroup = null;
         this._newPMRecipients = [];
         this.groupMessageReaders = new Map();
@@ -7786,6 +7787,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (zapFilter) filters.push(zapFilter);
 
         if (this.pubkey) {
+            // Gift wraps to our real pubkey (1:1 DMs, bootstrapping, resyncs)
             filters.push(
                 { kinds: [1059], "#p": [this.pubkey], limit: 500 },
                 { kinds: [7], "#p": [this.pubkey], "#k": ["20000"], limit: 100 },
@@ -7795,6 +7797,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 }
             );
 
+            // Subscribe to ephemeral pubkeys in SEPARATE filters so the relay
+            // cannot link them to our real pubkey via a single subscription.
+            const ephPks = this._getAllSelfEphemeralPubkeys();
+            for (const ephPk of ephPks) {
+                filters.push({ kinds: [1059], "#p": [ephPk], limit: 100 });
+            }
         }
 
         return filters;
@@ -10251,6 +10259,42 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             } catch (_) {}
 
+            // Include ephemeral keys for timing-attack mitigation sync.
+            // Chain keys are stored encrypted (settings are gift-wrapped to self).
+            try {
+                if (this.groupEphemeralKeys && this.groupEphemeralKeys.size > 0) {
+                    const ekData = {};
+                    for (const [groupId, ek] of this.groupEphemeralKeys) {
+                        ekData[groupId] = this._serializeEphemeralKeys(ek);
+                    }
+                    settingsData.groupEphemeralKeys = ekData;
+                }
+            } catch (_) {}
+
+            // Include last 100 messages per group for chat history backup
+            try {
+                if (this.pmMessages && this.pmMessages.size > 0) {
+                    const historyData = {};
+                    for (const [convKey, messages] of this.pmMessages) {
+                        if (convKey.startsWith('group-') && messages.length > 0) {
+                            // Store last 100 messages, stripped to essential fields
+                            historyData[convKey] = messages.slice(-100).map(m => ({
+                                id: m.id,
+                                pubkey: m.pubkey,
+                                content: m.content,
+                                created_at: m.created_at,
+                                isOwn: m.isOwn,
+                                groupId: m.groupId,
+                                nymMessageId: m.nymMessageId
+                            }));
+                        }
+                    }
+                    if (Object.keys(historyData).length > 0) {
+                        settingsData.groupMessageHistory = historyData;
+                    }
+                }
+            } catch (_) {}
+
             await this._publishEncryptedSettings(settingsData);
         } catch (error) {
         }
@@ -10581,12 +10625,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.lastPMSyncTime - 300, // 5-min buffer before last known event
                 Math.floor(Date.now() / 1000) - 604800 // at most 7 days back
             );
-            const catchupReq = JSON.stringify(['REQ', Math.random().toString(36).substring(2),
+            // Separate REQs for real pubkey and each ephemeral pubkey to prevent linking
+            const subId = () => Math.random().toString(36).substring(2);
+            const realReq = JSON.stringify(['REQ', subId(),
                 { kinds: [1059], '#p': [this.pubkey], since, limit: 200 }
             ]);
+            const ephPks = this._getAllSelfEphemeralPubkeys();
+            const ephReqs = ephPks.map(pk => JSON.stringify(['REQ', subId(),
+                { kinds: [1059], '#p': [pk], since, limit: 100 }
+            ]));
             this.relayPool.forEach(relay => {
                 if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    relay.ws.send(catchupReq);
+                    relay.ws.send(realReq);
+                    for (const req of ephReqs) relay.ws.send(req);
                 }
             });
         }
@@ -12486,7 +12537,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         content: emoji,
                         pubkey: this.pubkey
                     };
-                    await this._sendGiftWrapsAsync(group.members, reactionRumor, null);
+                    await this._sendGiftWrapsAsync(group.members, reactionRumor, null, groupId);
                     this.addToRecentEmojis(emoji);
                     return;
                 }
@@ -12587,7 +12638,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         content: emoji,
                         pubkey: this.pubkey
                     };
-                    await this._sendGiftWrapsAsync(group.members, reactionRumor, null);
+                    await this._sendGiftWrapsAsync(group.members, reactionRumor, null, groupId);
                     return;
                 }
             }
@@ -13584,7 +13635,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         try {
             const NT = window.NostrTools;
 
-            // Process only gift wraps addressed to me
+            // Process only gift wraps addressed to me (real pubkey or any ephemeral pubkey)
             if (this.pubkey) {
                 const wrapRecipients = [];
                 for (const t of event.tags || []) {
@@ -13592,8 +13643,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         wrapRecipients.push(t[1]);
                     }
                 }
-                if (wrapRecipients.length > 0 && !wrapRecipients.includes(this.pubkey)) {
-                    return; // not for me
+                if (wrapRecipients.length > 0) {
+                    const myEphPks = this._getAllSelfEphemeralPubkeys();
+                    const isForMe = wrapRecipients.includes(this.pubkey) ||
+                        wrapRecipients.some(r => myEphPks.includes(r));
+                    if (!isForMe) return; // not for me
                 }
             }
 
@@ -13792,9 +13846,30 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             let seal, rumor;
             if (this.privkey) {
-                ({ seal, rumor } = unwrapWithLocal());
+                try {
+                    ({ seal, rumor } = unwrapWithLocal());
+                } catch (_realKeyErr) {
+                    // Real privkey failed — try ephemeral keys (timing-attack mitigation scheme)
+                    const ephResult = this._tryDecryptWithEphemeralKeys(event);
+                    if (ephResult) {
+                        ({ seal, rumor } = ephResult);
+                    } else {
+                        throw _realKeyErr; // re-throw original error
+                    }
+                }
             } else if (window.nostr?.nip44?.decrypt) {
-                ({ seal, rumor } = await unwrapWithExtension());
+                try {
+                    ({ seal, rumor } = await unwrapWithExtension());
+                } catch (_extErr) {
+                    // Extension decrypt failed — try ephemeral keys if we have local privkey
+                    // (extension can't use ephemeral keys, but we store them locally)
+                    const ephResult = this._tryDecryptWithEphemeralKeys(event);
+                    if (ephResult) {
+                        ({ seal, rumor } = ephResult);
+                    } else {
+                        throw _extErr;
+                    }
+                }
             } else {
                 return; // no way to decrypt
             }
@@ -14286,6 +14361,262 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
     }
 
+    // Convert Uint8Array to hex string
+    _skToHex(sk) {
+        return Array.from(sk).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // Convert hex string to Uint8Array
+    _hexToSk(hex) {
+        const bytes = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < hex.length; i += 2) {
+            bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+        }
+        return bytes;
+    }
+
+    // Ratchet a chain key forward: nextSk = HKDF(currentSk, "nym-ephemeral-next")
+    _ratchetKey(sk) {
+        const NT = window.NostrTools;
+        const info = new TextEncoder().encode('nym-ephemeral-next');
+        const prk = NT._hkdfExtract(NT._sha256, sk, new Uint8Array(32));
+        return NT._hkdfExpand(NT._sha256, prk, info, 32);
+    }
+
+    // Generate the initial chain key for a new group (random seed).
+    _generateInitialChainKey() {
+        const NT = window.NostrTools;
+        return NT.generateSecretKey();
+    }
+
+    // Get or create the ephemeral key entry for a group.
+    _getGroupEphemeralKeys(groupId) {
+        if (!this.groupEphemeralKeys.has(groupId)) {
+            this.groupEphemeralKeys.set(groupId, { self: null, members: {} });
+        }
+        return this.groupEphemeralKeys.get(groupId);
+    }
+
+    // Ensure we have a current ephemeral keypair for ourselves in this group.
+    _ensureSelfEphemeralKey(groupId) {
+        const NT = window.NostrTools;
+        const ek = this._getGroupEphemeralKeys(groupId);
+        if (!ek.self) {
+            const sk = this._generateInitialChainKey();
+            const pk = NT.getPublicKey(sk);
+            ek.self = { current: { sk, pk }, prev: [] };
+        }
+        return ek.self.current;
+    }
+
+    // Rotate own ephemeral key for a group (called after sending a message).
+    // Ratchets the chain forward. Keeps a window of recent keys for in-flight
+    // messages, then deletes old ones for forward secrecy.
+    _rotateSelfEphemeralKey(groupId) {
+        const NT = window.NostrTools;
+        const ek = this._getGroupEphemeralKeys(groupId);
+        if (!ek.self) {
+            this._ensureSelfEphemeralKey(groupId);
+        }
+        // Move current to prev window
+        if (ek.self.current) {
+            ek.self.prev.unshift(ek.self.current);
+            // Keep last 10 keys for in-flight message tolerance, delete older
+            // ones for forward secrecy. Chat history is preserved via settings
+            // sync message backup, not key retention.
+            if (ek.self.prev.length > 10) ek.self.prev = ek.self.prev.slice(0, 10);
+        }
+        // Ratchet forward
+        const nextSk = this._ratchetKey(ek.self.current.sk);
+        const nextPk = NT.getPublicKey(nextSk);
+        ek.self.current = { sk: nextSk, pk: nextPk };
+        this._invalidateEphPkCache();
+        return ek.self.current;
+    }
+
+    // Update a member's ephemeral pubkey (called when we receive a message with ephemeral_pk tag).
+    _updateMemberEphemeralKey(groupId, realPubkey, ephemeralPk) {
+        const ek = this._getGroupEphemeralKeys(groupId);
+        ek.members[realPubkey] = ephemeralPk;
+    }
+
+    // Send a key-resync message to a group using REAL pubkeys (guaranteed deliverable).
+    // This is used when coming back online after extended inactivity to re-establish
+    // ephemeral key exchange. One-time privacy cost to get back in sync.
+    async _sendKeyResync(groupId) {
+        if (!this._canSendGiftWraps()) return;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+
+        const now = Math.floor(Date.now() / 1000);
+        const freshKey = this._rotateSelfEphemeralKey(groupId);
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'key-resync']);
+        tags.push(['ephemeral_pk', freshKey.pk]);
+
+        const rumor = { kind: 14, created_at: now, tags, content: '', pubkey: this.pubkey };
+
+        // Send to REAL pubkeys — bypasses ephemeral routing so it always arrives.
+        await this._sendGiftWrapsAsync(group.members, rumor, null);
+        this._saveEphemeralKeys();
+    }
+
+    // Check if we might be stale in a group and need to resync.
+    async _checkEphemeralKeyFreshness(groupId) {
+        const ek = this.groupEphemeralKeys.get(groupId);
+        if (!ek) return;
+
+        if (ek._needsResync) {
+            delete ek._needsResync;
+            await this._sendKeyResync(groupId);
+        }
+    }
+
+    // Get the pubkey to encrypt TO for a given group member.
+    // Returns their ephemeral pk if known, otherwise their real pk.
+    _getEncryptionPubkey(groupId, realPubkey) {
+        const ek = this.groupEphemeralKeys.get(groupId);
+        if (ek && ek.members[realPubkey]) {
+            return ek.members[realPubkey];
+        }
+        return realPubkey; // fallback to real pubkey
+    }
+
+    // Collect ephemeral pubkeys we should subscribe to on relays.
+    // Includes the current key + prev window per group.
+    _getAllSelfEphemeralPubkeys() {
+        const pks = new Set();
+        for (const [, ek] of this.groupEphemeralKeys) {
+            if (ek.self) {
+                pks.add(ek.self.current.pk);
+                for (const prev of ek.self.prev) {
+                    pks.add(prev.pk);
+                }
+            }
+        }
+        return [...pks];
+    }
+
+    // Try to decrypt a gift wrap using ephemeral keys. Returns {seal, rumor} or null.
+    _tryDecryptWithEphemeralKeys(event) {
+        const NT = window.NostrTools;
+
+        // Fast path: look up the ephemeral sk directly from the p tag.
+        const pTag = (event.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
+        if (pTag) {
+            const sk = this._lookupEphemeralSk(pTag[1]);
+            if (sk) {
+                try {
+                    const ckWrap = NT.nip44.getConversationKey(sk, event.pubkey);
+                    const sealJson = NT.nip44.decrypt(event.content, ckWrap);
+                    const seal = JSON.parse(sealJson);
+                    const ckSeal = NT.nip44.getConversationKey(sk, seal.pubkey);
+                    const rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
+                    const rumor = JSON.parse(rumorJson);
+                    return { seal, rumor };
+                } catch (_) {}
+            }
+        }
+
+        // Slow fallback: try all stored keys (current + prev window) across all groups.
+        for (const [, ek] of this.groupEphemeralKeys) {
+            if (!ek.self) continue;
+            const keysToTry = [ek.self.current, ...ek.self.prev];
+            for (const key of keysToTry) {
+                try {
+                    const ckWrap = NT.nip44.getConversationKey(key.sk, event.pubkey);
+                    const sealJson = NT.nip44.decrypt(event.content, ckWrap);
+                    const seal = JSON.parse(sealJson);
+                    const ckSeal = NT.nip44.getConversationKey(key.sk, seal.pubkey);
+                    const rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
+                    const rumor = JSON.parse(rumorJson);
+                    return { seal, rumor };
+                } catch (_) {}
+            }
+        }
+        return null;
+    }
+
+    // O(1) lookup: find the ephemeral secret key for a given ephemeral pubkey.
+    _lookupEphemeralSk(ephemeralPk) {
+        if (!this._ephPkCache) this._rebuildEphPkCache();
+        const key = this._ephPkCache.get(ephemeralPk);
+        return key || null;
+    }
+
+    // Build reverse map: ephemeralPk -> sk for fast lookup.
+    _rebuildEphPkCache() {
+        this._ephPkCache = new Map();
+        for (const [, ek] of this.groupEphemeralKeys) {
+            if (!ek.self) continue;
+            this._ephPkCache.set(ek.self.current.pk, ek.self.current.sk);
+            for (const prev of ek.self.prev) {
+                this._ephPkCache.set(prev.pk, prev.sk);
+            }
+        }
+    }
+
+    // Invalidate the cache (called after key rotation).
+    _invalidateEphPkCache() {
+        this._ephPkCache = null;
+    }
+
+    // Save ephemeral keys to localStorage.
+    // Only stores counters + member pubkeys — secret keys are derived on demand.
+    // Serialize an ephemeral key entry for JSON storage.
+    _serializeEphemeralKeys(ek) {
+        const entry = { members: ek.members, lastSendTime: ek._lastSendTime || 0 };
+        if (ek.self) {
+            entry.self = {
+                current: { sk: this._skToHex(ek.self.current.sk), pk: ek.self.current.pk },
+                prev: ek.self.prev.map(k => ({ sk: this._skToHex(k.sk), pk: k.pk }))
+            };
+        }
+        return entry;
+    }
+
+    // Deserialize an ephemeral key entry from JSON storage.
+    _deserializeEphemeralEntry(entry) {
+        const ek = { members: entry.members || {} };
+        if (entry.lastSendTime) ek._lastSendTime = entry.lastSendTime;
+        if (entry.self) {
+            ek.self = {
+                current: { sk: this._hexToSk(entry.self.current.sk), pk: entry.self.current.pk },
+                prev: (entry.self.prev || []).map(k => ({ sk: this._hexToSk(k.sk), pk: k.pk }))
+            };
+        } else {
+            ek.self = null;
+        }
+        return ek;
+    }
+
+    // Save ephemeral keys to localStorage.
+    _saveEphemeralKeys() {
+        if (!this.pubkey) return;
+        try {
+            const data = {};
+            for (const [groupId, ek] of this.groupEphemeralKeys) {
+                data[groupId] = this._serializeEphemeralKeys(ek);
+            }
+            localStorage.setItem(`nym_ephemeral_keys_${this.pubkey}`, JSON.stringify(data));
+        } catch (_) {}
+    }
+
+    // Load ephemeral keys from localStorage
+    _loadEphemeralKeys() {
+        if (!this.pubkey) return;
+        try {
+            const raw = localStorage.getItem(`nym_ephemeral_keys_${this.pubkey}`);
+            if (!raw) return;
+            const data = JSON.parse(raw);
+            for (const [groupId, entry] of Object.entries(data)) {
+                this.groupEphemeralKeys.set(groupId, this._deserializeEphemeralEntry(entry));
+            }
+        } catch (_) {}
+    }
+
     getGroupConversationKey(groupId) {
         return `group-${groupId}`;
     }
@@ -14427,6 +14758,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const groupId = groupTag[1];
         const groupConvKey = this.getGroupConversationKey(groupId);
 
+        // Extract sender's next ephemeral pubkey from the rumor (timing-attack mitigation).
+        // When present, future messages to this sender will be encrypted to this key.
+        if (!isOwn) {
+            const ephTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ephemeral_pk' && t[1]);
+            if (ephTag) {
+                this._updateMemberEphemeralKey(groupId, senderPubkey, ephTag[1]);
+                this._saveEphemeralKeys();
+            }
+        }
+
         // Filter group invites based on acceptPMs setting
         if (!isOwn && this.settings.acceptPMs !== 'enabled' && !this.groupConversations.has(groupId)) {
             if (this.settings.acceptPMs === 'disabled') return;
@@ -14450,6 +14791,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Route group reactions (kind 7) before regular message processing
         if (rumor.kind === 7) {
             this.handleGroupReaction(rumor, senderPubkey);
+            return;
+        }
+
+        // Handle key-resync: a member came back online and is re-establishing ephemeral keys.
+        // The ephemeral_pk was already extracted above; just silently consume the message.
+        if (typeTag && typeTag[1] === 'key-resync') {
             return;
         }
 
@@ -14756,11 +15103,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         tags.push(['type', 'group-invite']);
         tags.push(['x', nymMessageId]);
 
+        // Bootstrap ephemeral keys: include our first ephemeral pk so members
+        // can start encrypting to it instead of our real pubkey.
+        const initialEph = this._ensureSelfEphemeralKey(groupId);
+        tags.push(['ephemeral_pk', initialEph.pk]);
+
         const rumor = { kind: 14, created_at: now, tags, content: inviteContent, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
 
+        // First invite always uses real pubkeys (no ephemeral keys established yet)
         await this._sendGiftWrapsAsync(allMembers, rumor, expirationTs);
+        this._saveEphemeralKeys();
 
         // addGroupConversation creates the sidebar item (existing is null at this point)
         this.addGroupConversation(groupId, name, allMembers, Date.now());
@@ -14809,11 +15163,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         tags.push(['type', 'group-add-member']);
         tags.push(['x', nymMessageId]);
 
+        // Include our ephemeral pk so the new member (and existing members) learn it
+        const eph = this._ensureSelfEphemeralKey(groupId);
+        tags.push(['ephemeral_pk', eph.pk]);
+
         const rumor = { kind: 14, created_at: now, tags, content: addContent, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
 
-        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs);
+        // New member doesn't have an ephemeral key yet, so their wrap uses real pubkey.
+        // Existing members with ephemeral keys will get theirs used automatically.
+        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
+        this._saveEphemeralKeys();
 
         this.updateGroupConversationUI(groupId);
         this._saveGroupConversations();
@@ -14837,9 +15198,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             || (this.nostrLoginMethod === 'nip46' && !!(_nip46State && _nip46State.connected));
     }
 
-    _sendGiftWraps(members, rumor, expirationTs) {
+    _sendGiftWraps(members, rumor, expirationTs, groupId = null) {
         for (const pubkey of members) {
-            const wrapped = this.nip59WrapEvent(rumor, this.privkey, pubkey, expirationTs);
+            // Use ephemeral recipient key when available (timing-attack mitigation)
+            const encryptTo = groupId ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
+            const wrapped = this.nip59WrapEvent(rumor, this.privkey, encryptTo, expirationTs);
             this.sendDMToRelays(['EVENT', wrapped]);
 
             if (this.activeCosmetics?.has('cosmetic-redacted')) {
@@ -14851,10 +15214,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Uses the local privkey when available, otherwise falls back to the
     // NIP-07 extension for sealing (nip44.encrypt + signEvent) while still
     // wrapping with a local ephemeral keypair.
-    async _sendGiftWrapsAsync(members, rumor, expirationTs) {
+    async _sendGiftWrapsAsync(members, rumor, expirationTs, groupId = null) {
         // Fast path — local key available
         if (this.privkey) {
-            this._sendGiftWraps(members, rumor, expirationTs);
+            this._sendGiftWraps(members, rumor, expirationTs, groupId);
             return;
         }
 
@@ -14870,10 +15233,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         for (const pubkey of members) {
             try {
+                // Use ephemeral recipient key when available (timing-attack mitigation)
+                const encryptTo = groupId ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
+
                 // Seal: encrypt rumor to recipient via extension or remote signer
                 const sealContent = useExtension
-                    ? await window.nostr.nip44.encrypt(pubkey, JSON.stringify(rumorWithId))
-                    : await _nip46Encrypt(pubkey, JSON.stringify(rumorWithId));
+                    ? await window.nostr.nip44.encrypt(encryptTo, JSON.stringify(rumorWithId))
+                    : await _nip46Encrypt(encryptTo, JSON.stringify(rumorWithId));
                 const sealUnsigned = {
                     kind: 13, content: sealContent, created_at: this.randomNow(), tags: []
                 };
@@ -14883,13 +15249,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                 // Wrap with local ephemeral keypair
                 const ephSk = NT.generateSecretKey();
-                const ckWrap = NT.nip44.getConversationKey(ephSk, pubkey);
+                const ckWrap = NT.nip44.getConversationKey(ephSk, encryptTo);
                 const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
                 const wrapUnsigned = {
                     kind: 1059,
                     content: wrapContent,
                     created_at: this.randomNow(),
-                    tags: [['p', pubkey]]
+                    tags: [['p', encryptTo]]
                 };
                 if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
 
@@ -14916,12 +15282,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const group = this.groupConversations.get(groupId);
         if (!group) return false;
         const now = Math.floor(Date.now() / 1000);
+
+        // If we haven't sent in this group recently, broadcast a key-resync first
+        // so all members get our fresh ephemeral key via their real pubkeys.
+        const ek = this.groupEphemeralKeys.get(groupId);
+        const lastSend = ek?._lastSendTime || 0;
+        if (ek?.self?.current && (now - lastSend) > 86400) {
+            await this._sendKeyResync(groupId);
+        }
+        if (!ek) { this._getGroupEphemeralKeys(groupId); }
+        this._getGroupEphemeralKeys(groupId)._lastSendTime = now;
+
         const nymMessageId = this.generateUUID();
 
         const tags = group.members.map(pk => ['p', pk]);
         tags.push(['g', groupId]);
         tags.push(['subject', group.name]);
         tags.push(['x', nymMessageId]);
+
+        // Ephemeral key rotation: generate next key and advertise it inside the rumor.
+        // Recipients will encrypt future messages to this key instead of our real pubkey.
+        const nextEph = this._rotateSelfEphemeralKey(groupId);
+        tags.push(['ephemeral_pk', nextEph.pk]);
 
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
@@ -14963,7 +15345,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displayMessage(msg);
         }
 
-        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs);
+        // Send gift wraps using ephemeral recipient keys when available
+        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
+        this._saveEphemeralKeys();
         return true;
     }
 
@@ -15009,13 +15393,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 tags.push(['type', 'group-leave']);
                 tags.push(['x', this.generateUUID()]);
                 const rumor = { kind: 14, created_at: now, tags, content: leaveContent, pubkey: this.pubkey };
-                // Send to remaining members only (not self)
-                await this._sendGiftWrapsAsync(otherMembers, rumor, null);
+                // Send to remaining members only (not self), using ephemeral keys
+                await this._sendGiftWrapsAsync(otherMembers, rumor, null, groupId);
             }
         }
         // Track the left group so it doesn't reappear from stale relay data
         this.leftGroups.add(groupId);
         this._saveLeftGroups();
+
+        // Clean up ephemeral keys for this group
+        this.groupEphemeralKeys.delete(groupId);
+        this._saveEphemeralKeys();
 
         // Remove persisted entry
         try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) {}
@@ -15073,9 +15461,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
 
         // Send to everyone including the kicked member so they can remove themselves
-        await this._sendGiftWrapsAsync(group.members, rumor, null);
+        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
 
-        // Update local state immediately
+        // Update local state immediately — also clean up kicked member's ephemeral key
+        const ek = this.groupEphemeralKeys.get(groupId);
+        if (ek) { delete ek.members[pubkey]; this._saveEphemeralKeys(); }
         group.members = group.members.filter(pk => pk !== pubkey);
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
@@ -20741,7 +21131,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.updateMessageInDOM(lookupId, newContent);
 
             // Send gift wraps to all group members
-            await this._sendGiftWrapsAsync(group.members, rumor, expirationTs);
+            await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
             return true;
         } catch (error) {
             this.displaySystemMessage('Failed to edit message: ' + error.message);
@@ -27006,7 +27396,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.268 ═══<br/>
+═══ Nymchat v3.58.269 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -27214,8 +27604,9 @@ async function checkSavedConnection() {
             // Apply cached shop items (styles/flairs) to the new ephemeral identity
             nym.applyCachedShopItemsToNewIdentity();
 
-            // Restore persisted group conversations for this keypair
+            // Restore persisted group conversations and ephemeral keys for this keypair
             nym._loadGroupConversations();
+            nym._loadEphemeralKeys();
             nym._loadLeftGroups();
 
             // Load synced settings from relay (groups, closed PMs, etc.)
@@ -27399,8 +27790,9 @@ async function initializeNym() {
         // Apply cached shop items (styles/flairs) to the new ephemeral identity
         nym.applyCachedShopItemsToNewIdentity();
 
-        // Restore persisted group conversations for this keypair
+        // Restore persisted group conversations and ephemeral keys for this keypair
         nym._loadGroupConversations();
+        nym._loadEphemeralKeys();
         nym._loadLeftGroups();
 
         // Load synced settings from relay (groups, closed PMs, etc.)
@@ -28110,8 +28502,9 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Reload blur setting now that pubkey is known
     nym.blurOthersImages = nym.loadImageBlurSettings();
 
-    // Restore persisted groups for this identity before relay history arrives
+    // Restore persisted groups and ephemeral keys for this identity before relay history arrives
     nym._loadGroupConversations();
+    nym._loadEphemeralKeys();
     nym._loadLeftGroups();
 
     // Update notification badge from persisted history
@@ -28198,6 +28591,40 @@ async function nostrSettingsSave() {
                     };
                 }
                 settingsPayload.groupConversations = groupData;
+            }
+        } catch (_) {}
+
+        // Include ephemeral keys for timing-attack mitigation sync
+        try {
+            if (nym.groupEphemeralKeys && nym.groupEphemeralKeys.size > 0) {
+                const ekData = {};
+                for (const [groupId, ek] of nym.groupEphemeralKeys) {
+                    ekData[groupId] = nym._serializeEphemeralKeys(ek);
+                }
+                settingsPayload.groupEphemeralKeys = ekData;
+            }
+        } catch (_) {}
+
+        // Include chat history backup for new-device recovery
+        try {
+            if (nym.pmMessages && nym.pmMessages.size > 0) {
+                const historyData = {};
+                for (const [convKey, messages] of nym.pmMessages) {
+                    if (convKey.startsWith('group-') && messages.length > 0) {
+                        historyData[convKey] = messages.slice(-100).map(m => ({
+                            id: m.id,
+                            pubkey: m.pubkey,
+                            content: m.content,
+                            created_at: m.created_at,
+                            isOwn: m.isOwn,
+                            groupId: m.groupId,
+                            nymMessageId: m.nymMessageId
+                        }));
+                    }
+                }
+                if (Object.keys(historyData).length > 0) {
+                    settingsPayload.groupMessageHistory = historyData;
+                }
             }
         } catch (_) {}
 
@@ -28765,6 +29192,31 @@ async function applyNostrSettings(s) {
 
     if (s.groupConversations && typeof s.groupConversations === 'object') {
         try { applyGroupData(s.groupConversations); } catch (_) {}
+    }
+
+    // Restore ephemeral keys from settings sync (timing-attack mitigation)
+    if (s.groupEphemeralKeys && typeof s.groupEphemeralKeys === 'object') {
+        try {
+            for (const [groupId, entry] of Object.entries(s.groupEphemeralKeys)) {
+                // Only apply if we don't already have keys for this group (local takes priority)
+                if (!nym.groupEphemeralKeys.has(groupId)) {
+                    nym.groupEphemeralKeys.set(groupId, nym._deserializeEphemeralEntry(entry));
+                }
+            }
+            nym._saveEphemeralKeys();
+        } catch (_) {}
+    }
+
+    // Restore chat history backup from settings sync
+    if (s.groupMessageHistory && typeof s.groupMessageHistory === 'object') {
+        try {
+            for (const [groupConvKey, messages] of Object.entries(s.groupMessageHistory)) {
+                if (!nym.pmMessages.has(groupConvKey) || nym.pmMessages.get(groupConvKey).length === 0) {
+                    nym.pmMessages.set(groupConvKey, messages);
+                    nym.channelDOMCache.delete(groupConvKey);
+                }
+            }
+        } catch (_) {}
     }
 
     // Retroactively remove left groups that were re-added by early-arriving
