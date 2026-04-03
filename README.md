@@ -78,9 +78,7 @@ Nymchat group chats go beyond standard NIP-17 with **rotating ephemeral recipien
 
 - **Timing-Attack Resistance** — In standard NIP-17, an observer watching relay traffic can see N gift wraps appear simultaneously to N different pubkeys and infer group membership. Nymchat eliminates this by rotating recipient pubkeys on every message. Each member generates a fresh ephemeral keypair when they send, advertises the new public key inside the encrypted rumor (`ephemeral_pk` tag), and all future messages to that member are addressed to their ephemeral key instead of their real pubkey. To an outside observer, every message appears to go to/from never-before-seen one-time pubkeys with no link to real identities.
 
-- **Post-Compromise Recovery** — If a device is compromised, the key-resync mechanism allows a user to broadcast a fresh ephemeral key to all group members (via real pubkeys as a one-time fallback). All subsequent messages return to using rotating keys.
-
-- **Automatic Resync** — When a user sends their first message in a group after 24+ hours of inactivity, the app automatically fires a key-resync to ensure all members have their fresh ephemeral key.
+- **Post-Compromise Recovery** — If a device is compromised, the user simply sends a new message. The fresh random ephemeral keypair advertised inside the encrypted rumor (`ephemeral_pk` tag) automatically replaces the old key for all group members — no out-of-band resync needed.
 
 - **Metadata Separation** — Relay subscription filters for real and ephemeral pubkeys use separate REQ messages with independent subscription IDs, preventing relays from linking ephemeral identities to real pubkeys via filter inspection.
 

@@ -559,6 +559,7 @@ class NYM {
         this.groupConversations = new Map();
         this.groupEphemeralKeys = new Map();
         this._ephemeralSubIds = [];
+        this._dmCatchupReady = Promise.resolve();
         this.currentGroup = null;
         this._newPMRecipients = [];
         this.groupMessageReaders = new Map();
@@ -10688,6 +10689,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Called on relay reconnection to retry any pending DMs and catch missed gift wraps
     retryPendingDMsOnReconnect() {
         // Re-request gift wraps since our last known PM to catch any missed during disconnect
+        let resolveCatchup;
+        this._dmCatchupReady = new Promise(r => { resolveCatchup = r; });
+
         if (this.pubkey && this.lastPMSyncTime) {
             const since = Math.max(
                 this.lastPMSyncTime - 300, // 5-min buffer before last known event
@@ -10723,6 +10727,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 });
             }
         }
+
+        // Allow 3 seconds for relays to deliver missed gift wraps (and update ephemeral keys)
+        // before allowing outbound group messages to proceed.
+        setTimeout(() => resolveCatchup(), 3000);
 
         if (this.pendingDMs.size === 0) return;
 
@@ -14502,9 +14510,15 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     // Update a member's ephemeral pubkey (called when we receive a message with ephemeral_pk tag).
-    _updateMemberEphemeralKey(groupId, realPubkey, ephemeralPk) {
+    // Uses timestamp ordering so out-of-order relay delivery doesn't overwrite a newer key.
+    _updateMemberEphemeralKey(groupId, realPubkey, ephemeralPk, messageTs) {
         const ek = this._getGroupEphemeralKeys(groupId);
-        ek.members[realPubkey] = ephemeralPk;
+        if (!ek._memberKeyTs) ek._memberKeyTs = {};
+        const prevTs = ek._memberKeyTs[realPubkey] || 0;
+        if ((messageTs || 0) >= prevTs) {
+            ek.members[realPubkey] = ephemeralPk;
+            ek._memberKeyTs[realPubkey] = messageTs || 0;
+        }
     }
 
     // Get the pubkey to encrypt TO for a given group member.
@@ -14617,6 +14631,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Serialize an ephemeral key entry for JSON storage.
     _serializeEphemeralKeys(ek) {
         const entry = { members: ek.members };
+        if (ek._memberKeyTs) entry.memberKeyTs = ek._memberKeyTs;
         if (ek.self) {
             entry.self = {
                 current: { sk: this._skToHex(ek.self.current.sk), pk: ek.self.current.pk },
@@ -14629,6 +14644,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Deserialize an ephemeral key entry from JSON storage.
     _deserializeEphemeralEntry(entry) {
         const ek = { members: entry.members || {} };
+        if (entry.memberKeyTs) ek._memberKeyTs = entry.memberKeyTs;
         if (entry.self) {
             ek.self = {
                 current: { sk: this._hexToSk(entry.self.current.sk), pk: entry.self.current.pk },
@@ -14654,14 +14670,17 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        // Merge member keys: prefer the most recently seen ephemeral pk.
-        // If synced has a key we don't, add it. If both have one, keep
-        // whichever is non-null (synced may be from a more recent message
-        // seen by the other device).
+        // Merge member keys using timestamps: keep whichever device saw
+        // the more recent message from each member.
+        if (!local._memberKeyTs) local._memberKeyTs = {};
+        const syncedTs = synced._memberKeyTs || {};
         if (synced.members) {
             for (const [realPk, ephPk] of Object.entries(synced.members)) {
-                if (!local.members[realPk]) {
+                const localTs = local._memberKeyTs[realPk] || 0;
+                const remoteTs = syncedTs[realPk] || 0;
+                if (!local.members[realPk] || remoteTs > localTs) {
                     local.members[realPk] = ephPk;
+                    local._memberKeyTs[realPk] = remoteTs;
                 }
             }
         }
@@ -14867,7 +14886,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         if (!isOwn) {
             const ephTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ephemeral_pk' && t[1]);
             if (ephTag) {
-                this._updateMemberEphemeralKey(groupId, senderPubkey, ephTag[1]);
+                this._updateMemberEphemeralKey(groupId, senderPubkey, ephTag[1], rumor.created_at || 0);
                 this._saveEphemeralKeys();
             }
         }
@@ -15382,6 +15401,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             this.displaySystemMessage('Group messages require a logged-in account');
             return false;
         }
+
+        // Wait for reconnect catch-up to finish so we have the latest
+        // ephemeral keys from missed messages before encrypting.
+        await this._dmCatchupReady;
 
         const group = this.groupConversations.get(groupId);
         if (!group) return false;
@@ -27494,7 +27517,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.273 ═══<br/>
+═══ Nymchat v3.58.274 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
