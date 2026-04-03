@@ -10306,7 +10306,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } catch (_) {}
 
             // Include ephemeral keys for timing-attack mitigation sync.
-            // Chain keys are stored encrypted (settings are gift-wrapped to self).
+            // Keys are stored encrypted (settings are gift-wrapped to self).
             try {
                 if (this.groupEphemeralKeys && this.groupEphemeralKeys.size > 0) {
                     const ekData = {};
@@ -13726,7 +13726,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     }
                 }
                 if (wrapRecipients.length > 0) {
-                    const myEphPks = this._getAllSelfEphemeralPubkeys();
+                    // Use ALL known ephemeral pubkeys (not the subscription-limited set)
+                    // so messages to older keys aren't dropped before decryption.
+                    const myEphPks = this._getAllKnownEphemeralPubkeys();
                     const isForMe = wrapRecipients.includes(this.pubkey) ||
                         wrapRecipients.some(r => myEphPks.includes(r));
                     if (!isForMe) return; // not for me
@@ -14457,20 +14459,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return bytes;
     }
 
-    // Ratchet a chain key forward: nextSk = HKDF(currentSk, "nym-ephemeral-next")
-    _ratchetKey(sk) {
-        const NT = window.NostrTools;
-        const info = new TextEncoder().encode('nym-ephemeral-next');
-        const prk = NT._hkdfExtract(NT._sha256, sk, new Uint8Array(32));
-        return NT._hkdfExpand(NT._sha256, prk, info, 32);
-    }
-
-    // Generate the initial chain key for a new group (random seed).
-    _generateInitialChainKey() {
-        const NT = window.NostrTools;
-        return NT.generateSecretKey();
-    }
-
     // Get or create the ephemeral key entry for a group.
     _getGroupEphemeralKeys(groupId) {
         if (!this.groupEphemeralKeys.has(groupId)) {
@@ -14484,7 +14472,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const NT = window.NostrTools;
         const ek = this._getGroupEphemeralKeys(groupId);
         if (!ek.self) {
-            const sk = this._generateInitialChainKey();
+            const sk = NT.generateSecretKey();
             const pk = NT.getPublicKey(sk);
             ek.self = { current: { sk, pk }, prev: [] };
         }
@@ -14492,24 +14480,21 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     }
 
     // Rotate own ephemeral key for a group (called after sending a message).
-    // Ratchets the chain forward. Keeps a window of recent keys for in-flight
-    // messages, then deletes old ones for forward secrecy.
+    // Generates a fresh random keypair. Previous keys are retained for
+    // in-flight message tolerance and multi-device sync.
     _rotateSelfEphemeralKey(groupId) {
         const NT = window.NostrTools;
         const ek = this._getGroupEphemeralKeys(groupId);
         if (!ek.self) {
             this._ensureSelfEphemeralKey(groupId);
         }
-        // Move current to prev window
+        // Move current to prev
         if (ek.self.current) {
             ek.self.prev.unshift(ek.self.current);
-            // Keep last 10 keys for in-flight message tolerance, delete older
-            // ones for forward secrecy. Chat history is preserved via settings
-            // sync message backup, not key retention.
             if (ek.self.prev.length > 10) ek.self.prev = ek.self.prev.slice(0, 10);
         }
-        // Ratchet forward
-        const nextSk = this._ratchetKey(ek.self.current.sk);
+        // Generate fresh random keypair
+        const nextSk = NT.generateSecretKey();
         const nextPk = NT.getPublicKey(nextSk);
         ek.self.current = { sk: nextSk, pk: nextPk };
         this._invalidateEphPkCache();
@@ -14566,22 +14551,27 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return realPubkey; // fallback to real pubkey
     }
 
-    // Collect ephemeral pubkeys we should subscribe to on relays.
-    // Only includes current + last few per group to avoid overwhelming relays.
-    // All keys are still retained for decryption via _tryDecryptWithEphemeralKeys.
-    _getAllSelfEphemeralPubkeys() {
-        const MAX_SUB_KEYS_PER_GROUP = 5;
+    // Collect ALL ephemeral pubkeys we own (for isForMe checks and decryption).
+    // Includes current + all prev keys across all groups.
+    _getAllKnownEphemeralPubkeys() {
         const pks = new Set();
         for (const [, ek] of this.groupEphemeralKeys) {
             if (ek.self) {
                 pks.add(ek.self.current.pk);
-                const prevSlice = ek.self.prev.slice(0, MAX_SUB_KEYS_PER_GROUP);
-                for (const prev of prevSlice) {
+                for (const prev of ek.self.prev) {
                     pks.add(prev.pk);
                 }
             }
         }
         return [...pks];
+    }
+
+    // Collect ephemeral pubkeys to subscribe to on relays.
+    // Includes current + all prev keys (prev is already capped at 10 by rotation).
+    // We subscribe to all stored keys so messages to any known key get delivered.
+    _getAllSelfEphemeralPubkeys() {
+        // Reuse the full set — prev is already bounded by _rotateSelfEphemeralKey
+        return this._getAllKnownEphemeralPubkeys();
     }
 
     // Try to decrypt a gift wrap using ephemeral keys. Returns {seal, rumor} or null.
@@ -14677,7 +14667,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         return ek;
     }
 
-    // Merge synced ephemeral keys into the local set for a group
+    // Merge synced ephemeral keys into the local set for a group.
+    // Handles multi-device: both devices accumulate all keys so either
+    // can decrypt messages addressed to any device's ephemeral key.
     _mergeEphemeralKeys(groupId, syncedEntry) {
         const synced = this._deserializeEphemeralEntry(syncedEntry);
         const local = this.groupEphemeralKeys.get(groupId);
@@ -29342,7 +29334,9 @@ async function applyNostrSettings(s) {
         try { applyGroupData(s.groupConversations); } catch (_) {}
     }
 
-    // Restore ephemeral keys from settings sync
+    // Restore ephemeral keys from settings sync (timing-attack mitigation).
+    // Merge rather than replace — handles multi-device by accumulating all
+    // keys so any device can decrypt messages sent to any other device's key.
     if (s.groupEphemeralKeys && typeof s.groupEphemeralKeys === 'object') {
         try {
             for (const [groupId, entry] of Object.entries(s.groupEphemeralKeys)) {
