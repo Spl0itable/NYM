@@ -38,7 +38,7 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 
 ### Messaging
 - **Private Messages** - End-to-end encrypted 1:1 PMs using [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) (kind 14 rumor format) wrapped in NIP-59 gift wraps
-- **Private Group Chats** - End-to-end encrypted multi-party group chats via [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) / [NIP-59](https://github.com/nostr-protocol/nips/blob/master/59.md) with rotating ephemeral recipient keys, forward secrecy via a ratcheting key chain, and automatic post-compromise recovery — each message is individually gift-wrapped per member using one-time pubkeys so relays cannot correlate group membership, timing, or real identities
+- **Private Group Chats** - End-to-end encrypted multi-party group chats via [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) / [NIP-59](https://github.com/nostr-protocol/nips/blob/master/59.md); each message is individually gift-wrapped per member with an ephemeral sender key and a randomized envelope timestamp (±2 h) so relays cannot correlate group membership or timing
 - **Rich Text** - Markdown support for bold, italic, strikethrough, code blocks, and quotes
 - **Message Reactions** - React to messages with emojis ([NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md))
 - **Auto-Reply** - Set away messages with `/brb` command
@@ -72,21 +72,6 @@ Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (
 - NIP-17 `kind 14` rumor (message content + metadata) sealed inside NIP-59 `kind 1059` gift wraps
 - Each gift wrap uses a one-time ephemeral sender key; the `created_at` timestamp is randomized ±2 hours so relays cannot correlate senders, recipients, or timing
 - Group chats send one gift wrap per member — each individually encrypted to that member's public key
-
-#### Enhanced Group Chat Security
-Nymchat group chats go beyond standard NIP-17 with **rotating ephemeral recipient keys** to mitigate timing-based metadata attacks:
-
-- **Timing-Attack Resistance** — In standard NIP-17, an observer watching relay traffic can see N gift wraps appear simultaneously to N different pubkeys and infer group membership. Nymchat eliminates this by rotating recipient pubkeys on every message. Each member generates a fresh ephemeral keypair when they send, advertises the new public key inside the encrypted rumor (`ephemeral_pk` tag), and all future messages to that member are addressed to their ephemeral key instead of their real pubkey. To an outside observer, every message appears to go to/from never-before-seen one-time pubkeys with no link to real identities.
-
-- **Forward Secrecy** — Ephemeral keys use a forward-ratcheting chain (`key_N = HKDF(key_{N-1}, "nym-ephemeral-next")`). Old chain keys are deleted after a small window, making past messages cryptographically unrecoverable from key material alone. Partial chat history (up to 100 of the latest messages per group) is preserved separately via an encrypted settings backup (gift-wrapped to self) so messages survive across devices.
-
-- **Post-Compromise Recovery** — If a device is compromised, the key-resync mechanism allows a user to broadcast a fresh ephemeral key to all group members (via real pubkeys as a one-time fallback), re-establishing the ephemeral chain. All subsequent messages return to using rotating keys.
-
-- **Automatic Resync** — When a user sends their first message in a group after 24+ hours of inactivity, the app automatically fires a key-resync to ensure all members have their fresh ephemeral key.
-
-- **Metadata Separation** — Relay subscription filters for real and ephemeral pubkeys use separate REQ messages with independent subscription IDs, preventing relays from linking ephemeral identities to real pubkeys via filter inspection.
-
-- **Backward Compatible** — Old clients ignore the unknown `ephemeral_pk` tag per Nostr convention. New clients fall back to real pubkeys for members who haven't advertised an ephemeral key yet. Existing groups upgrade organically as members update.
 
 ### Reactions & Zaps
 - Reaction events `kind 7` (NIP-25) with `['k', originalKind]` tag for proper categorization
