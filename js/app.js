@@ -14507,40 +14507,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         ek.members[realPubkey] = ephemeralPk;
     }
 
-    // Send a key-resync message to a group using REAL pubkeys (guaranteed deliverable).
-    // This is used when coming back online after extended inactivity to re-establish
-    // ephemeral key exchange. One-time privacy cost to get back in sync.
-    async _sendKeyResync(groupId) {
-        if (!this._canSendGiftWraps()) return;
-        const group = this.groupConversations.get(groupId);
-        if (!group) return;
-
-        const now = Math.floor(Date.now() / 1000);
-        const freshKey = this._rotateSelfEphemeralKey(groupId);
-        const tags = group.members.map(pk => ['p', pk]);
-        tags.push(['g', groupId]);
-        tags.push(['subject', group.name]);
-        tags.push(['type', 'key-resync']);
-        tags.push(['ephemeral_pk', freshKey.pk]);
-
-        const rumor = { kind: 14, created_at: now, tags, content: '', pubkey: this.pubkey };
-
-        // Send to REAL pubkeys — bypasses ephemeral routing so it always arrives.
-        await this._sendGiftWrapsAsync(group.members, rumor, null);
-        this._saveEphemeralKeys();
-    }
-
-    // Check if we might be stale in a group and need to resync.
-    async _checkEphemeralKeyFreshness(groupId) {
-        const ek = this.groupEphemeralKeys.get(groupId);
-        if (!ek) return;
-
-        if (ek._needsResync) {
-            delete ek._needsResync;
-            await this._sendKeyResync(groupId);
-        }
-    }
-
     // Get the pubkey to encrypt TO for a given group member.
     // Returns their ephemeral pk if known, otherwise their real pk.
     _getEncryptionPubkey(groupId, realPubkey) {
@@ -14642,7 +14608,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Only stores counters + member pubkeys — secret keys are derived on demand.
     // Serialize an ephemeral key entry for JSON storage.
     _serializeEphemeralKeys(ek) {
-        const entry = { members: ek.members, lastSendTime: ek._lastSendTime || 0 };
+        const entry = { members: ek.members };
         if (ek.self) {
             entry.self = {
                 current: { sk: this._skToHex(ek.self.current.sk), pk: ek.self.current.pk },
@@ -14655,7 +14621,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     // Deserialize an ephemeral key entry from JSON storage.
     _deserializeEphemeralEntry(entry) {
         const ek = { members: entry.members || {} };
-        if (entry.lastSendTime) ek._lastSendTime = entry.lastSendTime;
         if (entry.self) {
             ek.self = {
                 current: { sk: this._hexToSk(entry.self.current.sk), pk: entry.self.current.pk },
@@ -14718,11 +14683,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     }
                 }
             }
-        }
-
-        // Merge lastSendTime — keep the most recent
-        if (synced._lastSendTime && (!local._lastSendTime || synced._lastSendTime > local._lastSendTime)) {
-            local._lastSendTime = synced._lastSendTime;
         }
 
         this._invalidateEphPkCache();
@@ -14930,8 +14890,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             return;
         }
 
-        // Handle key-resync: a member came back online and is re-establishing ephemeral keys.
-        // The ephemeral_pk was already extracted above; just silently consume the message.
+        // Handle key-resync from older clients. The ephemeral_pk was already
+        // extracted above; just silently consume so it doesn't display as a message.
         if (typeTag && typeTag[1] === 'key-resync') {
             return;
         }
@@ -15418,16 +15378,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const group = this.groupConversations.get(groupId);
         if (!group) return false;
         const now = Math.floor(Date.now() / 1000);
-
-        // If we haven't sent in this group recently, broadcast a key-resync first
-        // so all members get our fresh ephemeral key via their real pubkeys.
-        const ek = this.groupEphemeralKeys.get(groupId);
-        const lastSend = ek?._lastSendTime || 0;
-        if (ek?.self?.current && (now - lastSend) > 86400) {
-            await this._sendKeyResync(groupId);
-        }
-        if (!ek) { this._getGroupEphemeralKeys(groupId); }
-        this._getGroupEphemeralKeys(groupId)._lastSendTime = now;
 
         const nymMessageId = this.generateUUID();
 
@@ -27536,7 +27486,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.271 ═══<br/>
+═══ Nymchat v3.58.272 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>

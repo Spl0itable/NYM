@@ -2491,7 +2491,7 @@ var BOT_AVATAR = "https://nymchat.app/images/nymbot-icon.png";
 var BOT_BANNER = "https://nymchat.app/images/NYM-banner.png";
 var BOT_ABOUT = "Nymchat bot — type ?help for commands";
 var BOT_LUD16 = "69420@wallet.yakihonne.com";
-var NYMCHAT_VERSION = "3.58.271";
+var NYMCHAT_VERSION = "3.58.272";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2969,8 +2969,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Group chats use rotating ephemeral recipient keys to prevent timing-based metadata attacks.",
   "In standard NIP-17, an observer can see N gift wraps appear simultaneously to N pubkeys and infer group membership. Nymchat eliminates this by rotating recipient pubkeys on every message.",
   "How it works: Each member generates a fresh ephemeral keypair when they send a message. The new public key is advertised inside the encrypted rumor (ephemeral_pk tag). Future messages to that member use their ephemeral key instead of their real pubkey. To an outside observer, every message goes to/from never-before-seen one-time pubkeys — no link to real identities.",
-  "Post-compromise recovery: If a key is compromised, the key-resync mechanism broadcasts a fresh ephemeral key to all group members via real pubkeys. All subsequent messages return to using rotating keys.",
-  "Automatic resync: When a user sends their first message after 24+ hours of inactivity, the app auto-fires a key-resync so all members have their fresh key.",
+  "Post-compromise recovery: If a device is compromised, the next message the user sends advertises a fresh ephemeral key to all group members via the in-band ephemeral_pk tag. Members without an ephemeral key for a sender fall back to the real pubkey.",
   "Backward compatible: Old clients ignore the unknown tag. New clients fall back to real pubkeys for members who haven't upgraded yet. Existing groups upgrade organically.",
   "",
   "=== THEMES & APPEARANCE (in Settings > Theme & Appearance) ===",
@@ -3032,7 +3031,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Start a DM: /pm @nym, or click a user > Send PM.",
   "DMs are end-to-end encrypted with NIP-44 + NIP-17 gift wraps.",
   "Group chats: /group @user1 @user2 [GroupName] — creates an encrypted group.",
-  "Group chats use NIP-17 gift wraps with rotating ephemeral recipient keys for enhanced privacy: timing-attack resistance (every message uses one-time pubkeys so observers can't infer group membership) and post-compromise recovery (automatic key-resync after inactivity).",
+  "Group chats use NIP-17 gift wraps with rotating ephemeral recipient keys for enhanced privacy: timing-attack resistance (every message uses one-time pubkeys so observers can't infer group membership) and post-compromise recovery (next message advertises fresh key).",
   "/addmember @user — add someone to an existing group.",
   "/groupinfo — show current group members.",
   "Remove members via the context menu.",
