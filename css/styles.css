@@ -8458,18 +8458,21 @@ body.performance-mode .context-menu-overlay {
 }
 
 body.performance-mode .channel-context-menu,
-body.performance-mode .reactors-modal,
 body.performance-mode .autocomplete-dropdown,
 body.performance-mode .emoji-autocomplete {
     background: var(--bg-tertiary);
 }
 
-body.performance-mode .modal-overlay {
+body.performance-mode .modal,
+body.performance-mode .shop-modal {
     background: rgba(0, 0, 0, 0.7);
 }
 
 body.performance-mode .modal-content,
-body.performance-mode .shop-content {
+body.performance-mode .shop-content,
+body.performance-mode .reactors-modal,
+body.performance-mode .enhanced-emoji-modal,
+body.performance-mode .reaction-picker {
     background: var(--bg-secondary);
 }
 
@@ -8495,7 +8498,7 @@ body.performance-mode .tutorial-card {
     background: var(--bg-tertiary);
 }
 
-body.performance-mode .image-modal-overlay {
+body.performance-mode .image-modal {
     background: rgba(0, 0, 0, 0.85);
 }
 
