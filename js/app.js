@@ -7194,22 +7194,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (!resp.ok) return;
             const data = await resp.json();
             if (data.event) {
-                // Publish the signed bot event (and profile if present) to all connected relays
-                const events = [data.event];
-                if (data.profile) events.unshift(data.profile);
-                for (const evt of events) {
-                    const msg = JSON.stringify(['EVENT', evt]);
-                    if (this.useRelayProxy && this.poolSockets.length > 0) {
-                        for (const pool of this.poolSockets) {
-                            if (pool.ws && pool.ws.readyState === WebSocket.OPEN) {
-                                try { pool.ws.send(msg); } catch {}
-                            }
+                // Publish the signed bot event to all connected relays
+                const msg = JSON.stringify(['EVENT', data.event]);
+                if (this.useRelayProxy && this.poolSockets.length > 0) {
+                    for (const pool of this.poolSockets) {
+                        if (pool.ws && pool.ws.readyState === WebSocket.OPEN) {
+                            try { pool.ws.send(msg); } catch {}
                         }
-                    } else {
-                        for (const [, ws] of this.relayPool) {
-                            if (ws.readyState === WebSocket.OPEN) {
-                                try { ws.send(msg); } catch {}
-                            }
+                    }
+                } else {
+                    for (const [, ws] of this.relayPool) {
+                        if (ws.readyState === WebSocket.OPEN) {
+                            try { ws.send(msg); } catch {}
                         }
                     }
                 }
@@ -27517,7 +27513,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.274 ═══<br/>
+═══ Nymchat v3.58.275 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
