@@ -1915,8 +1915,6 @@ body.light-mode.chat-bubbles .read-more-btn {
     background: rgb(from var(--secondary) r g b / 0.1);
 }
 
-
-
 .message-content h1,
 .message-content h2,
 .message-content h3 {
