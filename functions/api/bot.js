@@ -2487,10 +2487,6 @@ function signEvent(evt, privkeyHex) {
   return evt;
 }
 var BOT_NYM = "Nymbot";
-var BOT_AVATAR = "https://nymchat.app/images/nymbot-icon.png";
-var BOT_BANNER = "https://nymchat.app/images/NYM-banner.png";
-var BOT_ABOUT = "Nymchat bot — type ?help for commands";
-var BOT_LUD16 = "69420@wallet.yakihonne.com";
 var NYMCHAT_VERSION = "3.58.274";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
@@ -2704,26 +2700,7 @@ async function onRequest(context) {
 
   var signed = signEvent(event, privkey);
 
-  // Build kind 0 profile event so the client can publish it
-  var profileContent = JSON.stringify({
-    name: BOT_NYM,
-    display_name: BOT_NYM,
-    about: BOT_ABOUT,
-    picture: BOT_AVATAR,
-    banner: BOT_BANNER,
-    lud16: BOT_LUD16,
-    bot: true
-  });
-  var profileEvent = {
-    kind: 0,
-    created_at: now,
-    tags: [],
-    content: profileContent,
-    pubkey: pubkey
-  };
-  var signedProfile = signEvent(profileEvent, privkey);
-
-  return new Response(JSON.stringify({ event: signed, profile: signedProfile }), {
+  return new Response(JSON.stringify({ event: signed }), {
     status: 200,
     headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
   });
