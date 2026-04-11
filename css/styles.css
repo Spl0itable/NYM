@@ -4335,7 +4335,7 @@ body.light-mode .send-btn:hover:not(:disabled) {
     box-shadow: 0 0 15px rgb(from var(--primary) r g b / 0.1);
 }
 
-body.light-mode *:not(.message-author) {
+body.light-mode {
     text-shadow: none;
 }
 

@@ -568,6 +568,7 @@ class NYM {
         this.nostrFollowProfiles = [];
         this._followListFetched = false;
         this.unreadCounts = new Map();
+        this.channelLastActivity = new Map();
         this.blockedUsers = new Set();
         this.friends = new Set();
         this.blockedKeywords = new Set();
@@ -18305,6 +18306,19 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Check if message already exists
             const exists = this.messages.get(storageKey).some(m => m.id === message.id);
             if (!exists) {
+                // Track most recent message time for channel sort ordering
+                const msgTime = (message.created_at || 0) * 1000;
+                const prevActivity = this.channelLastActivity.get(storageKey) || 0;
+                if (msgTime > prevActivity) {
+                    this.channelLastActivity.set(storageKey, msgTime);
+                    // Debounced sort so discovered/historical channels order by activity
+                    if (this._sortDebounceTimer) clearTimeout(this._sortDebounceTimer);
+                    this._sortDebounceTimer = setTimeout(() => {
+                        this._sortDebounceTimer = null;
+                        this.sortChannelsByActivity();
+                    }, 300);
+                }
+
                 // Add message and sort by raw created_at (integer seconds) for
                 // deterministic ordering across relays; arrival sequence breaks ties
                 // within the same second (best proxy for actual send order).
@@ -24335,6 +24349,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     updateUnreadCount(channel) {
         const count = (this.unreadCounts.get(channel) || 0) + 1;
         this.unreadCounts.set(channel, count);
+        this.channelLastActivity.set(channel, Date.now());
 
         // Handle PM unread counts using conversation key
         if (channel.startsWith('pm-')) {
@@ -24451,8 +24466,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const aUnread = this.unreadCounts.get(aChannel) || 0;
             const bUnread = this.unreadCounts.get(bChannel) || 0;
 
-            if (aUnread === bUnread) return 0;
-            return bUnread - aUnread;
+            if (aUnread !== bUnread) return bUnread - aUnread;
+
+            // Tiebreaker: sort by most recent activity
+            const aActivity = this.channelLastActivity.get(aChannel) || 0;
+            const bActivity = this.channelLastActivity.get(bChannel) || 0;
+            return bActivity - aActivity;
         });
 
         // Clear and re-append
@@ -27513,7 +27532,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.276 ═══<br/>
+═══ Nymchat v3.58.277 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -29421,7 +29440,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Scale all logo-ascii elements to fit inside their containers.
-    // Uses transform: scale() instead of font-size to bypass Android minimum font-size enforcement.
+    // Uses transform: scale() to bypass Android minimum font-size enforcement.
+    // Temporarily unconstrain the element to measure its true content width,
+    // since Android WebView may clamp scrollWidth to clientWidth with overflow:hidden.
     function scaleLogo(logo) {
         const container = logo.parentElement;
         if (!container || container.clientWidth === 0) return;
@@ -29431,7 +29452,7 @@ document.addEventListener('DOMContentLoaded', () => {
             logo.dataset.baseMarginBottom = parseFloat(getComputedStyle(logo).marginBottom) || 0;
         }
 
-        // Reset transform to measure natural width
+        // Reset any previous scaling
         logo.style.transform = '';
         logo.style.marginBottom = '';
 
@@ -29440,11 +29461,19 @@ document.addEventListener('DOMContentLoaded', () => {
             - parseFloat(containerStyle.paddingLeft)
             - parseFloat(containerStyle.paddingRight);
 
-        const naturalWidth = logo.scrollWidth;
+        // Temporarily unconstrain to measure true natural width
+        // (Android WebView may clamp scrollWidth when overflow:hidden)
+        logo.style.position = 'absolute';
+        logo.style.width = 'max-content';
+        logo.style.overflow = 'visible';
+        const naturalWidth = logo.offsetWidth;
+        const naturalHeight = logo.offsetHeight;
+        logo.style.position = '';
+        logo.style.width = '';
+        logo.style.overflow = '';
 
         if (naturalWidth > availableWidth && availableWidth > 0) {
             const scale = availableWidth / naturalWidth;
-            const naturalHeight = logo.offsetHeight;
             logo.style.transformOrigin = 'top center';
             logo.style.transform = `scale(${scale})`;
             // Collapse the unused vertical space left by the visual scaling
