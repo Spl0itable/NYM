@@ -18997,7 +18997,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
                     // Get author's flair if found
                     const flairHtml = authorPubkey ? this.getFlairForUser(authorPubkey) : '';
-                    const displayAuthor = `${this.escapeHtml(cleanAuthor)}${flairHtml}`;
+                    // Wrap the #suffix in nym-suffix span for proper dimming
+                    const suffixMatch = cleanAuthor.match(/^(.+)(#[0-9a-f]{4})$/i);
+                    const displayAuthor = suffixMatch
+                        ? `${this.escapeHtml(suffixMatch[1])}<span class="nym-suffix">${this.escapeHtml(suffixMatch[2])}</span>${flairHtml}`
+                        : `${this.escapeHtml(cleanAuthor)}${flairHtml}`;
 
                     html += `<blockquote><span class="quote-author">@${displayAuthor}:</span> ${this.formatMessageWithQuotes(quotedMessage, depth + 1)}</blockquote>`;
                 } else {
@@ -19144,7 +19148,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             /(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?])/gi,
             (match, mentionWithSuffix, simpleMention, whitespace, channel) => {
                 if (mentionWithSuffix) {
-                    return `<span style="color: var(--secondary)">${mentionWithSuffix}</span>`;
+                    // Wrap the #suffix in nym-suffix span for proper dimming
+                    const suffixIdx = mentionWithSuffix.search(/#[0-9a-f]{4}$/i);
+                    const namePart = mentionWithSuffix.substring(0, suffixIdx);
+                    const suffixPart = mentionWithSuffix.substring(suffixIdx);
+                    return `<span style="color: var(--secondary)">${namePart}<span class="nym-suffix">${suffixPart}</span></span>`;
                 } else if (simpleMention) {
                     return `<span style="color: var(--secondary)">${simpleMention}</span>`;
                 } else if (channel) {
@@ -27573,7 +27581,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.283 ═══<br/>
+═══ Nymchat v3.58.284 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
