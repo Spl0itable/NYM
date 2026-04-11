@@ -27532,7 +27532,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.277 ═══<br/>
+═══ Nymchat v3.58.278 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -29441,8 +29441,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Scale all logo-ascii elements to fit inside their containers.
     // Uses transform: scale() to bypass Android minimum font-size enforcement.
-    // Temporarily unconstrain the element to measure its true content width,
-    // since Android WebView may clamp scrollWidth to clientWidth with overflow:hidden.
+    // Clones the element off-screen for reliable width measurement on all platforms
+    // (Android WebView clamps scrollWidth/offsetWidth when the element is in-flow).
     function scaleLogo(logo) {
         const container = logo.parentElement;
         if (!container || container.clientWidth === 0) return;
@@ -29461,16 +29461,17 @@ document.addEventListener('DOMContentLoaded', () => {
             - parseFloat(containerStyle.paddingLeft)
             - parseFloat(containerStyle.paddingRight);
 
-        // Temporarily unconstrain to measure true natural width
-        // (Android WebView may clamp scrollWidth when overflow:hidden)
-        logo.style.position = 'absolute';
-        logo.style.width = 'max-content';
-        logo.style.overflow = 'visible';
-        const naturalWidth = logo.offsetWidth;
-        const naturalHeight = logo.offsetHeight;
-        logo.style.position = '';
-        logo.style.width = '';
-        logo.style.overflow = '';
+        // Clone off-screen as a direct child of body to measure true natural width
+        // free from any parent flex/overflow/width constraints.
+        // Copy computed font properties so the clone renders at the same size the
+        // browser actually uses (including Android WebView's enforced minimum).
+        const logoStyle = getComputedStyle(logo);
+        const clone = logo.cloneNode(true);
+        clone.style.cssText = `position:absolute;left:-99999px;top:0;width:auto;max-width:none;overflow:visible;white-space:pre;visibility:hidden;pointer-events:none;font-size:${logoStyle.fontSize};font-family:${logoStyle.fontFamily};line-height:${logoStyle.lineHeight};`;
+        document.body.appendChild(clone);
+        const naturalWidth = clone.offsetWidth;
+        const naturalHeight = clone.offsetHeight;
+        document.body.removeChild(clone);
 
         if (naturalWidth > availableWidth && availableWidth > 0) {
             const scale = availableWidth / naturalWidth;
