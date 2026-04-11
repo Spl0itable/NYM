@@ -197,9 +197,6 @@ body::after {
     white-space: pre;
     overflow: hidden;
     opacity: 0.9;
-    -webkit-text-size-adjust: none;
-    -moz-text-size-adjust: none;
-    text-size-adjust: none;
 }
 
 .nym-display {
@@ -619,13 +616,25 @@ body::after {
     padding: 16px 12px;
     border-top: 1px solid var(--glass-border);
     gap: 6px;
-    flex-direction: column;
+    flex-direction: row;
 }
 
 .sidebar-actions .icon-btn {
-    width: 100%;
+    flex: 1;
     padding: 10px;
     text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.sidebar-actions .icon-btn svg {
+    flex-shrink: 0;
+}
+
+.sidebar-actions .icon-btn .btn-label {
+    display: none;
 }
 
 .user-list {
@@ -924,6 +933,9 @@ body.light-mode .channel-context-menu {
     transition: all var(--transition);
     text-transform: uppercase;
     letter-spacing: 0.8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
 }
 
 .icon-btn:hover {

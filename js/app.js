@@ -27532,7 +27532,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.278 ═══<br/>
+═══ Nymchat v3.58.279 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -29439,69 +29439,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cb) cb.checked = true;
     }
 
-    // Scale all logo-ascii elements to fit inside their containers.
-    // Uses transform: scale() to bypass Android minimum font-size enforcement.
-    // Clones the element off-screen for reliable width measurement on all platforms
-    // (Android WebView clamps scrollWidth/offsetWidth when the element is in-flow).
-    function scaleLogo(logo) {
-        const container = logo.parentElement;
-        if (!container || container.clientWidth === 0) return;
-
-        // Cache the original margin-bottom before we modify it
-        if (!logo.dataset.baseMarginBottom) {
-            logo.dataset.baseMarginBottom = parseFloat(getComputedStyle(logo).marginBottom) || 0;
-        }
-
-        // Reset any previous scaling
-        logo.style.transform = '';
-        logo.style.marginBottom = '';
-
-        const containerStyle = getComputedStyle(container);
-        const availableWidth = container.clientWidth
-            - parseFloat(containerStyle.paddingLeft)
-            - parseFloat(containerStyle.paddingRight);
-
-        // Clone off-screen as a direct child of body to measure true natural width
-        // free from any parent flex/overflow/width constraints.
-        // Copy computed font properties so the clone renders at the same size the
-        // browser actually uses (including Android WebView's enforced minimum).
-        const logoStyle = getComputedStyle(logo);
-        const clone = logo.cloneNode(true);
-        clone.style.cssText = `position:absolute;left:-99999px;top:0;width:auto;max-width:none;overflow:visible;white-space:pre;visibility:hidden;pointer-events:none;font-size:${logoStyle.fontSize};font-family:${logoStyle.fontFamily};line-height:${logoStyle.lineHeight};`;
-        document.body.appendChild(clone);
-        const naturalWidth = clone.offsetWidth;
-        const naturalHeight = clone.offsetHeight;
-        document.body.removeChild(clone);
-
-        if (naturalWidth > availableWidth && availableWidth > 0) {
-            const scale = availableWidth / naturalWidth;
-            logo.style.transformOrigin = 'top center';
-            logo.style.transform = `scale(${scale})`;
-            // Collapse the unused vertical space left by the visual scaling
-            const baseMargin = parseFloat(logo.dataset.baseMarginBottom);
-            logo.style.marginBottom = (baseMargin - naturalHeight * (1 - scale)) + 'px';
-        }
-    }
-
-    const logoObserver = new ResizeObserver(entries => {
-        for (const entry of entries) {
-            const logo = entry.target.querySelector('.logo-ascii');
-            if (logo) scaleLogo(logo);
-        }
-    });
-    document.querySelectorAll('.logo-ascii').forEach(logo => {
-        scaleLogo(logo);
-        if (logo.parentElement) logoObserver.observe(logo.parentElement);
-    });
-    // Re-scale when setup modal becomes visible (display:none -> display:flex)
-    const setupModal = document.getElementById('setupModal');
-    if (setupModal) {
-        new MutationObserver(() => {
-            if (setupModal.classList.contains('active')) {
-                const logo = setupModal.querySelector('.logo-ascii');
-                if (logo) scaleLogo(logo);
-            }
-        }).observe(setupModal, { attributes: true, attributeFilter: ['class'] });
+    // Hide ASCII art logos inside the NymchatApp Android webview shell
+    // (Android WebView enforces minimum font-size that breaks the ASCII art layout)
+    if (isNymchatApp()) {
+        document.querySelectorAll('.logo-ascii').forEach(logo => {
+            logo.style.display = 'none';
+        });
     }
 
     // Pre-connect to a broadcast relay for instant connection
