@@ -46,6 +46,8 @@
             var mode = localStorage.getItem('nym_color_mode') || 'auto';
             var isLight = mode === 'light' || (mode === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches);
             if (isLight) document.body.classList.add('light-mode');
+            // Hide ASCII art logos in NymchatApp shell to prevent flash
+            if (/NymchatApp\//i.test(navigator.userAgent)) document.body.classList.add('nymchat-app');
         })();
     </script>
     <div id="wallpaperLayer"></div>
@@ -991,7 +993,7 @@
             </div>
             <div class="modal-body">
                 <div class="form-group" id="nymGroup">
-                    <div style="text-align: center; color: var(--text-dim); font-size: 13px; margin-bottom: 8px;">(Click logo to login with nsec private key or extension)</div><br/>
+                    <div onclick="openNostrLogin()" style="text-align: center; color: var(--text-dim); font-size: 13px; margin-bottom: 8px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px;">Login with nsec private key or extension? Click here</div><br/>
                     <label class="form-label">Choose Your Nickname <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
                         maxlength="20">

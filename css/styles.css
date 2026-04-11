@@ -199,6 +199,10 @@ body::after {
     opacity: 0.9;
 }
 
+body.nymchat-app .logo-ascii {
+    display: none;
+}
+
 .nym-display {
     margin-top: 15px;
     padding: 10px 14px;

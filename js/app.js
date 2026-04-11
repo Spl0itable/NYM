@@ -27532,7 +27532,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.279 ═══<br/>
+═══ Nymchat v3.58.280 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -29437,14 +29437,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
         const cb = document.getElementById('autoEphemeralCheckbox');
         if (cb) cb.checked = true;
-    }
-
-    // Hide ASCII art logos inside the NymchatApp Android webview shell
-    // (Android WebView enforces minimum font-size that breaks the ASCII art layout)
-    if (isNymchatApp()) {
-        document.querySelectorAll('.logo-ascii').forEach(logo => {
-            logo.style.display = 'none';
-        });
     }
 
     // Pre-connect to a broadcast relay for instant connection
