@@ -6235,14 +6235,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             // Use multiplexed relay pool when running on Cloudflare (or remote proxy)
             if (this.useRelayProxy) {
-                // Wait for geo relay CSV so the pool connects to all relays right away
-                try {
-                    await Promise.race([
-                        this._geoRelaysReady || Promise.resolve(),
-                        new Promise(r => setTimeout(r, 3000))
-                    ]);
-                } catch (_) {}
-
                 let poolConnected = false;
                 const maxRetries = 2;
                 for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -6474,53 +6466,43 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             });
 
-            // GEO relays, then DM relays
-            if (!this.settings.lowDataMode) {
-                (this._geoRelaysReady || Promise.resolve()).then(() => {
-                    // Connect GEO relays (second priority after defaults)
-                    const geoRelayUrls = (this.geoRelays || []).map(r => r.url || r).filter(Boolean);
-                    for (const relayUrl of geoRelayUrls) {
-                        if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                            this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
-                                const r = this.relayPool.get(relayUrl);
-                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                    this.subscribeRelayToChannel(r, relayUrl);
-                                    this.updateConnectionStatus();
-                                }
-                            });
-                        }
-                    }
-
-                    // Connect bitchatDMRelays (third priority)
-                    if (this.bitchatDMRelays) {
-                        this.bitchatDMRelays.forEach(relayUrl => {
-                            if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                                this.connectToRelay(relayUrl, 'relay').then(() => {
-                                    const r = this.relayPool.get(relayUrl);
-                                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        this.subscribeToSingleRelay(relayUrl);
-                                        this.updateConnectionStatus();
-                                    }
-                                });
+            // In low data mode, also connect to DM relays so PMs work, skip rest
+            if (this.settings.lowDataMode && this.bitchatDMRelays) {
+                this.bitchatDMRelays.forEach(relayUrl => {
+                    if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
+                        this.connectToRelay(relayUrl, 'relay').then(() => {
+                            const r = this.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                this.subscribeToSingleRelay(relayUrl);
+                                this.updateConnectionStatus();
                             }
                         });
                     }
                 });
-            } else {
-                // In low data mode, connect to DM relays so PMs work
-                if (this.bitchatDMRelays) {
-                    this.bitchatDMRelays.forEach(relayUrl => {
-                        if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                            this.connectToRelay(relayUrl, 'relay').then(() => {
-                                const r = this.relayPool.get(relayUrl);
-                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                    this.subscribeToSingleRelay(relayUrl);
-                                    this.updateConnectionStatus();
-                                }
-                            });
-                        }
-                    });
-                }
+            }
+
+            // Connect to all relays from bitchat CSV (staggered)
+            // In low data mode, skip - only use defaults + DM relays
+            if (!this.settings.lowDataMode) {
+                // Wait for CSV to load, then connect to all unified relays
+                (this._geoRelaysReady || Promise.resolve()).then(() => {
+                    // Connect to all relays not yet connected in concurrent batches
+                    const relaysToConnect = [...this.allRelayUrls]
+                        .filter(url => !this.relayPool.has(url) && this.shouldRetryRelay(url));
+
+                    // Fire all connections concurrently — the browser limits
+                    // parallel WebSocket handshakes natively so no artificial
+                    // stagger is needed.
+                    for (const relayUrl of relaysToConnect) {
+                        this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
+                            const r = this.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                this.subscribeRelayToChannel(r, relayUrl);
+                                this.updateConnectionStatus();
+                            }
+                        });
+                    }
+                });
             }
 
         } catch (error) {
@@ -27573,7 +27555,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.283 ═══<br/>
+═══ Nymchat v3.58.282 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
