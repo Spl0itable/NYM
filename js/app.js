@@ -471,6 +471,7 @@ class NYM {
         this._relayStatsAnimFrame = null;
         // Core default relays - always connected first for fast startup
         this.defaultRelays = [
+            'wss://relay.nymchat.app',
             'wss://relay.damus.io',
             'wss://offchain.pub',
             'wss://relay.primal.net',
@@ -495,6 +496,7 @@ class NYM {
         this.geoRelayCount = 5;
         this._geoRelaysReady = this.fetchGeoRelays();
         this.bitchatDMRelays = [
+            'wss://relay.nymchat.app',
             'wss://relay.damus.io',
             'wss://nos.lol',
             'wss://relay.primal.net',
@@ -27532,7 +27534,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.280 ═══<br/>
+═══ Nymchat v3.58.281 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
