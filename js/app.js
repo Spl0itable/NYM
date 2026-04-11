@@ -8575,17 +8575,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const avatarUrl = this.userAvatars.get(this.pubkey);
                 const bannerUrl = this.userBanners.get(this.pubkey);
 
-                // Only overwrite fields the user explicitly set in the app
+                // Overwrite fields the app manages, including clearing them
                 if (this.nym) {
                     existing.name = this.nym;
                     existing.display_name = this.nym;
                 }
                 if (bio !== undefined) existing.about = bio;
-                if (this.lightningAddress) existing.lud16 = this.lightningAddress;
-                if (avatarUrl) existing.picture = avatarUrl;
-                if (bannerUrl) existing.banner = bannerUrl;
+                // Sync lightning address — clear from profile when user removes it
+                if (this.lightningAddress) {
+                    existing.lud16 = this.lightningAddress;
+                } else {
+                    delete existing.lud16;
+                }
+                // Sync avatar — clear from profile when user removes it
+                if (avatarUrl) {
+                    existing.picture = avatarUrl;
+                } else if (!localStorage.getItem('nym_avatar_url')) {
+                    delete existing.picture;
+                }
+                // Sync banner — clear from profile when user removes it
+                if (bannerUrl) {
+                    existing.banner = bannerUrl;
+                } else if (!localStorage.getItem('nym_banner_url')) {
+                    delete existing.banner;
+                }
 
                 profileToSave = existing;
+                // Update cached profile so subsequent saves merge against latest state
+                this._cachedKind0Profile = { ...profileToSave };
             } else {
                 // Ephemeral mode - minimal profile
                 const bio = this.userBios.get(this.pubkey) || '';
@@ -26331,13 +26348,17 @@ async function changeNick() {
                 localStorage.setItem('nym_dev_nsec', cmdResult.nsec);
             }
         }
+        // If cmdNick was cancelled (e.g. reserved nick) but bio/lightning changed,
+        // still publish those changes to relays
+        if (!cmdResult && profileDirty) {
+            await nym.saveToNostrProfile();
+        }
         return;
     }
 
-    // No nickname change — publish profile only if bio or lightning address changed
-    if (profileDirty) {
-        await nym.saveToNostrProfile();
-    }
+    // Always publish profile to nostr relays when user clicks Change,
+    // so avatar, banner, bio, and lightning changes are all persisted
+    await nym.saveToNostrProfile();
     closeModal('nickEditModal');
 }
 
@@ -27534,7 +27555,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.281 ═══<br/>
+═══ Nymchat v3.58.282 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>

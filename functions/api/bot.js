@@ -2487,7 +2487,7 @@ function signEvent(evt, privkeyHex) {
   return evt;
 }
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.58.281";
+var NYMCHAT_VERSION = "3.58.282";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
