@@ -4430,30 +4430,30 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.channelSubscriptions.set(channelKey, subId);
         }
 
-        const since1h = Math.floor(Date.now() / 1000) - 3600;
+        const since24h = Math.floor(Date.now() / 1000) - 86400;
         const filters = [
             {
                 kinds: [20000],
                 '#g': [channelKey],
-                since: since1h,
+                since: since24h,
                 limit: this.channelMessageLimit
             },
             {
                 kinds: [30078],
                 '#t': ['nym-poll', 'nym-poll-vote'],
                 '#g': [channelKey],
-                since: since1h,
+                since: since24h,
                 limit: 50
             },
             {
                 kinds: [7],
                 '#k': ['20000'],
-                since: since1h,
+                since: since24h,
                 limit: this.channelMessageLimit
             },
             {
                 kinds: [5],
-                since: since1h,
+                since: since24h,
                 limit: 50
             }
         ];
@@ -6613,7 +6613,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (relay.type === 'write') return;
 
         const ws = relay.ws;
-        const since1h = Math.floor(Date.now() / 1000) - 3600;
+        const since24h = Math.floor(Date.now() / 1000) - 86400;
         const isGeo = this._isGeoOrDiscoveredRelay(relayUrl);
 
         // Geo/discovered relays only get kind 20000
@@ -6621,7 +6621,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const subId = Math.random().toString(36).substring(2);
             if (!relay.subscriptions) relay.subscriptions = new Set();
             relay.subscriptions.add(subId);
-            const filters = this._buildGeoFilters(since1h);
+            const filters = this._buildGeoFilters(since24h);
             ws.send(JSON.stringify(["REQ", subId, ...filters]));
             return;
         }
@@ -6635,7 +6635,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         relay.subscriptions.add(subId);
 
-        const filters = this._buildCriticalFilters(since1h);
+        const filters = this._buildCriticalFilters(since24h);
 
         // Send single REQ with all filters
         ws.send(JSON.stringify(["REQ", subId, ...filters]));
@@ -6652,7 +6652,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.channelLoadedFromRelays.add(channelKey);
 
         const subId = Math.random().toString(36).substring(2);
-        const since1h = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
+        const since24h = Math.floor(Date.now() / 1000) - 86400; // 24 hours ago
         let filters = [];
 
         // Subscribe to channel messages (geohash and non-geohash both use the g tag)
@@ -6660,25 +6660,25 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             {
                 kinds: [20000],
                 "#g": [channelKey],
-                since: since1h,
+                since: since24h,
                 limit: this.channelMessageLimit
             },
             {
                 kinds: [30078],
                 "#t": ["nym-poll", "nym-poll-vote"],
                 "#g": [channelKey],
-                since: since1h,
+                since: since24h,
                 limit: 50
             },
             {
                 kinds: [7],
                 "#k": ["20000"],
-                since: since1h,
+                since: since24h,
                 limit: this.channelMessageLimit
             },
             {
                 kinds: [5],
-                since: since1h,
+                since: since24h,
                 limit: 50
             }
         ];
@@ -6740,7 +6740,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Only geohash channels
         const geohashChannels = [];
-        const since1h = Math.floor(Date.now() / 1000) - 3600;
+        const since24h = Math.floor(Date.now() / 1000) - 86400;
 
         channels.forEach(({ key, type }) => {
             // Skip already loaded channels
@@ -6755,14 +6755,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             filters.push({
                 kinds: [20000],
                 "#g": geohashChannels,
-                since: since1h,
+                since: since24h,
                 limit: this.channelMessageLimit * geohashChannels.length
             });
             filters.push({
                 kinds: [30078],
                 "#t": ["nym-poll", "nym-poll-vote"],
                 "#g": geohashChannels,
-                since: since1h,
+                since: since24h,
                 limit: 50 * geohashChannels.length
             });
             // Mark as loaded
@@ -7744,13 +7744,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const p = this.poolSockets.find(w => w.id === shardId);
         if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) return;
 
-        const since1h = Math.floor(Date.now() / 1000) - 3600;
+        const since24h = Math.floor(Date.now() / 1000) - 86400;
 
         // Geo/discovered shards only get kind 20000
         const isGeoOrDiscovered = p.role === 'geo' || p.role === 'discovered';
         const filters = isGeoOrDiscovered
-            ? this._buildGeoFilters(since1h)
-            : this._buildCriticalFilters(since1h);
+            ? this._buildGeoFilters(since24h)
+            : this._buildCriticalFilters(since24h);
 
         const subId = Math.random().toString(36).substring(2);
 
@@ -7764,24 +7764,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     // Build geo-only filters (kind 20000) for geo/discovered relay shards
-    _buildGeoFilters(since1h) {
+    _buildGeoFilters(since24h) {
         const filters = [];
         if (!this.settings.groupChatPMOnlyMode) {
-            filters.push({ kinds: [20000], since: since1h, limit: 100 });
+            filters.push({ kinds: [20000], since: since24h, limit: 100 });
         }
         return filters;
     }
 
     // Build full subscription filters for critical (default + DM) relay shards
-    _buildCriticalFilters(since1h) {
+    _buildCriticalFilters(since24h) {
         const filters = [];
 
         // Skip geohash channel subscriptions in group chat & PM only mode
         if (!this.settings.groupChatPMOnlyMode) {
-            filters.push({ kinds: [20000], since: since1h, limit: 100 });
-            filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since1h, limit: 100 });
-            filters.push({ kinds: [7], "#k": ["20000"], since: since1h, limit: 100 });
-            filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since1h, limit: 100 });
+            filters.push({ kinds: [20000], since: since24h, limit: 100 });
+            filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since24h, limit: 100 });
+            filters.push({ kinds: [7], "#k": ["20000"], since: since24h, limit: 100 });
+            filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since24h, limit: 100 });
         }
 
         filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
@@ -7810,8 +7810,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Build the standard subscription filters used for pool subscriptions
     // (kept for backward compat with _poolSubscribeOnWorker — delegates to role-based filters)
-    _buildPoolFilters(since1h) {
-        return this._buildCriticalFilters(since1h);
+    _buildPoolFilters(since24h) {
+        return this._buildCriticalFilters(since24h);
     }
 
     // Build a zap receipt filter scoped to visible message event IDs.
@@ -7894,18 +7894,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this._poolSendToRole('geo', ["CLOSE", this._lastGeoSubId]);
             this._poolSendToRole('discovered', ["CLOSE", this._lastGeoSubId]);
         }
-        const since1h = Math.floor(Date.now() / 1000) - 3600;
+        const since24h = Math.floor(Date.now() / 1000) - 86400;
 
         // Critical shards (default + DM relays): full subscription set
         const criticalSubId = Math.random().toString(36).substring(2);
         this._lastCriticalSubId = criticalSubId;
-        const criticalFilters = this._buildCriticalFilters(since1h);
+        const criticalFilters = this._buildCriticalFilters(since24h);
         this._poolSendToRole('critical', ["REQ", criticalSubId, ...criticalFilters]);
 
         // Geo + discovered shards: only kind 20000
         const geoSubId = Math.random().toString(36).substring(2);
         this._lastGeoSubId = geoSubId;
-        const geoFilters = this._buildGeoFilters(since1h);
+        const geoFilters = this._buildGeoFilters(since24h);
         this._poolSendToRole('geo', ["REQ", geoSubId, ...geoFilters]);
         this._poolSendToRole('discovered', ["REQ", geoSubId, ...geoFilters]);
 
@@ -27513,7 +27513,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.275 ═══<br/>
+═══ Nymchat v3.58.276 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -29420,18 +29420,59 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cb) cb.checked = true;
     }
 
-    // Scale logo-ascii to fit inside sidebar at any resolution
-    (function scaleLogoToFit() {
-        const logo = document.querySelector('.sidebar-header .logo-ascii');
-        if (!logo) return;
+    // Scale all logo-ascii elements to fit inside their containers.
+    // Uses transform: scale() instead of font-size to bypass Android minimum font-size enforcement.
+    function scaleLogo(logo) {
         const container = logo.parentElement;
-        const containerWidth = container.clientWidth;
-        const logoNaturalWidth = logo.scrollWidth;
-        if (logoNaturalWidth > containerWidth && containerWidth > 0) {
-            const scale = containerWidth / logoNaturalWidth;
-            logo.style.fontSize = (parseFloat(getComputedStyle(logo).fontSize) * scale) + 'px';
+        if (!container || container.clientWidth === 0) return;
+
+        // Cache the original margin-bottom before we modify it
+        if (!logo.dataset.baseMarginBottom) {
+            logo.dataset.baseMarginBottom = parseFloat(getComputedStyle(logo).marginBottom) || 0;
         }
-    })();
+
+        // Reset transform to measure natural width
+        logo.style.transform = '';
+        logo.style.marginBottom = '';
+
+        const containerStyle = getComputedStyle(container);
+        const availableWidth = container.clientWidth
+            - parseFloat(containerStyle.paddingLeft)
+            - parseFloat(containerStyle.paddingRight);
+
+        const naturalWidth = logo.scrollWidth;
+
+        if (naturalWidth > availableWidth && availableWidth > 0) {
+            const scale = availableWidth / naturalWidth;
+            const naturalHeight = logo.offsetHeight;
+            logo.style.transformOrigin = 'top center';
+            logo.style.transform = `scale(${scale})`;
+            // Collapse the unused vertical space left by the visual scaling
+            const baseMargin = parseFloat(logo.dataset.baseMarginBottom);
+            logo.style.marginBottom = (baseMargin - naturalHeight * (1 - scale)) + 'px';
+        }
+    }
+
+    const logoObserver = new ResizeObserver(entries => {
+        for (const entry of entries) {
+            const logo = entry.target.querySelector('.logo-ascii');
+            if (logo) scaleLogo(logo);
+        }
+    });
+    document.querySelectorAll('.logo-ascii').forEach(logo => {
+        scaleLogo(logo);
+        if (logo.parentElement) logoObserver.observe(logo.parentElement);
+    });
+    // Re-scale when setup modal becomes visible (display:none -> display:flex)
+    const setupModal = document.getElementById('setupModal');
+    if (setupModal) {
+        new MutationObserver(() => {
+            if (setupModal.classList.contains('active')) {
+                const logo = setupModal.querySelector('.logo-ascii');
+                if (logo) scaleLogo(logo);
+            }
+        }).observe(setupModal, { attributes: true, attributeFilter: ['class'] });
+    }
 
     // Pre-connect to a broadcast relay for instant connection
     async function preConnect() {

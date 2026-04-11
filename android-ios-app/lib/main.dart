@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:nym_bar/theme.dart';
 import 'package:nym_bar/screens/webview_screen.dart';
 import 'package:nym_bar/services/notification_service.dart';
-import 'package:nym_bar/services/unified_push_service.dart';
 import 'package:nym_bar/utils/webview_platform_initializer.dart';
 
 // App theme color to match the PWA dark mode default (--bg: #0a0a0f)
@@ -15,9 +14,6 @@ void main() async {
   
   // Initialize local notifications (works on all devices without Google Play Services)
   await NotificationService().initialize();
-  
-  // Initialize UnifiedPush for F-Droid/de-Googled devices
-  await UnifiedPushService().initialize();
   
   // Set edge-to-edge display mode for immersive experience
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);

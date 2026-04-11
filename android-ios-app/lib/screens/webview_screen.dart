@@ -16,7 +16,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:app_links/app_links.dart';
 import 'package:nym_bar/services/notification_service.dart';
 import 'package:nym_bar/services/fips_ble_bridge.dart';
-import 'package:nym_bar/services/unified_push_service.dart';
+
 
 class WebViewScreen extends StatefulWidget {
 const WebViewScreen({super.key});
@@ -36,7 +36,10 @@ StreamSubscription<String>? _notificationSubscription;
 StreamSubscription<Uri>? _appLinksSubscription;
 late final AppLinks _appLinks;
 Uri? _pendingDeepLink;
+static const int _maxRetryAttempts = 3;
 bool _hasTriedFallback = false;
+int _retryAttempts = 0;
+bool _mainPageStarted = false;
 final ImagePicker _imagePicker = ImagePicker();
 String? _localNostrPubkey;
 
@@ -64,7 +67,6 @@ _scheduleCacheClear();
 _initializeAppLinks();
 }
 _notificationSubscription = NotificationService().payloadStream.listen(_handleDeepLink);
-_initializeUnifiedPush();
 }
 
 Future<void> _loadAsciiLogo() async {
@@ -102,54 +104,6 @@ onError: (err) {
 debugPrint('[App Links] Stream error: $err');
 },
 );
-}
-
-Future<void> _initializeUnifiedPush() async {
-if (kIsWeb) return;
-
-final unifiedPush = UnifiedPushService();
-
-// Set up callback to inject endpoint into PWA when received
-unifiedPush.onEndpointReceived = (endpoint) {
-debugPrint('[UnifiedPush] Endpoint received: $endpoint');
-_injectUnifiedPushEndpoint(endpoint);
-};
-
-// Set up callback for incoming messages
-unifiedPush.onMessageReceived = (message) {
-debugPrint('[UnifiedPush] Message received: $message');
-// Messages are automatically shown as local notifications by the service
-};
-
-// Check if a distributor is available and register
-final hasDistributor = await unifiedPush.hasDistributor();
-if (hasDistributor) {
-debugPrint('[UnifiedPush] Distributor available, registering...');
-await unifiedPush.register();
-} else {
-debugPrint('[UnifiedPush] No distributor available. User needs to install one (e.g., ntfy app)');
-}
-}
-
-void _injectUnifiedPushEndpoint(String endpoint) {
-if (!_webViewInitialized) {
-debugPrint('[UnifiedPush] WebView not initialized yet');
-return;
-}
-
-final escaped = endpoint.replaceAll("'", "\\'");
-_controller.runJavaScript('''
-(function() {
-window.unifiedPushEndpoint = '$escaped';
-window.dispatchEvent(new CustomEvent('unifiedpush-endpoint', {
-detail: { endpoint: '$escaped' }
-}));
-if (window.nym && typeof window.nym.setUnifiedPushEndpoint === 'function') {
-window.nym.setUnifiedPushEndpoint('$escaped');
-}
-console.log('[NYM Bridge] UnifiedPush endpoint injected');
-})();
-''');
 }
 
 void _handleAppLink(Uri uri) {
@@ -280,7 +234,15 @@ return;
 _controller
 ..setJavaScriptMode(JavaScriptMode.unrestricted)
 ..setNavigationDelegate(NavigationDelegate(
-onPageStarted: (url) => setState(() => _isLoading = true),
+onPageStarted: (url) {
+debugPrint('[WebView] Page started: $url');
+// Track that main page navigation started successfully
+if (url.contains('web.nymchat.app') || url.contains('spl0itable.github.io')) {
+_mainPageStarted = true;
+_retryAttempts = 0; // Reset retries on successful navigation start
+}
+setState(() => _isLoading = true);
+},
 onPageFinished: (url) {
 setState(() => _isLoading = false);
 _webViewInitialized = true;
@@ -297,11 +259,41 @@ _handlePendingPMNym();
 }
 },
 onWebResourceError: (error) {
-debugPrint('Web resource error: ${error.description}');
+debugPrint('Web resource error: code=${error.errorCode}, type=${error.errorType}, desc=${error.description}, mainPageStarted=$_mainPageStarted');
 
-// If primary domain fails and we haven't tried fallback yet, load fallback
-if (!_hasTriedFallback && (error.errorCode == -2 || error.errorCode == -6 || error.errorCode == -8)) {
-debugPrint('Primary domain failed (error ${error.errorCode}), loading fallback: $_fallbackUri');
+// If main page already started loading, these are subresource errors - ignore them
+// This prevents fallback to GitHub when the main PWA loads but some assets fail
+if (_mainPageStarted) {
+debugPrint('Ignoring subresource error (main page already started loading)');
+return;
+}
+
+// Only consider critical network errors for main frame navigation
+final isCriticalError = error.errorCode == -2 || // ERROR_HOST_LOOKUP
+error.errorCode == -6 || // ERROR_CONNECT
+error.errorCode == -8; // ERROR_TIMEOUT
+
+// Only retry/fallback for critical main frame navigation failures
+if (isCriticalError && !_hasTriedFallback) {
+_retryAttempts++;
+debugPrint('Primary domain error (attempt $_retryAttempts/$_maxRetryAttempts): ${error.description}');
+
+// Retry primary URL before falling back
+if (_retryAttempts < _maxRetryAttempts) {
+debugPrint('Retrying primary domain: $_baseUri');
+Future.delayed(const Duration(milliseconds: 500), () {
+if (mounted) {
+_controller.loadRequest(
+_baseUri,
+headers: {'Cache-Control': 'no-cache'},
+);
+}
+});
+return;
+}
+
+// Only fall back after exhausting retries - and only for truly unreachable scenarios
+debugPrint('Primary domain failed after $_maxRetryAttempts attempts, loading fallback: $_fallbackUri');
 _hasTriedFallback = true;
 _controller.loadRequest(
 _fallbackUri,

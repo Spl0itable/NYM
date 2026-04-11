@@ -197,6 +197,9 @@ body::after {
     white-space: pre;
     overflow: hidden;
     opacity: 0.9;
+    -webkit-text-size-adjust: none;
+    -moz-text-size-adjust: none;
+    text-size-adjust: none;
 }
 
 .nym-display {

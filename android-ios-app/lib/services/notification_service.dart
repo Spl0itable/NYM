@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
@@ -29,13 +28,13 @@ class NotificationService {
     }
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(
-      requestSoundPermission: true,
-      requestBadgePermission: true,
-      requestAlertPermission: true,
+      requestSoundPermission: false,
+      requestBadgePermission: false,
+      requestAlertPermission: false,
     );
     const settings = InitializationSettings(android: androidSettings, iOS: iosSettings);
     await _notifications.initialize(
-      settings: settings,
+      settings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
         final payload = response.payload;
         if (payload != null && payload.isNotEmpty) {
@@ -46,16 +45,6 @@ class NotificationService {
     final launchDetails = await _notifications.getNotificationAppLaunchDetails();
     if (launchDetails?.didNotificationLaunchApp ?? false) {
       _initialPayload = launchDetails?.notificationResponse?.payload;
-    }
-    await requestPermissions();
-  }
-
-  Future<void> requestPermissions() async {
-    if (kIsWeb) {
-      return;
-    }
-    if (await Permission.notification.isDenied) {
-      await Permission.notification.request();
     }
   }
 
@@ -87,7 +76,7 @@ class NotificationService {
     const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
     
     debugPrint('[NotificationService] Showing notification: id=$notificationId, title=$title, payload=$payload');
-    await _notifications.show(id: notificationId, title: title, body: body, notificationDetails: details, payload: payload);
+    await _notifications.show(notificationId, title, body, details, payload: payload);
   }
   
   int _generateUniqueId() {

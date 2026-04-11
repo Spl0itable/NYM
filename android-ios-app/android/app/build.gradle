@@ -14,8 +14,8 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.mycompany.CounterApp"
-    compileSdk = 35
-    // NDK r27+ required for 16 KB page-size support
+    compileSdk = flutter.compileSdkVersion
+    // Use NDK r27+ for 16 KB page-size support
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -41,8 +41,8 @@ android {
     defaultConfig {
         applicationId "com.nym.bar"
         minSdk = 23
-        targetSdk = 35
-        versionCode = 101
+        targetSdk = 36
+        versionCode = 102
         versionName = flutter.versionName
         
         // Support all ABIs - AGP 8.7.3 automatically handles 16 KB alignment
@@ -57,14 +57,10 @@ android {
         }
     }
     
-    // Support for 16 KB page sizes (Android 15+)
-    // AGP 8.5.1+ handles page alignment automatically when pageAlignSharedLibs=true in gradle.properties
+    // Support for 16 KB page sizes: do not extract native libs
     packaging {
         jniLibs {
             useLegacyPackaging = false
-        }
-        resources {
-            excludes += '/META-INF/{AL2.0,LGPL2.1}'
         }
     }
 }

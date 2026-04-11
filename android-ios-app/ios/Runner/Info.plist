@@ -14,8 +14,6 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>Nymchat</string>
-	<key>NSUserNotificationsUsageDescription</key>
-	<string>Nymchat needs notification permissions to alert you of important updates and messages from the platform.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Nymchat needs location access to provide location-based features and services.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
