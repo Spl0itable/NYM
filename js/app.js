@@ -7964,10 +7964,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const ephPks = this._getAllSelfEphemeralPubkeys();
         if (!ephPks.length) return;
 
+        // Always go back a full 7 days to catch messages sent to this ephemeral
+        // key while the device was offline or before ephemeral key sync occurred.
+        const since = Math.floor(Date.now() / 1000) - 604800;
+
         for (const ephPk of ephPks) {
             const subId = Math.random().toString(36).substring(2);
             this._ephemeralSubIds.push(subId);
-            const filter = { kinds: [1059], "#p": [ephPk], limit: 100 };
+            const filter = { kinds: [1059], "#p": [ephPk], since, limit: 200 };
 
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 this._poolSend(['REQ', subId, filter]);
@@ -14038,7 +14042,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     try {
                         const s = JSON.parse(rumor.content);
                         const rumorTs = rumor.created_at || 0;
-                        // Only apply if newer than what we've already loaded
+                        // Always merge additive data (group history, ephemeral keys, group list)
+                        // from every settings event regardless of timestamp order — older saves
+                        // may contain unique messages or keys absent from the newest event.
+                        await applyNostrSettingsAdditive(s);
+                        // Only apply state-replacing preferences from events newer than what we've seen
                         if (rumorTs > (this._lastSettingsSyncTs || 0)) {
                             this._lastSettingsSyncTs = rumorTs;
                             await applyNostrSettings(s);
@@ -27682,7 +27690,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.285 ═══<br/>
+═══ Nymchat v3.58.286 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -29205,6 +29213,95 @@ function nostrSettingsLoad() {
     });
 }
 
+async function applyNostrSettingsAdditive(s) {
+    if (!s || typeof s !== 'object') return;
+
+    // Group conversations — additive: only add groups we don't already know about
+    const applyGroupData = (groupData) => {
+        for (const [groupId, group] of Object.entries(groupData)) {
+            if (!nym.groupConversations.has(groupId)) {
+                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
+                const g = nym.groupConversations.get(groupId);
+                if (g) {
+                    if (group.createdBy) g.createdBy = group.createdBy;
+                }
+            }
+        }
+        nym._saveGroupConversations();
+        nym.updateViewMoreButton('pmList');
+    };
+
+    if (s.groupConversations && typeof s.groupConversations === 'object') {
+        try { applyGroupData(s.groupConversations); } catch (_) {}
+    }
+
+    // Ephemeral keys — always merge from every settings event so no device's
+    // keys are silently dropped when events arrive out of timestamp order
+    if (s.groupEphemeralKeys && typeof s.groupEphemeralKeys === 'object') {
+        try {
+            const prevEphCount = nym._getAllKnownEphemeralPubkeys().length;
+            for (const [groupId, entry] of Object.entries(s.groupEphemeralKeys)) {
+                nym._mergeEphemeralKeys(groupId, entry);
+            }
+            nym._saveEphemeralKeys();
+            if (nym._getAllKnownEphemeralPubkeys().length > prevEphCount && nym.connected) {
+                nym._refreshEphemeralSubscriptions();
+            }
+        } catch (_) {}
+    }
+
+    // Group message history — always merge from every settings event so older
+    // device saves that contain unique messages are never discarded
+    if (s.groupMessageHistory && typeof s.groupMessageHistory === 'object') {
+        try {
+            const refreshedConvKeys = new Set();
+            for (const [groupConvKey, backupMessages] of Object.entries(s.groupMessageHistory)) {
+                if (!Array.isArray(backupMessages) || backupMessages.length === 0) continue;
+
+                const inflated = backupMessages.map(m => {
+                    if (m.conversationKey && m.isPM) return m;
+                    return Object.assign({
+                        author: nym.getNymFromPubkey(m.pubkey) || 'anon',
+                        timestamp: new Date((m.created_at || 0) * 1000),
+                        isPM: true,
+                        isGroup: true,
+                        conversationKey: groupConvKey,
+                        isHistorical: true,
+                        _seq: ++nym._msgSeq
+                    }, m);
+                });
+
+                const existing = nym.pmMessages.get(groupConvKey) || [];
+                const existingIds = new Set(existing.map(m => m.id));
+                const newMsgs = inflated.filter(m => m.id && !existingIds.has(m.id));
+
+                if (newMsgs.length === 0) continue;
+
+                const merged = [...existing, ...newMsgs];
+                merged.sort((a, b) => {
+                    const dt = (a.created_at || 0) - (b.created_at || 0);
+                    if (dt !== 0) return dt;
+                    return (a._seq || 0) - (b._seq || 0);
+                });
+                const capped = merged.length > nym.pmStorageLimit
+                    ? merged.slice(-nym.pmStorageLimit)
+                    : merged;
+
+                nym.pmMessages.set(groupConvKey, capped);
+                nym.channelDOMCache.delete(groupConvKey);
+                refreshedConvKeys.add(groupConvKey);
+            }
+
+            if (refreshedConvKeys.size > 0 && nym.inPMMode && nym.currentGroup) {
+                const activeKey = nym.getGroupConversationKey(nym.currentGroup);
+                if (refreshedConvKeys.has(activeKey)) {
+                    nym.loadPMMessages(activeKey);
+                }
+            }
+        } catch (_) {}
+    }
+}
+
 async function applyNostrSettings(s) {
     if (!s || typeof s !== 'object') return;
 
@@ -29485,20 +29582,75 @@ async function applyNostrSettings(s) {
     // keys so any device can decrypt messages sent to any other device's key.
     if (s.groupEphemeralKeys && typeof s.groupEphemeralKeys === 'object') {
         try {
+            const prevEphCount = nym._getAllKnownEphemeralPubkeys().length;
             for (const [groupId, entry] of Object.entries(s.groupEphemeralKeys)) {
                 nym._mergeEphemeralKeys(groupId, entry);
             }
             nym._saveEphemeralKeys();
+            // If we learned new ephemeral pubkeys from the other device, re-subscribe
+            // immediately so we fetch any gift wraps that were addressed to those keys.
+            // Without this, a second device never receives messages sent as self-copies
+            // by the first device (which encrypts its own copy to its own ephemeral key).
+            if (nym._getAllKnownEphemeralPubkeys().length > prevEphCount && nym.connected) {
+                nym._refreshEphemeralSubscriptions();
+            }
         } catch (_) {}
     }
 
-    // Restore chat history backup from settings sync
+    // Restore chat history backup from settings sync.
+    // Always merge (not replace) so newer messages from another device are added
+    // even when this device already has some history for the conversation.
     if (s.groupMessageHistory && typeof s.groupMessageHistory === 'object') {
         try {
-            for (const [groupConvKey, messages] of Object.entries(s.groupMessageHistory)) {
-                if (!nym.pmMessages.has(groupConvKey) || nym.pmMessages.get(groupConvKey).length === 0) {
-                    nym.pmMessages.set(groupConvKey, messages);
-                    nym.channelDOMCache.delete(groupConvKey);
+            const refreshedConvKeys = new Set();
+            for (const [groupConvKey, backupMessages] of Object.entries(s.groupMessageHistory)) {
+                if (!Array.isArray(backupMessages) || backupMessages.length === 0) continue;
+
+                // Inflate stripped backup messages with the fields required for
+                // display and filtering (conversationKey, isGroup, isPM, timestamp, author)
+                const inflated = backupMessages.map(m => {
+                    if (m.conversationKey && m.isPM) return m; // already full-fidelity
+                    return Object.assign({
+                        author: nym.getNymFromPubkey(m.pubkey) || 'anon',
+                        timestamp: new Date((m.created_at || 0) * 1000),
+                        isPM: true,
+                        isGroup: true,
+                        conversationKey: groupConvKey,
+                        isHistorical: true,
+                        _seq: ++nym._msgSeq
+                    }, m);
+                });
+
+                const existing = nym.pmMessages.get(groupConvKey) || [];
+                const existingIds = new Set(existing.map(m => m.id));
+
+                // Find backup messages that are genuinely new to this device
+                const newMsgs = inflated.filter(m => m.id && !existingIds.has(m.id));
+
+                if (newMsgs.length === 0) continue; // nothing to merge
+
+                const merged = [...existing, ...newMsgs];
+                merged.sort((a, b) => {
+                    const dt = (a.created_at || 0) - (b.created_at || 0);
+                    if (dt !== 0) return dt;
+                    return (a._seq || 0) - (b._seq || 0);
+                });
+                // Cap to storage limit after merge
+                const capped = merged.length > nym.pmStorageLimit
+                    ? merged.slice(-nym.pmStorageLimit)
+                    : merged;
+
+                nym.pmMessages.set(groupConvKey, capped);
+                nym.channelDOMCache.delete(groupConvKey);
+                refreshedConvKeys.add(groupConvKey);
+            }
+
+            // If the user is currently viewing a group that received new backup
+            // messages, re-render it so the merged messages appear immediately.
+            if (refreshedConvKeys.size > 0 && nym.inPMMode && nym.currentGroup) {
+                const activeKey = nym.getGroupConversationKey(nym.currentGroup);
+                if (refreshedConvKeys.has(activeKey)) {
+                    nym.loadPMMessages(activeKey);
                 }
             }
         } catch (_) {}
