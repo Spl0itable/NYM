@@ -580,6 +580,11 @@ class NYM {
         this.channelLoadedFromRelays = new Set();
         this.channelSubscriptionBatchSize = 10;
         this.channelMessageLimit = 100;
+        this.pmStorageLimit = 500;
+        this.pmPageSize = 100;
+        this.pmLoadMoreSize = 50;
+        this.pmRenderedStart = new Map();
+        this.appRelay = 'wss://relay.nymchat.app';
         this.settings = this.loadSettings();
         if (this.settings.textSize && this.settings.textSize !== 15) {
             document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
@@ -5237,8 +5242,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             const r = this.relayPool.get(relayUrl);
                             if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                                 this.subscribeToSingleRelay(relayUrl);
-                            } else if (tempBlacklist.has(relayUrl)) {
-                                // Restore to blacklist if it fails again
+                            } else if (tempBlacklist.has(relayUrl) && relayUrl !== this.appRelay) {
+                                // Restore to blacklist if it fails again (never blacklist app relay)
                                 this.blacklistedRelays.add(relayUrl);
                             }
                             this.updateConnectionStatus();
@@ -8101,8 +8106,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 connectionTimeout = setTimeout(() => {
                     if (ws.readyState !== WebSocket.OPEN) {
                         ws.close();
-                        this.blacklistedRelays.add(relayUrl);
-                        this.blacklistTimestamps.set(relayUrl, Date.now());
+                        if (relayUrl !== this.appRelay) {
+                            this.blacklistedRelays.add(relayUrl);
+                            this.blacklistTimestamps.set(relayUrl, Date.now());
+                        }
                         resolve(); // Resolve (not reject) — callers check relayPool state
                     }
                 }, 5000);
@@ -8145,9 +8152,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     clearTimeout(verificationTimeout);
                     clearTimeout(connectionTimeout);
 
-                    // Immediately blacklist on connection error
-                    this.blacklistedRelays.add(relayUrl);
-                    this.blacklistTimestamps.set(relayUrl, Date.now());
+                    // Immediately blacklist on connection error (but never the app relay)
+                    if (relayUrl !== this.appRelay) {
+                        this.blacklistedRelays.add(relayUrl);
+                        this.blacklistTimestamps.set(relayUrl, Date.now());
+                    }
 
                     resolve(); // Resolve (not reject) — callers check relayPool state
                 };
@@ -8163,7 +8172,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     // Only blacklist on actual connection failures, not normal closes
                     const isConnectionFailure = !wasConnected && event.code !== 1000 && event.code !== 1001;
 
-                    if (isConnectionFailure) {
+                    if (isConnectionFailure && relayUrl !== this.appRelay) {
                         this.blacklistedRelays.add(relayUrl);
                         this.blacklistTimestamps.set(relayUrl, Date.now());
                     }
@@ -8260,8 +8269,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 };
 
             } catch (error) {
-                this.blacklistedRelays.add(relayUrl);
-                this.blacklistTimestamps.set(relayUrl, Date.now());
+                if (relayUrl !== this.appRelay) {
+                    this.blacklistedRelays.add(relayUrl);
+                    this.blacklistTimestamps.set(relayUrl, Date.now());
+                }
                 this.trackRelayFailure(relayUrl);
                 resolve();
             }
@@ -13297,6 +13308,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
 
         const convTypers = convKey ? this.typingUsers.get(convKey) : null;
+
+        // Prune stale typing indicators (older than expire window)
+        if (convTypers) {
+            const now = Date.now();
+            for (const [pk, entry] of convTypers) {
+                if (now - entry.timestamp > this._typingExpireMs) {
+                    if (entry.timeout) clearTimeout(entry.timeout);
+                    convTypers.delete(pk);
+                }
+            }
+        }
+
         const typers = convTypers ? Array.from(convTypers.entries()) : [];
 
         if (typers.length === 0) {
@@ -13612,9 +13635,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (dt !== 0) return dt;
                 return (a._seq || 0) - (b._seq || 0);
             });
-            // Cap PM conversations at 100 messages
-            if (pmList.length > 100) {
-                this.pmMessages.set(conversationKey, pmList.slice(-100));
+            // Cap PM conversations at pmStorageLimit messages
+            if (pmList.length > this.pmStorageLimit) {
+                this.pmMessages.set(conversationKey, pmList.slice(-this.pmStorageLimit));
             }
 
             // Track for automatic retry if delivery receipt not received
@@ -13732,9 +13755,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (dt !== 0) return dt;
                 return (a._seq || 0) - (b._seq || 0);
             });
-            // Cap PM conversations at 100 messages
-            if (extPmList.length > 100) {
-                this.pmMessages.set(conversationKey, extPmList.slice(-100));
+            // Cap PM conversations at pmStorageLimit messages
+            if (extPmList.length > this.pmStorageLimit) {
+                this.pmMessages.set(conversationKey, extPmList.slice(-this.pmStorageLimit));
             }
 
             // Track for automatic retry if delivery receipt not received
@@ -14049,7 +14072,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             }
 
             // Handle typing indicators immediately (lightweight, no profile fetch needed)
+            // Discard stale typing indicators — they are ephemeral signals, not historical data
             if (this.isTypingIndicator(rumor)) {
+                const rumorAge = Math.floor(Date.now() / 1000) - (rumor.created_at || 0);
+                if (rumorAge > this._typingExpireMs / 1000) return; // Older than expire window — stale
                 const parsed = this.parseTypingIndicator(rumor);
                 this.handleTypingIndicatorEvent(parsed, senderPubkey);
                 return;
@@ -14321,9 +14347,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 if (dt !== 0) return dt;
                 return (a._seq || 0) - (b._seq || 0);
             });
-            // Cap PM conversations at 100 messages to prevent memory bloat
-            if (list.length > 100) {
-                list = list.slice(-100);
+            // Cap PM conversations at pmStorageLimit messages to prevent memory bloat
+            if (list.length > this.pmStorageLimit) {
+                list = list.slice(-this.pmStorageLimit);
             }
             this.pmMessages.set(conversationKey, list);
 
@@ -15176,7 +15202,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (dt !== 0) return dt;
             return (a._seq || 0) - (b._seq || 0);
         });
-        if (list.length > 100) list = list.slice(-100);
+        if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
         this.pmMessages.set(groupConvKey, list);
 
         // Update or create group conversation entry
@@ -15488,7 +15514,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (dt !== 0) return dt;
             return (a._seq || 0) - (b._seq || 0);
         });
-        if (groupList.length > 100) this.pmMessages.set(groupConvKey, groupList.slice(-100));
+        if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
         this.channelDOMCache.delete(groupConvKey);
         this.moveGroupToTop(groupId);
 
@@ -18830,11 +18856,13 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (readersEl) this._bindReaderLongPress(readersEl, message.nymMessageId);
         }
 
-        // Prune oldest messages from DOM to stay at the 100 message cap
+        // Prune oldest messages from DOM to stay within limits
+        // For PMs/groups with pagination, allow up to pmStorageLimit; for channels use channelMessageLimit
         {
             const domMessages = container.querySelectorAll('[data-message-id]');
-            if (domMessages.length > this.channelMessageLimit) {
-                const toRemove = domMessages.length - this.channelMessageLimit;
+            const domLimit = message.isPM ? this.pmStorageLimit : this.channelMessageLimit;
+            if (domMessages.length > domLimit) {
+                const toRemove = domMessages.length - domLimit;
                 let removedHeight = 0;
                 for (let i = 0; i < toRemove; i++) {
                     removedHeight += domMessages[i].offsetHeight;
@@ -23941,6 +23969,22 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             container.appendChild(notice);
         }
 
+        // For PMs/groups, only render the latest pmPageSize messages initially
+        // and track the start index for pagination
+        let renderMessages = messages;
+        if (isPM && messages.length > this.pmPageSize) {
+            const startIdx = messages.length - this.pmPageSize;
+            renderMessages = messages.slice(startIdx);
+            this.pmRenderedStart.set(storageKey, startIdx);
+            // Show "load older" notice at top
+            const loadNotice = document.createElement('div');
+            loadNotice.className = 'system-message pm-load-older';
+            loadNotice.textContent = `Scroll up to load older messages (${startIdx} more)`;
+            container.appendChild(loadNotice);
+        } else if (isPM) {
+            this.pmRenderedStart.set(storageKey, 0);
+        }
+
         // Render all messages sorted by timestamp
         this.virtualScroll.suppressAutoScroll = true;
 
@@ -23950,8 +23994,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // (e.g. when opening a conversation) to avoid replaying sounds
         this._suppressSound = true;
 
-        for (let i = 0; i < messages.length; i++) {
-            this.displayMessage(messages[i]);
+        for (let i = 0; i < renderMessages.length; i++) {
+            this.displayMessage(renderMessages[i]);
         }
 
         this._suppressSound = false;
@@ -23963,15 +24007,72 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 container.scrollTop = container.scrollHeight;
                 // Clear the suppression after the scroll-to-bottom settles
                 setTimeout(() => {
-            
+
                 }, 300);
             });
         } else {
             // Clear suppression after a brief delay if not scrolling
             setTimeout(() => {
-        
+
             }, 300);
         }
+    }
+
+    // Load older PM/group messages when user scrolls to top
+    loadOlderPMMessages(conversationKey) {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return false;
+
+        const currentStart = this.pmRenderedStart.get(conversationKey);
+        if (currentStart === undefined || currentStart <= 0) return false;
+
+        const messages = this.getFilteredPMMessages(conversationKey);
+        if (messages.length === 0) return false;
+
+        const newStart = Math.max(0, currentStart - this.pmLoadMoreSize);
+        if (newStart === currentStart) return false;
+
+        // Remember scroll position before re-rendering
+        const prevScrollHeight = container.scrollHeight;
+        const prevScrollTop = container.scrollTop;
+
+        // Update start index and invalidate DOM cache
+        this.pmRenderedStart.set(conversationKey, newStart);
+        this.channelDOMCache.delete(conversationKey);
+
+        // Re-render with the expanded message window
+        container.innerHTML = '';
+        const renderMessages = messages.slice(newStart);
+
+        if (newStart > 0) {
+            const loadNotice = document.createElement('div');
+            loadNotice.className = 'system-message pm-load-older';
+            loadNotice.textContent = `Scroll up to load older messages (${newStart} more)`;
+            container.appendChild(loadNotice);
+        } else {
+            const topNotice = document.createElement('div');
+            topNotice.className = 'system-message pm-history-start';
+            topNotice.textContent = 'Beginning of conversation history';
+            container.appendChild(topNotice);
+        }
+
+        this.virtualScroll.suppressAutoScroll = true;
+        this._suppressSound = true;
+
+        for (let i = 0; i < renderMessages.length; i++) {
+            this.displayMessage(renderMessages[i]);
+        }
+
+        this._suppressSound = false;
+        this.virtualScroll.suppressAutoScroll = false;
+
+        // Restore scroll position so user stays at the same place
+        requestAnimationFrame(() => {
+            const newScrollHeight = container.scrollHeight;
+            container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+        });
+
+        return true;
     }
 
     addChannel(channel, geohash = '') {
@@ -27581,7 +27682,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.284 ═══<br/>
+═══ Nymchat v3.58.285 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -29640,12 +29741,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // Prune PM conversations to 100 messages max
+        // Prune inactive PM conversations to pmStorageLimit messages max
         const currentPMKey = nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null;
+        const currentGroupKey = nym.currentGroup ? nym.getGroupConversationKey(nym.currentGroup) : null;
         nym.pmMessages.forEach((messages, convKey) => {
-            if (convKey === currentPMKey) return;
-            if (messages.length > 100) {
-                nym.pmMessages.set(convKey, messages.slice(-100));
+            if (convKey === currentPMKey || convKey === currentGroupKey) return;
+            if (messages.length > nym.pmStorageLimit) {
+                nym.pmMessages.set(convKey, messages.slice(-nym.pmStorageLimit));
             }
         });
 
@@ -29697,15 +29799,33 @@ document.addEventListener('DOMContentLoaded', () => {
         messagesContainer.addEventListener('scroll', () => {
             const distanceFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
 
-            // When scrolled to the very top, show history limit notice if channel is at capacity
-            if (messagesContainer.scrollTop <= 5 && !nym.inPMMode) {
-                const storageKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
-                const channelMessages = nym.messages.get(storageKey) || [];
-                if (channelMessages.length >= nym.channelMessageLimit && !messagesContainer.querySelector('.channel-history-limit')) {
-                    const notice = document.createElement('div');
-                    notice.className = 'system-message channel-history-limit';
-                    notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void \u2014 only the latest 100 messages are shown.';
-                    messagesContainer.insertBefore(notice, messagesContainer.firstChild);
+            // When scrolled to the very top, load older messages or show history limit
+            if (messagesContainer.scrollTop <= 5) {
+                if (nym.inPMMode) {
+                    // PM/group pagination: load older messages on scroll-to-top
+                    const convKey = nym.currentGroup
+                        ? nym.getGroupConversationKey(nym.currentGroup)
+                        : (nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null);
+                    if (convKey && !nym._pmLoadingOlder) {
+                        const startIdx = nym.pmRenderedStart.get(convKey);
+                        if (startIdx !== undefined && startIdx > 0) {
+                            nym._pmLoadingOlder = true;
+                            requestAnimationFrame(() => {
+                                nym.loadOlderPMMessages(convKey);
+                                nym._pmLoadingOlder = false;
+                            });
+                        }
+                    }
+                } else {
+                    // Channel mode: show history limit notice
+                    const storageKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
+                    const channelMessages = nym.messages.get(storageKey) || [];
+                    if (channelMessages.length >= nym.channelMessageLimit && !messagesContainer.querySelector('.channel-history-limit')) {
+                        const notice = document.createElement('div');
+                        notice.className = 'system-message channel-history-limit';
+                        notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void \u2014 only the latest 100 messages are shown.';
+                        messagesContainer.insertBefore(notice, messagesContainer.firstChild);
+                    }
                 }
             }
 
