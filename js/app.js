@@ -4019,6 +4019,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     getUserColorClass(pubkey) {
         if (this.settings.theme !== 'bitchat') return '';
+        if (!pubkey) return '';
 
         // Your own messages are always orange
         if (pubkey === this.pubkey) {
@@ -27690,7 +27691,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.286 ═══<br/>
+═══ Nymchat v3.58.287 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
