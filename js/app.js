@@ -528,7 +528,7 @@ class NYM {
         this.navigationHistory = [];
         this.navigationIndex = -1;
         this._navigating = false;
-        try { history.replaceState({ _nym_nav: -1 }, ''); } catch {}
+        try { history.replaceState({ _nym_nav: -1 }, ''); } catch { }
         this.messages = new Map();
         this._msgSeq = 0;
         this.channelDOMCache = new Map();
@@ -1516,7 +1516,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         try {
             const signed = await this.signEvent(evt);
             if (signed) this.sendToRelay(['EVENT', signed]);
-        } catch (_) {}
+        } catch (_) { }
     }
 
     loadCachedShopItems() {
@@ -4533,12 +4533,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.defaultRelays.forEach(relayUrl => {
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                         this.connectToRelay(relayUrl, 'relay').then(() => {
-                                const r = this.relayPool.get(relayUrl);
-                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                    this.subscribeToSingleRelay(relayUrl);
-                                    this.updateConnectionStatus();
-                                }
-                            });
+                            const r = this.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                this.subscribeToSingleRelay(relayUrl);
+                                this.updateConnectionStatus();
+                            }
+                        });
                     }
                 });
                 this.geoRelays.forEach((relay, index) => {
@@ -4546,12 +4546,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                         setTimeout(() => {
                             this.connectToRelayWithTimeout(relayUrl, 'relay', 3000).then(() => {
-                                    const r = this.relayPool.get(relayUrl);
-                                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        this.subscribeRelayToChannel(r, relayUrl);
-                                        this.updateConnectionStatus();
-                                    }
-                                });
+                                const r = this.relayPool.get(relayUrl);
+                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                    this.subscribeRelayToChannel(r, relayUrl);
+                                    this.updateConnectionStatus();
+                                }
+                            });
                         }, index * 50);
                     }
                 });
@@ -5240,15 +5240,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.defaultRelays.forEach(relayUrl => {
                 if (!this.relayPool.has(relayUrl)) {
                     this.connectToRelay(relayUrl, 'relay').then(() => {
-                            const r = this.relayPool.get(relayUrl);
-                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                this.subscribeToSingleRelay(relayUrl);
-                            } else if (tempBlacklist.has(relayUrl) && relayUrl !== this.appRelay) {
-                                // Restore to blacklist if it fails again (never blacklist app relay)
-                                this.blacklistedRelays.add(relayUrl);
-                            }
-                            this.updateConnectionStatus();
-                        });
+                        const r = this.relayPool.get(relayUrl);
+                        if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                            this.subscribeToSingleRelay(relayUrl);
+                        } else if (tempBlacklist.has(relayUrl) && relayUrl !== this.appRelay) {
+                            // Restore to blacklist if it fails again (never blacklist app relay)
+                            this.blacklistedRelays.add(relayUrl);
+                        }
+                        this.updateConnectionStatus();
+                    });
                 }
             });
 
@@ -6247,7 +6247,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this._geoRelaysReady || Promise.resolve(),
                         new Promise(r => setTimeout(r, 3000))
                     ]);
-                } catch (_) {}
+                } catch (_) { }
 
                 let poolConnected = false;
                 const maxRetries = 2;
@@ -6323,7 +6323,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             try {
                                 const parsed = JSON.parse(msg);
                                 this.sendToRelay(parsed);
-                            } catch (e) {}
+                            } catch (e) { }
                         });
                     }
 
@@ -6358,12 +6358,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     // Create connection promises that resolve with relay URL on success
                     const connectionPromises = initialRelays.map(relayUrl =>
                         this.connectToRelayWithTimeout(relayUrl, 'relay', 2000).then(() => {
-                                const relay = this.relayPool.get(relayUrl);
-                                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                                    return relayUrl;
-                                }
-                                return null;
-                            })
+                            const relay = this.relayPool.get(relayUrl);
+                            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                                return relayUrl;
+                            }
+                            return null;
+                        })
                     );
 
                     // Wait for first successful connection (Promise.any-like behavior)
@@ -6964,7 +6964,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Close all pool sockets
         for (const p of this.poolSockets) {
             p._closing = true;
-            try { if (p.ws) p.ws.close(); } catch (_) {}
+            try { if (p.ws) p.ws.close(); } catch (_) { }
         }
         this.poolSockets = [];
         this.poolSocket = null;
@@ -7013,7 +7013,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this._poolSubscribe();
                     // Close direct relay connections (pool handles them now)
                     this.relayPool.forEach((relay, url) => {
-                        try { if (relay.ws) relay.ws.close(); } catch (_) {}
+                        try { if (relay.ws) relay.ws.close(); } catch (_) { }
                     });
                     this.relayPool.clear();
                     this.updateConnectionStatus();
@@ -7226,13 +7226,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (this.useRelayProxy && this.poolSockets.length > 0) {
                     for (const pool of this.poolSockets) {
                         if (pool.ws && pool.ws.readyState === WebSocket.OPEN) {
-                            try { pool.ws.send(msg); } catch {}
+                            try { pool.ws.send(msg); } catch { }
                         }
                     }
                 } else {
                     for (const [, ws] of this.relayPool) {
                         if (ws.readyState === WebSocket.OPEN) {
-                            try { ws.send(msg); } catch {}
+                            try { ws.send(msg); } catch { }
                         }
                     }
                 }
@@ -7374,7 +7374,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _poolRemoveMessageListener(handler) {
         for (const p of this.poolSockets) {
             if (p.ws) {
-                try { p.ws.removeEventListener('message', handler); } catch (_) {}
+                try { p.ws.removeEventListener('message', handler); } catch (_) { }
             }
         }
     }
@@ -7520,7 +7520,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.poolSocket = null;
         for (const p of oldSockets) {
             p._closing = true;
-            try { if (p.ws) p.ws.close(); } catch (_) {}
+            try { if (p.ws) p.ws.close(); } catch (_) { }
         }
 
         // Connect all shards in parallel, resolve when at least one opens
@@ -7574,7 +7574,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (existingIdx >= 0) {
                 const old = this.poolSockets[existingIdx];
                 old._closing = true;
-                try { if (old.ws) old.ws.close(); } catch (_) {}
+                try { if (old.ws) old.ws.close(); } catch (_) { }
                 this.poolSockets[existingIdx] = poolEntry;
             } else {
                 this.poolSockets.push(poolEntry);
@@ -7751,7 +7751,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const msg = typeof data === 'string' ? data : JSON.stringify(data);
         for (const p of this.poolSockets) {
             if (p.ws && p.ws.readyState === WebSocket.OPEN) {
-                try { p.ws.send(msg); } catch (_) {}
+                try { p.ws.send(msg); } catch (_) { }
             }
         }
     }
@@ -7761,7 +7761,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const msg = typeof data === 'string' ? data : JSON.stringify(data);
         for (const p of this.poolSockets) {
             if (p.role === role && p.ws && p.ws.readyState === WebSocket.OPEN) {
-                try { p.ws.send(msg); } catch (_) {}
+                try { p.ws.send(msg); } catch (_) { }
             }
         }
     }
@@ -7782,7 +7782,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const subId = Math.random().toString(36).substring(2);
 
         const msg = JSON.stringify(["REQ", subId, ...filters]);
-        try { p.ws.send(msg); } catch (_) {}
+        try { p.ws.send(msg); } catch (_) { }
 
         // Also subscribe to ephemeral pubkeys on critical shards
         if (!isGeoOrDiscovered) {
@@ -7901,10 +7901,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.relayPool.forEach((relay, url) => {
                 if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
                     relay.type !== 'write' && !this._isGeoOrDiscoveredRelay(url)) {
-                    if (closeMsg) try { relay.ws.send(closeMsg); } catch (_) {}
+                    if (closeMsg) try { relay.ws.send(closeMsg); } catch (_) { }
                     if (!relay.subscriptions) relay.subscriptions = new Set();
                     relay.subscriptions.add(newSubId);
-                    try { relay.ws.send(msg); } catch (_) {}
+                    try { relay.ws.send(msg); } catch (_) { }
                 }
             });
         }
@@ -7955,7 +7955,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const closeMsg = JSON.stringify(['CLOSE', oldSubId]);
                 this.relayPool.forEach(relay => {
                     if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        try { relay.ws.send(closeMsg); } catch (_) {}
+                        try { relay.ws.send(closeMsg); } catch (_) { }
                     }
                 });
             }
@@ -7980,7 +7980,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const msg = JSON.stringify(['REQ', subId, filter]);
                 this.relayPool.forEach((relay, url) => {
                     if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                        try { relay.ws.send(msg); } catch (_) {}
+                        try { relay.ws.send(msg); } catch (_) { }
                     }
                 });
             }
@@ -8052,7 +8052,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // New shard — connect a new worker
                 this._connectSinglePoolWorker(shard).then(() => {
                     this._poolSubscribeOnWorker(shard.id);
-                }).catch(() => {});
+                }).catch(() => { });
             }
         }
 
@@ -8239,32 +8239,32 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                                 }
 
                                 this.connectToRelay(relayUrl, type).then(() => {
-                                        // Check if actually connected (connectToRelay resolves even on failure)
-                                        const relay = this.relayPool.get(relayUrl);
-                                        const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
+                                    // Check if actually connected (connectToRelay resolves even on failure)
+                                    const relay = this.relayPool.get(relayUrl);
+                                    const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
-                                        if (isConnected) {
-                                            // Re-subscribe after reconnection (except write-only relays)
-                                            if (type !== 'write') {
-                                                this.subscribeToSingleRelay(relayUrl);
-                                            }
-                                            this.updateConnectionStatus();
-                                            this.reconnectingRelays.delete(relayUrl);
-
-                                            if (this.reconnectingRelays.size === 0) {
-                                                setTimeout(() => this.retryPendingDMsOnReconnect(), 1000);
-                                            }
-                                        } else {
-                                            this.trackRelayFailure(relayUrl);
-                                            this.updateConnectionStatus();
-                                            if (attempt < maxAttempts - 1) {
-                                                attemptReconnect(attempt + 1);
-                                            } else {
-                                                this.reconnectingRelays.delete(relayUrl);
-                                                this.updateConnectionStatus();
-                                            }
+                                    if (isConnected) {
+                                        // Re-subscribe after reconnection (except write-only relays)
+                                        if (type !== 'write') {
+                                            this.subscribeToSingleRelay(relayUrl);
                                         }
-                                    });
+                                        this.updateConnectionStatus();
+                                        this.reconnectingRelays.delete(relayUrl);
+
+                                        if (this.reconnectingRelays.size === 0) {
+                                            setTimeout(() => this.retryPendingDMsOnReconnect(), 1000);
+                                        }
+                                    } else {
+                                        this.trackRelayFailure(relayUrl);
+                                        this.updateConnectionStatus();
+                                        if (attempt < maxAttempts - 1) {
+                                            attemptReconnect(attempt + 1);
+                                        } else {
+                                            this.reconnectingRelays.delete(relayUrl);
+                                            this.updateConnectionStatus();
+                                        }
+                                    }
+                                });
                             }, delay);
                         };
 
@@ -8603,7 +8603,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (cached && typeof cached === 'object') {
                         existing = { ...cached };
                     }
-                } catch (_) {}
+                } catch (_) { }
 
                 const bio = this.userBios.get(this.pubkey);
                 const avatarUrl = this.userAvatars.get(this.pubkey);
@@ -8660,9 +8660,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
+            const jittered = this.randomNow();
+            const minTs = (this._lastKind0Ts || 0) + 1;
+            const profileTs = Math.max(jittered, minTs);
+            this._lastKind0Ts = profileTs;
+
             const profileEvent = {
                 kind: 0,
-                created_at: Math.floor(Date.now() / 1000),
+                created_at: profileTs,
                 tags: [],
                 content: JSON.stringify(profileToSave),
                 pubkey: this.pubkey
@@ -8733,7 +8738,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     ctxBanner.src = objectUrl;
                 }
             })
-            .catch(() => {})
+            .catch(() => { })
             .finally(() => { this.bannerBlobInflight.delete(pubkey); });
         this.bannerBlobInflight.set(pubkey, p);
         return p;
@@ -9201,7 +9206,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.navigationIndex <= 0) return;
         this.navigationIndex--;
         this._navigateTo(this.navigationHistory[this.navigationIndex]);
-        try { history.replaceState({ _nym_nav: this.navigationIndex }, ''); } catch {}
+        try { history.replaceState({ _nym_nav: this.navigationIndex }, ''); } catch { }
         this._updateNavButtons();
     }
 
@@ -9210,7 +9215,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.navigationIndex >= this.navigationHistory.length - 1) return;
         this.navigationIndex++;
         this._navigateTo(this.navigationHistory[this.navigationIndex]);
-        try { history.replaceState({ _nym_nav: this.navigationIndex }, ''); } catch {}
+        try { history.replaceState({ _nym_nav: this.navigationIndex }, ''); } catch { }
         this._updateNavButtons();
     }
 
@@ -9348,7 +9353,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             : '';
 
         let host = '';
-        try { host = new URL(meta.url).hostname; } catch {}
+        try { host = new URL(meta.url).hostname; } catch { }
 
         return `<a href="${this.escapeHtml(meta.url)}" target="_blank" rel="noopener" class="link-preview" onclick="event.stopPropagation()">
             ${imageHtml}
@@ -9901,7 +9906,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             qrContainer.innerHTML = `
     <div style="display: inline-block; padding: 20px; border: 5px solid white; background: white; color: black; text-align: center; border-radius: 10px;">
         <div style="font-size: 14px; margin-bottom: 10px;">Lightning Invoice</div>
-        <div style="font-size: 10px; word-break: break-all;">${invoice.pr.substring(0, 60)}...</div>
+        <div style="font-size: 10px; word-break: break-all;">${this.escapeHtml(invoice.pr.substring(0, 60))}...</div>
         <div style="margin-top: 10px; font-size: 12px; color: red;">QR generation failed - copy invoice manually</div>
     </div>
 `;
@@ -10354,7 +10359,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                     settingsData.groupConversations = groupData;
                 }
-            } catch (_) {}
+            } catch (_) { }
 
             // Include ephemeral keys for timing-attack mitigation sync.
             // Keys are stored encrypted (settings are gift-wrapped to self).
@@ -10366,7 +10371,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                     settingsData.groupEphemeralKeys = ekData;
                 }
-            } catch (_) {}
+            } catch (_) { }
 
             // Include last 100 messages per group for chat history backup
             try {
@@ -10390,7 +10395,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         settingsData.groupMessageHistory = historyData;
                     }
                 }
-            } catch (_) {}
+            } catch (_) { }
 
             await this._publishEncryptedSettings(settingsData);
         } catch (error) {
@@ -10769,9 +10774,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 ]));
                 this.relayPool.forEach(relay => {
                     if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        try { relay.ws.send(realReq); } catch (_) {}
+                        try { relay.ws.send(realReq); } catch (_) { }
                         for (const req of ephReqs) {
-                            try { relay.ws.send(req); } catch (_) {}
+                            try { relay.ws.send(req); } catch (_) { }
                         }
                     }
                 });
@@ -10875,7 +10880,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         if (p.ws && p.ws.readyState === WebSocket.OPEN) {
                             try {
                                 p.ws.send(JSON.stringify(p.role === 'geo' ? geoMsg : plainMsg));
-                            } catch (_) {}
+                            } catch (_) { }
                         }
                     }
                     return;
@@ -11034,87 +11039,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             case 'EVENT':
                 const [subscriptionId, event] = data;
 
-                // Handle profile events (kind 0) for lightning addresses and avatars
-                if (event && event.kind === 0) {
-                    try {
-                        const profile = JSON.parse(event.content);
-                        const pubkey = event.pubkey;
-
-                        if (profile.lud16 || profile.lud06) {
-                            const lnAddress = profile.lud16 || profile.lud06;
-                            this.userLightningAddresses.set(pubkey, lnAddress);
-                            this.notifyLightningAddress(pubkey, lnAddress);
-                        }
-
-                        // Extract avatar from profile picture field
-                        if (profile.picture) {
-                            const prevUrl = this.userAvatars.get(pubkey);
-                            if (prevUrl !== profile.picture) {
-                                // Avatar URL changed — revoke old blob and re-fetch
-                                const oldBlob = this.avatarBlobCache.get(pubkey);
-                                if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
-                                this.userAvatars.set(pubkey, profile.picture);
-                                // cacheAvatarImage will call updateRenderedAvatars once with the blob URL when done
-                                // (avoid calling updateRenderedAvatars twice which causes visible flickering)
-                                this.cacheAvatarImage(pubkey, profile.picture);
-                            } else if (!this.avatarBlobCache.has(pubkey)) {
-                                // Same URL but no blob cached yet — trigger fetch
-                                this.userAvatars.set(pubkey, profile.picture);
-                                this.cacheAvatarImage(pubkey, profile.picture);
-                            }
-                            // If same URL and blob already cached, do nothing — avatars are fine
-                        }
-
-                        // Extract banner image
-                        if (profile.banner) {
-                            const prevBanner = this.userBanners.get(pubkey);
-                            if (prevBanner !== profile.banner) {
-                                const oldBlob = this.bannerBlobCache.get(pubkey);
-                                if (oldBlob) { URL.revokeObjectURL(oldBlob); this.bannerBlobCache.delete(pubkey); }
-                                this.userBanners.set(pubkey, profile.banner);
-                                this.cacheBannerImage(pubkey, profile.banner);
-                            } else if (!this.bannerBlobCache.has(pubkey)) {
-                                this.userBanners.set(pubkey, profile.banner);
-                                this.cacheBannerImage(pubkey, profile.banner);
-                            }
-                        }
-
-                        // Extract bio/about
-                        if (profile.about) {
-                            const bio = profile.about.substring(0, 150);
-                            this.userBios.set(pubkey, bio);
-                            if (pubkey === this.pubkey) {
-                                localStorage.setItem('nym_bio', bio);
-                            }
-                        }
-
-                        if (profile.name || profile.username || profile.display_name) {
-                            const profileName = (profile.name || profile.username || profile.display_name).substring(0, 20);
-                            if (!this.users.has(pubkey) || this.users.get(pubkey).nym.startsWith('anon-')) {
-                                const existingUser = this.users.get(pubkey);
-                                this.users.set(pubkey, {
-                                    nym: profileName,
-                                    pubkey,
-                                    lastSeen: existingUser?.lastSeen || 0,
-                                    status: existingUser?.status || 'online',
-                                    channels: existingUser?.channels || new Set()
-                                });
-                            } else {
-                                // Update existing user name without discarding channels/status
-                                const u = this.users.get(pubkey);
-                                u.nym = profileName;
-                                // Don't update lastSeen - only channel messages should update presence
-                                this.users.set(pubkey, u);
-                            }
-
-                            // Refresh PM sidebar entry and any open PM header
-                            this.updatePMNicknameFromProfile(pubkey, profileName);
-                        }
-
-                        // Resolve any pending fetchProfileDirect calls for this pubkey
-                        this._resolveProfileCallbacks(pubkey);
-                    } catch (e) { }
-                }
                 // Deduplicate events by ID
                 if (event && event.id) {
                     if (this.eventDeduplication.has(event.id)) {
@@ -11152,6 +11076,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     }
 
     async handleEvent(event) {
+        // Normalize against malicious or malformed relay payloads up front so downstream
+        if (!event || typeof event !== 'object' || typeof event.pubkey !== 'string') return;
+        if (!Array.isArray(event.tags)) event.tags = [];
+        if (typeof event.created_at !== 'number' || !Number.isFinite(event.created_at)) {
+            event.created_at = Math.floor(Date.now() / 1000);
+        }
+
         // Early deduplication for channel messages to prevent re-processing on reconnect
         if (event.kind === 20000) {
             if (this.processedMessageEventIds.has(event.id)) {
@@ -11671,6 +11602,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // can merge changes without losing fields the app doesn't manage
                 if (pubkey === this.pubkey) {
                     this._cachedKind0Profile = profile;
+                    if (typeof event.created_at === 'number' && event.created_at > (this._lastKind0Ts || 0)) {
+                        this._lastKind0Ts = event.created_at;
+                    }
                 }
 
                 // Store lightning address if present
@@ -11695,8 +11629,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 }
 
+                // Extract banner image
+                if (profile.banner) {
+                    const prevBanner = this.userBanners.get(pubkey);
+                    if (prevBanner !== profile.banner) {
+                        const oldBlob = this.bannerBlobCache.get(pubkey);
+                        if (oldBlob) { URL.revokeObjectURL(oldBlob); this.bannerBlobCache.delete(pubkey); }
+                        this.userBanners.set(pubkey, profile.banner);
+                        this.cacheBannerImage(pubkey, profile.banner);
+                    } else if (!this.bannerBlobCache.has(pubkey)) {
+                        this.userBanners.set(pubkey, profile.banner);
+                        this.cacheBannerImage(pubkey, profile.banner);
+                    }
+                }
+
                 // Extract bio/about
-                if (profile.about) {
+                if (typeof profile.about === 'string') {
                     const bio = profile.about.substring(0, 150);
                     this.userBios.set(pubkey, bio);
                     if (pubkey === this.pubkey) {
@@ -11705,8 +11653,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
 
                 // Update nym from kind 0 profile — always accept newer profile data
-                if (profile.name || profile.username || profile.display_name) {
-                    const profileName = profile.name || profile.username || profile.display_name;
+                const profileName = [profile.name, profile.username, profile.display_name]
+                    .find(v => typeof v === 'string' && v.length > 0);
+                if (profileName) {
                     const truncatedName = profileName.substring(0, 20);
                     const existingUser = this.users.get(pubkey);
                     // Always update: the kind 0 event is the authoritative source
@@ -11729,6 +11678,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.updatePMNicknameFromProfile(pubkey, truncatedName);
                     }
                 }
+
+                // Resolve any pending fetchProfileDirect calls for this pubkey
+                this._resolveProfileCallbacks(pubkey);
             } catch (e) {
                 // Ignore profile parse errors
             }
@@ -12172,7 +12124,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             badge.dataset.emoji = emoji;
             badge.dataset.messageId = messageId;
 
-            badge.innerHTML = `${emoji} ${this.abbreviateNumber(reactors.size)}`;
+            badge.innerHTML = `${this.escapeHtml(emoji)} ${this.abbreviateNumber(reactors.size)}`;
 
             // No tooltip — long-press shows reactors modal instead
 
@@ -12268,7 +12220,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const modal = document.createElement('div');
         modal.className = 'reactors-modal';
         modal.innerHTML = `
-            <div class="reactors-modal-header">${emoji} <span class="reactors-modal-count">${reactors.size}</span></div>
+            <div class="reactors-modal-header">${this.escapeHtml(emoji)} <span class="reactors-modal-count">${reactors.size}</span></div>
             <div class="reactors-modal-list">${userItems}</div>
         `;
 
@@ -14052,7 +14004,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                             this._lastSettingsSyncTs = rumorTs;
                             await applyNostrSettings(s);
                         }
-                    } catch (_) {}
+                    } catch (_) { }
                 }
                 return;
             }
@@ -14244,7 +14196,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Re-open closed PMs when a new message arrives from the peer
             if (this.closedPMs.has(peerPubkey)) {
                 this.closedPMs.delete(peerPubkey);
-                try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+                try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
                 this._debouncedNostrSettingsSave();
             }
 
@@ -14648,7 +14600,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     const rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
                     const rumor = JSON.parse(rumorJson);
                     return { seal, rumor };
-                } catch (_) {}
+                } catch (_) { }
             }
         }
 
@@ -14665,7 +14617,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     const rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
                     const rumor = JSON.parse(rumorJson);
                     return { seal, rumor };
-                } catch (_) {}
+                } catch (_) { }
             }
         }
         return null;
@@ -14793,7 +14745,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 data[groupId] = this._serializeEphemeralKeys(ek);
             }
             localStorage.setItem(`nym_ephemeral_keys_${this.pubkey}`, JSON.stringify(data));
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // Load ephemeral keys from localStorage
@@ -14806,7 +14758,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             for (const [groupId, entry] of Object.entries(data)) {
                 this.groupEphemeralKeys.set(groupId, this._deserializeEphemeralEntry(entry));
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     getGroupConversationKey(groupId) {
@@ -14842,16 +14794,16 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 };
             }
             localStorage.setItem(`nym_groups_${this.pubkey}`, JSON.stringify(data));
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // Persist left-group IDs so they survive reload. Uses a per-pubkey key when
     // pubkey is available, plus a global fallback for early init.
     _saveLeftGroups() {
         const json = JSON.stringify([...this.leftGroups]);
-        try { localStorage.setItem('nym_left_groups', json); } catch {}
+        try { localStorage.setItem('nym_left_groups', json); } catch { }
         if (this.pubkey) {
-            try { localStorage.setItem(`nym_left_groups_${this.pubkey}`, json); } catch {}
+            try { localStorage.setItem(`nym_left_groups_${this.pubkey}`, json); } catch { }
         }
     }
 
@@ -14864,7 +14816,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const arr = JSON.parse(perUser);
                 for (const gid of arr) this.leftGroups.add(gid);
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // Restore groups saved by _saveGroupConversations (called after pubkey is known)
@@ -14903,7 +14855,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     }
                 }
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // Handle a group reaction (kind 7 gift-wrapped to the group)
@@ -15596,7 +15548,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this._saveEphemeralKeys();
 
         // Remove persisted entry
-        try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) {}
+        try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) { }
         this.groupConversations.delete(groupId);
         this._saveGroupConversations();
 
@@ -16073,9 +16025,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 try {
                     this.sendRequestToFewRelays(["REQ", profileSubId, { kinds: [0], authors: unknownPubkeys, limit: unknownPubkeys.length }]);
                     setTimeout(() => {
-                        try { this.sendToRelay(["CLOSE", profileSubId]); } catch (_) {}
+                        try { this.sendToRelay(["CLOSE", profileSubId]); } catch (_) { }
                     }, 10000);
-                } catch (_) {}
+                } catch (_) { }
             }
         };
 
@@ -16084,7 +16036,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Auto-close subscription after 6 seconds
         setTimeout(() => {
-            try { this.sendToRelay(["CLOSE", subId]); } catch (_) {}
+            try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
             this._pendingFollowListHandler = null;
             // If no response was received, allow retry on next call
             if (!received) {
@@ -16240,7 +16192,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Re-open closed PMs when a new conversation is initiated
             if (this.closedPMs.has(pubkey)) {
                 this.closedPMs.delete(pubkey);
-                try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+                try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
                 this._debouncedNostrSettingsSave();
             }
 
@@ -16339,7 +16291,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Persist closed state so PM doesn't reappear on reload
             this.closedPMs.add(pubkey);
-            try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+            try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
             // Remove from UI
@@ -16361,7 +16313,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         const conversationKey = this.getPMConversationKey(pubkey);
         this.pmMessages.delete(conversationKey);
         this.closedPMs.add(pubkey);
-        try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+        try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
         if (item) item.remove();
@@ -16485,7 +16437,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 setTimeout(() => {
                     container.scrollTop = container.scrollHeight;
                     setTimeout(() => {
-                
+
                     }, 300);
                 }, 0);
             }
@@ -16527,7 +16479,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Clear closed state so user can re-open a previously closed PM
         if (this.closedPMs.has(pubkey)) {
             this.closedPMs.delete(pubkey);
-            try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch {}
+            try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
             this._debouncedNostrSettingsSave();
         }
 
@@ -22230,7 +22182,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                         // Only refresh if the input still shows this pubkey
                         const currentInput = document.getElementById('pmRecipientInput')?.value.trim().replace(/^@/, '').toLowerCase();
                         if (currentInput === pk) renderPubkeySuggestion();
-                    }).catch(() => {});
+                    }).catch(() => { });
                 }
             } else {
                 suggestions.style.display = 'none';
@@ -22321,7 +22273,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                     r.nym = u ? this.stripPubkeySuffix(u.nym) : r.nym;
                     this._renderNewPMRecipientChips();
                 }
-            }).catch(() => {});
+            }).catch(() => { });
         }
     }
 
@@ -23847,7 +23799,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 requestAnimationFrame(() => {
                     container.scrollTop = container.scrollHeight;
                     setTimeout(() => {
-                
+
                     }, 300);
                 });
             }
@@ -25128,7 +25080,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // so they never retrigger the unread badge on reload.
         if (ts > this.notificationLastReadTime) {
             this.notificationLastReadTime = ts;
-            try { localStorage.setItem('nym_notification_last_read', String(ts)); } catch {}
+            try { localStorage.setItem('nym_notification_last_read', String(ts)); } catch { }
         }
     }
 
@@ -25147,7 +25099,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const stored = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
                 if (maxTs > stored) {
                     this.notificationLastReadTime = maxTs;
-                    try { localStorage.setItem('nym_notification_last_read', String(maxTs)); } catch {}
+                    try { localStorage.setItem('nym_notification_last_read', String(maxTs)); } catch { }
                 }
             }
             return filtered;
@@ -25159,7 +25111,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
             const recent = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
             localStorage.setItem('nym_notification_history', JSON.stringify(recent));
-        } catch {}
+        } catch { }
     }
 
     _updateNotificationBadge() {
@@ -25215,7 +25167,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     openNotificationsModal() {
         // Mark all as read
         this.notificationLastReadTime = Date.now();
-        try { localStorage.setItem('nym_notification_last_read', String(this.notificationLastReadTime)); } catch {}
+        try { localStorage.setItem('nym_notification_last_read', String(this.notificationLastReadTime)); } catch { }
         this._updateNotificationBadge();
 
         const modal = document.getElementById('notificationsModal');
@@ -27406,7 +27358,7 @@ async function saveSettings() {
                 try {
                     const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
                     localStorage.setItem('nym_session_nsec', nsec);
-                } catch (e) {}
+                } catch (e) { }
             }
         }
     }
@@ -27691,7 +27643,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.58.287 ═══<br/>
+═══ Nymchat v3.58.288 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -27772,7 +27724,7 @@ async function checkSavedConnection() {
                     nym.userAvatars.set(pubkey, cached.avatar);
                     nym.cacheAvatarImage(pubkey, cached.avatar);
                 }
-            } catch (_) {}
+            } catch (_) { }
 
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
             nym.updateSidebarAvatar();
@@ -27882,7 +27834,7 @@ async function checkSavedConnection() {
                     try {
                         const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
                         localStorage.setItem('nym_session_nsec', nsec);
-                    } catch (e) {}
+                    } catch (e) { }
                 }
             } else {
                 // Generate fresh ephemeral keypair each session (random keypair mode)
@@ -28043,7 +27995,7 @@ async function initializeNym() {
             try {
                 const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
                 localStorage.setItem('nym_session_nsec', nsec);
-            } catch (e) {}
+            } catch (e) { }
         }
 
         // Save bio from setup modal
@@ -28063,7 +28015,7 @@ async function initializeNym() {
                 try {
                     const nsec = localStorage.getItem('nym_nostr_login_nsec');
                     if (nsec) nostrSecretKey = nym.decodeNsec(nsec);
-                } catch (_) {}
+                } catch (_) { }
             }
             if (nostrPubkey) {
                 nym.pubkey = nostrPubkey;
@@ -28254,7 +28206,7 @@ async function nostrLoginWithExtension() {
         try {
             const npub = window.NostrTools.nip19.npubEncode(pubkey);
             localStorage.setItem('nym_nostr_login_npub', npub);
-        } catch (_) {}
+        } catch (_) { }
 
         // Apply identity to current session
         applyNostrLogin(pubkey, null, 'extension');
@@ -28302,7 +28254,7 @@ async function nostrLoginWithNsec() {
     try {
         const npub = window.NostrTools.nip19.npubEncode(pubkey);
         localStorage.setItem('nym_nostr_login_npub', npub);
-    } catch (_) {}
+    } catch (_) { }
 
     applyNostrLogin(pubkey, secretKey, 'nsec');
 
@@ -28417,7 +28369,7 @@ function _nip46OpenRelay() {
             if (msg[0] === 'EVENT' && msg[1] === state.subId) {
                 await _nip46HandleEvent(msg[2]);
             }
-        } catch (_) {}
+        } catch (_) { }
     };
 
     ws.onerror = () => {
@@ -28451,7 +28403,7 @@ async function _nip46HandleEvent(event) {
         if (response.result === 'auth_url') {
             // Remote signer requires auth — show URL to user
             const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
-            const safeUrl = (response.error && /^https?:\/\//i.test(response.error)) ? response.error.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'})[m]) : '#';
+            const safeUrl = (response.error && /^https?:\/\//i.test(response.error)) ? response.error.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' })[m]) : '#';
             statusEl.innerHTML = `Signer requires authorization. <a href="${safeUrl}" target="_blank" rel="noopener" style="color: var(--secondary)">Open auth page</a>`;
             return;
         }
@@ -28524,7 +28476,7 @@ async function _nip46CompleteLogin(remotePubkey) {
         try {
             const npub = window.NostrTools.nip19.npubEncode(pubkey);
             localStorage.setItem('nym_nostr_login_npub', npub);
-        } catch (_) {}
+        } catch (_) { }
 
         // Close the subscription but keep the WebSocket alive for signing
         if (state.ws && state.ws.readyState === WebSocket.OPEN) {
@@ -28639,7 +28591,7 @@ function nostrLoginCancelRemoteSigner() {
     // Clean up WebSocket and state
     if (_nip46State) {
         if (_nip46State.ws) {
-            try { _nip46State.ws.close(); } catch (_) {}
+            try { _nip46State.ws.close(); } catch (_) { }
         }
         _nip46State = null;
     }
@@ -28694,7 +28646,7 @@ async function _nip46RestoreSession() {
                 if (msg[0] === 'EVENT' && msg[1] === _nip46State.subId) {
                     await _nip46HandleEvent(msg[2]);
                 }
-            } catch (_) {}
+            } catch (_) { }
         };
 
         ws.onclose = () => {
@@ -28763,7 +28715,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
                     name: nym.nym || null,
                     avatar: avatarUrl || null
                 }));
-            } catch (_) {}
+            } catch (_) { }
         }
     }
 
@@ -28849,7 +28801,7 @@ function nostrLogout() {
     localStorage.removeItem('nym_nip46_relay');
     if (_nip46State) {
         if (_nip46State.ws) {
-            try { _nip46State.ws.close(); } catch (_) {}
+            try { _nip46State.ws.close(); } catch (_) { }
         }
         _nip46State = null;
     }
@@ -28887,7 +28839,7 @@ async function nostrSettingsSave() {
                 }
                 settingsPayload.groupConversations = groupData;
             }
-        } catch (_) {}
+        } catch (_) { }
 
         // Include ephemeral keys for timing-attack mitigation sync
         try {
@@ -28898,7 +28850,7 @@ async function nostrSettingsSave() {
                 }
                 settingsPayload.groupEphemeralKeys = ekData;
             }
-        } catch (_) {}
+        } catch (_) { }
 
         // Include chat history backup for new-device recovery
         try {
@@ -28921,7 +28873,7 @@ async function nostrSettingsSave() {
                     settingsPayload.groupMessageHistory = historyData;
                 }
             }
-        } catch (_) {}
+        } catch (_) { }
 
         await nym._publishEncryptedSettings(settingsPayload);
     } catch (err) {
@@ -28946,7 +28898,7 @@ function nostrPurchasesLoad() {
                 localPurchases = cache;
             }
         }
-    } catch (_) {}
+    } catch (_) { }
 
     const subId = Math.random().toString(36).substring(2);
     const filter = {
@@ -28969,18 +28921,18 @@ function nostrPurchasesLoad() {
                     try {
                         const data = JSON.parse(msg[2].content);
                         applyNostrPurchases(data, localPurchases, msg[2].created_at);
-                    } catch (_) {}
+                    } catch (_) { }
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
                     nym._poolRemoveMessageListener(handler);
-                    try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
+                    try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
 
                     if (!received && localPurchases) {
                         received = true;
                         applyLocalPurchasesToNostr(localPurchases);
                     }
                 }
-            } catch (_) {}
+            } catch (_) { }
         };
         nym._poolAddMessageListener(handler);
         nym._poolSend(['REQ', subId, filter]);
@@ -28988,7 +28940,7 @@ function nostrPurchasesLoad() {
         // Cleanup after 10s
         setTimeout(() => {
             nym._poolRemoveMessageListener(handler);
-            try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
+            try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
         }, 10000);
         return;
     }
@@ -29006,11 +28958,11 @@ function nostrPurchasesLoad() {
                     try {
                         const data = JSON.parse(msg[2].content);
                         applyNostrPurchases(data, localPurchases, msg[2].created_at);
-                    } catch (_) {}
+                    } catch (_) { }
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
                     relay.ws.removeEventListener('message', handler);
-                    try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) {}
+                    try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) { }
 
                     // If no relay had purchases but we have local ones, push them up
                     if (!received && localPurchases) {
@@ -29018,7 +28970,7 @@ function nostrPurchasesLoad() {
                         applyLocalPurchasesToNostr(localPurchases);
                     }
                 }
-            } catch (_) {}
+            } catch (_) { }
         };
         relay.ws.addEventListener('message', handler);
         relay.ws.send(JSON.stringify(['REQ', subId, filter]));
@@ -29026,7 +28978,7 @@ function nostrPurchasesLoad() {
         // Cleanup after 10s
         setTimeout(() => {
             relay.ws.removeEventListener('message', handler);
-            try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) {}
+            try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) { }
         }, 10000);
     });
 }
@@ -29089,7 +29041,7 @@ function applyNostrPurchases(data, localPurchases, eventCreatedAt) {
             if (!localStorage.getItem(key)) {
                 try {
                     localStorage.setItem(key, JSON.stringify(payload));
-                } catch (_) {}
+                } catch (_) { }
             }
         });
     }
@@ -29168,13 +29120,13 @@ function nostrSettingsLoad() {
             try {
                 const msg = JSON.parse(evt.data);
                 if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
-                    nym.handleGiftWrapDM(msg[2]).catch(() => {});
+                    nym.handleGiftWrapDM(msg[2]).catch(() => { });
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
                     nym._poolRemoveMessageListener(handler);
-                    try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
+                    try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
                 }
-            } catch (_) {}
+            } catch (_) { }
         };
         nym._poolAddMessageListener(handler);
         nym._poolSend(['REQ', subId, filter]);
@@ -29182,7 +29134,7 @@ function nostrSettingsLoad() {
         // Cleanup after 10s
         setTimeout(() => {
             nym._poolRemoveMessageListener(handler);
-            try { nym._poolSend(['CLOSE', subId]); } catch (_) {}
+            try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
         }, 10000);
         return;
     }
@@ -29195,13 +29147,13 @@ function nostrSettingsLoad() {
             try {
                 const msg = JSON.parse(evt.data);
                 if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
-                    nym.handleGiftWrapDM(msg[2]).catch(() => {});
+                    nym.handleGiftWrapDM(msg[2]).catch(() => { });
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
                     relay.ws.removeEventListener('message', handler);
-                    try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) {}
+                    try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) { }
                 }
-            } catch (_) {}
+            } catch (_) { }
         };
         relay.ws.addEventListener('message', handler);
         relay.ws.send(JSON.stringify(['REQ', subId, filter]));
@@ -29209,7 +29161,7 @@ function nostrSettingsLoad() {
         // Cleanup after 10s
         setTimeout(() => {
             relay.ws.removeEventListener('message', handler);
-            try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) {}
+            try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) { }
         }, 10000);
     });
 }
@@ -29233,7 +29185,7 @@ async function applyNostrSettingsAdditive(s) {
     };
 
     if (s.groupConversations && typeof s.groupConversations === 'object') {
-        try { applyGroupData(s.groupConversations); } catch (_) {}
+        try { applyGroupData(s.groupConversations); } catch (_) { }
     }
 
     // Ephemeral keys — always merge from every settings event so no device's
@@ -29248,7 +29200,7 @@ async function applyNostrSettingsAdditive(s) {
             if (nym._getAllKnownEphemeralPubkeys().length > prevEphCount && nym.connected) {
                 nym._refreshEphemeralSubscriptions();
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // Group message history — always merge from every settings event so older
@@ -29299,7 +29251,7 @@ async function applyNostrSettingsAdditive(s) {
                     nym.loadPMMessages(activeKey);
                 }
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 }
 
@@ -29575,7 +29527,7 @@ async function applyNostrSettings(s) {
     };
 
     if (s.groupConversations && typeof s.groupConversations === 'object') {
-        try { applyGroupData(s.groupConversations); } catch (_) {}
+        try { applyGroupData(s.groupConversations); } catch (_) { }
     }
 
     // Restore ephemeral keys from settings sync (timing-attack mitigation).
@@ -29595,7 +29547,7 @@ async function applyNostrSettings(s) {
             if (nym._getAllKnownEphemeralPubkeys().length > prevEphCount && nym.connected) {
                 nym._refreshEphemeralSubscriptions();
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // Restore chat history backup from settings sync.
@@ -29654,7 +29606,7 @@ async function applyNostrSettings(s) {
                     nym.loadPMMessages(activeKey);
                 }
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // Retroactively remove left groups that were re-added by early-arriving
@@ -29932,12 +29884,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 expiredRelays.forEach(relayUrl => {
                     if (nym.defaultRelays.includes(relayUrl) && !nym.relayPool.has(relayUrl)) {
                         nym.connectToRelay(relayUrl, 'relay').then(() => {
-                                const r = nym.relayPool.get(relayUrl);
-                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                    nym.subscribeToSingleRelay(relayUrl);
-                                    nym.updateConnectionStatus();
-                                }
-                            });
+                            const r = nym.relayPool.get(relayUrl);
+                            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                nym.subscribeToSingleRelay(relayUrl);
+                                nym.updateConnectionStatus();
+                            }
+                        });
                     }
                 });
             }
@@ -30320,7 +30272,7 @@ function renderRelayList(pool, stats) {
             const shortUrl = e.url.replace('wss://', '').replace('ws://', '');
             html += `<div class="relay-stats-row" data-rs-idx="${i}">` +
                 `<span class="relay-stats-dot ${e.open ? 'open' : 'closed'}"></span>` +
-                `<span class="relay-stats-url" title="${e.url}">${shortUrl}</span>` +
+                `<span class="relay-stats-url" title="${nym.escapeHtml(e.url)}">${nym.escapeHtml(shortUrl)}</span>` +
                 (e.write ? `<span class="relay-stats-type write">write</span>` : '') +
                 `<span class="relay-stats-latency">${e.latency !== null ? e.latency + 'ms' : '--'}</span>` +
                 `<span class="relay-stats-events">${e.events} evt</span>` +
