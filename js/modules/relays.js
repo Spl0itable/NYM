@@ -2303,9 +2303,36 @@ Object.assign(NYM.prototype, {
         this._resubscribeChannels();
     },
 
-    // Send independent REQ subscriptions for each ephemeral pubkey.
-    // Each gets its own subscription ID so relays cannot link them to
-    // the real pubkey or to each other via a single request.
+    // History fetch for a set of ephemeral pubkeys
+    _recoverEphemeralHistory(ephPks) {
+        if (!Array.isArray(ephPks) || ephPks.length === 0) return;
+        const mkSubId = () => Math.random().toString(36).substring(2);
+        const since = this._isFreshDevice
+            ? 0
+            : (this.lastPMSyncTime > 0 ? Math.max(0, this.lastPMSyncTime - 300) : 0);
+        const buildFilter = (pk) => {
+            const f = { kinds: [1059], '#p': [pk], limit: 500 };
+            if (since > 0) f.since = since;
+            return f;
+        };
+
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            for (const pk of ephPks) {
+                this._poolSendToRole('critical', ['REQ', mkSubId(), buildFilter(pk)]);
+            }
+            return;
+        }
+        const reqs = ephPks.map(pk => JSON.stringify(['REQ', mkSubId(), buildFilter(pk)]));
+        this.relayPool.forEach(relay => {
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
+                for (const req of reqs) {
+                    try { relay.ws.send(req); } catch (_) { }
+                }
+            }
+        });
+    },
+
+    // Send independent REQ subscriptions for each ephemeral pubkey
     _refreshEphemeralSubscriptions() {
         // Close previous ephemeral subscriptions
         for (const oldSubId of this._ephemeralSubIds) {

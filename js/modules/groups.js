@@ -37,21 +37,16 @@ Object.assign(NYM.prototype, {
         return ek.self.current;
     },
 
-    // Rotate own ephemeral key for a group (called after sending a message).
-    // Generates a fresh random keypair. Previous keys are retained for
-    // in-flight message tolerance and multi-device sync.
+    // Rotate own ephemeral key for a group
     _rotateSelfEphemeralKey(groupId) {
         const NT = window.NostrTools;
         const ek = this._getGroupEphemeralKeys(groupId);
         if (!ek.self) {
             this._ensureSelfEphemeralKey(groupId);
         }
-        // Move current to prev
         if (ek.self.current) {
             ek.self.prev.unshift(ek.self.current);
-            if (ek.self.prev.length > 10) ek.self.prev = ek.self.prev.slice(0, 10);
         }
-        // Generate fresh random keypair
         const nextSk = NT.generateSecretKey();
         const nextPk = NT.getPublicKey(nextSk);
         ek.self.current = { sk: nextSk, pk: nextPk };
@@ -104,11 +99,8 @@ Object.assign(NYM.prototype, {
         return [...pks];
     },
 
-    // Collect ephemeral pubkeys to subscribe to on relays.
-    // Includes current + all prev keys (prev is already capped at 10 by rotation).
-    // We subscribe to all stored keys so messages to any known key get delivered.
+    // Collect ephemeral pubkeys to subscribe to on relays
     _getAllSelfEphemeralPubkeys() {
-        // Reuse the full set — prev is already bounded by _rotateSelfEphemeralKey
         return this._getAllKnownEphemeralPubkeys();
     },
 
@@ -287,6 +279,7 @@ Object.assign(NYM.prototype, {
             for (const [groupId, entry] of Object.entries(data)) {
                 this.groupEphemeralKeys.set(groupId, this._deserializeEphemeralEntry(entry));
             }
+            this._invalidateEphPkCache();
         } catch (_) { }
     },
 

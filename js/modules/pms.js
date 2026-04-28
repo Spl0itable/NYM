@@ -114,6 +114,32 @@ Object.assign(NYM.prototype, {
         this.sendNIP17PM(msg.content, msg.conversationPubkey);
     },
 
+    // Persist the newest gift-wrap timestamp we've processed
+    _persistLastPMSyncTime() {
+        if (!this.pubkey || !this.lastPMSyncTime) return;
+        if (this._lastPMSyncTimeWriteAt && Date.now() - this._lastPMSyncTimeWriteAt < 5000) return;
+        this._lastPMSyncTimeWriteAt = Date.now();
+        try {
+            localStorage.setItem(`nym_last_pm_sync_${this.pubkey}`, String(this.lastPMSyncTime));
+        } catch (_) { }
+    },
+
+    _loadLastPMSyncTime() {
+        if (!this.pubkey) return;
+        try {
+            const raw = localStorage.getItem(`nym_last_pm_sync_${this.pubkey}`);
+            if (!raw) {
+                this._isFreshDevice = true;
+                return;
+            }
+            const parsed = parseInt(raw, 10);
+            if (Number.isFinite(parsed) && parsed > this.lastPMSyncTime) {
+                this.lastPMSyncTime = parsed;
+            }
+            this._isFreshDevice = false;
+        } catch (_) { }
+    },
+
     // Called on relay reconnection to retry any pending DMs and catch missed gift wraps
     retryPendingDMsOnReconnect() {
         // Re-request gift wraps since our last known PM to catch any missed during disconnect
@@ -458,6 +484,7 @@ Object.assign(NYM.prototype, {
             // Update lastPMSyncTime to track newest received PM
             if (event.created_at && event.created_at > this.lastPMSyncTime) {
                 this.lastPMSyncTime = event.created_at;
+                this._persistLastPMSyncTime();
             }
 
             // Limit Set size to prevent memory leaks (keep last 5000 events)

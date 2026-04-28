@@ -3023,7 +3023,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.289 ═══<br/>
+═══ Nymchat v3.59.290 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -3234,6 +3234,7 @@ async function checkSavedConnection() {
             // Restore persisted group conversations and ephemeral keys for this keypair
             nym._loadGroupConversations();
             nym._loadEphemeralKeys();
+            nym._loadLastPMSyncTime();
             nym._loadLeftGroups();
 
             // Load synced settings from relay (groups, closed PMs, etc.)
@@ -3420,6 +3421,7 @@ async function initializeNym() {
         // Restore persisted group conversations and ephemeral keys for this keypair
         nym._loadGroupConversations();
         nym._loadEphemeralKeys();
+        nym._loadLastPMSyncTime();
         nym._loadLeftGroups();
 
         // Load synced settings from relay (groups, closed PMs, etc.)
@@ -4132,6 +4134,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Restore persisted groups and ephemeral keys for this identity before relay history arrives
     nym._loadGroupConversations();
     nym._loadEphemeralKeys();
+    nym._loadLastPMSyncTime();
     nym._loadLeftGroups();
 
     // Update notification badge from persisted history
@@ -4238,7 +4241,7 @@ async function nostrSettingsSave() {
                 const historyData = {};
                 for (const [convKey, messages] of nym.pmMessages) {
                     if (convKey.startsWith('group-') && messages.length > 0) {
-                        historyData[convKey] = messages.slice(-25).map(m => ({
+                        historyData[convKey] = messages.slice(-200).map(m => ({
                             id: m.id,
                             pubkey: m.pubkey,
                             content: m.content,
@@ -4572,13 +4575,16 @@ async function applyNostrSettingsAdditive(s) {
     // keys are silently dropped when events arrive out of timestamp order
     if (s.groupEphemeralKeys && typeof s.groupEphemeralKeys === 'object') {
         try {
-            const prevEphCount = nym._getAllKnownEphemeralPubkeys().length;
+            const beforePks = new Set(nym._getAllKnownEphemeralPubkeys());
             for (const [groupId, entry] of Object.entries(s.groupEphemeralKeys)) {
                 nym._mergeEphemeralKeys(groupId, entry);
             }
             nym._saveEphemeralKeys();
-            if (nym._getAllKnownEphemeralPubkeys().length > prevEphCount && nym.connected) {
+            const afterPks = nym._getAllKnownEphemeralPubkeys();
+            const newPks = afterPks.filter(pk => !beforePks.has(pk));
+            if (newPks.length > 0 && nym.connected) {
                 nym._refreshEphemeralSubscriptions();
+                nym._recoverEphemeralHistory(newPks);
             }
         } catch (_) { }
     }
@@ -4910,29 +4916,23 @@ async function applyNostrSettings(s) {
         try { applyGroupData(s.groupConversations); } catch (_) { }
     }
 
-    // Restore ephemeral keys from settings sync (timing-attack mitigation).
-    // Merge rather than replace — handles multi-device by accumulating all
-    // keys so any device can decrypt messages sent to any other device's key.
     if (s.groupEphemeralKeys && typeof s.groupEphemeralKeys === 'object') {
         try {
-            const prevEphCount = nym._getAllKnownEphemeralPubkeys().length;
+            const beforePks = new Set(nym._getAllKnownEphemeralPubkeys());
             for (const [groupId, entry] of Object.entries(s.groupEphemeralKeys)) {
                 nym._mergeEphemeralKeys(groupId, entry);
             }
             nym._saveEphemeralKeys();
-            // If we learned new ephemeral pubkeys from the other device, re-subscribe
-            // immediately so we fetch any gift wraps that were addressed to those keys.
-            // Without this, a second device never receives messages sent as self-copies
-            // by the first device (which encrypts its own copy to its own ephemeral key).
-            if (nym._getAllKnownEphemeralPubkeys().length > prevEphCount && nym.connected) {
+            const afterPks = nym._getAllKnownEphemeralPubkeys();
+            const newPks = afterPks.filter(pk => !beforePks.has(pk));
+            if (newPks.length > 0 && nym.connected) {
                 nym._refreshEphemeralSubscriptions();
+                nym._recoverEphemeralHistory(newPks);
             }
         } catch (_) { }
     }
 
-    // Restore chat history backup from settings sync.
-    // Always merge (not replace) so newer messages from another device are added
-    // even when this device already has some history for the conversation.
+    // Restore chat history backup from encrypted settings sync
     if (s.groupMessageHistory && typeof s.groupMessageHistory === 'object') {
         try {
             const refreshedConvKeys = new Set();
