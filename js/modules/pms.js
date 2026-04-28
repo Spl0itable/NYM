@@ -559,8 +559,12 @@ Object.assign(NYM.prototype, {
                         return { type: noisePayloadType, content: null, messageId };
                     }
 
-                    // For PRIVATE_MESSAGE, extract the content and messageId from TLV
-                    // TLV format after NoisePayloadType: [0x00][len][messageID][0x01][len][content]
+                    // For PRIVATE_MESSAGE, extract the content and messageId from TLV.
+                    // TLV format after NoisePayloadType: [type][len][value], repeated.
+                    // For values <= 255 bytes the length is 1 byte; for longer values
+                    // the type byte has its high bit set (0x80) and length is 2 bytes
+                    // big-endian. Without the extended-length form, content over 255
+                    // bytes wraps mod 256 and the message is silently truncated.
                     let pos = payloadStart + 1; // Skip NoisePayloadType byte
                     let messageContent = null;
                     let messageId = null;
@@ -570,21 +574,33 @@ Object.assign(NYM.prototype, {
                     while (end > 0 && bytes[end - 1] === 0xBE) end--;
 
                     // Parse TLV fields
-                    while (pos < end - 2) {
-                        const fieldType = bytes[pos];
-                        const fieldLen = bytes[pos + 1];
-                        if (pos + 2 + fieldLen > end) break;
+                    while (pos < end - 1) {
+                        const rawType = bytes[pos];
+                        const fieldType = rawType & 0x7F;
+                        const isExtendedLen = (rawType & 0x80) !== 0;
+                        let fieldLen;
+                        let valueStart;
+                        if (isExtendedLen) {
+                            if (pos + 3 > end) break;
+                            fieldLen = (bytes[pos + 1] << 8) | bytes[pos + 2];
+                            valueStart = pos + 3;
+                        } else {
+                            if (pos + 2 > end) break;
+                            fieldLen = bytes[pos + 1];
+                            valueStart = pos + 2;
+                        }
+                        if (valueStart + fieldLen > end) break;
 
                         if (fieldType === 0x00) { // MESSAGE_ID field
                             try {
-                                messageId = new TextDecoder().decode(bytes.subarray(pos + 2, pos + 2 + fieldLen));
+                                messageId = new TextDecoder().decode(bytes.subarray(valueStart, valueStart + fieldLen));
                             } catch (e) { }
                         } else if (fieldType === 0x01) { // CONTENT field
                             try {
-                                messageContent = new TextDecoder().decode(bytes.subarray(pos + 2, pos + 2 + fieldLen));
+                                messageContent = new TextDecoder().decode(bytes.subarray(valueStart, valueStart + fieldLen));
                             } catch (e) { }
                         }
-                        pos += 2 + fieldLen;
+                        pos = valueStart + fieldLen;
                     }
 
                     return { type: noisePayloadType, content: messageContent || '', messageId };
@@ -932,14 +948,23 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Content-based dedup for dual-wrapped messages: when nymchat sends
-            // both bitchat + nymchat format to unknown peers, the recipient may
-            // decrypt both. Deduplicate by sender + content + close timestamp.
-            // If the existing message is missing nymMessageId (arrived as bitchat format
-            // first), backfill it from the nymchat duplicate so reactions can match.
+            // Dedup for dual-wrapped messages: when nymchat sends both bitchat +
+            // nymchat format to unknown peers, the recipient may decrypt both.
+            // Match first on the shared nymMessageId from the `x` tag (set on
+            // both wraps), since older senders truncate bitchat content over
+            // 255 bytes and content-equality would miss those duplicates.
+            // Fall back to sender + content + close-timestamp for legacy events
+            // that lacked the `x` tag.
             const nymMsgIdFromRumor = this.getNymMessageId(rumor);
-            const dupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5);
+            let dupMsg = null;
+            if (nymMsgIdFromRumor) {
+                dupMsg = list.find(m => m.pubkey === senderPubkey && m.nymMessageId === nymMsgIdFromRumor);
+            }
+            if (!dupMsg) {
+                dupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5);
+            }
             if (dupMsg) {
+                let needsRerender = false;
                 if (!dupMsg.nymMessageId && nymMsgIdFromRumor) {
                     dupMsg.nymMessageId = nymMsgIdFromRumor;
                     // Update the DOM element's data-message-id to use nymMessageId
@@ -947,8 +972,15 @@ Object.assign(NYM.prototype, {
                     if (oldEl) {
                         oldEl.dataset.messageId = nymMsgIdFromRumor;
                     }
-                    this.channelDOMCache.delete(conversationKey);
+                    needsRerender = true;
                 }
+                // If the duplicate carries longer content, prefer it — the existing
+                // copy may be a bitchat wrap with content truncated by an older sender.
+                if (messageContent && messageContent.length > (dupMsg.content || '').length) {
+                    dupMsg.content = messageContent;
+                    needsRerender = true;
+                }
+                if (needsRerender) this.channelDOMCache.delete(conversationKey);
                 return;
             }
 

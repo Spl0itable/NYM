@@ -865,15 +865,27 @@ Object.assign(NYM.prototype, {
 
         const tlvParts = [];
 
+        // TLV fields use a 1-byte length when value <= 255 bytes. For longer
+        // values we set the high bit of the type byte (0x80) to signal that
+        // a 2-byte big-endian length follows. Without this, message content
+        // over 255 bytes silently truncates because the length wraps mod 256.
+        const pushTlvField = (type, valueBytes) => {
+            if (valueBytes.length <= 0xFF) {
+                tlvParts.push(type);
+                tlvParts.push(valueBytes.length);
+            } else {
+                tlvParts.push(type | 0x80);
+                tlvParts.push((valueBytes.length >> 8) & 0xFF);
+                tlvParts.push(valueBytes.length & 0xFF);
+            }
+            for (const b of valueBytes) tlvParts.push(b);
+        };
+
         // MESSAGE_ID field (type 0x00)
-        tlvParts.push(0x00);
-        tlvParts.push(messageIDBytes.length & 0xFF);
-        for (const b of messageIDBytes) tlvParts.push(b);
+        pushTlvField(0x00, messageIDBytes);
 
         // CONTENT field (type 0x01)
-        tlvParts.push(0x01);
-        tlvParts.push(messageBytes.length & 0xFF);
-        for (const b of messageBytes) tlvParts.push(b);
+        pushTlvField(0x01, messageBytes);
 
         const noisePayload = [];
         noisePayload.push(0x01); // PRIVATE_MESSAGE

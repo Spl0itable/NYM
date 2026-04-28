@@ -557,29 +557,67 @@ Object.assign(NYM.prototype, {
 
         // Truncate long messages with "Read more" toggle
         // Mobile: 400 chars, Desktop: 600 chars
+        // Quotes and replies are truncated independently so a short reply to a
+        // long quote stays fully visible while only the quote collapses.
         const isMobileTruncate = window.innerWidth <= 768;
         const truncateThreshold = isMobileTruncate ? 400 : 600;
-        if (!message.isFileOffer && message.content && message.content.length > truncateThreshold) {
+        if (!message.isFileOffer && message.content) {
             const contentEl = messageEl.querySelector('.message-content') || messageEl;
-            // Wrap existing content in an inner span so we can truncate it
-            // while keeping the button inside the bubble
-            const inner = document.createElement('span');
-            inner.className = 'truncated-inner';
-            while (contentEl.firstChild) {
-                inner.appendChild(contentEl.firstChild);
-            }
-            contentEl.appendChild(inner);
-            contentEl.classList.add('has-truncation');
-            const readMoreBtn = document.createElement('button');
-            readMoreBtn.className = 'read-more-btn';
-            readMoreBtn.textContent = 'Read more';
-            readMoreBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const isExpanded = inner.classList.toggle('truncated-expanded');
-                readMoreBtn.textContent = isExpanded ? 'Show less' : 'Read more';
+            const bubbleTimeInner = contentEl.querySelector(':scope > .bubble-time-inner');
+
+            const makeReadMoreBtn = (inner) => {
+                const btn = document.createElement('button');
+                btn.className = 'read-more-btn';
+                btn.textContent = 'Read more';
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const isExpanded = inner.classList.toggle('truncated-expanded');
+                    btn.textContent = isExpanded ? 'Show less' : 'Read more';
+                });
+                return btn;
+            };
+
+            // Truncate each long top-level blockquote in place
+            contentEl.querySelectorAll(':scope > blockquote').forEach(bq => {
+                if ((bq.textContent || '').length > truncateThreshold) {
+                    const inner = document.createElement('span');
+                    inner.className = 'truncated-inner';
+                    while (bq.firstChild) inner.appendChild(bq.firstChild);
+                    bq.appendChild(inner);
+                    bq.appendChild(makeReadMoreBtn(inner));
+                    bq.classList.add('has-truncation');
+                }
             });
-            contentEl.appendChild(readMoreBtn);
+
+            // Truncate the reply (non-quoted) portion if it's long on its own
+            const replyText = message.content
+                .split('\n')
+                .filter(line => !line.startsWith('>'))
+                .join('\n')
+                .trim();
+            if (replyText.length > truncateThreshold) {
+                const replyNodes = [];
+                Array.from(contentEl.childNodes).forEach(node => {
+                    if (node === bubbleTimeInner) return;
+                    if (node.nodeType === 1 && node.tagName === 'BLOCKQUOTE') return;
+                    replyNodes.push(node);
+                });
+                if (replyNodes.length) {
+                    const inner = document.createElement('span');
+                    inner.className = 'truncated-inner';
+                    replyNodes.forEach(n => inner.appendChild(n));
+                    const btn = makeReadMoreBtn(inner);
+                    if (bubbleTimeInner) {
+                        contentEl.insertBefore(inner, bubbleTimeInner);
+                        contentEl.insertBefore(btn, bubbleTimeInner);
+                    } else {
+                        contentEl.appendChild(inner);
+                        contentEl.appendChild(btn);
+                    }
+                    contentEl.classList.add('has-truncation');
+                }
+            }
         }
 
         // Apply shop styles for own messages (load from cache if needed)
@@ -979,9 +1017,12 @@ Object.assign(NYM.prototype, {
         // Restore video placeholders
         formatted = formatted.replace(/__VID_(\d+)__/g, (m, idx) => videoPlaceholders[idx]);
 
-        // Process mentions and channel references (both geohash and non-geohash) in one pass
+        // Process mentions and channel references (both geohash and non-geohash) in one pass.
+        // The trailing (?![^<]*>) prevents matches inside HTML attribute values
+        // (e.g. inside an <a href="...@user/...">), which would otherwise consume
+        // the closing quote and `>` of the tag and break the rendered HTML.
         formatted = formatted.replace(
-            /(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?])/gi,
+            /(?:(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?]))(?![^<]*>)/gi,
             (match, mentionWithSuffix, simpleMention, whitespace, channel) => {
                 if (mentionWithSuffix) {
                     // Wrap the #suffix in nym-suffix span for proper dimming
