@@ -1008,6 +1008,7 @@ Object.assign(NYM.prototype, {
         // Send gift wraps using ephemeral recipient keys when available
         await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
         this._saveEphemeralKeys();
+        this._debouncedNostrSettingsSave(2000);
 
         // Refresh relay subscriptions so we receive messages to our new ephemeral key
         this._refreshEphemeralSubscriptions();

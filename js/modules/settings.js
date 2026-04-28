@@ -43,14 +43,13 @@ Object.assign(NYM.prototype, {
                 }
             } catch (_) { }
 
-            // Include last 100 messages per group for chat history backup
+            // Include group message history backup for new-device recovery
             try {
                 if (this.pmMessages && this.pmMessages.size > 0) {
                     const historyData = {};
                     for (const [convKey, messages] of this.pmMessages) {
                         if (convKey.startsWith('group-') && messages.length > 0) {
-                            // Store last 25 messages, stripped to essential fields
-                            historyData[convKey] = messages.slice(-25).map(m => ({
+                            historyData[convKey] = messages.slice(-200).map(m => ({
                                 id: m.id,
                                 pubkey: m.pubkey,
                                 content: m.content,
@@ -134,24 +133,19 @@ Object.assign(NYM.prototype, {
         const NT = window.NostrTools;
         const now = Math.floor(Date.now() / 1000);
 
-        // NIP-44 max plaintext is 65535 bytes. Content is encrypted twice:
-        // rumor → seal (NIP-44 encrypt + base64 ≈ 1.5x expansion) → wrap (NIP-44 encrypt).
-        // So the rumor JSON must be small enough that the seal JSON stays under 65535.
+        // NIP-44 max plaintext is 65535 bytes. Content is encrypted twice
         const MAX_PLAINTEXT = 28000;
         let content = JSON.stringify(settingsData);
         if (content.length > MAX_PLAINTEXT) {
-            // Drop message history first (heaviest, least critical)
             delete settingsData.groupMessageHistory;
             content = JSON.stringify(settingsData);
         }
         if (content.length > MAX_PLAINTEXT) {
-            // Drop ephemeral keys next
-            delete settingsData.groupEphemeralKeys;
+            delete settingsData.groupConversations;
             content = JSON.stringify(settingsData);
         }
         if (content.length > MAX_PLAINTEXT) {
-            // Drop group conversations as last resort
-            delete settingsData.groupConversations;
+            delete settingsData.groupEphemeralKeys;
             content = JSON.stringify(settingsData);
         }
 
