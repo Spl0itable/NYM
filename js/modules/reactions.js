@@ -530,65 +530,50 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Position modal
         const rect = button.getBoundingClientRect();
-        modal.style.position = 'fixed';
-
-        // Check if on mobile
+        let css;
         if (window.innerWidth <= 768) {
             // Center on mobile
-            modal.style.top = '50%';
-            modal.style.left = '50%';
-            modal.style.transform = 'translate(-50%, -50%)';
-            modal.style.maxWidth = '90%';
-            modal.style.maxHeight = '80vh';
-            modal.style.zIndex = '10000';
+            css = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);max-width:90%;max-height:80vh;z-index:10000;';
         } else {
-            // Desktop positioning - check if near top of screen
             const spaceBelow = window.innerHeight - rect.bottom;
             const spaceAbove = rect.top;
-
-            if (spaceBelow > 450 || spaceBelow > spaceAbove) {
-                // Show below button
-                modal.style.top = (rect.bottom + 10) + 'px';
-                modal.style.bottom = 'auto';
-            } else {
-                // Show above button
-                modal.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
-                modal.style.top = 'auto';
-            }
-
-            // Horizontal positioning
-            if (rect.left > window.innerWidth * 0.5) {
-                modal.style.right = Math.min(window.innerWidth - rect.right, 10) + 'px';
-                modal.style.left = 'auto';
-            } else {
-                modal.style.left = Math.max(rect.left, 10) + 'px';
-                modal.style.right = 'auto';
-            }
-
-            modal.style.maxHeight = '400px';
+            const vertical = (spaceBelow > 450 || spaceBelow > spaceAbove)
+                ? `top:${rect.bottom + 10}px;bottom:auto;`
+                : `bottom:${window.innerHeight - rect.top + 10}px;top:auto;`;
+            const horizontal = (rect.left > window.innerWidth * 0.5)
+                ? `right:${Math.min(window.innerWidth - rect.right, 10)}px;left:auto;`
+                : `left:${Math.max(rect.left, 10)}px;right:auto;`;
+            css = `position:fixed;${vertical}${horizontal}max-height:400px;`;
         }
+        modal.style.cssText = css;
 
         document.body.appendChild(modal);
         this.enhancedEmojiModal = modal;
 
         // Add search functionality
         const searchInput = modal.querySelector('#emojiSearchInput');
+        let searchDebounceTimer = null;
         searchInput.addEventListener('input', (e) => {
-            const search = e.target.value.toLowerCase();
-            modal.querySelectorAll('.emoji-option').forEach(btn => {
-                const emoji = btn.textContent;
-                const names = btn.dataset.names || '';
-                const shouldShow = !search ||
-                    emoji.includes(search) ||
-                    names.toLowerCase().includes(search);
-                btn.style.display = shouldShow ? '' : 'none';
-            });
-            // Hide empty sections
-            modal.querySelectorAll('.emoji-section').forEach(section => {
-                const hasVisible = Array.from(section.querySelectorAll('.emoji-option'))
-                    .some(btn => btn.style.display !== 'none');
-                section.style.display = hasVisible ? '' : 'none';
-            });
+            const value = e.target.value;
+            if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                searchDebounceTimer = null;
+                const search = value.toLowerCase();
+                modal.querySelectorAll('.emoji-option').forEach(btn => {
+                    const emoji = btn.textContent;
+                    const names = btn.dataset.names || '';
+                    const shouldShow = !search ||
+                        emoji.includes(search) ||
+                        names.toLowerCase().includes(search);
+                    btn.style.display = shouldShow ? '' : 'none';
+                });
+                // Hide empty sections
+                modal.querySelectorAll('.emoji-section').forEach(section => {
+                    const hasVisible = Array.from(section.querySelectorAll('.emoji-option'))
+                        .some(btn => btn.style.display !== 'none');
+                    section.style.display = hasVisible ? '' : 'none';
+                });
+            }, 80);
         });
 
         // Add click handlers
@@ -685,22 +670,28 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
         // Add search functionality
         const searchInput = modal.querySelector('#emojiSearchInput');
+        let searchDebounceTimer = null;
         searchInput.addEventListener('input', (e) => {
-            const search = e.target.value.toLowerCase();
-            modal.querySelectorAll('.emoji-option').forEach(btn => {
-                const emoji = btn.textContent;
-                const names = btn.dataset.names || '';
-                const shouldShow = !search ||
-                    emoji.includes(search) ||
-                    names.toLowerCase().includes(search);
-                btn.style.display = shouldShow ? '' : 'none';
-            });
-            // Hide empty sections
-            modal.querySelectorAll('.emoji-section').forEach(section => {
-                const hasVisible = Array.from(section.querySelectorAll('.emoji-option'))
-                    .some(btn => btn.style.display !== 'none');
-                section.style.display = hasVisible ? '' : 'none';
-            });
+            const value = e.target.value;
+            if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                searchDebounceTimer = null;
+                const search = value.toLowerCase();
+                modal.querySelectorAll('.emoji-option').forEach(btn => {
+                    const emoji = btn.textContent;
+                    const names = btn.dataset.names || '';
+                    const shouldShow = !search ||
+                        emoji.includes(search) ||
+                        names.toLowerCase().includes(search);
+                    btn.style.display = shouldShow ? '' : 'none';
+                });
+                // Hide empty sections
+                modal.querySelectorAll('.emoji-section').forEach(section => {
+                    const hasVisible = Array.from(section.querySelectorAll('.emoji-option'))
+                        .some(btn => btn.style.display !== 'none');
+                    section.style.display = hasVisible ? '' : 'none';
+                });
+            }, 80);
         });
 
         // Add click handlers for inserting emoji into input

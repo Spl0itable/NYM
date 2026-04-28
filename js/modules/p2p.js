@@ -614,6 +614,8 @@ Object.assign(NYM.prototype, {
         if (this.p2pActiveTransfers.size === 0 && this.p2pPendingFiles.size === 0) {
             list.innerHTML = '<div class="p2p-empty-state">No active transfers</div>';
         } else {
+            const fragment = document.createDocumentFragment();
+
             // Show seeding files
             this.p2pPendingFiles.forEach((file, offerId) => {
                 const offer = this.p2pFileOffers.get(offerId);
@@ -633,7 +635,7 @@ Object.assign(NYM.prototype, {
                             </div>
                         </div>
                     `;
-                    list.appendChild(item);
+                    fragment.appendChild(item);
                 }
             });
 
@@ -658,9 +660,11 @@ Object.assign(NYM.prototype, {
                             </div>
                         </div>
                     `;
-                    list.appendChild(item);
+                    fragment.appendChild(item);
                 }
             });
+
+            list.appendChild(fragment);
         }
 
         modal.classList.add('active');

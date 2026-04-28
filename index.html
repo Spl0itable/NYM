@@ -30,6 +30,16 @@
     <meta name="apple-mobile-web-app-title" content="Nymchat">
     <link rel="apple-touch-icon" href="https://nymchat.app/images/NYM-favicon.png">
 
+    <!-- Resource hints: open connections to CDNs early -->
+    <link rel="preconnect" href="https://nymchat.app" crossorigin>
+    <link rel="dns-prefetch" href="https://nymchat.app">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+    <link rel="preconnect" href="https://unpkg.com" crossorigin>
+    <link rel="dns-prefetch" href="https://unpkg.com">
+
     <!-- Preload critical assets for faster paint -->
     <link rel="preload" href="css/styles.css" as="style">
     <link rel="preload" href="js/nostr-tools.js" as="script">
@@ -67,10 +77,10 @@
     <!-- Context Menu Sidebar -->
     <div class="context-menu" id="contextMenu">
         <button class="context-menu-close" id="ctxCloseBtn" title="Close">&#x2715;</button>
-        <img id="ctxBannerImg" class="context-menu-banner" src="" alt="" style="display: none;"
+        <img id="ctxBannerImg" class="context-menu-banner" src="" alt="" decoding="async" loading="lazy" style="display: none;"
             onclick="event.stopPropagation(); nym.expandImage(this.src); nym.closeContextMenu();">
         <div class="context-menu-avatar-header" id="ctxAvatarHeader">
-            <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar" style="cursor: pointer;"
+            <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar" decoding="async" style="cursor: pointer;"
                 onclick="event.stopPropagation(); nym.expandImage(this.src); nym.closeContextMenu();">
             <div class="context-menu-avatar-nym" id="ctxAvatarNym"></div>
             <div class="context-menu-copy-pubkey" id="ctxCopyPubkey">
@@ -327,6 +337,7 @@
                     <div class="nym-identity">
                         <img id="sidebarAvatar" class="avatar"
                             src="https://robohash.org/default.png?set=set1&size=80x80" alt=""
+                            decoding="async" width="32" height="32"
                             style="width: 32px; height: 32px;">
                         <div class="nym-value" id="currentNym">anonymous</div>
                     </div>
@@ -676,7 +687,7 @@
     <div class="image-modal" id="imageModal" onclick="closeImageModal()">
         <span class="image-modal-close" onclick="closeImageModal()">×</span>
         <span class="image-modal-download" onclick="downloadModalMedia(event)" title="Download">⤓</span>
-        <img id="modalImage" src="" alt="Expanded image">
+        <img id="modalImage" src="" alt="Expanded image" decoding="async" loading="lazy">
         <video id="modalVideo" controls playsinline webkit-playsinline style="display:none; max-width:90%; max-height:90%; border:1px solid var(--glass-border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg);"></video>
     </div>
 
@@ -891,7 +902,8 @@
                     <div class="avatar-upload-section">
                         <div class="avatar-preview-wrap">
                             <img id="nickEditAvatarPreview" class="avatar-preview"
-                                src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar">
+                                src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar"
+                                decoding="async" loading="lazy" width="80" height="80">
                             <div class="avatar-upload-spinner" id="nickEditAvatarSpinner"></div>
                         </div>
                         <div class="avatar-upload-controls">
@@ -912,7 +924,7 @@
                     <div class="banner-upload-section">
                         <div class="banner-preview-wrap" id="nickEditBannerPreviewWrap">
                             <img id="nickEditBannerPreview" class="banner-preview" src="" alt="Banner"
-                                style="display: none;">
+                                decoding="async" loading="lazy" style="display: none;">
                             <div class="banner-placeholder" id="nickEditBannerPlaceholder">No banner set</div>
                             <div class="avatar-upload-spinner" id="nickEditBannerSpinner"></div>
                         </div>
@@ -1004,7 +1016,8 @@
                     <div class="avatar-upload-section">
                         <div class="avatar-preview-wrap">
                             <img id="setupAvatarPreview" class="avatar-preview"
-                                src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar">
+                                src="https://robohash.org/default.png?set=set1&size=80x80" alt="Avatar"
+                                decoding="async" loading="lazy" width="80" height="80">
                             <div class="avatar-upload-spinner" id="setupAvatarSpinner"></div>
                         </div>
                         <div class="avatar-upload-controls">
@@ -1024,7 +1037,7 @@
                     <div class="banner-upload-section">
                         <div class="banner-preview-wrap" id="setupBannerPreviewWrap">
                             <img id="setupBannerPreview" class="banner-preview" src="" alt="Banner"
-                                style="display: none;">
+                                decoding="async" loading="lazy" style="display: none;">
                             <div class="banner-placeholder" id="setupBannerPlaceholder">No banner set</div>
                             <div class="avatar-upload-spinner" id="setupBannerSpinner"></div>
                         </div>
@@ -1703,11 +1716,11 @@
     <script src="js/modules/ui-context.js"></script>
     <script src="js/modules/init.js"></script>
 
-    <!-- QRCode library for Lightning invoices -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- QRCode library for Lightning invoices (used lazily; safe to async) -->
+    <script async src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
-    <!-- WebTorrent for P2P torrent-based file sharing -->
-    <script src="https://cdn.jsdelivr.net/npm/webtorrent@2.5.1/webtorrent.min.js"></script>
+    <!-- WebTorrent for P2P torrent-based file sharing (used lazily; safe to async) -->
+    <script async src="https://cdn.jsdelivr.net/npm/webtorrent@2.5.1/webtorrent.min.js"></script>
 
     <!-- Notifications Modal -->
     <div class="modal" id="notificationsModal">

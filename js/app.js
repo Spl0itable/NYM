@@ -3023,7 +3023,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.291 ═══<br/>
+═══ Nymchat v3.59.292 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -5125,16 +5125,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 1000);
 
-    // Periodically update connection status (skip during initial connection)
+    // Wake the page once per second
     setInterval(() => {
-        if (nym.connected && !nym.initialConnectionInProgress) {
+        if (nym.initialConnectionInProgress) return;
+        if (nym.connected) {
             nym.updateConnectionStatus();
         }
-    }, 1000);
-
-    // Periodic connection health check (skip during initial connection to avoid race conditions)
-    setInterval(() => {
-        if (!nym.initialConnectionInProgress && (nym.connected || nym.relayPool.size > 0)) {
+        if (nym.connected || nym.relayPool.size > 0) {
             nym.checkConnectionHealth();
         }
     }, 1000);
@@ -5285,7 +5282,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const messagesContainer = document.getElementById('messagesContainer');
     const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
     if (messagesContainer && scrollToBottomBtn) {
-        messagesContainer.addEventListener('scroll', () => {
+        let scrollRafScheduled = false;
+        const handleScroll = () => {
+            scrollRafScheduled = false;
             const distanceFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
 
             // When scrolled to the very top, load older messages or show history limit
@@ -5319,22 +5318,17 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Track whether user has intentionally scrolled away from the bottom.
-            // This flag prevents new messages from yanking the user back to the
-            // bottom while they are reading older messages. It is cleared when
-            // the user scrolls back near the bottom or clicks the scroll-to-bottom button.
             // Use a single threshold (150px) to avoid a dead zone between set/clear.
-            if (distanceFromBottom > 150) {
-                nym.userScrolledUp = true;
-            } else {
-                nym.userScrolledUp = false;
-            }
+            const scrolledUp = distanceFromBottom > 150;
+            nym.userScrolledUp = scrolledUp;
 
-            // Show/hide scroll-to-bottom button
-            if (distanceFromBottom > 150) {
-                scrollToBottomBtn.classList.add('visible');
-            } else {
-                scrollToBottomBtn.classList.remove('visible');
-            }
+            // Show/hide scroll-to-bottom button (toggle to avoid redundant class writes)
+            scrollToBottomBtn.classList.toggle('visible', scrolledUp);
+        };
+        messagesContainer.addEventListener('scroll', () => {
+            if (scrollRafScheduled) return;
+            scrollRafScheduled = true;
+            requestAnimationFrame(handleScroll);
         }, { passive: true });
     }
 

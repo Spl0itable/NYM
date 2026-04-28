@@ -1352,15 +1352,14 @@ Object.assign(NYM.prototype, {
         document.body.appendChild(modal);
         this.readersModal = modal;
 
-        // Position above/below the anchor
+        // Position above/below the anchor — batch style writes
         const rect = anchorEl.getBoundingClientRect();
-        modal.style.right = Math.max(4, window.innerWidth - rect.right) + 'px';
+        const right = Math.max(4, window.innerWidth - rect.right);
         const approxHeight = Math.min(readers.size * 44 + 50, 300);
-        if (rect.top > approxHeight + 20) {
-            modal.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
-        } else {
-            modal.style.top = (rect.bottom + 6) + 'px';
-        }
+        const verticalDecl = (rect.top > approxHeight + 20)
+            ? `bottom:${window.innerHeight - rect.top + 4}px;`
+            : `top:${rect.bottom + 6}px;`;
+        modal.style.cssText += `right:${right}px;${verticalDecl}`;
     },
 
     closeReadersModal() {

@@ -323,12 +323,22 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Mousemove for hover
+        // Mousemove for hover (RAF-throttled to one check per frame)
+        let pendingHoverEvent = null;
+        let hoverRafScheduled = false;
         renderer.domElement.addEventListener('mousemove', (e) => {
-            if (!isDragging) {
-                checkHover(e.clientX, e.clientY);
-            }
-        });
+            if (isDragging) return;
+            pendingHoverEvent = { clientX: e.clientX, clientY: e.clientY };
+            if (hoverRafScheduled) return;
+            hoverRafScheduled = true;
+            requestAnimationFrame(() => {
+                hoverRafScheduled = false;
+                if (pendingHoverEvent) {
+                    checkHover(pendingHoverEvent.clientX, pendingHoverEvent.clientY);
+                    pendingHoverEvent = null;
+                }
+            });
+        }, { passive: true });
 
         // Pointer down - start tracking
         renderer.domElement.addEventListener('pointerdown', (e) => {
@@ -407,12 +417,12 @@ Object.assign(NYM.prototype, {
             document.addEventListener('pointerup', onPointerUp);
         });
 
-        // Wheel zoom
+        // Wheel zoom (passive: false so we can preventDefault page scroll)
         renderer.domElement.addEventListener('wheel', (e) => {
             e.preventDefault();
             camera.position.z += e.deltaY * 0.2;
             camera.position.z = Math.max(150, Math.min(600, camera.position.z));
-        });
+        }, { passive: false });
 
         // Pinch-to-zoom support for mobile
         let touchDistance = 0;
@@ -456,7 +466,7 @@ Object.assign(NYM.prototype, {
                 // Reset pinch state when less than 2 fingers
                 touchDistance = 0;
             }
-        });
+        }, { passive: true });
 
         // Animation loop (throttled to ~20fps in performance mode)
         let lastFrame = 0;
@@ -553,16 +563,21 @@ Object.assign(NYM.prototype, {
 
         this.globeAnimationActive = true;
 
-        // Handle resize
+        // Handle resize (debounced 150ms to avoid thrashing during window drag)
+        let resizeDebounceTimer = null;
         const handleResize = () => {
-            updateSize();
+            if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer);
+            resizeDebounceTimer = setTimeout(() => {
+                resizeDebounceTimer = null;
+                updateSize();
+            }, 150);
         };
 
         if (this.globeResizeHandler) {
             window.removeEventListener('resize', this.globeResizeHandler);
         }
         this.globeResizeHandler = handleResize;
-        window.addEventListener('resize', this.globeResizeHandler);
+        window.addEventListener('resize', this.globeResizeHandler, { passive: true });
 
         // Start animation
         animate();

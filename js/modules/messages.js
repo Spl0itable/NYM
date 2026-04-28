@@ -723,15 +723,18 @@ Object.assign(NYM.prototype, {
         }
 
         // Prune oldest messages from DOM to stay within limits
-        // For PMs/groups with pagination, allow up to pmStorageLimit; for channels use channelMessageLimit
         {
             const domMessages = container.querySelectorAll('[data-message-id]');
             const domLimit = message.isPM ? this.pmStorageLimit : this.channelMessageLimit;
             if (domMessages.length > domLimit) {
                 const toRemove = domMessages.length - domLimit;
                 let removedHeight = 0;
+                if (this.userScrolledUp) {
+                    for (let i = 0; i < toRemove; i++) {
+                        removedHeight += domMessages[i].offsetHeight;
+                    }
+                }
                 for (let i = 0; i < toRemove; i++) {
-                    removedHeight += domMessages[i].offsetHeight;
                     domMessages[i].remove();
                 }
                 if (this.userScrolledUp && removedHeight > 0) {
