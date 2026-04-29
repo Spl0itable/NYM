@@ -5,14 +5,14 @@ Object.assign(NYM.prototype, {
 
     setupMobileGestures() {
         if (window.innerWidth <= 768) {
-            // Touch events for swipe to open menu (passive for scroll perf)
+            // Touch events for swipe to open menu
             document.addEventListener('touchstart', (e) => {
                 const touch = e.touches[0];
                 // Only track swipes starting from left edge
                 if (touch.clientX < 50) {
                     this.swipeStartX = touch.clientX;
                 }
-            }, { passive: true });
+            });
 
             document.addEventListener('touchmove', (e) => {
                 if (this.swipeStartX !== null) {
@@ -24,11 +24,11 @@ Object.assign(NYM.prototype, {
                         this.swipeStartX = null;
                     }
                 }
-            }, { passive: true });
+            });
 
             document.addEventListener('touchend', () => {
                 this.swipeStartX = null;
-            }, { passive: true });
+            });
         }
     },
 
@@ -1340,19 +1340,8 @@ Object.assign(NYM.prototype, {
     },
 
     autoResizeTextarea(textarea) {
-        const prev = textarea._lastAutoHeight;
         textarea.style.height = 'auto';
-        const next = Math.min(textarea.scrollHeight, 120);
-        if (next !== prev) {
-            textarea.style.height = next + 'px';
-            textarea._lastAutoHeight = next;
-        } else if (prev !== undefined) {
-            // Restore previously computed height without recomputing
-            textarea.style.height = prev + 'px';
-        } else {
-            textarea.style.height = next + 'px';
-            textarea._lastAutoHeight = next;
-        }
+        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
     },
 
     toggleGifPicker() {

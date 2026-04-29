@@ -729,12 +729,8 @@ Object.assign(NYM.prototype, {
             if (domMessages.length > domLimit) {
                 const toRemove = domMessages.length - domLimit;
                 let removedHeight = 0;
-                if (this.userScrolledUp) {
-                    for (let i = 0; i < toRemove; i++) {
-                        removedHeight += domMessages[i].offsetHeight;
-                    }
-                }
                 for (let i = 0; i < toRemove; i++) {
+                    removedHeight += domMessages[i].offsetHeight;
                     domMessages[i].remove();
                 }
                 if (this.userScrolledUp && removedHeight > 0) {

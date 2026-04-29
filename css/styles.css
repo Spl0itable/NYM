@@ -432,7 +432,7 @@ body.nymchat-app .logo-ascii {
     cursor: pointer;
     border: 1px solid transparent;
     border-radius: var(--radius-xs);
-    transition: background-color var(--transition), border-color var(--transition), padding-left var(--transition), color var(--transition);
+    transition: all var(--transition);
     position: relative;
     display: flex;
     align-items: center;
@@ -657,7 +657,7 @@ body.nymchat-app .logo-ascii {
     align-items: center;
     gap: 8px;
     cursor: pointer;
-    transition: background-color 0.2s, color 0.2s, opacity 0.2s;
+    transition: all 0.2s;
     word-wrap: break-word;
     overflow-wrap: break-word;
 }
@@ -1009,7 +1009,7 @@ body.light-mode .channel-context-menu {
     padding: 10px 14px;
     border-left: none;
     border-radius: var(--radius-sm);
-    transition: background-color var(--transition), opacity var(--transition), transform var(--transition);
+    transition: all var(--transition);
     animation: messageIn 0.3s;
     position: relative;
     flex-wrap: wrap;
