@@ -1779,7 +1779,6 @@ Object.assign(NYM.prototype, {
         msg.isEdited = true;
 
         const domId = msg.nymMessageId || msg.id;
-        this.channelDOMCache.delete(conversationKey);
         this.updateMessageInDOM(domId, newContent);
     },
 

@@ -1376,7 +1376,7 @@ Object.assign(NYM.prototype, {
     },
 
     updateMessageInDOM(messageId, newContent) {
-        const msgEl = document.querySelector(`[data-message-id="${messageId}"]`);
+        const msgEl = this.findMessageElementAnywhere(messageId);
         if (!msgEl) return;
 
         // Update raw content data attribute
@@ -1820,7 +1820,23 @@ Object.assign(NYM.prototype, {
     // Compute a fingerprint of messages for cache invalidation
     _computeMessageFingerprint(messages) {
         if (!messages || messages.length === 0) return '';
-        return messages.map(m => `${m.id}:${m._originalCreatedAt || m.created_at || 0}:${m.deliveryStatus || ''}:${m.isEdited ? 'e' : ''}`).join('|');
+        return messages.map(m => `${m.id}:${m._originalCreatedAt || m.created_at || 0}:${m.isEdited ? 'e' : ''}`).join('|');
+    },
+
+    findMessageElementAnywhere(messageId) {
+        if (!messageId) return null;
+        const safeId = String(messageId).replace(/"/g, '\\"');
+        const live = document.querySelector(`[data-message-id="${safeId}"]`);
+        if (live) return live;
+        if (this.channelDOMCache && this.channelDOMCache.size > 0) {
+            for (const cached of this.channelDOMCache.values()) {
+                if (cached && cached.fragment) {
+                    const el = cached.fragment.querySelector(`[data-message-id="${safeId}"]`);
+                    if (el) return el;
+                }
+            }
+        }
+        return null;
     },
 
     loadChannelMessages(displayName) {

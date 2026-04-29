@@ -3,6 +3,20 @@
 
 Object.assign(NYM.prototype, {
 
+    // Update the delivery checkmark on a PM message in-place
+    _updateDeliveryStatusEl(messageId, receiptType) {
+        const msgEl = this.findMessageElementAnywhere(messageId);
+        if (!msgEl) return;
+        let statusEl = msgEl.querySelector('.delivery-status');
+        if (!statusEl) {
+            statusEl = document.createElement('span');
+            msgEl.appendChild(statusEl);
+        }
+        statusEl.className = `delivery-status ${receiptType}`;
+        statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
+        statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
+    },
+
     // Track a sent DM for retry if delivery receipt is not received
     trackPendingDM(eventId, wrappedEvents, recipientPubkey, conversationKey) {
         this.pendingDMs.set(eventId, {
@@ -55,20 +69,16 @@ Object.assign(NYM.prototype, {
                     const msg = msgs.find(m => m.id === eventId);
                     if (msg && msg.deliveryStatus === 'sent') {
                         msg.deliveryStatus = 'failed';
-                        // Invalidate cached DOM for this conversation since status changed
-                        this.channelDOMCache.delete(pending.conversationKey);
-                        // Update the UI checkmark if visible
-                        if (this.inPMMode && this.currentPM === pending.recipientPubkey) {
-                            const msgEl = document.querySelector(`[data-message-id="${eventId}"]`);
-                            if (msgEl) {
-                                let statusEl = msgEl.querySelector('.delivery-status');
-                                if (statusEl) {
-                                    statusEl.className = 'delivery-status failed';
-                                    statusEl.title = 'Failed to deliver - click to retry';
-                                    statusEl.textContent = '!';
-                                    statusEl.style.cursor = 'pointer';
-                                    statusEl.onclick = () => this.manualRetryDM(eventId);
-                                }
+                        // Update the failed checkmark in-place
+                        const msgEl = this.findMessageElementAnywhere(eventId);
+                        if (msgEl) {
+                            let statusEl = msgEl.querySelector('.delivery-status');
+                            if (statusEl) {
+                                statusEl.className = 'delivery-status failed';
+                                statusEl.title = 'Failed to deliver - click to retry';
+                                statusEl.textContent = '!';
+                                statusEl.style.cursor = 'pointer';
+                                statusEl.onclick = () => this.manualRetryDM(eventId);
                             }
                         }
                     }
@@ -97,8 +107,8 @@ Object.assign(NYM.prototype, {
         // Re-send the original message content
         msg.deliveryStatus = 'sent';
 
-        // Update UI immediately
-        const msgEl = document.querySelector(`[data-message-id="${eventId}"]`);
+        // Update UI immediately (live DOM or any cached fragment)
+        const msgEl = this.findMessageElementAnywhere(eventId);
         if (msgEl) {
             let statusEl = msgEl.querySelector('.delivery-status');
             if (statusEl) {
@@ -793,7 +803,6 @@ Object.assign(NYM.prototype, {
                             if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
                                 msg.deliveryStatus = receiptType;
                                 this.pendingDMs.delete(msg.id);
-                                this.channelDOMCache.delete(convKey);
 
                                 if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
                                     // Group read receipt: store the reader's avatar instead of checkmarks
@@ -802,21 +811,15 @@ Object.assign(NYM.prototype, {
                                     }
                                     const readerNym = this.getNymFromPubkey(senderPubkey);
                                     this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
-                                    this.updateGroupReaderAvatars(msg.nymMessageId);
-                                } else {
-                                    // 1:1 PM: update checkmark in-place
-                                    const domId = msg.nymMessageId || msg.id;
-                                    const msgEl = document.querySelector(`[data-message-id="${domId}"]`);
-                                    if (msgEl) {
-                                        let statusEl = msgEl.querySelector('.delivery-status');
-                                        if (!statusEl) {
-                                            statusEl = document.createElement('span');
-                                            msgEl.appendChild(statusEl);
-                                        }
-                                        statusEl.className = `delivery-status ${receiptType}`;
-                                        statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
-                                        statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
+                                    if (this.inPMMode && this.currentGroup &&
+                                        convKey === this.getGroupConversationKey(this.currentGroup)) {
+                                        this.updateGroupReaderAvatars(msg.nymMessageId);
+                                    } else {
+                                        this.channelDOMCache.delete(convKey);
                                     }
+                                } else {
+                                    const domId = msg.nymMessageId || msg.id;
+                                    this._updateDeliveryStatusEl(domId, receiptType);
                                 }
                             }
                             break;
@@ -834,26 +837,15 @@ Object.assign(NYM.prototype, {
                     const receiptId = parsedEarly.messageId?.toUpperCase();
 
                     if (receiptId) {
-                        for (const [convKey, messages] of this.pmMessages) {
+                        for (const [, messages] of this.pmMessages) {
                             const msg = messages.find(m => m.bitchatMessageId?.toUpperCase() === receiptId);
                             if (msg && msg.isOwn) {
                                 const statusOrder = { sent: 0, delivered: 1, read: 2 };
                                 if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
                                     msg.deliveryStatus = receiptType;
                                     this.pendingDMs.delete(msg.id);
-                                    this.channelDOMCache.delete(convKey);
                                     const domId = msg.nymMessageId || msg.id;
-                                    const msgEl = document.querySelector(`[data-message-id="${domId}"]`);
-                                    if (msgEl) {
-                                        let statusEl = msgEl.querySelector('.delivery-status');
-                                        if (!statusEl) {
-                                            statusEl = document.createElement('span');
-                                            msgEl.appendChild(statusEl);
-                                        }
-                                        statusEl.className = `delivery-status ${receiptType}`;
-                                        statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
-                                        statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
-                                    }
+                                    this._updateDeliveryStatusEl(domId, receiptType);
                                 }
                                 break;
                             }
@@ -1737,7 +1729,6 @@ Object.assign(NYM.prototype, {
                     msg.isEdited = true;
                 }
             }
-            this.channelDOMCache.delete(conversationKey);
 
             // Update DOM in-place
             this.updateMessageInDOM(lookupId, newContent);

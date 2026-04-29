@@ -1505,7 +1505,6 @@ Object.assign(NYM.prototype, {
                     msg.isEdited = true;
                 }
             }
-            this.channelDOMCache.delete(groupConvKey);
 
             // Update DOM in-place
             this.updateMessageInDOM(lookupId, newContent);
