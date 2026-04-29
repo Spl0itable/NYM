@@ -3120,10 +3120,7 @@ function sanitizeInput(text) {
   // Truncate excessively long inputs
   text = text.slice(0, 1000);
   // Strip zero-width and invisible unicode characters used for steganographic injection
-  text = text.replace(
-    /[\u200B-\u200F\u2028-\u202F\u2060-\u206F\uFEFF\u202A-\u202E\u2066-\u2069\uFE00-\uFE0F\uE0100-\uE01EF\u0300-\u036F\u1AB0-\u1AFF\uE0000-\uE007F\u00AD\u061C\u180E\u00A0\u2000-\u200A\u205F\u3000\u2400-\u243F\uFFF0-\uFFFF]/gu,
-    ""
-  );
+  text = text.replace(/[\u200B-\u200F\u2028-\u202F\u2060-\u206F\uFEFF]/g, "");
   return text.trim();
 }
 
