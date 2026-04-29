@@ -149,12 +149,19 @@ Object.assign(NYM.prototype, {
             if (!raw) return [];
             const parsed = JSON.parse(raw);
             const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-            const filtered = parsed.filter(n => n.timestamp > cutoff24h);
+            const filtered = [];
+            let maxTs = 0;
+            for (let i = 0; i < parsed.length; i++) {
+                const n = parsed[i];
+                if (n.timestamp > cutoff24h) {
+                    filtered.push(n);
+                    if (n.timestamp > maxTs) maxTs = n.timestamp;
+                }
+            }
             // Mark all persisted notifications as already seen so they don't
-            // retrigger the unread badge on reload.  Advance lastReadTime to
+            // retrigger the unread badge on reload. Advance lastReadTime to
             // cover every entry that was already stored.
             if (filtered.length > 0) {
-                const maxTs = Math.max(...filtered.map(n => n.timestamp));
                 const stored = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
                 if (maxTs > stored) {
                     this.notificationLastReadTime = maxTs;
@@ -174,6 +181,18 @@ Object.assign(NYM.prototype, {
     },
 
     _updateNotificationBadge() {
+        // Coalesce burst calls (every incoming PM/mention triggers one) into a
+        // single DOM update per animation frame.
+        if (this._notifBadgeRafPending) return;
+        this._notifBadgeRafPending = true;
+        const raf = window.requestAnimationFrame || (cb => setTimeout(cb, 16));
+        raf(() => {
+            this._notifBadgeRafPending = false;
+            this._doUpdateNotificationBadge();
+        });
+    },
+
+    _doUpdateNotificationBadge() {
         const desktopBadge = document.getElementById('notifBadgeDesktop');
         const mobileBadge = document.getElementById('notifBadgeMobile');
 
@@ -251,7 +270,8 @@ Object.assign(NYM.prototype, {
                 let authorHtml = '';
                 if (pubkey) {
                     const avatarSrc = this.getAvatarUrl(pubkey);
-                    avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">`;
+                    const safePk = this._safePubkey(pubkey);
+                    avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">`;
                     // Use live profile lookup, fall back to stored senderNym
                     const user = this.users.get(pubkey);
                     const baseNym = user

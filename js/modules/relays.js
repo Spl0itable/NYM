@@ -784,26 +784,12 @@ Object.assign(NYM.prototype, {
             });
 
             // Clear blacklist temporarily to allow retry
-            const tempBlacklist = new Set(this.blacklistedRelays);
             this.blacklistedRelays.clear();
             this.blacklistTimestamps.clear();
             this.isReconnecting = false;
 
-            // Attempt to reconnect to all broadcast relays
-            this.defaultRelays.forEach(relayUrl => {
-                if (!this.relayPool.has(relayUrl)) {
-                    this.connectToRelay(relayUrl, 'relay').then(() => {
-                        const r = this.relayPool.get(relayUrl);
-                        if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                            this.subscribeToSingleRelay(relayUrl);
-                        } else if (tempBlacklist.has(relayUrl) && relayUrl !== this.appRelay) {
-                            // Restore to blacklist if it fails again (never blacklist app relay)
-                            this.blacklistedRelays.add(relayUrl);
-                        }
-                        this.updateConnectionStatus();
-                    });
-                }
-            });
+            // Reconnect via the serialized helper
+            this.reconnectToBroadcastRelays();
 
             // Retry any pending DMs after network restore
             setTimeout(() => this.retryPendingDMsOnReconnect(), 3000);
@@ -1817,7 +1803,8 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            const delay = Math.min(3000 * Math.pow(2, retries), 30000);
+            const baseDelay = Math.min(3000 * Math.pow(2, retries), 30000);
+            const delay = Math.floor(baseDelay * (0.5 + Math.random() * 0.5));
             this.updateConnectionStatus(retries > 0
                 ? `Reconnecting (attempt ${retries + 1})...`
                 : 'Reconnecting...');

@@ -1259,16 +1259,17 @@ Object.assign(NYM.prototype, {
         const userShopItems = this.getUserShopItems(pubkey);
         const supporterBadge = userShopItems?.supporter ?
             '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span></span>' : '';
-        document.querySelectorAll(`.message[data-pubkey="${pubkey}"] .message-author`).forEach(el => {
+        const safePk = this._safePubkey(pubkey);
+        document.querySelectorAll(`.message[data-pubkey="${safePk}"] .message-author`).forEach(el => {
             // Update only the author-clickable inner span to preserve bubble-time and click handler
             const clickable = el.querySelector('.author-clickable');
             if (clickable) {
-                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}`;
+                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}`;
             } else {
                 // Fallback: full rewrite with author-clickable wrapper for older messages missing it
                 const bubbleTime = el.querySelector('.bubble-time');
                 const bubbleHtml = bubbleTime ? bubbleTime.outerHTML : '';
-                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}</span>&gt;`;
+                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}</span>&gt;`;
                 const newClickable = el.querySelector('.author-clickable');
                 if (newClickable) {
                     newClickable.style.cursor = 'pointer';
@@ -1279,7 +1280,7 @@ Object.assign(NYM.prototype, {
                     newClickable.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+                        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
                         this.showContextMenu(e, displayAuthor, pubkey, rawContent, msgId, false, isPM ? msgId : null);
                         return false;
                     });
@@ -1291,7 +1292,7 @@ Object.assign(NYM.prototype, {
         if (this.inPMMode && this.currentPM === pubkey) {
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
             const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>`;
-            const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+            const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
             const channelEl = document.getElementById('currentChannel');
             if (channelEl) channelEl.innerHTML = pmHeaderHtml;
         }
@@ -1341,11 +1342,12 @@ Object.assign(NYM.prototype, {
             const cleanBaseNym = this.parseNymFromDisplay(baseNym);
 
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
+            const safePk = this._safePubkey(pubkey);
             item.innerHTML = `
-<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">
+<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}</span>
 <div class="channel-badges">
-<span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${pubkey}')">✕</span>
+<span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${safePk}')">✕</span>
 <span class="unread-badge" style="display:none">0</span>
 </div>
 `;
@@ -1464,8 +1466,9 @@ Object.assign(NYM.prototype, {
         const baseNym = known ? this.parseNymFromDisplay(known.nym) : this.parseNymFromDisplay(nym);
         const suffix = this.getPubkeySuffix(pubkey);
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
+        const safePk = this._safePubkey(pubkey);
         const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
-        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
 
         // Update UI with formatted nym
         document.getElementById('currentChannel').innerHTML = pmHeaderHtml;
@@ -1866,8 +1869,9 @@ Object.assign(NYM.prototype, {
         const header = query ? '' : '<div class="pm-suggestion-header">From your Nostr follows</div>';
         const html = header + followMatches.slice(0, 10).map(m => {
             const suffix = this.getPubkeySuffix(m.pubkey);
+            const safePk = this._safePubkey(m.pubkey);
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
-            return `<div class="pm-suggestion-item" data-pubkey="${m.pubkey}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span><span class="pm-suggestion-follow-badge">following</span></div>`;
+            return `<div class="pm-suggestion-item" data-pubkey="${safePk}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span><span class="pm-suggestion-follow-badge">following</span></div>`;
         }).join('');
 
         suggestions.innerHTML = html;
@@ -1951,9 +1955,10 @@ Object.assign(NYM.prototype, {
 
         suggestions.innerHTML = matches.slice(0, 10).map(m => {
             const suffix = this.getPubkeySuffix(m.pubkey);
+            const safePk = this._safePubkey(m.pubkey);
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
             const followBadge = m.isFollow ? '<span class="pm-suggestion-follow-badge">following</span>' : '';
-            return `<div class="pm-suggestion-item" data-pubkey="${m.pubkey}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${m.pubkey}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span>${followBadge}</div>`;
+            return `<div class="pm-suggestion-item" data-pubkey="${safePk}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span>${followBadge}</div>`;
         }).join('');
         suggestions.querySelectorAll('.pm-suggestion-item[data-pubkey]').forEach(el => {
             el.addEventListener('click', () => this.addNewPMRecipient(el.dataset.pubkey, el.dataset.nym));

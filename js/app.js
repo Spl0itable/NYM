@@ -607,12 +607,6 @@ class NYM {
         this.discoveredGeohashes = new Set();
         this.channelSubscriptions = new Map();
         this.channelLoadedFromRelays = new Set();
-        this.channelSubscriptionBatchSize = 10;
-        this.channelMessageLimit = 100;
-        this.pmStorageLimit = 500;
-        this.pmPageSize = 100;
-        this.pmLoadMoreSize = 50;
-        this.pmRenderedStart = new Map();
         this.appRelay = 'wss://relay.nymchat.app';
         this.settings = this.loadSettings();
         if (this.settings.textSize && this.settings.textSize !== 15) {
@@ -621,6 +615,13 @@ class NYM {
         this.performanceMode = false;
         this._deviceCapabilities = this._detectDeviceCapabilities();
         this._applyPerformanceMode();
+        const _tier = this._deviceCapabilities.tier;
+        this.channelSubscriptionBatchSize = _tier === 'low' ? 5 : (_tier === 'high' ? 15 : 10);
+        this.channelMessageLimit = _tier === 'low' ? 50 : (_tier === 'high' ? 150 : 100);
+        this.pmStorageLimit = _tier === 'low' ? 200 : (_tier === 'high' ? 1000 : 500);
+        this.pmPageSize = 100;
+        this.pmLoadMoreSize = 50;
+        this.pmRenderedStart = new Map();
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
         if (this.settings.groupChatPMOnlyMode) {
             // In PM-only mode, don't default to a geohash channel
@@ -3023,7 +3024,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.293 ═══<br/>
+═══ Nymchat v3.59.294 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -5126,7 +5127,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 1000);
 
     // Wake the page once per second
-    setInterval(() => {
+    nym._setManagedInterval('connectionHealth', () => {
         if (nym.initialConnectionInProgress) return;
         if (nym.connected) {
             nym.updateConnectionStatus();
@@ -5142,7 +5143,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 100);
 
     // Periodically update user list
-    setInterval(() => {
+    nym._setManagedInterval('userListRefresh', () => {
         if (nym.connected) {
             nym.updateUserList();
         }
@@ -5213,7 +5214,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Background message cleanup
-    setInterval(() => {
+    nym._setManagedInterval('messageCleanup', () => {
         // Clean up stored messages for inactive channels
         const currentKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
 
@@ -5221,9 +5222,10 @@ document.addEventListener('DOMContentLoaded', () => {
             // Skip current channel
             if (channel === currentKey) return;
 
-            // Prune inactive channels to 100 messages max
-            if (messages.length > 100) {
-                nym.messages.set(channel, messages.slice(-100));
+            // Prune inactive channels to the tier-aware channel limit so
+            // low-tier devices recover memory faster.
+            if (messages.length > nym.channelMessageLimit) {
+                nym.messages.set(channel, messages.slice(-nym.channelMessageLimit));
             }
         });
 
@@ -5250,7 +5252,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 60000);
 
     // Periodically check and clear expired blacklists
-    setInterval(() => {
+    nym._setManagedInterval('blacklistExpiry', () => {
         if (nym.connected) {
             // Check all blacklisted relays for expiration
             const expiredRelays = [];

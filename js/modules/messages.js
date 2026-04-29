@@ -1,6 +1,23 @@
 // messages.js - Message rendering, formatting, sending, edits, quotes, swipe-to-reply, virtual scroll
 // Methods are attached to NYM.prototype.
 
+const _RX_REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g;
+const _RX_HTML_TAG = /<[^>]*>/g;
+const _RX_DUP_SUFFIX = /@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi;
+const _RX_WHITESPACE = /\s/g;
+const _EMOJI_UNIT = '(?:[\\u{1F1E0}-\\u{1F1FF}]{2})|(?:[#*0-9]\\u{FE0F}?\\u{20E3})|(?:(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?(?:\\u{200D}(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?)*)(?:[\\u{E0020}-\\u{E007E}]+\\u{E007F})?';
+const _RX_EMOJI_ONLY = new RegExp(`^(?:${_EMOJI_UNIT}){1,6}$`, 'u');
+
+// Mention pattern is per-nym; cache so we recompile only when the active nym changes.
+let _mentionPatternCache = { nym: null, pattern: null };
+function _getMentionPattern(cleanNym) {
+    if (_mentionPatternCache.nym === cleanNym) return _mentionPatternCache.pattern;
+    const escaped = cleanNym.replace(_RX_REGEX_ESCAPE, '\\$&');
+    const pattern = new RegExp(`@${escaped}(#[0-9a-f]{4})?(?:\\b|$)`, 'gi');
+    _mentionPatternCache = { nym: cleanNym, pattern };
+    return pattern;
+}
+
 Object.assign(NYM.prototype, {
 
     hasBlockedKeyword(text, nickname) {
@@ -127,15 +144,13 @@ Object.assign(NYM.prototype, {
         // Strip HTML from nym for comparison
         const cleanNym = this.parseNymFromDisplay(this.nym);
 
-        // Escape special regex characters in the nym
-        const escapedNym = cleanNym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-        // Create pattern that matches the clean nym with optional suffix
-        const nymPattern = new RegExp(`@${escapedNym}(#[0-9a-f]{4})?(?:\\b|$)`, 'gi');
+        // Cached, per-nym pattern (recompiled only when nym changes)
+        const nymPattern = _getMentionPattern(cleanNym);
+        nymPattern.lastIndex = 0;
 
         // Strip HTML from content and deduplicate suffixes for mention detection
-        let cleanContent = content.replace(/<[^>]*>/g, '');
-        cleanContent = cleanContent.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
+        let cleanContent = content.replace(_RX_HTML_TAG, '');
+        cleanContent = cleanContent.replace(_RX_DUP_SUFFIX, '@$1#$2');
 
         // Strip blockquoted lines so mentions inside quoted text don't trigger notifications
         cleanContent = cleanContent.split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n');
@@ -220,10 +235,10 @@ Object.assign(NYM.prototype, {
                     return (a._seq || 0) - (b._seq || 0);
                 });
 
-                // Prune in-memory messages if exceeding limit (100 max)
+                // Prune in-memory messages if exceeding the tier-aware limit
                 const messages = this.messages.get(storageKey);
-                if (messages && messages.length > 100) {
-                    this.messages.set(storageKey, messages.slice(-100));
+                if (messages && messages.length > this.channelMessageLimit) {
+                    this.messages.set(storageKey, messages.slice(-this.channelMessageLimit));
                 }
 
                 // Schedule zap receipt subscription update with new event IDs
@@ -322,7 +337,8 @@ Object.assign(NYM.prototype, {
             const cleanAuthor = this.parseNymFromDisplay(message.author);
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
-            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${message.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
+            const safePk = this._safePubkey(message.pubkey);
+            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
 
             // Get the action content (everything after /me)
             const actionContent = message.content.substring(4);
@@ -409,7 +425,8 @@ Object.assign(NYM.prototype, {
 
             const baseNym = this.parseNymFromDisplay(message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
-            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${message.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${message.pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            const safePk2 = this._safePubkey(message.pubkey);
+            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk2}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -1108,11 +1125,8 @@ Object.assign(NYM.prototype, {
     isEmojiOnly(content) {
         if (!content) return false;
         // Strip whitespace and check if remaining chars are all emoji (up to 6)
-        const stripped = content.replace(/\s/g, '');
-        // Matches flag sequences, keycap sequences, and all ZWJ/skin-tone emoji
-        const singleEmoji = '(?:[\\u{1F1E0}-\\u{1F1FF}]{2})|(?:[#*0-9]\\u{FE0F}?\\u{20E3})|(?:(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?(?:\\u{200D}(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?)*)(?:[\\u{E0020}-\\u{E007E}]+\\u{E007F})?';
-        const emojiPattern = new RegExp(`^(?:${singleEmoji}){1,6}$`, 'u');
-        return emojiPattern.test(stripped);
+        const stripped = content.replace(_RX_WHITESPACE, '');
+        return _RX_EMOJI_ONLY.test(stripped);
     },
 
     expandImage(src) {

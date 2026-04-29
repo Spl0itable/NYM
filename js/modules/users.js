@@ -119,7 +119,7 @@ Object.assign(NYM.prototype, {
                 this.blockedKeywords = new Set();
             }
         }
-        this.updateKeywordList();
+        this._scheduleIdle(() => this.updateKeywordList());
     },
 
     saveBlockedKeywords() {
@@ -277,7 +277,9 @@ Object.assign(NYM.prototype, {
     },
 
     getPubkeySuffix(pubkey) {
-        return pubkey ? pubkey.slice(-4) : '????';
+        if (typeof pubkey !== 'string' || pubkey.length < 4) return '????';
+        const tail = pubkey.slice(-4);
+        return /^[0-9a-f]{4}$/i.test(tail) ? tail : '????';
     },
 
     parseNymFromDisplay(displayNym) {
@@ -376,8 +378,10 @@ Object.assign(NYM.prototype, {
 
     // Update already-rendered message avatars when a kind 0 profile picture arrives
     updateRenderedAvatars(pubkey, avatarUrl) {
-        const fallback = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`;
-        document.querySelectorAll(`img[data-avatar-pubkey="${pubkey}"]`).forEach(img => {
+        const safePk = this._safePubkey(pubkey);
+        if (!safePk) return;
+        const fallback = `https://robohash.org/${safePk}.png?set=set1&size=80x80`;
+        document.querySelectorAll(`img[data-avatar-pubkey="${safePk}"]`).forEach(img => {
             img.onerror = function () { this.onerror = null; this.src = fallback; };
             img.src = avatarUrl;
         });
@@ -854,6 +858,16 @@ Object.assign(NYM.prototype, {
     },
 
     updateUserList() {
+        if (this._userListRafPending) return;
+        this._userListRafPending = true;
+        const raf = window.requestAnimationFrame || (cb => setTimeout(cb, 16));
+        raf(() => {
+            this._userListRafPending = false;
+            this._doUpdateUserList();
+        });
+    },
+
+    _doUpdateUserList() {
         const userListContent = document.getElementById('userListContent');
         const currentChannelKey = this.currentGeohash || this.currentChannel;
 
@@ -963,10 +977,11 @@ Object.assign(NYM.prototype, {
             } else {
                 // Create new element for a user not previously in the list
                 const wrapper = document.createElement('div');
+                const safePk = this._safePubkey(user.pubkey);
                 wrapper.innerHTML = `<div class="user-item list-item ${userColorClass}"
-                        data-pubkey="${user.pubkey}"
+                        data-pubkey="${safePk}"
                         data-nym="${this.escapeHtml(baseNym)}">
-                    <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" data-avatar-pubkey="${user.pubkey}" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">
+                    <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" data-avatar-pubkey="${safePk}" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">
                     <span class="user-status ${user.effectiveStatus}"></span>
                     <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
                 </div>`;
@@ -1030,7 +1045,7 @@ Object.assign(NYM.prototype, {
                 this.blockedUsers = new Set();
             }
         }
-        this.updateBlockedList();
+        this._scheduleIdle(() => this.updateBlockedList());
     },
 
     saveBlockedUsers() {
@@ -1159,9 +1174,13 @@ Object.assign(NYM.prototype, {
     loadFriends() {
         const saved = localStorage.getItem('nym_friends');
         if (saved) {
-            this.friends = new Set(JSON.parse(saved));
+            try {
+                this.friends = new Set(JSON.parse(saved));
+            } catch (_) {
+                this.friends = new Set();
+            }
         }
-        this.updateFriendsList();
+        this._scheduleIdle(() => this.updateFriendsList());
     },
 
     saveFriends() {
@@ -1251,6 +1270,11 @@ Object.assign(NYM.prototype, {
             "'": '&#x27;',
         };
         return String(text).replace(/[&<>"']/g, m => map[m]);
+    },
+
+    _safePubkey(pk) {
+        if (typeof pk !== 'string') return '';
+        return /^[0-9a-f]{64}$/i.test(pk) ? pk.toLowerCase() : '';
     },
 
     abbreviateNumber(n) {

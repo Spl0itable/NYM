@@ -230,12 +230,13 @@ Object.assign(NYM.prototype, {
                 const statusIndicator = `<span class="user-status${statusClass}" style="display: inline-block; margin-right: 6px; vertical-align: middle;"></span>`;
 
                 const acAvatarSrc = this.getAvatarUrl(user.pubkey);
+                const safePk = this._safePubkey(user.pubkey);
                 return `
         <div class="autocomplete-item ${index === 0 ? 'selected' : ''}"
                 data-nym="${this.escapeHtml(user.nym)}"
-                data-pubkey="${user.pubkey}"
-                onclick="nym.selectSpecificAutocomplete('${this.escapeHtml(user.nym)}', '${user.pubkey}')">
-            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${user.pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${user.pubkey}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
+                data-pubkey="${safePk}"
+                onclick="nym.selectSpecificAutocomplete('${this.escapeHtml(user.nym)}', '${safePk}')">
+            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
         </div>
     `;
             }).join('');

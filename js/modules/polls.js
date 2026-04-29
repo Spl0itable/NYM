@@ -231,10 +231,11 @@ Object.assign(NYM.prototype, {
 
             // Voter avatars
             const voterAvatars = optVotes.slice(0, 8).map(([vpk]) => {
+                const sk = this._safePubkey(vpk);
                 const vAvatar = this.getAvatarUrl(vpk);
                 const vNym = this.getNymFromPubkey(vpk);
                 const vSuffix = this.getPubkeySuffix(vpk);
-                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" title="${this.escapeHtml(vNym)}" alt="" onerror="this.onerror=null;this.src='https://robohash.org/${vpk}.png?set=set1&size=80x80'">`;
+                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" title="${this.escapeHtml(vNym)}" alt="" onerror="this.onerror=null;this.src='https://robohash.org/${sk}.png?set=set1&size=80x80'">`;
             }).join('');
             const extraCount = count > 8 ? `<span class="poll-voter-extra">+${count - 8}</span>` : '';
 
@@ -263,7 +264,8 @@ Object.assign(NYM.prototype, {
             hour12: this.settings?.timeFormat === '12hr'
         });
 
-        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${pubkey}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pubkey}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+        const safePk = this._safePubkey(pubkey);
+        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
 
         messageEl.innerHTML = `
             <span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
@@ -340,10 +342,11 @@ Object.assign(NYM.prototype, {
             const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
 
             const voterAvatars = optVotes.slice(0, 8).map(([vpk]) => {
+                const sk = this._safePubkey(vpk);
                 const vAvatar = this.getAvatarUrl(vpk);
                 const vNym = this.getNymFromPubkey(vpk);
                 const vSuffix = this.getPubkeySuffix(vpk);
-                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" title="${this.escapeHtml(vNym)}" alt="" onerror="this.onerror=null;this.src='https://robohash.org/${vpk}.png?set=set1&size=80x80'">`;
+                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" title="${this.escapeHtml(vNym)}" alt="" onerror="this.onerror=null;this.src='https://robohash.org/${sk}.png?set=set1&size=80x80'">`;
             }).join('');
             const extraCount = count > 8 ? `<span class="poll-voter-extra">+${count - 8}</span>` : '';
 

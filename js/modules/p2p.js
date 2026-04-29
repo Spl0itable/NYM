@@ -364,7 +364,26 @@ Object.assign(NYM.prototype, {
 
         // Read and send file in chunks
         const chunkSize = this.P2P_CHUNK_SIZE;
+        const HIGH_WATER = chunkSize * 16;   // start backpressure
+        const LOW_WATER = chunkSize * 4;     // resume threshold
         let offset = 0;
+
+        try { dataChannel.bufferedAmountLowThreshold = LOW_WATER; } catch (_) { }
+
+        const waitForDrain = () => new Promise((resolve, reject) => {
+            const onLow = () => {
+                dataChannel.removeEventListener('bufferedamountlow', onLow);
+                resolve();
+            };
+            const fallback = setTimeout(() => {
+                dataChannel.removeEventListener('bufferedamountlow', onLow);
+                resolve();
+            }, 5000);
+            dataChannel.addEventListener('bufferedamountlow', () => {
+                clearTimeout(fallback);
+                onLow();
+            }, { once: true });
+        });
 
         const sendNextChunk = async () => {
             if (dataChannel.readyState !== 'open') {
@@ -385,11 +404,9 @@ Object.assign(NYM.prototype, {
             const chunk = file.slice(offset, offset + chunkSize);
             const arrayBuffer = await chunk.arrayBuffer();
 
-            // Wait for buffer to clear if needed (backpressure)
-            let waitAttempts = 0;
-            while (dataChannel.bufferedAmount > chunkSize * 10 && waitAttempts < 500) {
-                await new Promise(resolve => setTimeout(resolve, 20));
-                waitAttempts++;
+            // Apply backpressure: only wait when the queue is actually full.
+            if (dataChannel.bufferedAmount > HIGH_WATER) {
+                await waitForDrain();
                 if (dataChannel.readyState !== 'open') {
                     this.updateTransferStatus(transferId, 'error', 'Connection closed during transfer');
                     return;
@@ -400,8 +417,13 @@ Object.assign(NYM.prototype, {
                 dataChannel.send(arrayBuffer);
                 offset += chunkSize;
 
-                // Continue sending
-                setTimeout(sendNextChunk, 0);
+                // Continue sending without an artificial setTimeout(0) hop
+                // when the channel has headroom — keeps throughput high.
+                if (dataChannel.bufferedAmount < HIGH_WATER) {
+                    Promise.resolve().then(sendNextChunk);
+                } else {
+                    setTimeout(sendNextChunk, 0);
+                }
             }
         };
 

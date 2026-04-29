@@ -1,6 +1,21 @@
 // nostr-core.js - Event signing, NIP-44/59 encryption, gift wraps, profile fetch, presence, typing indicators
 // Methods are attached to NYM.prototype.
 
+const _RX_REGEX_ESCAPE_NC = /[.*+?^${}()|[\]\\]/g;
+const _quoteMentionCache = new Map();
+function _getQuoteMentionPattern(author) {
+    let pattern = _quoteMentionCache.get(author);
+    if (pattern) return pattern;
+    pattern = new RegExp(`^@${author.replace(_RX_REGEX_ESCAPE_NC, '\\$&')}\\s*`);
+    if (_quoteMentionCache.size >= 256) {
+        // Evict oldest insertion
+        const firstKey = _quoteMentionCache.keys().next().value;
+        _quoteMentionCache.delete(firstKey);
+    }
+    _quoteMentionCache.set(author, pattern);
+    return pattern;
+}
+
 Object.assign(NYM.prototype, {
 
     // NIP-13: Validate proof of work
@@ -290,7 +305,7 @@ Object.assign(NYM.prototype, {
                 const qAuthor = nymquoteTag[1];
                 const qText = nymquoteTag[2];
                 // Strip the @author mention prefix from event content to get user's reply
-                const mentionPattern = new RegExp(`^@${qAuthor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`);
+                const mentionPattern = _getQuoteMentionPattern(qAuthor);
                 const userMessage = event.content.replace(mentionPattern, '').trim();
                 // Reconstruct > @author: blockquote format for NYM display
                 // Strip nested quotes — only show the last message being quoted
@@ -1218,8 +1233,9 @@ Object.assign(NYM.prototype, {
 
         // Build avatars
         const avatarHtml = typers.slice(0, 3).map(([pk]) => {
+            const sk = this._safePubkey(pk);
             const src = this.getAvatarUrl(pk);
-            return `<img src="${this.escapeHtml(src)}" data-avatar-pubkey="${pk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${pk}.png?set=set1&size=80x80'">`;
+            return `<img src="${this.escapeHtml(src)}" data-avatar-pubkey="${sk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${sk}.png?set=set1&size=80x80'">`;
         }).join('');
         avatarsEl.innerHTML = avatarHtml;
 
@@ -1404,25 +1420,51 @@ Object.assign(NYM.prototype, {
 
     // Direct profile fetch - sends REQ and resolves when the kind 0 handler
     // processes the response (or after a timeout fallback).
+    // Concurrent calls for the same pubkey share a single REQ via an in-flight
+    // promise map; subsequent callers attach a resolver instead of re-issuing.
     async fetchProfileDirect(pubkey) {
+        if (!this._profileFetchInFlight) this._profileFetchInFlight = new Map();
+        const existing = this._profileFetchInFlight.get(pubkey);
+        if (existing) {
+            await new Promise(resolve => {
+                if (!this.pendingProfileResolvers.has(pubkey)) {
+                    this.pendingProfileResolvers.set(pubkey, []);
+                }
+                // No own timer/CLOSE: piggyback on the in-flight request
+                this.pendingProfileResolvers.get(pubkey).push({ resolve, timer: null });
+                // Safety: still resolve if the in-flight request never completes
+                setTimeout(resolve, 4500);
+            });
+            return;
+        }
+
         const subId = 'pm-profile-' + Math.random().toString(36).slice(2);
         const req = ["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }];
 
-        try { this.sendRequestToFewRelays(req); } catch (_) { }
+        const inflight = (async () => {
+            try { this.sendRequestToFewRelays(req); } catch (_) { }
 
-        await new Promise(resolve => {
-            const timer = setTimeout(() => {
-                this._removeProfileResolver(pubkey, entry);
-                resolve();
-            }, 4000);
-            const entry = { resolve, timer };
-            if (!this.pendingProfileResolvers.has(pubkey)) {
-                this.pendingProfileResolvers.set(pubkey, []);
-            }
-            this.pendingProfileResolvers.get(pubkey).push(entry);
-        });
+            await new Promise(resolve => {
+                const timer = setTimeout(() => {
+                    this._removeProfileResolver(pubkey, entry);
+                    resolve();
+                }, 4000);
+                const entry = { resolve, timer };
+                if (!this.pendingProfileResolvers.has(pubkey)) {
+                    this.pendingProfileResolvers.set(pubkey, []);
+                }
+                this.pendingProfileResolvers.get(pubkey).push(entry);
+            });
 
-        try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+            try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+        })();
+
+        this._profileFetchInFlight.set(pubkey, inflight);
+        try {
+            await inflight;
+        } finally {
+            this._profileFetchInFlight.delete(pubkey);
+        }
     },
 
     // Fetch the Nostr kind:3 contact list (follow list) for a pubkey
@@ -1451,16 +1493,11 @@ Object.assign(NYM.prototype, {
 
             this.nostrFollowList = [...new Set(followPubkeys)];
 
-            // Fetch all follow list profiles from a few relays (not all 200+)
+            // Fetch follow-list profiles via the batched queue, which
+            // dedupes against fresh-cached profiles and any in-flight REQs.
             const unknownPubkeys = this.nostrFollowList.filter(pk => !this.users.has(pk));
-            if (unknownPubkeys.length > 0) {
-                const profileSubId = 'follow-profiles-' + Math.random().toString(36).slice(2);
-                try {
-                    this.sendRequestToFewRelays(["REQ", profileSubId, { kinds: [0], authors: unknownPubkeys, limit: unknownPubkeys.length }]);
-                    setTimeout(() => {
-                        try { this.sendToRelay(["CLOSE", profileSubId]); } catch (_) { }
-                    }, 10000);
-                } catch (_) { }
+            for (const pk of unknownPubkeys) {
+                this.queueProfileFetch(pk);
             }
         };
 
@@ -1509,6 +1546,14 @@ Object.assign(NYM.prototype, {
     // Returns immediately (fire-and-forget). The kind 0 handler updates
     // rendered avatars/names retroactively when responses arrive.
     queueProfileFetch(pubkey) {
+        // Skip if we already have a fresh profile or there's an in-flight
+        // direct fetch for this pubkey (avoids redundant relay REQs from
+        // multiple rendering paths racing on the same author).
+        const lastFetch = this.profileFetchedAt && this.profileFetchedAt.get(pubkey) || 0;
+        const fresh = Date.now() - lastFetch < 5 * 60 * 1000;
+        if (fresh && this.userAvatars && this.userAvatars.has(pubkey)) return;
+        if (this._profileFetchInFlight && this._profileFetchInFlight.has(pubkey)) return;
+
         if (this._profileBatchSet && this._profileBatchSet.has(pubkey)) return;
         if (!this._profileBatchQueue) this._profileBatchQueue = [];
         if (!this._profileBatchSet) this._profileBatchSet = new Set();

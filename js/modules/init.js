@@ -3,6 +3,40 @@
 
 Object.assign(NYM.prototype, {
 
+    _setManagedInterval(key, fn, ms) {
+        if (!this._appIntervals) this._appIntervals = new Map();
+        const existing = this._appIntervals.get(key);
+        if (existing) clearInterval(existing);
+        const id = setInterval(fn, ms);
+        this._appIntervals.set(key, id);
+        return id;
+    },
+
+    _clearManagedInterval(key) {
+        if (!this._appIntervals) return;
+        const id = this._appIntervals.get(key);
+        if (id) {
+            clearInterval(id);
+            this._appIntervals.delete(key);
+        }
+    },
+
+    _clearAllManagedIntervals() {
+        if (!this._appIntervals) return;
+        for (const id of this._appIntervals.values()) clearInterval(id);
+        this._appIntervals.clear();
+    },
+
+    _scheduleIdle(fn, timeout = 1000) {
+        if (typeof window.requestIdleCallback === 'function') {
+            return window.requestIdleCallback(fn, { timeout });
+        }
+        if (typeof window.requestAnimationFrame === 'function') {
+            return window.requestAnimationFrame(fn);
+        }
+        return setTimeout(fn, 0);
+    },
+
     _detectDeviceCapabilities() {
         const caps = { tier: 'high', cores: 4, memory: 8, mobile: false, weakGPU: false };
         try {
