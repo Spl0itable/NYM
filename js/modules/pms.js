@@ -1,5 +1,4 @@
 // pms.js - Private messages: send, open, conversation list, gift wrap DMs, new-PM modal, retry queue
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 
@@ -324,6 +323,7 @@ Object.assign(NYM.prototype, {
             if (pmList.length > this.pmStorageLimit) {
                 this.pmMessages.set(conversationKey, pmList.slice(-this.pmStorageLimit));
             }
+            this.persistPMMessages(conversationKey);
 
             // Track for automatic retry if delivery receipt not received
             this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
@@ -444,6 +444,7 @@ Object.assign(NYM.prototype, {
             if (extPmList.length > this.pmStorageLimit) {
                 this.pmMessages.set(conversationKey, extPmList.slice(-this.pmStorageLimit));
             }
+            this.persistPMMessages(conversationKey);
 
             // Track for automatic retry if delivery receipt not received
             this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
@@ -490,6 +491,7 @@ Object.assign(NYM.prototype, {
                 return; // Already processed this event
             }
             this.processedPMEventIds.add(event.id);
+            if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
 
             // Update lastPMSyncTime to track newest received PM
             if (event.created_at && event.created_at > this.lastPMSyncTime) {
@@ -950,7 +952,8 @@ Object.assign(NYM.prototype, {
             let messageContent = parsed.content;
 
             // Drop messages whose content is raw ciphertext from other NIP-17
-            if (messageContent && messageContent.length > 80 &&
+            // implementations. Exempt our own self-wraps
+            if (!isOwn && messageContent && messageContent.length > 80 &&
                 !/\s/.test(messageContent) && /^[A-Za-z0-9+/=_-]+$/.test(messageContent) &&
                 !/^(lnbc|lnurl|lntb|lntbs|cashu|npub1|nsec1|nprofile1|nevent1|naddr1|note1|bc1|tb1|bitcoin:)/i.test(messageContent)) {
                 return;
@@ -1056,6 +1059,7 @@ Object.assign(NYM.prototype, {
                 list = list.slice(-this.pmStorageLimit);
             }
             this.pmMessages.set(conversationKey, list);
+            this.persistPMMessages(conversationKey);
 
             // Send DELIVERED receipt back to Bitchat user
             if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
@@ -1087,18 +1091,25 @@ Object.assign(NYM.prototype, {
                 this.displayMessage(msg);
                 // Force auto-scroll to bottom for PM messages
                 this._scheduleScrollToBottom();
-                // Send READ receipt if viewing the conversation
-                if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
-                    this.sendBitchatReceipt(parsed.messageId, 0x02, senderPubkey); // 0x02 = READ
-                }
-                // Send READ receipt for Nymchat users
-                if (!isOwn && nymMsgId && this.nymUsers.has(senderPubkey)) {
-                    this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
+                // Send READ receipt if viewing the conversation, and mark
+                // the message so openPM doesn't re-send on next open.
+                if (!isOwn) {
+                    let sent = false;
+                    if (parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
+                        this.sendBitchatReceipt(parsed.messageId, 0x02, senderPubkey); // 0x02 = READ
+                        sent = true;
+                    }
+                    if (nymMsgId && this.nymUsers.has(senderPubkey)) {
+                        this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
+                        sent = true;
+                    }
+                    if (sent) msg.readReceiptSent = true;
                 }
             } else {
-                // Not viewing this conversation — invalidate DOM cache so it
-                // re-renders fresh when the user opens this PM.
-                this.channelDOMCache.delete(conversationKey);
+                // Not viewing this conversation — leave the cached DOM in
+                // place. loadPMMessages does a partial-cache restore that
+                // appends the trailing new messages to the cached fragment,
+                // avoiding a full re-render of long PM threads.
                 if (!isOwn) {
                     const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.isNymBlocked(msg.author) || this.hasBlockedKeyword(msg.content, msg.author);
                     if (!msg.isHistorical) {
@@ -1173,6 +1184,7 @@ Object.assign(NYM.prototype, {
             });
             // Invalidate cached DOM for this conversation
             this.channelDOMCache.delete(conversationKey);
+            this.persistPMMessages(conversationKey);
             // Display the failed message if currently viewing this PM
             if (this.inPMMode && this.currentPM === recipientPubkey) {
                 this.displayMessage(failedMsg);
@@ -1403,6 +1415,7 @@ Object.assign(NYM.prototype, {
             // Remove messages
             const conversationKey = this.getPMConversationKey(pubkey);
             this.pmMessages.delete(conversationKey);
+            if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
 
             // Persist closed state so PM doesn't reappear on reload
             this.closedPMs.add(pubkey);
@@ -1427,6 +1440,7 @@ Object.assign(NYM.prototype, {
         this.pmConversations.delete(pubkey);
         const conversationKey = this.getPMConversationKey(pubkey);
         this.pmMessages.delete(conversationKey);
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
         this.closedPMs.add(pubkey);
         try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -1488,19 +1502,20 @@ Object.assign(NYM.prototype, {
         // Load PM messages
         this.loadPMMessages(conversationKey);
 
-        // Send READ receipts for all unread messages from this peer
+        // Send READ receipts only for messages we haven't acknowledged
         const pmMsgs = this.pmMessages.get(conversationKey) || [];
         for (const msg of pmMsgs) {
-            if (!msg.isOwn) {
-                // Send Bitchat READ receipt if applicable
-                if (msg.bitchatMessageId && this.bitchatUsers.has(msg.pubkey)) {
-                    this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
-                }
-                // Send Nymchat READ receipt if applicable
-                if (msg.nymMessageId && this.nymUsers.has(msg.pubkey)) {
-                    this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey);
-                }
+            if (msg.isOwn || msg.readReceiptSent) continue;
+            let sent = false;
+            if (msg.bitchatMessageId && this.bitchatUsers.has(msg.pubkey)) {
+                this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
+                sent = true;
             }
+            if (msg.nymMessageId && this.nymUsers.has(msg.pubkey)) {
+                this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey);
+                sent = true;
+            }
+            if (sent) msg.readReceiptSent = true;
         }
 
         // Close mobile sidebar on mobile
@@ -1527,40 +1542,15 @@ Object.assign(NYM.prototype, {
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = conversationKey;
 
-        // Try to restore from DOM cache if messages haven't changed
+        // Try to restore from DOM cache
         const pmMessages = this.pmMessages.get(conversationKey) || [];
         const cached = this.channelDOMCache.get(conversationKey);
-        const currentFingerprint = this._computeMessageFingerprint(pmMessages);
 
-        if (cached && cached.messageCount === pmMessages.length &&
-            cached.messageFingerprint === currentFingerprint) {
-            // Message count unchanged, restore cached DOM instantly
-            container.innerHTML = '';
-            container.appendChild(cached.fragment);
-            this.channelDOMCache.delete(conversationKey);
-
-            // Restore virtual scroll state
-            this.virtualScroll.currentStartIndex = cached.virtualScrollState.currentStartIndex;
-            this.virtualScroll.currentEndIndex = cached.virtualScrollState.currentEndIndex;
-
-            // Re-init virtual scroll handler (isPM = true)
-            container.dataset.virtualScrollKey = conversationKey;
-            container.dataset.virtualScrollIsPM = 'true';
-
-            // Scroll to bottom
-            if (this.settings.autoscroll) {
-
-                setTimeout(() => {
-                    container.scrollTop = container.scrollHeight;
-                    setTimeout(() => {
-
-                    }, 300);
-                }, 0);
-            }
+        if (cached && this._tryRestoreCachedDOM(container, cached, conversationKey, pmMessages, true)) {
             return;
         }
 
-        // Cache miss or stale (new messages arrived) - render fresh
+        // Cache miss or stale - render fresh
         this.channelDOMCache.delete(conversationKey);
 
         // Get filtered messages

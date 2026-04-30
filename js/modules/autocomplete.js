@@ -1,5 +1,4 @@
 // autocomplete.js - Emoji, channel, mention, and command autocomplete UI
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

@@ -1,5 +1,4 @@
 // nostr-core.js - Event signing, NIP-44/59 encryption, gift wraps, profile fetch, presence, typing indicators
-// Methods are attached to NYM.prototype.
 
 const _RX_REGEX_ESCAPE_NC = /[.*+?^${}()|[\]\\]/g;
 const _quoteMentionCache = new Map();
@@ -727,6 +726,7 @@ Object.assign(NYM.prototype, {
                         existingUser.nym = truncatedName;
                         this.users.set(pubkey, existingUser);
                     }
+                    this.persistProfile(pubkey);
                     // Update PM sidebar and header if this user has a PM conversation
                     if (pubkey !== this.pubkey) {
                         this.updatePMNicknameFromProfile(pubkey, truncatedName);
@@ -1642,6 +1642,7 @@ Object.assign(NYM.prototype, {
 
             // Track deleted event ID
             this.deletedEventIds.add(messageId);
+            if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
 
             // Remove message from DOM
             const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
@@ -1654,6 +1655,7 @@ Object.assign(NYM.prototype, {
                 const idx = msgs.findIndex(m => m.id === messageId);
                 if (idx !== -1) {
                     msgs.splice(idx, 1);
+                    this.persistChannelMessages(channel);
                 }
             });
 
@@ -1663,6 +1665,7 @@ Object.assign(NYM.prototype, {
                 if (idx !== -1) {
                     msgs.splice(idx, 1);
                     this.channelDOMCache.delete(convKey);
+                    this.persistPMMessages(convKey);
                 }
             });
         } catch (error) {
@@ -1680,6 +1683,7 @@ Object.assign(NYM.prototype, {
 
             // Track deleted event ID to prevent re-displaying
             this.deletedEventIds.add(deletedId);
+            if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
 
             // Prune if too large
             if (this.deletedEventIds.size > 5000) {
@@ -1698,6 +1702,7 @@ Object.assign(NYM.prototype, {
                 const idx = msgs.findIndex(m => m.id === deletedId);
                 if (idx !== -1) {
                     msgs.splice(idx, 1);
+                    this.persistChannelMessages(channel);
                 }
             });
 
@@ -1707,6 +1712,7 @@ Object.assign(NYM.prototype, {
                 if (idx !== -1) {
                     msgs.splice(idx, 1);
                     this.channelDOMCache.delete(convKey);
+                    this.persistPMMessages(convKey);
                 }
             });
         }
@@ -1734,11 +1740,12 @@ Object.assign(NYM.prototype, {
 
         // Try to apply to already-loaded messages
         let found = false;
-        this.messages.forEach((msgs) => {
+        this.messages.forEach((msgs, channel) => {
             const msg = msgs.find(m => m.id === originalEventId);
             if (msg && msg.pubkey === senderPubkey) {
                 msg.content = newContent;
                 msg.isEdited = true;
+                this.persistChannelMessages(channel);
                 found = true;
             }
         });
@@ -1777,6 +1784,7 @@ Object.assign(NYM.prototype, {
 
         msg.content = newContent;
         msg.isEdited = true;
+        this.persistPMMessages(conversationKey);
 
         const domId = msg.nymMessageId || msg.id;
         this.updateMessageInDOM(domId, newContent);
@@ -1862,6 +1870,7 @@ Object.assign(NYM.prototype, {
                                     status: 'online',
                                     channels: new Set()
                                 });
+                                this.persistProfile(event.pubkey);
                             }
                             // Update PM nickname displays
                             this.updatePMNicknameFromProfile(event.pubkey, profileName);

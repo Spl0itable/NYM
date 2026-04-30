@@ -1,5 +1,4 @@
 // relays.js - Relay pool, connection lifecycle, proxy worker, geo-relays, stats, retries
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 
@@ -1612,12 +1611,13 @@ Object.assign(NYM.prototype, {
         return 'web.nymchat.app';
     },
 
-    // Mark the remote API as unavailable and fall back to local/direct connections
+    // Mark the remote API as unavailable and fall back to local/direct
     _fallbackToLocal() {
         if (this._isCloudflareHost || this._remoteApiFailed) return;
         this._remoteApiFailed = true;
         this.useRelayProxy = false;
         console.warn('[NYM] Remote API unreachable, falling back to direct connections');
+        this._schedulePoolReconnectInBackground();
     },
 
     // Fall back from pool mode to direct relay connections (works on any host including Cloudflare).
@@ -1649,21 +1649,22 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Try to restore pool mode in the background (used after initial pool failure on Cloudflare).
-    // Periodically attempts to reconnect to the pool while direct connections are active.
+    // Try to restore pool mode in the background
     _schedulePoolReconnectInBackground() {
         if (this._bgPoolReconnectTimer) return;
         let attempts = 0;
 
         const tryRestore = () => {
             attempts++;
-            if (attempts > 2) {
-                // Give up restoring pool mode
+            if (attempts > 4) {
+                // Give up restoring pool mode for this session
                 clearTimeout(this._bgPoolReconnectTimer);
                 this._bgPoolReconnectTimer = null;
                 return;
             }
-            // Temporarily re-enable pool mode to attempt connection
+            // Temporarily clear the remote-API-failed flag
+            const wasRemoteApiFailed = this._remoteApiFailed;
+            this._remoteApiFailed = false;
             this.useRelayProxy = true;
             this._poolConnecting = false;
             this._poolReconnecting = false;
@@ -1683,15 +1684,17 @@ Object.assign(NYM.prototype, {
                     this.updateConnectionStatus();
                 })
                 .catch(() => {
-                    // Failed — stay in direct mode
+                    // Failed — stay in direct mode and restore the
+                    // remote-API-failed flag so other call sites keep
+                    // routing direct until the next retry tick.
+                    this._remoteApiFailed = wasRemoteApiFailed;
                     this.useRelayProxy = false;
                     const delay = Math.min(30000 * Math.pow(2, attempts - 1), 120000);
                     this._bgPoolReconnectTimer = setTimeout(tryRestore, delay);
                 });
         };
 
-        // First attempt after 30 seconds
-        this._bgPoolReconnectTimer = setTimeout(tryRestore, 30000);
+        this._bgPoolReconnectTimer = setTimeout(tryRestore, 15000);
     },
 
     _getProxiedRelayUrl(relayUrl) {

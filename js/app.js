@@ -2590,6 +2590,12 @@ async function showSettings() {
         typingIndicatorsSel.value = nym.settings.typingIndicatorsEnabled !== false ? 'true' : 'false';
     }
 
+    // Fill in cache-PMs toggle
+    const cachePMsSel = document.getElementById('cachePMsSelect');
+    if (cachePMsSel) {
+        cachePMsSel.value = nym.settings.cachePMs !== false ? 'true' : 'false';
+    }
+
     // Initialize wallpaper UI selection
     initWallpaperUI();
 
@@ -2640,8 +2646,38 @@ async function showSettings() {
     // Render pending settings transfers
     nym.renderPendingSettingsTransfers();
 
+    // Refresh the app cache size display
+    refreshAppCacheSize();
+
     document.getElementById('settingsModal').classList.add('active');
 }
+
+// Format a byte count into a short human-readable string (e.g. 1.2 MB).
+function formatCacheBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    let n = bytes;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+// Update the cache size readout in the settings modal
+async function refreshAppCacheSize() {
+    const el = document.getElementById('appCacheSizeDisplay');
+    if (!el) return;
+    try {
+        if (navigator.storage && typeof navigator.storage.estimate === 'function') {
+            const est = await navigator.storage.estimate();
+            const usage = formatCacheBytes(est.usage || 0);
+            const quota = est.quota ? ` of ${formatCacheBytes(est.quota)} available` : '';
+            el.textContent = `${usage} cached on device${quota}`;
+            return;
+        }
+    } catch (_) { }
+    el.textContent = 'Cache size unavailable on this browser';
+}
+
 
 async function saveSettings() {
     // Get all settings values
@@ -2712,6 +2748,19 @@ async function saveSettings() {
     const typingIndicatorsEnabled = document.getElementById('typingIndicatorsSelect').value === 'true';
     nym.settings.typingIndicatorsEnabled = typingIndicatorsEnabled;
     localStorage.setItem('nym_typing_indicators_enabled', String(typingIndicatorsEnabled));
+
+    // Read and save PM/group cache opt-out. When the user turns it off,
+    // wipe the existing cache so we don't leave decrypted content at rest.
+    const cachePMsEl = document.getElementById('cachePMsSelect');
+    if (cachePMsEl) {
+        const wasOn = nym.settings.cachePMs !== false;
+        const nowOn = cachePMsEl.value === 'true';
+        nym.settings.cachePMs = nowOn;
+        localStorage.setItem('nym_cache_pms', String(nowOn));
+        if (wasOn && !nowOn && typeof nym.clearPMCache === 'function') {
+            nym.clearPMCache().catch(() => { });
+        }
+    }
 
     // Handle auto-ephemeral setting (hidden, kept for compatibility)
     const autoEphemeral = document.getElementById('autoEphemeralSelect').value === 'true';
@@ -2862,10 +2911,17 @@ async function saveSettings() {
     closeModal('settingsModal');
 }
 
-function clearLocalStorageCache() {
-    if (!confirm('Clear all cached settings and preferences? This will not log you out.')) {
+async function clearLocalStorageCache() {
+    if (!confirm('Clear all cached settings, preferences, and on-device app cache? This will not log you out.')) {
         return;
     }
+
+    // Wipe the IndexedDB-backed app cache
+    try {
+        if (typeof nym.resetCache === 'function') {
+            await nym.resetCache();
+        }
+    } catch (_) { }
 
     // Preserve session identity and shop purchase keys
     const preserveKeys = {};
@@ -3024,7 +3080,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.296 ═══<br/>
+═══ Nymchat v3.59.297 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4183,6 +4239,12 @@ function nostrLogout() {
     localStorage.removeItem('nym_nip46_client_secret');
     localStorage.removeItem('nym_nip46_remote_pubkey');
     localStorage.removeItem('nym_nip46_relay');
+    // Wipe profile fields that aren't pubkey-scoped
+    localStorage.removeItem('nym_bio');
+    localStorage.removeItem('nym_lightning_address_global');
+    localStorage.removeItem('nym_avatar_url');
+    localStorage.removeItem('nym_banner_url');
+    localStorage.removeItem('nym_auto_ephemeral_nick');
     if (_nip46State) {
         if (_nip46State.ws) {
             try { _nip46State.ws.close(); } catch (_) { }
@@ -4192,6 +4254,14 @@ function nostrLogout() {
     nym.nostrLoginPubkey = null;
     nym.nostrLoginSecretKey = null;
     nym.nostrLoginMethod = null;
+    nym.nym = null;
+    nym.lightningAddress = null;
+    nym.userBios = new Map();
+    nym.userBanners = new Map();
+    nym.userAvatars = new Map();
+    if (typeof nym.resetCache === 'function') {
+        nym.resetCache().catch(() => { });
+    }
     nym.displaySystemMessage('Nostr identity logged out. Settings will no longer sync.');
 }
 
@@ -5052,12 +5122,16 @@ function signOut() {
         localStorage.removeItem('nym_nostr_login_pubkey');
         localStorage.removeItem('nym_nostr_login_nsec');
         localStorage.removeItem('nym_nostr_login_npub');
+        localStorage.removeItem('nym_bio');
+        localStorage.removeItem('nym_lightning_address_global');
+        localStorage.removeItem('nym_avatar_url');
+        localStorage.removeItem('nym_banner_url');
         nym.cmdQuit();
     }
 }
 
 // Initialize on load
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Construct the NYM instance now that all module scripts have been parsed
     // and their methods have been attached to NYM.prototype.
     nym = new NYM();
@@ -5065,7 +5139,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Parse URL for channel routing BEFORE initialization
     parseUrlChannel();
 
-    nym.initialize();
+    await nym.initialize();
 
     // Apply group chat & PM only mode on startup (hide channels section)
     if (nym.settings.groupChatPMOnlyMode) {

@@ -1,5 +1,4 @@
 // groups.js - NIP-17 group chats: create, send, ephemeral keys, members, readers, history
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 
@@ -594,6 +593,7 @@ Object.assign(NYM.prototype, {
                 const gck = this.getGroupConversationKey(groupId);
                 this.pmMessages.delete(gck);
                 this.channelDOMCache.delete(gck);
+                if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', gck);
                 document.getElementById('pmList')?.querySelector(`[data-group-id="${groupId}"]`)?.remove();
                 this.updateViewMoreButton('pmList');
                 if (this.currentGroup === groupId) {
@@ -687,6 +687,7 @@ Object.assign(NYM.prototype, {
         });
         if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
         this.pmMessages.set(groupConvKey, list);
+        this.persistPMMessages(groupConvKey);
 
         // Update or create group conversation entry
         this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000);
@@ -712,9 +713,7 @@ Object.assign(NYM.prototype, {
             // Force auto-scroll to bottom for group messages
             this._scheduleScrollToBottom();
         } else {
-            // Not viewing this group — invalidate DOM cache so it
-            // re-renders fresh when the user opens this group.
-            this.channelDOMCache.delete(groupConvKey);
+            // Not viewing this group — leave the cached DOM in place
             if (!isOwn && !senderBlocked) {
                 if (!msg.isHistorical) {
                     // Always update sidebar unread count for all group messages
@@ -999,6 +998,7 @@ Object.assign(NYM.prototype, {
         });
         if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
         this.channelDOMCache.delete(groupConvKey);
+        this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);
 
         if (this.inPMMode && this.currentGroup === groupId) {
@@ -1078,6 +1078,7 @@ Object.assign(NYM.prototype, {
         const groupConvKey = this.getGroupConversationKey(groupId);
         this.pmMessages.delete(groupConvKey);
         this.channelDOMCache.delete(groupConvKey);
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', groupConvKey);
         const pmList = document.getElementById('pmList');
         const item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
         if (item) item.remove();

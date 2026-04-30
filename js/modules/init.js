@@ -1,5 +1,4 @@
 // init.js - App initialization, device capability detection, performance mode
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 
@@ -115,6 +114,14 @@ Object.assign(NYM.prototype, {
             this.loadHiddenChannels();
             this.loadWallpaper();
             applyMessageLayout(this.settings.chatLayout);
+
+            // Hydrate channel/PM/profile/reaction caches from IndexedDB
+            try {
+                await Promise.race([
+                    this.hydrateFromCache(),
+                    new Promise(r => setTimeout(r, 1500))
+                ]);
+            } catch (_) { }
 
             // Load lightning address
             await this.loadLightningAddress();

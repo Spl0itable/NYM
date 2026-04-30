@@ -1,5 +1,4 @@
 // ui-context.js - Context menus, modals, gestures, sidebar, GIF picker, link previews, zap modals, event listeners
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

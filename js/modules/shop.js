@@ -1,5 +1,4 @@
 // shop.js - Shop UI: cosmetics, flair, special items, purchases, transfers, recovery codes
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

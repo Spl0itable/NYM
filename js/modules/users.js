@@ -1,5 +1,4 @@
 // users.js - User identities, blocked users/keywords, friends, avatars, banners, wallpaper, uploads
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

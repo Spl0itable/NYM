@@ -1,5 +1,4 @@
 // translate.js - Message and input translation (auto-detect, language selection)
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

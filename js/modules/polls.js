@@ -1,5 +1,4 @@
 // polls.js - Poll creation, voting, display, channel poll list
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

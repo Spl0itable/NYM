@@ -1,5 +1,4 @@
 // messages.js - Message rendering, formatting, sending, edits, quotes, swipe-to-reply, virtual scroll
-// Methods are attached to NYM.prototype.
 
 const _RX_REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g;
 const _RX_HTML_TAG = /<[^>]*>/g;
@@ -241,15 +240,20 @@ Object.assign(NYM.prototype, {
                     this.messages.set(storageKey, messages.slice(-this.channelMessageLimit));
                 }
 
+                // Persist to IndexedDB (debounced) so this channel's
+                // history is available instantly on next launch.
+                this.persistChannelMessages(storageKey);
+
                 // Schedule zap receipt subscription update with new event IDs
                 this._scheduleZapResubscribe();
             }
 
             // Now check if we should actually render this message
             if (this.inPMMode) {
-                // In PM mode — message is stored but don't render channel messages.
-                // Invalidate DOM cache so it re-renders when user switches back.
-                this.channelDOMCache.delete(storageKey);
+                // In PM mode — message is stored but don't render channel
+                // messages. Leave the cached DOM alone; loadChannelMessages
+                // does a partial-cache restore that appends trailing new
+                // messages on switch back, avoiding a full re-render.
                 if (!message.isOwn && !exists && !message.isHistorical) {
                     this.updateUnreadCount(storageKey);
                 }
@@ -259,9 +263,9 @@ Object.assign(NYM.prototype, {
             // Check if this is for current channel
             const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
             if (storageKey !== currentKey) {
-                // Message is for different channel, update unread count but don't display.
-                // Invalidate DOM cache so the channel re-renders when user switches to it.
-                if (!exists) this.channelDOMCache.delete(storageKey);
+                // Message is for different channel — same partial-cache
+                // strategy as the PM branch above; no cache invalidation
+                // needed.
                 if (!message.isOwn && !exists && !message.isHistorical) {
                     this.updateUnreadCount(storageKey);
                 }
@@ -737,6 +741,14 @@ Object.assign(NYM.prototype, {
         if (message.isOwn && message.isGroup && message.nymMessageId) {
             const readersEl = messageEl.querySelector('.group-readers');
             if (readersEl) this._bindReaderLongPress(readersEl, message.nymMessageId);
+        }
+
+        // Apply any reactions we already know about
+        if (this.reactions && typeof this.updateMessageReactions === 'function') {
+            const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
+            if (reactionMsgId && this.reactions.has(reactionMsgId)) {
+                this.updateMessageReactions(reactionMsgId);
+            }
         }
 
         // Prune oldest messages from DOM to stay within limits
@@ -1857,36 +1869,15 @@ Object.assign(NYM.prototype, {
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = storageKey;
 
-        // Try to restore from cache if messages haven't changed
+        // Try to restore from cache
         const channelMessages = this.messages.get(storageKey) || [];
         const cached = this.channelDOMCache.get(storageKey);
-        const currentFingerprint = this._computeMessageFingerprint(channelMessages);
 
-        if (cached && cached.messageCount === channelMessages.length &&
-            cached.messageFingerprint === currentFingerprint) {
-            // Message count unchanged, restore cached DOM instantly
-            container.innerHTML = '';
-            container.appendChild(cached.fragment);
-            this.channelDOMCache.delete(storageKey);
-
-            // Restore virtual scroll state
-            this.virtualScroll.currentStartIndex = cached.virtualScrollState.currentStartIndex;
-            this.virtualScroll.currentEndIndex = cached.virtualScrollState.currentEndIndex;
-
-            // Scroll to bottom
-            if (this.settings.autoscroll) {
-
-                requestAnimationFrame(() => {
-                    container.scrollTop = container.scrollHeight;
-                    setTimeout(() => {
-
-                    }, 300);
-                });
-            }
+        if (cached && this._tryRestoreCachedDOM(container, cached, storageKey, channelMessages, false)) {
             return;
         }
 
-        // Cache miss or stale (new messages arrived) - render fresh
+        // Cache miss or stale - render fresh
         this.channelDOMCache.delete(storageKey);
         container.innerHTML = '';
 
@@ -1901,6 +1892,50 @@ Object.assign(NYM.prototype, {
 
         // Re-render any polls for this channel
         this.renderChannelPolls();
+    },
+
+    // Restore a cached DOM fragment into the container
+    _tryRestoreCachedDOM(container, cached, storageKey, currentMessages, isPM) {
+        const cachedCount = cached.messageCount || 0;
+        const currentLen = currentMessages.length;
+
+        if (cachedCount > currentLen) return false;
+
+        const compareList = cachedCount === currentLen
+            ? currentMessages
+            : currentMessages.slice(0, cachedCount);
+        const compareFp = this._computeMessageFingerprint(compareList);
+        if (compareFp !== cached.messageFingerprint) return false;
+
+        container.innerHTML = '';
+        container.appendChild(cached.fragment);
+        this.channelDOMCache.delete(storageKey);
+
+        if (cached.virtualScrollState) {
+            this.virtualScroll.currentStartIndex = cached.virtualScrollState.currentStartIndex;
+            this.virtualScroll.currentEndIndex = cached.virtualScrollState.currentEndIndex;
+        }
+        container.dataset.virtualScrollKey = storageKey;
+        container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
+
+        // Partial hit: render trailing messages that arrived while we were away.
+        if (cachedCount < currentLen) {
+            const trailing = currentMessages.slice(cachedCount);
+            this.virtualScroll.suppressAutoScroll = true;
+            this._suppressSound = true;
+            for (let i = 0; i < trailing.length; i++) {
+                this.displayMessage(trailing[i]);
+            }
+            this._suppressSound = false;
+            this.virtualScroll.suppressAutoScroll = false;
+        }
+
+        if (this.settings.autoscroll) {
+            requestAnimationFrame(() => {
+                container.scrollTop = container.scrollHeight;
+            });
+        }
+        return true;
     },
 
     // Initialize virtual scroll for a container

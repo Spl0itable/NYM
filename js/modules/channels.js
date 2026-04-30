@@ -1,5 +1,4 @@
 // channels.js - Channel switch/add/remove, joined/pinned/hidden channels, navigation history, unread counts
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

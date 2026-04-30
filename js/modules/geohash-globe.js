@@ -1,5 +1,4 @@
 // geohash-globe.js - Geohash channels and 3D globe explorer
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

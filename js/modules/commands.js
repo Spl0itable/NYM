@@ -1,5 +1,4 @@
 // commands.js - Slash-command parsing and handlers (cmdJoin, cmdNick, cmdZap, ...) plus bot commands and palette
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

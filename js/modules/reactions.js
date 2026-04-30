@@ -1,5 +1,4 @@
 // reactions.js - Reaction sending/removal, reactor lists, emoji picker
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 
@@ -91,6 +90,7 @@ Object.assign(NYM.prototype, {
                     this.reactions.delete(messageId);
                 }
             }
+            this.persistReactions(messageId);
             const reactionApplied = this.updateMessageReactions(messageId);
             if (!reactionApplied) {
                 for (const [key, msgs] of this.messages.entries()) {
@@ -121,6 +121,7 @@ Object.assign(NYM.prototype, {
 
         // Store pubkey with nym
         messageReactions.get(reactionContent).set(event.pubkey, reactorNym);
+        this.persistReactions(messageId);
 
         // Update UI if message is visible, otherwise invalidate DOM cache
         // so the reaction appears when the user switches to that channel
@@ -776,6 +777,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Add reaction immediately to local state
             messageReactions.get(emoji).set(this.pubkey, this.nym);
+            this.persistReactions(messageId);
 
             // Update UI immediately
             this.updateMessageReactions(messageId);
@@ -876,6 +878,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (messageReactions.size === 0) {
                 this.reactions.delete(messageId);
             }
+            this.persistReactions(messageId);
 
             // Update UI immediately
             this.updateMessageReactions(messageId);
@@ -942,6 +945,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const mr = this.reactions.get(messageId);
                 if (!mr.has(emoji)) mr.set(emoji, new Map());
                 mr.get(emoji).set(this.pubkey, this.nym);
+                this.persistReactions(messageId);
                 this.updateMessageReactions(messageId);
                 this.displaySystemMessage('Failed to sign reaction removal');
             }

@@ -1,5 +1,4 @@
 // p2p.js - Peer-to-peer file sharing: WebRTC data channels, WebTorrent, transfers UI
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

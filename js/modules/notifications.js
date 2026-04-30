@@ -1,5 +1,4 @@
 // notifications.js - Notification history, badges, sounds, settings
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

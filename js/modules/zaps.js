@@ -1,5 +1,4 @@
 // zaps.js - Lightning zaps: invoices, modals, receipts, message/profile zaps, wallets
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 

@@ -1,5 +1,4 @@
 // settings.js - User settings: load/save, sync to Nostr, theme/color mode, image blur
-// Methods are attached to NYM.prototype.
 
 Object.assign(NYM.prototype, {
 
@@ -426,6 +425,7 @@ Object.assign(NYM.prototype, {
             translateLanguage: localStorage.getItem('nym_translate_language') || '',
             performanceMode: localStorage.getItem('nym_performance_mode') || 'auto',
             acceptPMs: localStorage.getItem('nym_accept_pms') || 'enabled',
+            cachePMs: localStorage.getItem('nym_cache_pms') !== 'false', // default true
             syncMLSHistory: localStorage.getItem('nym_sync_mls_history') !== 'false' // default true
         };
     },
