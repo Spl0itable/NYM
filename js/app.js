@@ -2663,19 +2663,81 @@ function formatCacheBytes(bytes) {
 }
 
 // Update the cache size readout in the settings modal
+async function countAppCacheItems() {
+    const counts = { profiles: 0, channels: 0, pms: 0, reactions: 0, totalBytes: 0 };
+    if (!nym || typeof nym._cacheGetAll !== 'function') return counts;
+    try {
+        const [profiles, channels, pms, reactions] = await Promise.all([
+            nym._cacheGetAll('profiles'),
+            nym._cacheGetAll('channels'),
+            nym._cacheGetAll('pms'),
+            nym._cacheGetAll('reactions')
+        ]);
+        counts.profiles = profiles.length;
+        counts.channels = channels.length;
+        counts.pms = pms.length;
+        counts.reactions = reactions.length;
+        const all = [].concat(profiles, channels, pms, reactions);
+        for (const r of all) {
+            try { counts.totalBytes += JSON.stringify(r).length; } catch (_) { }
+        }
+    } catch (_) { }
+    return counts;
+}
+
+async function probeAppCacheWritable() {
+    if (!nym || typeof nym._cachePut !== 'function' || typeof nym._cacheGetAll !== 'function') {
+        return { ok: false, reason: 'no cache module' };
+    }
+    if (nym._cacheDisabled) return { ok: false, reason: 'cache disabled' };
+    const marker = `probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+        await nym._cachePut('meta', { key: '__probe__', marker });
+        const all = await nym._cacheGetAll('meta');
+        const found = all.find(r => r && r.key === '__probe__');
+        if (found && found.marker === marker) return { ok: true };
+        return { ok: false, reason: 'write did not persist' };
+    } catch (e) {
+        return { ok: false, reason: (e && e.message) || 'exception' };
+    }
+}
+
+// Update the cache size readout in the settings modal
 async function refreshAppCacheSize() {
     const el = document.getElementById('appCacheSizeDisplay');
     if (!el) return;
+    el.textContent = 'Calculating…';
+    let estimateUsage = 0;
     try {
         if (navigator.storage && typeof navigator.storage.estimate === 'function') {
             const est = await navigator.storage.estimate();
-            const usage = formatCacheBytes(est.usage || 0);
-            const quota = est.quota ? ` of ${formatCacheBytes(est.quota)} available` : '';
-            el.textContent = `${usage} cached on device${quota}`;
-            return;
+            if (Number.isFinite(est.usage) && est.usage > 0) {
+                estimateUsage = est.usage;
+            }
         }
     } catch (_) { }
-    el.textContent = 'Cache size unavailable on this browser';
+
+    const counts = await countAppCacheItems();
+    const totalItems = counts.profiles + counts.channels + counts.pms + counts.reactions;
+    const sizeBytes = estimateUsage > 0 ? estimateUsage : counts.totalBytes;
+
+    if (totalItems === 0 && sizeBytes === 0) {
+        const probe = await probeAppCacheWritable();
+        if (!probe.ok) {
+            el.textContent = `IndexedDB unavailable (${probe.reason}) — cache disabled in this browser`;
+        } else {
+            el.textContent = 'No cached data on device yet';
+        }
+        return;
+    }
+
+    const sizeStr = formatCacheBytes(sizeBytes);
+    const breakdown =
+        `${counts.channels} channel${counts.channels === 1 ? '' : 's'}, ` +
+        `${counts.pms} PM/group thread${counts.pms === 1 ? '' : 's'}, ` +
+        `${counts.profiles} profile${counts.profiles === 1 ? '' : 's'}, ` +
+        `${counts.reactions} reaction record${counts.reactions === 1 ? '' : 's'}`;
+    el.textContent = `${sizeStr} cached on device — ${breakdown}`;
 }
 
 
@@ -3080,7 +3142,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.297 ═══<br/>
+═══ Nymchat v3.59.298 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>

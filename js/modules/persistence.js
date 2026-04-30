@@ -375,11 +375,15 @@
                 if (typeof window !== 'undefined' && !this._persistUnloadHooked) {
                     this._persistUnloadHooked = true;
                     const flush = () => this.flushPendingPersists();
+                    // pagehide / beforeunload — desktop + most mobile.
                     window.addEventListener('pagehide', flush);
                     window.addEventListener('beforeunload', flush);
+                    // visibilitychange — backgrounded PWAs.
                     document.addEventListener('visibilitychange', () => {
                         if (document.hidden) flush();
                     });
+                    window.addEventListener('freeze', flush);
+                    window.addEventListener('blur', flush);
                 }
             }
         },
