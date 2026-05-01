@@ -119,10 +119,11 @@ Object.assign(NYM.prototype, {
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         // Only track if within the last 24 hours
         if (ts < cutoff24h) return;
-        // Deduplicate by checking for same title + body + similar timestamp
-        const isDupe = this.notificationHistory.some(
-            n => n.title === titleToShow && n.body === body && Math.abs(n.timestamp - ts) < 2000
-        );
+        const eventId = channelInfo?.id || '';
+        const isDupe = this.notificationHistory.some(n => {
+            if (eventId && n.channelInfo?.id === eventId && n.timestamp === ts) return true;
+            return n.title === titleToShow && n.body === body && Math.abs(n.timestamp - ts) < 2000;
+        });
         if (isDupe) return;
         this.notificationHistory.push({
             title: titleToShow,
@@ -134,12 +135,9 @@ Object.assign(NYM.prototype, {
         });
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
-        // Historical notifications are silently recorded – advance lastReadTime
-        // so they never retrigger the unread badge on reload.
-        if (ts > this.notificationLastReadTime) {
-            this.notificationLastReadTime = ts;
-            try { localStorage.setItem('nym_notification_last_read', String(ts)); } catch { }
-        }
+        // Refresh badge so unviewed historical events (newer than the synced
+        // notificationLastReadTime) surface as unread on reconnected devices.
+        this._updateNotificationBadge();
     },
 
     _loadNotificationHistory() {
@@ -148,26 +146,7 @@ Object.assign(NYM.prototype, {
             if (!raw) return [];
             const parsed = JSON.parse(raw);
             const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-            const filtered = [];
-            let maxTs = 0;
-            for (let i = 0; i < parsed.length; i++) {
-                const n = parsed[i];
-                if (n.timestamp > cutoff24h) {
-                    filtered.push(n);
-                    if (n.timestamp > maxTs) maxTs = n.timestamp;
-                }
-            }
-            // Mark all persisted notifications as already seen so they don't
-            // retrigger the unread badge on reload. Advance lastReadTime to
-            // cover every entry that was already stored.
-            if (filtered.length > 0) {
-                const stored = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
-                if (maxTs > stored) {
-                    this.notificationLastReadTime = maxTs;
-                    try { localStorage.setItem('nym_notification_last_read', String(maxTs)); } catch { }
-                }
-            }
-            return filtered;
+            return parsed.filter(n => n.timestamp > cutoff24h);
         } catch { return []; }
     },
 
@@ -223,10 +202,13 @@ Object.assign(NYM.prototype, {
     },
 
     openNotificationsModal() {
-        // Mark all as read
+        // Mark all as read and broadcast so other devices stay in sync
         this.notificationLastReadTime = Date.now();
         try { localStorage.setItem('nym_notification_last_read', String(this.notificationLastReadTime)); } catch { }
         this._updateNotificationBadge();
+        if (typeof this._debouncedNostrSettingsSave === 'function') {
+            this._debouncedNostrSettingsSave(2000);
+        }
 
         const modal = document.getElementById('notificationsModal');
         const body = document.getElementById('notificationsModalBody');
