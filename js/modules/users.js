@@ -1124,7 +1124,7 @@ Object.assign(NYM.prototype, {
         item.dataset.nym = baseNym;
 
         const img = document.createElement('img');
-        img.className = 'avatar-user-list';
+        img.className = `avatar-user-list status-${effectiveStatus}`;
         img.alt = '';
         img.loading = 'lazy';
         img.dataset.avatarPubkey = pubkey;
@@ -1132,10 +1132,6 @@ Object.assign(NYM.prototype, {
         const fallback = this.generateAvatarSvg(pubkey);
         img.onerror = () => { img.onerror = null; img.src = fallback; };
         item.appendChild(img);
-
-        const status = document.createElement('span');
-        status.className = `user-status ${effectiveStatus}`;
-        item.appendChild(status);
 
         const label = document.createElement('span');
         if (userColorClass) label.className = userColorClass;
@@ -1148,9 +1144,14 @@ Object.assign(NYM.prototype, {
         el.className = userColorClass ? `user-item list-item ${userColorClass}` : 'user-item list-item';
         el.dataset.nym = baseNym;
         const img = el.querySelector('img.avatar-user-list');
-        if (img && img.getAttribute('src') !== avatarSrc) img.src = avatarSrc;
-        const statusSpan = el.querySelector('.user-status');
-        if (statusSpan) statusSpan.className = `user-status ${effectiveStatus}`;
+        if (img) {
+            if (img.getAttribute('src') !== avatarSrc) img.src = avatarSrc;
+            const statusClass = `status-${effectiveStatus}`;
+            img.classList.remove('status-online', 'status-away', 'status-offline');
+            img.classList.add(statusClass);
+        }
+        const oldStatusSpan = el.querySelector('.user-status');
+        if (oldStatusSpan) oldStatusSpan.remove();
         const label = el.querySelector('span:last-child');
         if (label) {
             label.className = userColorClass || '';

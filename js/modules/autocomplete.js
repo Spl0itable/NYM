@@ -224,18 +224,17 @@ Object.assign(NYM.prototype, {
 
         if (allUsers.length > 0) {
             dropdown.innerHTML = allUsers.map((user, index) => {
-                const statusClass = user.effectiveStatus === 'online' ? '' :
-                    user.effectiveStatus === 'away' ? ' away' : ' offline';
-                const statusIndicator = `<span class="user-status${statusClass}" style="display: inline-block; margin-right: 6px; vertical-align: middle;"></span>`;
-
+                const statusClass = `status-${user.effectiveStatus}`;
                 const acAvatarSrc = this.getAvatarUrl(user.pubkey);
                 const safePk = this._safePubkey(user.pubkey);
                 return `
         <div class="autocomplete-item ${index === 0 ? 'selected' : ''}"
                 data-nym="${this.escapeHtml(user.nym)}"
                 data-pubkey="${safePk}"
-                onclick="nym.selectSpecificAutocomplete('${this.escapeHtml(user.nym)}', '${safePk}')">
-            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">${statusIndicator}<strong>@${user.displayNym}</strong>
+                data-ac-nym="${this.escapeHtml(user.nym)}"
+                data-ac-pubkey="${safePk}"
+                data-action="selectSpecificAutocomplete">
+            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message ${statusClass}" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><strong>@${user.displayNym}</strong>
         </div>
     `;
             }).join('');
@@ -392,7 +391,8 @@ Object.assign(NYM.prototype, {
                 return `
         <div class="autocomplete-item channel-ac-item${joinedClass} ${index === 0 ? 'selected' : ''}"
                 data-channel="${this.escapeHtml(ch.name)}"
-                onclick="nym.selectChannelAutocompleteItem('${this.escapeHtml(ch.name)}')">
+                data-channel-name="${this.escapeHtml(ch.name)}"
+                data-action="selectChannelAutocompleteItem">
             <strong>#${this.escapeHtml(ch.name)}</strong>${currentBadge}${locationHtml}${msgCountHtml}
         </div>
     `;

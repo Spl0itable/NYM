@@ -788,14 +788,20 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 originalKind = '1059'; // NIP-17 gift wrap (covers 1:1 PMs and group messages)
             }
 
+            const reactionTags = [
+                ['e', messageId],
+                ['p', targetPubkey],
+                ['k', originalKind]
+            ];
+            const reactionGeohash = (originalKind === '20000' && this.currentGeohash) ? this.currentGeohash : '';
+            if (reactionGeohash) {
+                reactionTags.push(['g', reactionGeohash]);
+            }
+
             const event = {
                 kind: 7,
                 created_at: Math.floor(Date.now() / 1000),
-                tags: [
-                    ['e', messageId],
-                    ['p', targetPubkey],
-                    ['k', originalKind]
-                ],
+                tags: reactionTags,
                 content: emoji,
                 pubkey: this.pubkey
             };
@@ -841,6 +847,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (signedEvent) {
                 // Send to relay (async - UI already updated)
                 this.sendToRelay(["EVENT", signedEvent]);
+                if (reactionGeohash) {
+                    this.ensureGeoRelayDelivery(signedEvent, reactionGeohash);
+                }
                 this.addToRecentEmojis(emoji);
             } else {
                 // Signing failed - revert the optimistic update
@@ -889,15 +898,21 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 originalKind = '1059';
             }
 
+            const removeTags = [
+                ['e', messageId],
+                ['p', targetPubkey],
+                ['k', originalKind],
+                ['action', 'remove']
+            ];
+            const removeGeohash = (originalKind === '20000' && this.currentGeohash) ? this.currentGeohash : '';
+            if (removeGeohash) {
+                removeTags.push(['g', removeGeohash]);
+            }
+
             const event = {
                 kind: 7,
                 created_at: Math.floor(Date.now() / 1000),
-                tags: [
-                    ['e', messageId],
-                    ['p', targetPubkey],
-                    ['k', originalKind],
-                    ['action', 'remove']
-                ],
+                tags: removeTags,
                 content: emoji,
                 pubkey: this.pubkey
             };
@@ -939,6 +954,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             if (signedEvent) {
                 this.sendToRelay(["EVENT", signedEvent]);
+                if (removeGeohash) {
+                    this.ensureGeoRelayDelivery(signedEvent, removeGeohash);
+                }
             } else {
                 // Signing failed - revert the optimistic removal
                 if (!this.reactions.has(messageId)) this.reactions.set(messageId, new Map());

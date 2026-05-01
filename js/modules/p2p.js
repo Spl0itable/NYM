@@ -652,7 +652,7 @@ Object.assign(NYM.prototype, {
                         <div class="p2p-transfer-status">
                             <span class="p2p-transfer-status-text complete">Seeding${isTorrent ? ' (Torrent)' : ' (P2P)'}</span>
                             <div class="p2p-transfer-actions">
-                                <button class="p2p-transfer-btn cancel" onclick="nym.stopSeeding('${offerId}')">Stop</button>
+                                <button class="p2p-transfer-btn cancel" data-action="stopSeeding" data-offer-id="${offerId}">Stop</button>
                             </div>
                         </div>
                     `;
@@ -677,7 +677,7 @@ Object.assign(NYM.prototype, {
                         <div class="p2p-transfer-status">
                             <span class="p2p-transfer-status-text ${transfer.status}">${transfer.status}</span>
                             <div class="p2p-transfer-actions">
-                                <button class="p2p-transfer-btn cancel" onclick="nym.cancelTransfer('${transferId}')">Cancel</button>
+                                <button class="p2p-transfer-btn cancel" data-action="cancelTransfer" data-transfer-id="${transferId}">Cancel</button>
                             </div>
                         </div>
                     `;

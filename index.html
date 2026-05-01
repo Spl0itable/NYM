@@ -50,26 +50,17 @@
 </head>
 
 <body>
-    <script>
-        // Apply color mode immediately to prevent flash of wrong theme
-        (function () {
-            var mode = localStorage.getItem('nym_color_mode') || 'auto';
-            var isLight = mode === 'light' || (mode === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches);
-            if (isLight) document.body.classList.add('light-mode');
-            // Hide ASCII art logos in NymchatApp shell to prevent flash
-            if (/NymchatApp\//i.test(navigator.userAgent)) document.body.classList.add('nymchat-app');
-        })();
-    </script>
+    <script src="js/theme-init.js"></script>
     <div id="wallpaperLayer"></div>
-    <div class="mobile-overlay" id="mobileOverlay" onclick="nym.closeSidebar()"></div>
-    <button class="mobile-notif-toggle" onclick="nym.openNotificationsModal()" title="Notifications">
+    <div class="mobile-overlay" id="mobileOverlay" data-action="closeSidebar"></div>
+    <button class="mobile-notif-toggle" data-action="openNotificationsModal" title="Notifications">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
             <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
         </svg>
         <span class="notification-count-badge" id="notifBadgeMobile" style="display:none">0</span>
     </button>
-    <button class="mobile-menu-toggle" onclick="toggleSidebar()">☰</button>
+    <button class="mobile-menu-toggle" data-action="toggleSidebar">☰</button>
 
     <!-- Context Menu Overlay -->
     <div class="context-menu-overlay" id="contextMenuOverlay"></div>
@@ -78,10 +69,10 @@
     <div class="context-menu" id="contextMenu">
         <button class="context-menu-close" id="ctxCloseBtn" title="Close">&#x2715;</button>
         <img id="ctxBannerImg" class="context-menu-banner" src="" alt="" decoding="async" loading="lazy" style="display: none;"
-            onclick="event.stopPropagation(); nym.expandImage(this.src); nym.closeContextMenu();">
+            data-action="expandImageFromSrcStop">
         <div class="context-menu-avatar-header" id="ctxAvatarHeader">
             <img id="ctxAvatarImg" class="avatar-context" src="" alt="Avatar" decoding="async" style="cursor: pointer;"
-                onclick="event.stopPropagation(); nym.expandImage(this.src); nym.closeContextMenu();">
+                data-action="expandImageFromSrcStop">
             <div class="context-menu-avatar-nym" id="ctxAvatarNym"></div>
             <div class="context-menu-copy-pubkey" id="ctxCopyPubkey">
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
@@ -236,17 +227,17 @@
     <!-- PM / Group Modal -->
     <div class="modal" id="newPMModal">
         <div class="modal-content" style="max-width: 440px;">
-            <button class="modal-close" onclick="closeModal('newPMModal')">&#x2715;</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="newPMModal">&#x2715;</button>
             <div class="modal-header">New Message</div>
             <div class="modal-body">
                 <div class="form-group">
                     <label class="form-label">To</label>
-                    <div class="pm-recipient-box" id="pmRecipientBox" onclick="document.getElementById('pmRecipientInput').focus()">
+                    <div class="pm-recipient-box" id="pmRecipientBox" data-action="focusPmRecipient">
                         <div class="pm-recipient-chips" id="pmRecipientChips"></div>
                         <input type="text" class="pm-recipient-input" id="pmRecipientInput"
                             placeholder="Search nym or paste pubkey..."
-                            oninput="nym.onNewPMRecipientInput(this.value)"
-                            onkeydown="nym.onNewPMRecipientKeydown(event)"
+                            data-on-input="onNewPMRecipientInput"
+                            data-on-keydown="onNewPMRecipientKeydown"
                             autocomplete="off">
                     </div>
                     <div class="pm-suggestions" id="pmSuggestions"></div>
@@ -261,8 +252,8 @@
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="closeModal('newPMModal')">Cancel</button>
-                <button class="send-btn" id="pmStartBtn" onclick="nym.startNewPMFromModal()" disabled>Start</button>
+                <button class="icon-btn" data-action="closeModal" data-modal-id="newPMModal">Cancel</button>
+                <button class="send-btn" id="pmStartBtn" data-action="startNewPMFromModal" disabled>Start</button>
             </div>
         </div>
     </div>
@@ -270,7 +261,7 @@
     <!-- Report Modal -->
     <div class="modal" id="reportModal" style="display: none;">
         <div class="modal-content" style="max-width: 500px;">
-            <button class="modal-close" onclick="nym.closeReportModal()">✕</button>
+            <button class="modal-close" data-action="closeReportModal">✕</button>
             <div class="modal-header">
                 <h2>Report User/Content</h2>
             </div>
@@ -309,8 +300,8 @@
                 </div>
 
                 <div class="modal-actions">
-                    <button class="icon-btn" onclick="nym.closeReportModal()">Cancel</button>
-                    <button class="send-btn" onclick="nym.submitReport()">Submit Report</button>
+                    <button class="icon-btn" data-action="closeReportModal">Cancel</button>
+                    <button class="send-btn" data-action="submitReport">Submit Report</button>
                 </div>
             </div>
         </div>
@@ -319,7 +310,7 @@
     <div class="container">
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <pre class="logo-ascii" onclick="openNostrLogin()" title="Login with Nostr" style="cursor: pointer;">
+                <pre class="logo-ascii" data-action="openNostrLogin" title="Login with Nostr" style="cursor: pointer;">
                                             ##\                  ##\     
                                             ## |                 ## |    
 #######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\   
@@ -332,7 +323,7 @@
           \######  |                                                     
            \______/                                                      
 </pre>
-                <div class="nym-display" onclick="editNick()">
+                <div class="nym-display" data-action="editNick">
                     <div class="nym-label">Your Nym (click to edit)</div>
                     <div class="nym-identity">
                         <img id="sidebarAvatar" class="avatar"
@@ -342,26 +333,26 @@
                         <div class="nym-value" id="currentNym">anonymous</div>
                     </div>
                 </div>
-                <div class="status-indicator" onclick="openRelayStats()" style="cursor: pointer;" title="View network stats">
+                <div class="status-indicator" data-action="openRelayStats" style="cursor: pointer;" title="View network stats">
                     <span class="status-dot" id="statusDot"></span>
                     <span id="connectionStatus">Disconnected</span>
                 </div>
             </div>
 
             <div class="sidebar-actions">
-                <button class="icon-btn" onclick="nym.openShop(); nym.closeSidebar();" title="Flair">
+                <button class="icon-btn" data-action="openShopAndCloseSidebar" title="Flair">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
                     <span class="btn-label">Flair</span>
                 </button>
-                <button class="icon-btn" onclick="showSettings(); nym.closeSidebar();" title="Settings">
+                <button class="icon-btn" data-action="showSettingsAndCloseSidebar" title="Settings">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                     <span class="btn-label">Settings</span>
                 </button>
-                <button class="icon-btn" onclick="showAbout(); nym.closeSidebar();" title="About">
+                <button class="icon-btn" data-action="showAboutAndCloseSidebar" title="About">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                     <span class="btn-label">About</span>
                 </button>
-                <button class="icon-btn" onclick="signOut(); nym.closeSidebar();" title="Logout">
+                <button class="icon-btn" data-action="signOutAndCloseSidebar" title="Logout">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
                     <span class="btn-label">Logout</span>
                 </button>
@@ -370,7 +361,7 @@
             <div class="nav-section">
                 <div class="nav-title">
                     <span class="nav-title-text">Channels</span>
-                    <span class="discover-icon" style="padding-right:30px;" onclick="nym.showGeohashExplorer()"
+                    <span class="discover-icon" style="padding-right:30px;" data-action="showGeohashExplorer"
                         title="Explore geohash channels globally">
                         <svg viewBox="0 0 24 24">
                             <circle cx="12" cy="12" r="10" fill="none" stroke-width="2" />
@@ -379,7 +370,7 @@
                                 fill="none" stroke-width="2" />
                         </svg>
                     </span>
-                    <span class="search-icon" onclick="toggleSearch('channelSearch')">
+                    <span class="search-icon" data-action="toggleSearch" data-search-target="channelSearch">
                         <svg viewBox="0 0 24 24">
                             <circle cx="11" cy="11" r="8"></circle>
                             <path d="m21 21-4.35-4.35"></path>
@@ -388,9 +379,9 @@
                 </div>
                 <div class="search-input-wrapper" id="channelSearchWrapper">
                     <input type="text" class="search-input" id="channelSearch" placeholder="Search channels..."
-                        oninput="this.value = this.value.toLowerCase(); nym.handleChannelSearch(this.value)"
-                        onkeyup="nym.handleChannelSearch(this.value)">
-                    <span class="search-clear" onclick="clearSearch('channelSearch')">✕</span>
+                        data-on-input="channelSearchInput"
+                        data-on-keyup="channelSearchKeyup">
+                    <span class="search-clear" data-action="clearSearch" data-search-target="channelSearch">✕</span>
                 </div>
                 <div id="channelSearchResults"></div>
                 <div class="channel-list" id="channelList">
@@ -406,13 +397,13 @@
             <div class="nav-section">
                 <div class="nav-title">
                     <span class="nav-title-text">Private Messages</span>
-                    <span class="search-icon new-pm-btn" onclick="nym.openNewPMModal()" title="New message">
+                    <span class="search-icon new-pm-btn" data-action="openNewPMModal" title="New message">
                         <svg viewBox="0 0 24 24">
                             <line x1="12" y1="5" x2="12" y2="19"></line>
                             <line x1="5" y1="12" x2="19" y2="12"></line>
                         </svg>
                     </span>
-                    <span class="search-icon" onclick="toggleSearch('pmSearch')" title="Search PMs">
+                    <span class="search-icon" data-action="toggleSearch" data-search-target="pmSearch" title="Search PMs">
                         <svg viewBox="0 0 24 24">
                             <circle cx="11" cy="11" r="8"></circle>
                             <path d="m21 21-4.35-4.35"></path>
@@ -421,8 +412,8 @@
                 </div>
                 <div class="search-input-wrapper" id="pmSearchWrapper">
                     <input type="text" class="search-input" id="pmSearch" placeholder="Search PMs..."
-                        onkeyup="nym.filterPMs(this.value)">
-                    <span class="search-clear" onclick="clearSearch('pmSearch')">✕</span>
+                        data-on-keyup="filterPMs">
+                    <span class="search-clear" data-action="clearSearch" data-search-target="pmSearch">✕</span>
                 </div>
                 <div class="pm-list" id="pmList"></div>
             </div>
@@ -430,7 +421,7 @@
             <div class="user-list" id="userList">
                 <div class="nav-title">
                     <span class="nav-title-text">Active Nyms</span>
-                    <span class="search-icon" onclick="toggleSearch('userSearch')">
+                    <span class="search-icon" data-action="toggleSearch" data-search-target="userSearch">
                         <svg viewBox="0 0 24 24">
                             <circle cx="11" cy="11" r="8"></circle>
                             <path d="m21 21-4.35-4.35"></path>
@@ -439,8 +430,8 @@
                 </div>
                 <div class="search-input-wrapper" id="userSearchWrapper">
                     <input type="text" class="search-input" id="userSearch" placeholder="Search users..."
-                        onkeyup="nym.filterUsers(this.value)">
-                    <span class="search-clear" onclick="clearSearch('userSearch')">✕</span>
+                        data-on-keyup="filterUsers">
+                    <span class="search-clear" data-action="clearSearch" data-search-target="userSearch">✕</span>
                 </div>
                 <div id="userListContent"></div>
             </div>
@@ -451,12 +442,12 @@
                 <div class="channel-info">
                     <div style="display: flex; align-items: center; gap: 10px;">
                         <div class="channel-nav-buttons">
-                            <button class="channel-nav-btn" id="channelBackBtn" onclick="nym.navigateBack()" title="Go back (Alt+Left)" disabled>
+                            <button class="channel-nav-btn" id="channelBackBtn" data-action="navigateBack" title="Go back (Alt+Left)" disabled>
                                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <polyline points="15 18 9 12 15 6"></polyline>
                                 </svg>
                             </button>
-                            <button class="channel-nav-btn" id="channelForwardBtn" onclick="nym.navigateForward()" title="Go forward (Alt+Right)" disabled>
+                            <button class="channel-nav-btn" id="channelForwardBtn" data-action="navigateForward" title="Go forward (Alt+Right)" disabled>
                                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <polyline points="9 6 15 12 9 18"></polyline>
                                 </svg>
@@ -466,7 +457,7 @@
                             <div class="channel-title" id="currentChannel">#nym</div>
                             <div class="channel-meta" id="channelMeta">0 nyms in channel</div>
                         </div>
-                        <button class="share-channel-btn" id="shareChannelBtn" onclick="nym.shareChannel()"
+                        <button class="share-channel-btn" id="shareChannelBtn" data-action="shareChannel"
                             title="Share channel URL">
                             <svg viewBox="0 0 24 24" width="20" height="20">
                                 <path
@@ -476,26 +467,26 @@
                     </div>
                 </div>
                 <div class="header-actions">
-                    <button class="icon-btn notifications-btn" onclick="nym.openNotificationsModal()" title="Notifications">
+                    <button class="icon-btn notifications-btn" data-action="openNotificationsModal" title="Notifications">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
                             <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
                         </svg>
                         <span class="notification-count-badge" id="notifBadgeDesktop" style="display:none">0</span>
                     </button>
-                    <button class="icon-btn" onclick="nym.openShop()" title="Flair">
+                    <button class="icon-btn" data-action="openShop" title="Flair">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
                         Flair
                     </button>
-                    <button class="icon-btn" onclick="showSettings()" title="Settings">
+                    <button class="icon-btn" data-action="showSettings" title="Settings">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                         Settings
                     </button>
-                    <button class="icon-btn" onclick="showAbout()" title="About">
+                    <button class="icon-btn" data-action="showAbout" title="About">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                         About
                     </button>
-                    <button class="icon-btn" onclick="signOut()" title="Logout">
+                    <button class="icon-btn" data-action="signOut" title="Logout">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
                         Logout
                     </button>
@@ -510,7 +501,7 @@
                 <div class="typing-indicator-text" id="typingIndicatorText"></div>
             </div>
 
-            <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" onclick="scrollToBottom()"
+            <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" data-action="scrollToBottom"
                 title="Scroll to bottom">
                 <svg viewBox="0 0 24 24" width="20" height="20">
                     <polyline points="6 9 12 15 18 9"></polyline>
@@ -615,7 +606,7 @@
                 </div>
                 <div class="input-buttons">
                     <input type="file" class="file-input" id="fileInput" accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime">
-                    <button class="icon-btn input-btn" onclick="selectImage()" title="Upload Image/Video">
+                    <button class="icon-btn input-btn" data-action="selectImage" title="Upload Image/Video">
                         <svg viewBox="0 0 24 24">
                             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                             <circle cx="8.5" cy="8.5" r="1.5"></circle>
@@ -623,7 +614,7 @@
                         </svg>
                     </button>
                     <input type="file" class="file-input" id="p2pFileInput">
-                    <button class="icon-btn input-btn" onclick="selectP2PFile()" title="Share File (P2P)">
+                    <button class="icon-btn input-btn" data-action="selectP2PFile" title="Share File (P2P)">
                         <svg viewBox="0 0 24 24">
                             <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
                             <polyline points="13 2 13 9 20 9"></polyline>
@@ -631,7 +622,7 @@
                             <polyline points="9 15 12 12 15 15"></polyline>
                         </svg>
                     </button>
-                    <button class="icon-btn input-btn" onclick="nym.toggleEmojiPicker()" title="Emoji">
+                    <button class="icon-btn input-btn" data-action="toggleEmojiPicker" title="Emoji">
                         <svg viewBox="0 0 24 24">
                             <circle cx="12" cy="12" r="10"></circle>
                             <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
@@ -639,7 +630,7 @@
                             <circle cx="15" cy="9" r="1"></circle>
                         </svg>
                     </button>
-                    <button class="icon-btn input-btn" onclick="nym.toggleGifPicker()" title="GIF">
+                    <button class="icon-btn input-btn" data-action="toggleGifPicker" title="GIF">
                         <svg viewBox="0 0 24 24">
                             <text x="12" y="16" text-anchor="middle" font-size="12" fill="currentColor">GIF</text>
                         </svg>
@@ -655,7 +646,7 @@
     <!-- Shop Modal -->
     <div class="shop-modal" id="shopModal">
         <div class="shop-content">
-            <button class="shop-close" onclick="nym.closeShop()">✕</button>
+            <button class="shop-close" data-action="closeShop">✕</button>
 
             <div class="shop-header">
                 <div class="shop-title">
@@ -665,16 +656,15 @@
                 </div>
                 <div class="shop-recovery">
                     <input type="text" id="recoveryCodeInput" placeholder="Recovery code">
-                    <button
-                        onclick="nym.restorePurchases(document.getElementById('recoveryCodeInput').value)">Restore</button>
+                    <button data-action="restorePurchasesFromInput">Restore</button>
                 </div>
             </div>
 
             <div class="shop-tabs">
-                <button class="shop-tab active" onclick="nym.switchShopTab('styles', event)">Message Styles</button>
-                <button class="shop-tab" onclick="nym.switchShopTab('flair', event)">Nickname Flair</button>
-                <button class="shop-tab" onclick="nym.switchShopTab('special', event)">Special Items</button>
-                <button class="shop-tab" onclick="nym.switchShopTab('inventory', event)">My Items</button>
+                <button class="shop-tab active" data-action="switchShopTab" data-shop-tab="styles">Message Styles</button>
+                <button class="shop-tab" data-action="switchShopTab" data-shop-tab="flair">Nickname Flair</button>
+                <button class="shop-tab" data-action="switchShopTab" data-shop-tab="special">Special Items</button>
+                <button class="shop-tab" data-action="switchShopTab" data-shop-tab="inventory">My Items</button>
             </div>
 
             <div class="shop-body" id="shopBody">
@@ -684,9 +674,9 @@
     </div>
 
     <!-- Image/Video Modal -->
-    <div class="image-modal" id="imageModal" onclick="closeImageModal()">
-        <span class="image-modal-close" onclick="closeImageModal()">×</span>
-        <span class="image-modal-download" onclick="downloadModalMedia(event)" title="Download">⤓</span>
+    <div class="image-modal" id="imageModal" data-action="closeImageModal">
+        <span class="image-modal-close" data-action="closeImageModal">×</span>
+        <span class="image-modal-download" data-action="downloadModalMedia" title="Download">⤓</span>
         <img id="modalImage" src="" alt="Expanded image" decoding="async" loading="lazy">
         <video id="modalVideo" controls playsinline webkit-playsinline style="display:none; max-width:90%; max-height:90%; border:1px solid var(--glass-border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg);"></video>
     </div>
@@ -694,7 +684,7 @@
     <!-- Poll Modal -->
     <div class="modal" id="pollModal">
         <div class="modal-content" style="max-width: 480px;">
-            <button class="modal-close" onclick="closeModal('pollModal')">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="pollModal">✕</button>
             <div class="modal-header">Create Poll</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -710,11 +700,11 @@
                         <input type="text" class="form-input" placeholder="Option 2" maxlength="100" data-poll-option>
                     </div>
                 </div>
-                <button class="poll-add-option-btn" id="pollAddOptionBtn" onclick="addPollOption()">+ Add option</button>
+                <button class="poll-add-option-btn" id="pollAddOptionBtn" data-action="addPollOption">+ Add option</button>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="closeModal('pollModal')">Cancel</button>
-                <button class="send-btn" onclick="submitPoll()">Create Poll</button>
+                <button class="icon-btn" data-action="closeModal" data-modal-id="pollModal">Cancel</button>
+                <button class="send-btn" data-action="submitPoll">Create Poll</button>
             </div>
         </div>
     </div>
@@ -722,7 +712,7 @@
     <!-- P2P File Transfers Modal -->
     <div class="modal" id="p2pTransfersModal">
         <div class="modal-content p2p-modal-content">
-            <button class="modal-close" onclick="closeModal('p2pTransfersModal')">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="p2pTransfersModal">✕</button>
             <div class="modal-header">P2P File Transfers</div>
             <div class="modal-body">
                 <div class="p2p-transfers-list" id="p2pTransfersList">
@@ -730,7 +720,7 @@
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="closeModal('p2pTransfersModal')">Close</button>
+                <button class="icon-btn" data-action="closeModal" data-modal-id="p2pTransfersModal">Close</button>
             </div>
         </div>
     </div>
@@ -738,7 +728,7 @@
     <!-- Developer Nsec Verification Modal -->
     <div class="modal" id="devNsecModal">
         <div class="modal-content">
-            <button class="modal-close" onclick="cancelDevNsec()">✕</button>
+            <button class="modal-close" data-action="cancelDevNsec">✕</button>
             <div class="modal-header">Reserved Nickname</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -752,8 +742,8 @@
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="cancelDevNsec()">Cancel</button>
-                <button class="send-btn" onclick="verifyDevNsec()">Verify</button>
+                <button class="icon-btn" data-action="cancelDevNsec">Cancel</button>
+                <button class="send-btn" data-action="verifyDevNsec">Verify</button>
             </div>
         </div>
     </div>
@@ -761,7 +751,7 @@
     <!-- Nostr Login Modal (easter egg via ASCII art click) -->
     <div class="modal" id="nostrLoginModal">
         <div class="modal-content" style="max-width: 440px;">
-            <button class="modal-close" onclick="nostrLoginCancelRemoteSigner(); closeModal('nostrLoginModal')">&#x2715;</button>
+            <button class="modal-close" data-action="nostrLoginCloseAndCancel">&#x2715;</button>
             <div class="modal-header">Login with Nostr</div>
             <div class="modal-body">
                 <div style="color: var(--text-dim); font-size: 13px; margin-bottom: 18px;">
@@ -770,7 +760,7 @@
 
                 <!-- Browser Extension Option (hidden for NymchatApp shell) -->
                 <div id="nostrLoginExtensionOption" style="margin-bottom: 14px;">
-                    <button class="send-btn" id="nostrLoginExtensionBtn" onclick="nostrLoginWithExtension()" style="width: 100%; padding: 12px;">
+                    <button class="send-btn" id="nostrLoginExtensionBtn" data-action="nostrLoginWithExtension" style="width: 100%; padding: 12px;">
                         Login with Browser Extension
                     </button>
                     <div class="form-hint" style="margin-top: 6px;">Use Alby, nos2x, or another NIP-07 extension</div>
@@ -782,7 +772,7 @@
 
                 <!-- Remote Signer Option (NIP-46 Nostr Connect) -->
                 <div id="nostrLoginRemoteSignerOption" style="margin-bottom: 14px;">
-                    <button class="send-btn" id="nostrLoginRemoteSignerBtn" onclick="nostrLoginStartRemoteSigner()" style="width: 100%; padding: 12px;">
+                    <button class="send-btn" id="nostrLoginRemoteSignerBtn" data-action="nostrLoginStartRemoteSigner" style="width: 100%; padding: 12px;">
                         Login with Remote Signer
                     </button>
                     <div class="form-hint" style="margin-top: 6px;">Use Amber, or another NIP-46 compatible remote signer</div>
@@ -799,12 +789,12 @@
                             <label class="form-label">Connection String</label>
                             <div style="display: flex; gap: 6px;">
                                 <input type="text" class="form-input" id="nostrLoginBunkerURI" readonly style="font-size: 11px; flex: 1;">
-                                <button class="icon-btn" onclick="nostrLoginCopyBunkerURI()" title="Copy" style="padding: 8px 10px; white-space: nowrap;">Copy</button>
+                                <button class="icon-btn" data-action="nostrLoginCopyBunkerURI" title="Copy" style="padding: 8px 10px; white-space: nowrap;">Copy</button>
                             </div>
                             <div class="form-hint">Scan the QR code or copy this connection string into your remote signer app</div>
                         </div>
                         <div style="text-align: center;">
-                            <button class="icon-btn" onclick="nostrLoginCancelRemoteSigner()" style="font-size: 12px;">Cancel</button>
+                            <button class="icon-btn" data-action="nostrLoginCancelRemoteSigner" style="font-size: 12px;">Cancel</button>
                         </div>
                     </div>
                 </div>
@@ -822,8 +812,8 @@
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="nostrLoginCancelRemoteSigner(); closeModal('nostrLoginModal')">Cancel</button>
-                <button class="send-btn" id="nostrLoginSubmitBtn" onclick="nostrLoginWithNsec()">Login</button>
+                <button class="icon-btn" data-action="nostrLoginCloseAndCancel">Cancel</button>
+                <button class="send-btn" id="nostrLoginSubmitBtn" data-action="nostrLoginWithNsec">Login</button>
             </div><br/>
             <div style="text-align: center; padding: 0 20px 16px; color: var(--text-dim); font-size: 12px;">
                 By logging in, you agree to our <a href="static/tos.html" target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> and <a href="static/pp.html" target="_blank" rel="noopener" style="color: var(--secondary)">Privacy Policy</a>.
@@ -834,7 +824,7 @@
     <!-- Relay Stats Modal -->
     <div class="modal" id="relayStatsModal">
         <div class="modal-content relay-stats-content">
-            <button class="modal-close" onclick="closeModal('relayStatsModal')">&#x2715;</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="relayStatsModal">&#x2715;</button>
             <div class="modal-header">Network Stats</div>
             <div class="modal-body" style="padding: 0;">
                 <!-- Summary Cards -->
@@ -877,7 +867,7 @@
     <!-- Nick Edit Modal -->
     <div class="modal nick-edit-modal" id="nickEditModal">
         <div class="modal-content">
-            <button class="modal-close" onclick="closeModal('nickEditModal')">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="nickEditModal">✕</button>
             <div class="modal-header">Change Nym's Details</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -908,12 +898,12 @@
                         </div>
                         <div class="avatar-upload-controls">
                             <input type="file" id="nickEditAvatarInput" accept="image/*" style="display: none"
-                                onchange="handleNickEditAvatarSelect(event)">
+                                data-on-change="handleNickEditAvatarSelect">
                             <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                                 <button type="button" class="avatar-upload-btn" id="nickEditAvatarUploadBtn"
-                                    onclick="triggerNickEditAvatarUpload()">Change photo</button>
+                                    data-action="triggerNickEditAvatarUpload">Change photo</button>
                                 <button type="button" class="avatar-remove-btn" id="nickEditAvatarRemoveBtn"
-                                    style="display: none;" onclick="removeNickEditAvatar()">Remove</button>
+                                    style="display: none;" data-action="removeNickEditAvatar">Remove</button>
                             </div>
                             <div class="avatar-upload-status" id="nickEditAvatarStatus"></div>
                         </div>
@@ -930,12 +920,12 @@
                         </div>
                         <div class="avatar-upload-controls">
                             <input type="file" id="nickEditBannerInput" accept="image/*" style="display: none"
-                                onchange="handleNickEditBannerSelect(event)">
+                                data-on-change="handleNickEditBannerSelect">
                             <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                                 <button type="button" class="avatar-upload-btn" id="nickEditBannerUploadBtn"
-                                    onclick="document.getElementById('nickEditBannerInput').click()">Choose banner</button>
+                                    data-action="triggerNickEditBannerUpload">Choose banner</button>
                                 <button type="button" class="avatar-remove-btn" id="nickEditBannerRemoveBtn"
-                                    style="display: none;" onclick="removeNickEditBanner()">Remove</button>
+                                    style="display: none;" data-action="removeNickEditBanner">Remove</button>
                             </div>
                             <div class="avatar-upload-status" id="nickEditBannerStatus"></div>
                         </div>
@@ -945,7 +935,7 @@
                     <label class="form-label">Bio</label>
                     <div class="bio-input-wrap">
                         <textarea id="nickEditBioInput" placeholder="Tell people a bit about yourself..."
-                            maxlength="150" oninput="updateBioCharCount()"></textarea>
+                            maxlength="150" data-on-input="updateBioCharCount"></textarea>
                         <div class="bio-char-count" id="nickEditBioCharCount">0/150</div>
                     </div>
                     <div class="form-hint">Short bio shown on your profile (max 150 characters)</div>
@@ -959,7 +949,7 @@
                 </div>
 
                 <div class="form-group" id="revealPrivkeyGroup">
-                    <div class="reveal-privkey-toggle" onclick="toggleRevealPrivkey()" style="cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--glass-border, var(--border-color)); border-radius: 12px; background: rgba(255,255,255,0.02);">
+                    <div class="reveal-privkey-toggle" data-action="toggleRevealPrivkey" style="cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--glass-border, var(--border-color)); border-radius: 12px; background: rgba(255,255,255,0.02);">
                         <span style="color: var(--text-dim);" id="revealPrivkeyArrow"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle;"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg></span>
                         <span style="font-size: 14px; color: var(--secondary); font-weight: 500;">Reveal this nym's private key</span>
                     </div>
@@ -971,16 +961,16 @@
                         <div style="display: flex; gap: 6px; align-items: center;">
                             <input type="password" class="form-input" id="revealedNsecValue" readonly
                                 style="flex: 1; font-family: monospace; font-size: 12px;">
-                            <button type="button" class="icon-btn" onclick="toggleNsecVisibility()" id="nsecVisibilityBtn" title="Show/hide" style="min-width: 36px; padding: 6px;"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle;"><path d="M 1 8 C 3 4 6 3 8 3 C 10 3 13 4 15 8 C 13 12 10 13 8 13 C 6 13 3 12 1 8 Z"/><circle cx="8" cy="8" r="2.5"/></svg></button>
-                            <button type="button" class="icon-btn" onclick="copyRevealedNsec()" id="nsecCopyBtn" title="Copy" style="min-width: 36px; padding: 6px;"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle;"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
+                            <button type="button" class="icon-btn" data-action="toggleNsecVisibility" id="nsecVisibilityBtn" title="Show/hide" style="min-width: 36px; padding: 6px;"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle;"><path d="M 1 8 C 3 4 6 3 8 3 C 10 3 13 4 15 8 C 13 12 10 13 8 13 C 6 13 3 12 1 8 Z"/><circle cx="8" cy="8" r="2.5"/></svg></button>
+                            <button type="button" class="icon-btn" data-action="copyRevealedNsec" id="nsecCopyBtn" title="Copy" style="min-width: 36px; padding: 6px;"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle;"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
                         </div>
                     </div>
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="randomizeNick()">Randomize</button>
-                <button class="icon-btn" onclick="closeModal('nickEditModal')">Cancel</button>
-                <button class="send-btn" onclick="changeNick()">Change</button>
+                <button class="icon-btn" data-action="randomizeNick">Randomize</button>
+                <button class="icon-btn" data-action="closeModal" data-modal-id="nickEditModal">Cancel</button>
+                <button class="send-btn" data-action="changeNick">Change</button>
             </div>
         </div>
     </div>
@@ -989,7 +979,7 @@
     <div class="modal active" id="setupModal">
         <div class="modal-content setup-modal-content">
             <div class="modal-header setup-modal-header">
-                <pre class="logo-ascii setup-logo" onclick="openNostrLogin()" title="Login with Nostr" style="cursor: pointer;">
+                <pre class="logo-ascii setup-logo" data-action="openNostrLogin" title="Login with Nostr" style="cursor: pointer;">
                                             ##\                  ##\
                                             ## |                 ## |
 #######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\
@@ -1005,7 +995,7 @@
             </div>
             <div class="modal-body">
                 <div class="form-group" id="nymGroup">
-                    <div onclick="openNostrLogin()" style="text-align: center; color: var(--text-dim); font-size: 13px; margin-bottom: 8px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px;">Login with nsec private key or extension? Click here</div><br/>
+                    <div data-action="openNostrLogin" style="text-align: center; color: var(--text-dim); font-size: 13px; margin-bottom: 8px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px;">Login with nsec private key or extension? Click here</div><br/>
                     <label class="form-label">Choose Your Nickname <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
                         maxlength="20">
@@ -1022,12 +1012,12 @@
                         </div>
                         <div class="avatar-upload-controls">
                             <input type="file" id="setupAvatarInput" accept="image/*" style="display: none"
-                                onchange="handleSetupAvatarSelect(event)">
+                                data-on-change="handleSetupAvatarSelect">
                             <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                                 <button type="button" class="avatar-upload-btn" id="setupAvatarUploadBtn"
-                                    onclick="triggerSetupAvatarUpload()">Choose photo</button>
+                                    data-action="triggerSetupAvatarUpload">Choose photo</button>
                                 <button type="button" class="avatar-remove-btn" id="setupAvatarRemoveBtn"
-                                    style="display: none;" onclick="removeSetupAvatar()">Remove</button>
+                                    style="display: none;" data-action="removeSetupAvatar">Remove</button>
                             </div>
                             <div class="avatar-upload-status" id="setupAvatarStatus"></div>
                         </div>
@@ -1043,12 +1033,12 @@
                         </div>
                         <div class="avatar-upload-controls">
                             <input type="file" id="setupBannerInput" accept="image/*" style="display: none"
-                                onchange="handleSetupBannerSelect(event)">
+                                data-on-change="handleSetupBannerSelect">
                             <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                                 <button type="button" class="avatar-upload-btn" id="setupBannerUploadBtn"
-                                    onclick="document.getElementById('setupBannerInput').click()">Choose banner</button>
+                                    data-action="triggerSetupBannerUpload">Choose banner</button>
                                 <button type="button" class="avatar-remove-btn" id="setupBannerRemoveBtn"
-                                    style="display: none;" onclick="removeSetupBanner()">Remove</button>
+                                    style="display: none;" data-action="removeSetupBanner">Remove</button>
                             </div>
                             <div class="avatar-upload-status" id="setupBannerStatus"></div>
                         </div>
@@ -1057,7 +1047,7 @@
                     <label class="form-label" style="margin-top: 15px;">Bio <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></label>
                     <div class="bio-input-wrap">
                         <textarea id="setupBioInput" placeholder="Tell people a bit about yourself..."
-                            maxlength="150" oninput="updateSetupBioCharCount()"></textarea>
+                            maxlength="150" data-on-input="updateSetupBioCharCount"></textarea>
                         <div class="bio-char-count" id="setupBioCharCount">0/150</div>
                     </div>
                     <div class="form-hint">Short bio shown on your profile (max 150 characters)</div>
@@ -1070,7 +1060,7 @@
                 </div>
             </div>
             <div class="modal-actions" style="margin-bottom:20px;">
-                <button class="send-btn" id="enterNymBtn" onclick="initializeNym()">Enter</button>
+                <button class="send-btn" id="enterNymBtn" data-action="initializeNym">Enter</button>
             </div>
             <span style="color: var(--text-dim);">By entering, you agree to our <a href="static/tos.html"
                     target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> and <a
@@ -1082,7 +1072,7 @@
     <!-- Settings Modal -->
     <div class="modal" id="settingsModal">
         <div class="modal-content">
-            <button class="modal-close" onclick="closeModal('settingsModal')">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="settingsModal">✕</button>
             <div class="modal-header">Settings</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -1110,7 +1100,7 @@
                 <div class="form-group">
                     <label class="form-label">Chat Wallpaper</label>
                     <div class="wallpaper-grid" id="wallpaperGrid">
-                        <div class="wallpaper-option selected" data-wallpaper="none" onclick="selectWallpaper('none')">
+                        <div class="wallpaper-option selected" data-wallpaper="none" data-action="selectWallpaper">
                             <div class="wallpaper-preview wallpaper-none">
                                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
                                     stroke-width="2">
@@ -1120,36 +1110,36 @@
                             </div>
                             <span class="wallpaper-label">None</span>
                         </div>
-                        <div class="wallpaper-option" data-wallpaper="geometric" onclick="selectWallpaper('geometric')">
+                        <div class="wallpaper-option" data-wallpaper="geometric" data-action="selectWallpaper">
                             <div class="wallpaper-preview wallpaper-geometric"></div>
                             <span class="wallpaper-label">Geometric</span>
                         </div>
-                        <div class="wallpaper-option" data-wallpaper="circuit" onclick="selectWallpaper('circuit')">
+                        <div class="wallpaper-option" data-wallpaper="circuit" data-action="selectWallpaper">
                             <div class="wallpaper-preview wallpaper-circuit"></div>
                             <span class="wallpaper-label">Circuit</span>
                         </div>
-                        <div class="wallpaper-option" data-wallpaper="dots" onclick="selectWallpaper('dots')">
+                        <div class="wallpaper-option" data-wallpaper="dots" data-action="selectWallpaper">
                             <div class="wallpaper-preview wallpaper-dots"></div>
                             <span class="wallpaper-label">Dots</span>
                         </div>
-                        <div class="wallpaper-option" data-wallpaper="waves" onclick="selectWallpaper('waves')">
+                        <div class="wallpaper-option" data-wallpaper="waves" data-action="selectWallpaper">
                             <div class="wallpaper-preview wallpaper-waves"></div>
                             <span class="wallpaper-label">Waves</span>
                         </div>
                         <div class="wallpaper-option" data-wallpaper="topography"
-                            onclick="selectWallpaper('topography')">
+                            data-action="selectWallpaper">
                             <div class="wallpaper-preview wallpaper-topography"></div>
                             <span class="wallpaper-label">Topography</span>
                         </div>
-                        <div class="wallpaper-option" data-wallpaper="hexagons" onclick="selectWallpaper('hexagons')">
+                        <div class="wallpaper-option" data-wallpaper="hexagons" data-action="selectWallpaper">
                             <div class="wallpaper-preview wallpaper-hexagons"></div>
                             <span class="wallpaper-label">Hexagons</span>
                         </div>
-                        <div class="wallpaper-option" data-wallpaper="diamonds" onclick="selectWallpaper('diamonds')">
+                        <div class="wallpaper-option" data-wallpaper="diamonds" data-action="selectWallpaper">
                             <div class="wallpaper-preview wallpaper-diamonds"></div>
                             <span class="wallpaper-label">Diamonds</span>
                         </div>
-                        <div class="wallpaper-option" data-wallpaper="custom" onclick="triggerWallpaperUpload()"
+                        <div class="wallpaper-option" data-wallpaper="custom" data-action="triggerWallpaperUpload"
                             id="customWallpaperOption">
                             <div class="wallpaper-preview wallpaper-custom" id="customWallpaperPreview">
                                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
@@ -1163,14 +1153,14 @@
                         </div>
                     </div>
                     <input type="file" id="wallpaperFileInput" accept="image/*" style="display: none"
-                        onchange="handleWallpaperUpload(event)">
+                        data-on-change="handleWallpaperUpload">
                     <div class="form-hint">Choose a background pattern or upload your own image (min 1920x1080)</div>
                 </div>
 
                 <div class="form-group">
                     <label class="form-label">Message Layout</label>
                     <div class="layout-grid" id="layoutGrid">
-                        <div class="layout-option selected" data-layout="bubbles" onclick="selectMessageLayout('bubbles')">
+                        <div class="layout-option selected" data-layout="bubbles" data-action="selectMessageLayout">
                             <div class="layout-preview layout-preview-bubbles">
                                 <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">&lt;alice#e45f&gt;</span><span class="lp-bubble-text">hey there!</span></div>
                                 <div class="lp-bubble lp-bubble-self"><span class="lp-bubble-nick">&lt;you#6si9&gt;</span><span class="lp-bubble-text">hello!</span></div>
@@ -1178,7 +1168,7 @@
                             </div>
                             <span class="layout-label">Bubbles (Default)</span>
                         </div>
-                        <div class="layout-option" data-layout="irc" onclick="selectMessageLayout('irc')">
+                        <div class="layout-option" data-layout="irc" data-action="selectMessageLayout">
                             <div class="layout-preview layout-preview-irc">
                                 <div class="layout-line"><span class="lp-nick">&lt;alice#e45f&gt;</span> <span class="lp-msg">hey there!</span></div>
                                 <div class="layout-line"><span class="lp-nick lp-self">&lt;you#6si9&gt;</span> <span class="lp-msg">hello!</span></div>
@@ -1196,11 +1186,11 @@
                         <span style="font-size: 11px; color: var(--text-dim);">A</span>
                         <input type="range" class="form-range" id="textSizeSlider" min="12" max="28" value="15" step="1"
                             style="flex: 1; accent-color: var(--primary);"
-                            oninput="previewTextSize(this.value)"
-                            onchange="commitTextSize(this.value)">
+                            data-on-input="previewTextSize"
+                            data-on-change="commitTextSize">
                         <span style="font-size: 22px; color: var(--text-dim);">A</span>
                         <span id="textSizeValue" style="font-size: 12px; color: var(--text-dim); min-width: 32px; text-align: center;">15px</span>
-                        <button class="btn-small" onclick="resetTextSize()" style="font-size: 11px; padding: 4px 10px; border: 1px solid var(--glass-border); background: rgba(255,255,255,0.05); color: var(--text-dim); border-radius: var(--radius-xs); cursor: pointer;">Reset</button>
+                        <button class="btn-small" data-action="resetTextSize" style="font-size: 11px; padding: 4px 10px; border: 1px solid var(--glass-border); background: rgba(255,255,255,0.05); color: var(--text-dim); border-radius: var(--radius-xs); cursor: pointer;">Reset</button>
                     </div>
                     <div class="form-hint">Adjust the size of all text across the app</div>
                 </div>
@@ -1216,7 +1206,7 @@
 
                 <div class="form-group">
                     <label class="form-label">Generate Random Keypair Per Session</label>
-                    <select class="form-select" id="randomKeypairSelect" onchange="document.getElementById('hardcoreKeypairWarning').style.display = this.value === 'hardcore' ? 'block' : 'none'">
+                    <select class="form-select" id="randomKeypairSelect" data-on-change="onRandomKeypairChange">
                         <option value="persistent">Disabled (reuse same keypair)</option>
                         <option value="random">Enabled (new identity each session)</option>
                         <option value="hardcore">Hardcore (new keypair every message)</option>
@@ -1444,7 +1434,7 @@
                     <label class="form-label">Blocked Keywords/Phrases</label>
                     <input type="text" class="form-input" id="newKeywordInput"
                         placeholder="Add keyword or phrase to block">
-                    <button class="icon-btn" onclick="nym.addBlockedKeyword()"
+                    <button class="icon-btn" data-action="addBlockedKeyword"
                         style="margin-top: 10px; width: 100%;">Add Keyword</button>
                     <div class="keyword-list" id="keywordList" style="margin-top: 10px;">
                         <div style="color: var(--text-dim); font-size: 12px;">No blocked keywords</div>
@@ -1514,7 +1504,7 @@
                     <div style="display: flex; gap: 8px;">
                         <input type="text" class="form-input" id="settingsTransferPubkeyInput"
                             placeholder="Recipient hex pubkey (64 chars)" style="flex: 1;">
-                        <button class="icon-btn" onclick="nym.executeSettingsTransfer()"
+                        <button class="icon-btn" data-action="executeSettingsTransfer"
                             style="white-space: nowrap;">Send</button>
                     </div>
                     <div id="settingsTransferError"
@@ -1536,7 +1526,7 @@
                     <div id="appCacheSizeDisplay" style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px;">
                         Calculating&hellip;
                     </div>
-                    <button class="icon-btn" id="clearCacheBtn" onclick="clearLocalStorageCache()"
+                    <button class="icon-btn" id="clearCacheBtn" data-action="clearLocalStorageCache"
                         style="width: 100%; color: var(--danger); border-color: var(--danger);">
                         Clear Local Storage Cache
                     </button>
@@ -1544,8 +1534,8 @@
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="closeModal('settingsModal')">Cancel</button>
-                <button class="send-btn" onclick="saveSettings()">Save</button>
+                <button class="icon-btn" data-action="closeModal" data-modal-id="settingsModal">Cancel</button>
+                <button class="send-btn" data-action="saveSettings">Save</button>
             </div>
         </div>
     </div>
@@ -1555,7 +1545,7 @@
     <!-- Zap Modal -->
     <div class="modal zap-modal" id="zapModal">
         <div class="modal-content">
-            <button class="modal-close" onclick="nym.closeZapModal()">✕</button>
+            <button class="modal-close" data-action="closeZapModal">✕</button>
             <div class="modal-header">⚡ Send Lightning Zap</div>
             <div class="modal-body">
                 <div id="zapRecipientInfo" style="text-align: center; margin-bottom: 20px; color: var(--text-dim);">
@@ -1612,16 +1602,16 @@
                         <div class="zap-invoice-qr" id="zapQRCode"></div>
                         <div class="zap-invoice" id="zapInvoice"></div>
                         <div class="zap-invoice-actions">
-                            <button class="icon-btn" onclick="nym.copyZapInvoice()" style="flex: 1;">Copy
+                            <button class="icon-btn" data-action="copyZapInvoice" style="flex: 1;">Copy
                                 Invoice</button>
-                            <button class="icon-btn" onclick="nym.openInWallet()" style="flex: 1;">Open Wallet</button>
+                            <button class="icon-btn" data-action="openInWallet" style="flex: 1;">Open Wallet</button>
                         </div>
                     </div>
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="nym.closeZapModal()">Cancel</button>
-                <button class="send-btn" id="zapSendBtn" onclick="nym.generateZapInvoice()">Generate Invoice</button>
+                <button class="icon-btn" data-action="closeZapModal">Cancel</button>
+                <button class="send-btn" id="zapSendBtn" data-action="generateZapInvoice">Generate Invoice</button>
             </div>
         </div>
     </div>
@@ -1629,20 +1619,20 @@
     <!-- Share Channel Modal -->
     <div class="modal" id="shareModal">
         <div class="modal-content share-modal">
-            <button class="modal-close" onclick="closeModal('shareModal')">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="shareModal">✕</button>
             <div class="modal-header">Share Channel</div>
             <div class="modal-body">
                 <div class="form-group">
                     <label class="form-label">Channel URL</label>
                     <div class="share-url-container">
                         <input type="text" class="share-url-input" id="shareUrlInput" readonly>
-                        <button class="copy-url-btn" onclick="nym.copyShareUrl()">COPY</button>
+                        <button class="copy-url-btn" data-action="copyShareUrl">COPY</button>
                     </div>
                     <div class="form-hint">Share this URL to invite others to this channel</div>
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" onclick="closeModal('shareModal')">Close</button>
+                <button class="icon-btn" data-action="closeModal" data-modal-id="shareModal">Close</button>
             </div>
         </div>
     </div>
@@ -1652,7 +1642,7 @@
         <div class="geohash-explorer-content">
             <div class="geohash-explorer-header">
                 <div class="geohash-explorer-title">Geohash Explorer</div>
-                <button class="geohash-explorer-close" onclick="nym.closeGeohashExplorer()">Close</button>
+                <button class="geohash-explorer-close" data-action="closeGeohashExplorer">Close</button>
             </div>
             <div class="geohash-explorer-body">
                 <div class="geohash-globe-container" id="geohashGlobeCanvas">
@@ -1665,7 +1655,7 @@
                     </div>
 
                     <div class="geohash-controls">
-                        <button class="geohash-control-btn" onclick="nym.resetGlobeView()">Reset View</button>
+                        <button class="geohash-control-btn" data-action="resetGlobeView">Reset View</button>
                     </div>
 
                     <div class="geohash-legend">
@@ -1704,6 +1694,7 @@
     </div>
 
     <!-- App core JavaScript -->
+    <script src="js/modules/inline-bindings.js"></script>
     <script src="js/nostr-tools.js"></script>
     <script src="js/app.js"></script>
     <script src="js/modules/persistence.js"></script>
@@ -1737,21 +1728,21 @@
     <!-- Notifications Modal -->
     <div class="modal" id="notificationsModal">
         <div class="modal-content" style="padding: 0;">
-            <button class="modal-close" onclick="nym.closeNotificationsModal()">&#x2715;</button>
+            <button class="modal-close" data-action="closeNotificationsModal">&#x2715;</button>
             <div class="modal-header" style="margin-bottom: 0; padding: 32px 32px 14px;">Notifications</div>
             <div style="padding: 0 32px 8px;">
                 <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim);">
-                    <input type="checkbox" id="enableNotificationsCheckbox" checked onchange="nym.toggleNotificationsEnabled(this.checked)" style="accent-color: var(--primary); cursor: pointer;">
+                    <input type="checkbox" id="enableNotificationsCheckbox" checked data-on-change="toggleNotificationsEnabled" style="accent-color: var(--primary); cursor: pointer;">
                     Enable notifications
                 </label>
                 <br>
                 <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim); margin-top: 6px; margin-left: 20px;">
-                    <input type="checkbox" id="groupMentionsOnlyCheckbox" onchange="nym.toggleGroupMentionsOnly(this.checked)" style="accent-color: var(--primary); cursor: pointer;">
+                    <input type="checkbox" id="groupMentionsOnlyCheckbox" data-on-change="toggleGroupMentionsOnly" style="accent-color: var(--primary); cursor: pointer;">
                     Only notify for mentions in group chats
                 </label>
                 <br>
                 <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim); margin-top: 6px; margin-left: 20px;">
-                    <input type="checkbox" id="notifyFriendsOnlyCheckbox" onchange="nym.toggleNotifyFriendsOnly(this.checked)" style="accent-color: var(--primary); cursor: pointer;">
+                    <input type="checkbox" id="notifyFriendsOnlyCheckbox" data-on-change="toggleNotifyFriendsOnly" style="accent-color: var(--primary); cursor: pointer;">
                     Only notify for messages from friends
                 </label>
             </div>
@@ -1762,24 +1753,7 @@
     </div>
 
     <!-- Three.js and Globe libraries -->
-    <script type="importmap">
-    {
-    "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
-    }
-    }
-    </script>
-    <script async type="module">
-        import * as THREE from 'three';
-
-        // Make available globally
-        window.THREE = THREE;
-
-        // Load three-globe after THREE is available
-        const script = document.createElement('script');
-        script.src = 'https://unpkg.com/three-globe@2.31.0/dist/three-globe.min.js';
-        document.head.appendChild(script);
-    </script>
+    <script src="js/three-loader.js"></script>
 </body>
 
 </html>

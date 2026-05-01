@@ -808,8 +808,8 @@ Object.assign(NYM.prototype, {
         const modalActions = document.querySelector('#zapModal .modal-actions');
         if (modalActions) {
             modalActions.innerHTML = `
-                <button class="icon-btn" onclick="nym.closeZapModal()">Cancel</button>
-                <button class="send-btn" id="zapSendBtn" onclick="nym.generateZapInvoice()">Generate Invoice</button>
+                <button class="icon-btn" data-action="closeZapModal">Cancel</button>
+                <button class="send-btn" id="zapSendBtn" data-action="generateZapInvoice">Generate Invoice</button>
             `;
         }
 

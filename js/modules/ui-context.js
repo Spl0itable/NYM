@@ -684,11 +684,11 @@ Object.assign(NYM.prototype, {
         if (!meta || (!meta.title && !meta.description)) return '';
 
         const imageHtml = meta.image
-            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.image))}" class="link-preview-image" loading="lazy" onerror="this.style.display='none'">`
+            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.image))}" class="link-preview-image" loading="lazy" data-error-action="errorHideElement">`
             : '';
 
         const faviconHtml = meta.favicon
-            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.favicon))}" class="link-preview-favicon" loading="lazy" onerror="this.style.display='none'">`
+            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.favicon))}" class="link-preview-favicon" loading="lazy" data-error-action="errorHideElement">`
             : '';
 
         const siteNameHtml = meta.siteName
@@ -698,7 +698,7 @@ Object.assign(NYM.prototype, {
         let host = '';
         try { host = new URL(meta.url).hostname; } catch { }
 
-        return `<a href="${this.escapeHtml(meta.url)}" target="_blank" rel="noopener" class="link-preview" onclick="event.stopPropagation()">
+        return `<a href="${this.escapeHtml(meta.url)}" target="_blank" rel="noopener" class="link-preview" data-action="stopPropagation">
             ${imageHtml}
             <div class="link-preview-text">
                 ${siteNameHtml || `<span class="link-preview-site">${this.escapeHtml(host)}</span>`}

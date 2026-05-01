@@ -109,6 +109,50 @@ Object.assign(NYM.prototype, {
         setTimeout(trySend, 2000);
     },
 
+    // Keep geo relays for the active geohash channel connected by periodically
+    startGeoRelayKeepAlive(geohash) {
+        if (this._geoRelayKeepAliveInterval) {
+            clearInterval(this._geoRelayKeepAliveInterval);
+            this._geoRelayKeepAliveInterval = null;
+        }
+        if (!geohash || !this.isValidGeohash(geohash)) return;
+
+        this._geoRelayKeepAliveGeohash = geohash;
+        this._geoRelayKeepAliveInterval = setInterval(() => {
+            if (this.currentGeohash !== this._geoRelayKeepAliveGeohash || document.hidden) return;
+            if (this.settings && this.settings.groupChatPMOnlyMode) return;
+
+            const closest = this.getClosestRelaysForGeohash(this._geoRelayKeepAliveGeohash);
+            if (closest.length === 0) return;
+
+            if (this.useRelayProxy) {
+                const expected = new Set(closest.map(r => r.url));
+                const present = new Set(this.poolConnectedRelays || []);
+                let missing = 0;
+                expected.forEach(u => { if (!present.has(u)) missing++; });
+                if (missing > 0) this.connectToGeoRelays(this._geoRelayKeepAliveGeohash);
+                return;
+            }
+
+            let alive = 0;
+            for (const r of closest) {
+                const relay = this.relayPool.get(r.url);
+                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) alive++;
+            }
+            if (alive < closest.length) {
+                this.connectToGeoRelays(this._geoRelayKeepAliveGeohash);
+            }
+        }, 30000);
+    },
+
+    stopGeoRelayKeepAlive() {
+        if (this._geoRelayKeepAliveInterval) {
+            clearInterval(this._geoRelayKeepAliveInterval);
+            this._geoRelayKeepAliveInterval = null;
+        }
+        this._geoRelayKeepAliveGeohash = null;
+    },
+
     // Connect to geo-specific relays for a geohash channel
     async connectToGeoRelays(geohash) {
         if (!geohash || !this.isValidGeohash(geohash)) {

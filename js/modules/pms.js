@@ -737,12 +737,27 @@ Object.assign(NYM.prototype, {
 
             // Route encrypted settings events to settings handler
             if (rumor.kind === 30078) {
+                const dTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'd' && t[1])?.[1];
                 const isOwn = !!this.pubkey && rumor.pubkey === this.pubkey;
+
+                if (dTag && dTag.startsWith('nym-settings-transfer-') && rumor.pubkey !== this.pubkey) {
+                    this.handleSettingsTransferEvent({
+                        id: event.id,
+                        kind: rumor.kind,
+                        pubkey: rumor.pubkey,
+                        created_at: rumor.created_at,
+                        tags: rumor.tags || [],
+                        content: rumor.content,
+                        sig: '',
+                        _giftWrapped: true
+                    });
+                    return;
+                }
+
                 if (isOwn) {
                     try {
                         const s = JSON.parse(rumor.content);
                         const rumorTs = rumor.created_at || 0;
-                        const dTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'd' && t[1])?.[1];
                         const isKeysOnly = dTag === 'nymchat-keys';
                         await applyNostrSettingsAdditive(s);
                         if (!isKeysOnly && rumorTs > (this._lastSettingsSyncTs || 0)) {
@@ -1266,12 +1281,12 @@ Object.assign(NYM.prototype, {
             // Update only the author-clickable inner span to preserve bubble-time and click handler
             const clickable = el.querySelector('.author-clickable');
             if (clickable) {
-                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}`;
+                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}`;
             } else {
                 // Fallback: full rewrite with author-clickable wrapper for older messages missing it
                 const bubbleTime = el.querySelector('.bubble-time');
                 const bubbleHtml = bubbleTime ? bubbleTime.outerHTML : '';
-                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}</span>&gt;`;
+                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}</span>&gt;`;
                 const newClickable = el.querySelector('.author-clickable');
                 if (newClickable) {
                     newClickable.style.cursor = 'pointer';
@@ -1282,7 +1297,7 @@ Object.assign(NYM.prototype, {
                     newClickable.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+                        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
                         this.showContextMenu(e, displayAuthor, pubkey, rawContent, msgId, false, isPM ? msgId : null);
                         return false;
                     });
@@ -1294,7 +1309,7 @@ Object.assign(NYM.prototype, {
         if (this.inPMMode && this.currentPM === pubkey) {
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
             const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>`;
-            const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+            const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
             const channelEl = document.getElementById('currentChannel');
             if (channelEl) channelEl.innerHTML = pmHeaderHtml;
         }
@@ -1346,10 +1361,10 @@ Object.assign(NYM.prototype, {
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
             const safePk = this._safePubkey(pubkey);
             item.innerHTML = `
-<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">
+<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy">
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}</span>
 <div class="channel-badges">
-<span class="delete-pm" onclick="event.stopPropagation(); nym.deletePM('${safePk}')">✕</span>
+<span class="delete-pm" data-action="deletePMStop" data-pubkey="${safePk}">✕</span>
 <span class="unread-badge" style="display:none">0</span>
 </div>
 `;
@@ -1472,7 +1487,7 @@ Object.assign(NYM.prototype, {
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const safePk = this._safePubkey(pubkey);
         const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
-        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
 
         // Update UI with formatted nym
         document.getElementById('currentChannel').innerHTML = pmHeaderHtml;
@@ -1850,7 +1865,7 @@ Object.assign(NYM.prototype, {
             const suffix = this.getPubkeySuffix(m.pubkey);
             const safePk = this._safePubkey(m.pubkey);
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
-            return `<div class="pm-suggestion-item" data-pubkey="${safePk}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span><span class="pm-suggestion-follow-badge">following</span></div>`;
+            return `<div class="pm-suggestion-item" data-pubkey="${safePk}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" data-avatar-pubkey="${safePk}" loading="lazy"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span><span class="pm-suggestion-follow-badge">following</span></div>`;
         }).join('');
 
         suggestions.innerHTML = html;
@@ -1881,7 +1896,7 @@ Object.assign(NYM.prototype, {
                     const nym = this.stripPubkeySuffix(this.getNymFromPubkey(pk));
                     const suffix = this.getPubkeySuffix(pk);
                     const avatarSrc = this.escapeHtml(this.getAvatarUrl(pk));
-                    suggestions.innerHTML = `<div class="pm-suggestion-item" data-pubkey="${pk}" data-nym="${this.escapeHtml(nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${pk}')"><span class="pm-suggestion-nym">${this.escapeHtml(nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span></div>`;
+                    suggestions.innerHTML = `<div class="pm-suggestion-item" data-pubkey="${pk}" data-nym="${this.escapeHtml(nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" data-avatar-pubkey="${pk}" loading="lazy"><span class="pm-suggestion-nym">${this.escapeHtml(nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span></div>`;
                     suggestions.querySelector('.pm-suggestion-item').addEventListener('click', () => this.addNewPMRecipient(pk, nym));
                     suggestions.style.display = 'block';
                 };
@@ -1937,7 +1952,7 @@ Object.assign(NYM.prototype, {
             const safePk = this._safePubkey(m.pubkey);
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
             const followBadge = m.isFollow ? '<span class="pm-suggestion-follow-badge">following</span>' : '';
-            return `<div class="pm-suggestion-item" data-pubkey="${safePk}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span>${followBadge}</div>`;
+            return `<div class="pm-suggestion-item" data-pubkey="${safePk}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" data-avatar-pubkey="${safePk}" loading="lazy"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span>${followBadge}</div>`;
         }).join('');
         suggestions.querySelectorAll('.pm-suggestion-item[data-pubkey]').forEach(el => {
             el.addEventListener('click', () => this.addNewPMRecipient(el.dataset.pubkey, el.dataset.nym));
@@ -2000,7 +2015,7 @@ Object.assign(NYM.prototype, {
         document.getElementById('pmRecipientChips').innerHTML = this._newPMRecipients.map(r => {
             const suffix = this.getPubkeySuffix(r.pubkey);
             const baseNym = this.stripPubkeySuffix(this.parseNymFromDisplay(r.nym));
-            return `<span class="pm-recipient-chip">${this.escapeHtml(baseNym)}<span class="pm-chip-suffix">#${suffix}</span><button class="pm-chip-remove" onclick="nym.removeNewPMRecipient('${r.pubkey}')" type="button">×</button></span>`;
+            return `<span class="pm-recipient-chip">${this.escapeHtml(baseNym)}<span class="pm-chip-suffix">#${suffix}</span><button class="pm-chip-remove" data-action="removeNewPMRecipient" data-pubkey="${r.pubkey}" type="button">×</button></span>`;
         }).join('');
     },
 

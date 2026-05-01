@@ -1628,7 +1628,7 @@ function addPollOption() {
     row.className = 'poll-option-input-row';
     row.innerHTML = `
         <input type="text" class="form-input" placeholder="Option ${existing.length + 1}" maxlength="100" data-poll-option>
-        <button class="poll-remove-option-btn" onclick="this.parentElement.remove()" title="Remove">✕</button>
+        <button class="poll-remove-option-btn" data-action="removeParent" title="Remove">✕</button>
     `;
     container.appendChild(row);
     if (existing.length + 1 >= 6) {
@@ -3143,7 +3143,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.303 ═══<br/>
+═══ Nymchat v3.59.304 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -5188,6 +5188,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Construct the NYM instance now that all module scripts have been parsed
     // and their methods have been attached to NYM.prototype.
     nym = new NYM();
+    window.nym = nym;
 
     // Parse URL for channel routing BEFORE initialization
     parseUrlChannel();

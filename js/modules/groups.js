@@ -1196,11 +1196,11 @@ Object.assign(NYM.prototype, {
         const avatarStackHtml = displayMembers.length > 0
             ? `<div class="group-avatar-stack">${displayMembers.map((pk, i) => {
                 const sk = this._safePubkey(pk);
-                return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" style="z-index:${3 - i}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${sk}')">`;
+                return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" style="z-index:${3 - i}" alt="" loading="lazy">`;
             }).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
             : `<div class="group-icon-wrap">${groupSvg}</div>`;
 
-        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="delete-pm" data-group-id="${this.escapeHtml(groupId)}" onclick="event.stopPropagation(); nym.deleteGroup(this.dataset.groupId)">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
+        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="delete-pm" data-group-id="${this.escapeHtml(groupId)}" data-action="deleteGroup">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
     },
 
     // Update the stacked reader avatars for group messages using waterfall logic:
@@ -1285,7 +1285,7 @@ Object.assign(NYM.prototype, {
         const overflow = readersMap.size - MAX_VISIBLE;
         const avatarHtml = visible.map(([pk, name]) => {
             const sk = this._safePubkey(pk);
-            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${sk}')">`;
+            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" loading="lazy">`;
         }).join('');
         const overflowHtml = overflow > 0
             ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
@@ -1303,7 +1303,7 @@ Object.assign(NYM.prototype, {
         const overflow = readers.size - MAX_VISIBLE;
         const avatarHtml = visible.map(([pk, name]) => {
             const sk = this._safePubkey(pk);
-            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${sk}')">`;
+            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" loading="lazy">`;
         }).join('');
         const overflowHtml = overflow > 0
             ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
@@ -1343,7 +1343,7 @@ Object.assign(NYM.prototype, {
             const safePk = this._safePubkey(pubkey);
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(pubkey));
             return `<div class="reactors-modal-user readers-modal-user" data-pubkey="${safePk}">
-                <img src="${avatarSrc}" class="readers-modal-avatar" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">
+                <img src="${avatarSrc}" class="readers-modal-avatar" data-avatar-pubkey="${safePk}" loading="lazy">
                 <span class="reactors-modal-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span></span>
                 ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
             </div>`;
@@ -1411,7 +1411,7 @@ Object.assign(NYM.prototype, {
         const headerAvatars = otherMembers.slice(0, 4).map(pk => {
             const sk = this._safePubkey(pk);
             const src = this.getAvatarUrl(pk);
-            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${sk}')">`;
+            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
         }).join('');
 
         const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
@@ -1596,7 +1596,7 @@ Object.assign(NYM.prototype, {
             const name = this.getNymFromPubkey(pk);
             const suffix = this.getPubkeySuffix(pk);
             const isYou = pk === this.pubkey ? ' (you)' : '';
-            return `  @${name}#${suffix}${isYou}`;
+            return `  @${name}${isYou}`;
         }).join('\n');
         this.displaySystemMessage(`Group: "${group.name}"\nMembers (${group.members.length}):\n${memberList}`);
     },

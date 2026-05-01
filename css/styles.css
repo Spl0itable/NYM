@@ -6625,6 +6625,31 @@ body.light-mode .friend-badge svg {
     border-radius: 50%;
     object-fit: cover;
     flex-shrink: 0;
+    box-shadow: 0 0 0 2px #6b7280;
+}
+
+.avatar-user-list.status-online {
+    box-shadow: 0 0 0 2px #22c55e;
+}
+
+.avatar-user-list.status-away {
+    box-shadow: 0 0 0 2px #eab308;
+}
+
+.avatar-user-list.status-offline {
+    box-shadow: 0 0 0 2px #6b7280;
+}
+
+.avatar-message.status-online {
+    box-shadow: 0 0 0 2px #22c55e;
+}
+
+.avatar-message.status-away {
+    box-shadow: 0 0 0 2px #eab308;
+}
+
+.avatar-message.status-offline {
+    box-shadow: 0 0 0 2px #6b7280;
 }
 
 .avatar-pm {

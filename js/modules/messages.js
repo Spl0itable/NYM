@@ -342,7 +342,7 @@ Object.assign(NYM.prototype, {
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk = this._safePubkey(message.pubkey);
-            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
+            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
 
             // Get the action content (everything after /me)
             const actionContent = message.content.substring(4);
@@ -408,7 +408,7 @@ Object.assign(NYM.prototype, {
             // Show reaction & translate buttons for all messages with valid IDs (including PMs)
             const hoverButtons = isValidEventId && !isMobile ? `
     <div class="msg-hover-buttons">
-        <button class="reaction-btn" onclick="nym.showReactionPicker('${reactionMsgId}', this)">
+        <button class="reaction-btn" data-action="reactionShowPicker" data-message-id="${reactionMsgId}">
             <svg viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="10"></circle>
                 <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
@@ -416,7 +416,7 @@ Object.assign(NYM.prototype, {
                 <circle cx="15" cy="9" r="1"></circle>
             </svg>
         </button>
-        <button class="translate-msg-btn" onclick="nym.translateHoverMessage(this)" title="Translate">
+        <button class="translate-msg-btn" data-action="translateHoverMessage" title="Translate">
             <svg viewBox="0 0 24 24">
                 <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
             </svg>
@@ -430,7 +430,7 @@ Object.assign(NYM.prototype, {
             const baseNym = this.parseNymFromDisplay(message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk2 = this._safePubkey(message.pubkey);
-            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk2}')">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" loading="lazy">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -494,7 +494,7 @@ Object.assign(NYM.prototype, {
                             <div class="file-offer-seeding">
                                 <div class="file-offer-seeding-dot"></div>
                                 <span>Seeding - available for download</span>
-                                <button class="file-offer-stop-btn" onclick="nym.stopSeeding('${offer.offerId}')" title="Stop seeding">Stop</button>
+                                <button class="file-offer-stop-btn" data-action="stopSeeding" data-offer-id="${offer.offerId}" title="Stop seeding">Stop</button>
                             </div>
                         `;
                     }
@@ -509,9 +509,9 @@ Object.assign(NYM.prototype, {
                     statusHtml = `
                         <div class="file-offer-actions">
                             ${isTorrent ? `
-                                <button class="file-offer-btn torrent-btn" onclick="nym.downloadTorrent('${offer.offerId}')">Download (Torrent)</button>
+                                <button class="file-offer-btn torrent-btn" data-action="downloadTorrent" data-offer-id="${offer.offerId}">Download (Torrent)</button>
                             ` : `
-                                <button class="file-offer-btn" onclick="nym.requestP2PFile('${offer.offerId}')">Download</button>
+                                <button class="file-offer-btn" data-action="requestP2PFile" data-offer-id="${offer.offerId}">Download</button>
                             `}
                         </div>
                         <div class="file-offer-progress" id="progress-${offer.offerId}" style="display: none;">
@@ -974,7 +974,7 @@ Object.assign(NYM.prototype, {
             const formattedCode = trimmedCode.replace(/\n/g, '<br/>');
             const encodedRaw = btoa(unescape(encodeURIComponent(trimmedCode)));
             const idx = codePlaceholders.length;
-            codePlaceholders.push(`<div class="code-block-wrapper"><pre><code>${formattedCode}</code></pre><button class="code-copy-btn" data-code="${encodedRaw}" onclick="try{navigator.clipboard.writeText(decodeURIComponent(escape(atob(this.dataset.code)))).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)}).catch(()=>{})}catch(e){}">Copy</button></div>`);
+            codePlaceholders.push(`<div class="code-block-wrapper"><pre><code>${formattedCode}</code></pre><button class="code-copy-btn" data-code="${encodedRaw}" data-action="codeBlockCopy">Copy</button></div>`);
             return `\uFDD0${idx}\uFDD1`;
         });
         formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
@@ -1014,7 +1014,7 @@ Object.assign(NYM.prototype, {
                 const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
                 const proxiedUrl = this.getProxiedMediaUrl(url);
                 const idx = videoPlaceholders.length;
-                videoPlaceholders.push(`<span class="video-container" onclick="event.stopPropagation()"><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${proxiedUrl}" type="${type}"></video><button class="video-expand-btn" data-video-src="${proxiedUrl.replace(/"/g, '&quot;')}" onclick="event.stopPropagation(); var v=this.previousElementSibling; nym.expandVideo(v.dataset.blobSrc||this.dataset.videoSrc)">⛶</button></span>`);
+                videoPlaceholders.push(`<span class="video-container" data-action="stopPropagation"><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${proxiedUrl}" type="${type}"></video><button class="video-expand-btn" data-video-src="${proxiedUrl.replace(/"/g, '&quot;')}" data-action="expandVideoFromContainer">⛶</button></span>`);
                 return `__VID_${idx}__`;
             }
         );
@@ -1024,7 +1024,7 @@ Object.assign(NYM.prototype, {
             /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
             (match, url) => {
                 const proxiedUrl = this.getProxiedMediaUrl(url);
-                return `<img src="${proxiedUrl}" alt="Image" onclick="nym.expandImage(this.dataset.originalSrc || this.src)" data-original-src="${url}" />`;
+                return `<img src="${proxiedUrl}" alt="Image" data-action="expandImageFromData" data-original-src="${url}" />`;
             }
         );
 
@@ -1032,7 +1032,7 @@ Object.assign(NYM.prototype, {
         formatted = formatted.replace(
             /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
             (match, prefix, channelId) => {
-                return `<span class="channel-link" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('${prefix}:${this.escapeHtml(channelId)}', event); return false;">${match}</span>`;
+                return `<span class="channel-link" data-action="channelLink" data-channel-ref="${prefix}:${this.escapeHtml(channelId)}">${match}</span>`;
             }
         );
 
@@ -1086,7 +1086,7 @@ Object.assign(NYM.prototype, {
                         title = `Channel: #${channelName}`;
                     }
 
-                    return `${whitespace || ''}<span class="${classes.join(' ')}" style="text-decoration: underline;" title="${title}" onclick="event.preventDefault(); event.stopPropagation(); nym.handleChannelLink('g:${channelName}', event); return false;">${channel}</span>`;
+                    return `${whitespace || ''}<span class="${classes.join(' ')}" style="text-decoration: underline;" title="${title}" data-action="channelLink" data-channel-ref="g:${channelName}">${channel}</span>`;
                 }
             }
         );

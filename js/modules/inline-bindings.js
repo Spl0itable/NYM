@@ -1,0 +1,284 @@
+// inline-bindings.js - Single delegated dispatcher that replaces inline event handlers
+
+(function () {
+    'use strict';
+
+    var ACTIONS = (window.NYM_ACTIONS = window.NYM_ACTIONS || {});
+
+    // Walk up from el looking for an ancestor with the given attribute.
+    function closestWithAttr(el, attr) {
+        while (el && el.nodeType === 1) {
+            if (el.hasAttribute && el.hasAttribute(attr)) return el;
+            el = el.parentNode;
+        }
+        return null;
+    }
+
+    function dispatch(eventType, attr, event) {
+        var node = closestWithAttr(event.target, attr);
+        if (!node) return;
+        var name = node.getAttribute(attr);
+        var handler = ACTIONS[name];
+        if (typeof handler === 'function') {
+            try { handler(event, node); }
+            catch (e) { console.error('[inline-bindings] handler error for', name, e); }
+        } else if (name) {
+            console.warn('[inline-bindings] no handler registered for', name);
+        }
+    }
+
+    document.addEventListener('click',    function (e) { dispatch('click',    'data-action',     e); }, false);
+    document.addEventListener('change',   function (e) { dispatch('change',   'data-on-change',  e); }, false);
+    document.addEventListener('input',    function (e) { dispatch('input',    'data-on-input',   e); }, false);
+    document.addEventListener('keyup',    function (e) { dispatch('keyup',    'data-on-keyup',   e); }, false);
+    document.addEventListener('keydown',  function (e) { dispatch('keydown',  'data-on-keydown', e); }, false);
+
+    // Avatar / image fallback. `error` events do not bubble
+    document.addEventListener('error', function (e) {
+        var t = e.target;
+        if (!t || t.tagName !== 'IMG') return;
+        if (t.dataset && t.dataset.avatarPubkey && window.nym && typeof window.nym.generateAvatarSvg === 'function') {
+            // Prevent further error firing on the swap.
+            t.onerror = null;
+            t.src = window.nym.generateAvatarSvg(t.dataset.avatarPubkey);
+            return;
+        }
+        if (t.dataset && t.dataset.errorAction) {
+            var fn = ACTIONS[t.dataset.errorAction];
+            if (typeof fn === 'function') {
+                try { fn(e, t); } catch (err) { console.error(err); }
+            }
+        }
+    }, true);
+
+    // Action registry
+    function nym() { return window.nym; }
+    function byId(id) { return document.getElementById(id); }
+
+    Object.assign(ACTIONS, {
+        // Generic
+        'closeModal':                 function (_e, t) { window.closeModal(t.dataset.modalId); },
+        'noop':                       function () {},
+        'stopPropagation':            function (e) { e.stopPropagation(); },
+
+        // Sidebar / global
+        'closeSidebar':               function () { nym().closeSidebar(); },
+        'openNotificationsModal':     function () { nym().openNotificationsModal(); },
+        'closeNotificationsModal':    function () { nym().closeNotificationsModal(); },
+        'toggleSidebar':              function () { window.toggleSidebar(); },
+        'openShop':                   function () { nym().openShop(); },
+        'closeShop':                  function () { nym().closeShop(); },
+        'openShopAndCloseSidebar':    function () { nym().openShop(); nym().closeSidebar(); },
+        'showSettingsAndCloseSidebar':function () { window.showSettings(); nym().closeSidebar(); },
+        'showAboutAndCloseSidebar':   function () { window.showAbout(); nym().closeSidebar(); },
+        'signOutAndCloseSidebar':     function () { window.signOut(); nym().closeSidebar(); },
+        'showSettings':               function () { window.showSettings(); },
+        'showAbout':                  function () { window.showAbout(); },
+        'signOut':                    function () { window.signOut(); },
+        'openNostrLogin':             function () { window.openNostrLogin(); },
+        'editNick':                   function () { window.editNick(); },
+        'openRelayStats':             function () { window.openRelayStats(); },
+        'showGeohashExplorer':        function () { nym().showGeohashExplorer(); },
+        'closeGeohashExplorer':       function () { nym().closeGeohashExplorer(); },
+        'resetGlobeView':             function () { nym().resetGlobeView(); },
+
+        // Image / context-menu avatar/banner
+        'expandImageFromSrcStop':     function (e, t) {
+            e.stopPropagation();
+            nym().expandImage(t.src);
+            nym().closeContextMenu();
+        },
+        'expandImageFromSrc':         function (_e, t) { nym().expandImage(t.src); },
+        'expandImageFromData':        function (_e, t) { nym().expandImage(t.dataset.originalSrc || t.src); },
+        'closeImageModal':            function () { window.closeImageModal(); },
+        'downloadModalMedia':         function (e) { window.downloadModalMedia(e); },
+
+        // Channel nav / search
+        'navigateBack':               function () { nym().navigateBack(); },
+        'navigateForward':            function () { nym().navigateForward(); },
+        'shareChannel':               function () { nym().shareChannel(); },
+        'toggleSearch':               function (_e, t) { window.toggleSearch(t.dataset.searchTarget); },
+        'clearSearch':                function (_e, t) { window.clearSearch(t.dataset.searchTarget); },
+        'channelSearchInput':         function (_e, t) {
+            t.value = t.value.toLowerCase();
+            nym().handleChannelSearch(t.value);
+        },
+        'channelSearchKeyup':         function (_e, t) { nym().handleChannelSearch(t.value); },
+        'filterPMs':                  function (_e, t) { nym().filterPMs(t.value); },
+        'filterUsers':                function (_e, t) { nym().filterUsers(t.value); },
+
+        // Input area buttons
+        'selectImage':                function () { window.selectImage(); },
+        'selectP2PFile':              function () { window.selectP2PFile(); },
+        'toggleEmojiPicker':          function () { nym().toggleEmojiPicker(); },
+        'toggleGifPicker':            function () { nym().toggleGifPicker(); },
+        'scrollToBottom':             function () { window.scrollToBottom(); },
+
+        // PM / report modals
+        'focusPmRecipient':           function () { var i = byId('pmRecipientInput'); if (i) i.focus(); },
+        'onNewPMRecipientInput':      function (_e, t) { nym().onNewPMRecipientInput(t.value); },
+        'onNewPMRecipientKeydown':    function (e)    { nym().onNewPMRecipientKeydown(e); },
+        'startNewPMFromModal':        function () { nym().startNewPMFromModal(); },
+        'openNewPMModal':             function () { nym().openNewPMModal(); },
+        'closeReportModal':           function () { nym().closeReportModal(); },
+        'submitReport':               function () { nym().submitReport(); },
+
+        // Poll
+        'addPollOption':              function () { window.addPollOption(); },
+        'submitPoll':                 function () { window.submitPoll(); },
+
+        // Dev nsec
+        'cancelDevNsec':              function () { window.cancelDevNsec(); },
+        'verifyDevNsec':              function () { window.verifyDevNsec(); },
+
+        // Nostr login
+        'nostrLoginCloseAndCancel':   function () { window.nostrLoginCancelRemoteSigner(); window.closeModal('nostrLoginModal'); },
+        'nostrLoginWithExtension':    function () { window.nostrLoginWithExtension(); },
+        'nostrLoginStartRemoteSigner':function () { window.nostrLoginStartRemoteSigner(); },
+        'nostrLoginCopyBunkerURI':    function () { window.nostrLoginCopyBunkerURI(); },
+        'nostrLoginCancelRemoteSigner': function () { window.nostrLoginCancelRemoteSigner(); },
+        'nostrLoginWithNsec':         function () { window.nostrLoginWithNsec(); },
+
+        // Nick edit
+        'handleNickEditAvatarSelect': function (e) { window.handleNickEditAvatarSelect(e); },
+        'triggerNickEditAvatarUpload':function () { window.triggerNickEditAvatarUpload(); },
+        'removeNickEditAvatar':       function () { window.removeNickEditAvatar(); },
+        'handleNickEditBannerSelect': function (e) { window.handleNickEditBannerSelect(e); },
+        'triggerNickEditBannerUpload':function () { var i = byId('nickEditBannerInput'); if (i) i.click(); },
+        'removeNickEditBanner':       function () { window.removeNickEditBanner(); },
+        'updateBioCharCount':         function () { window.updateBioCharCount(); },
+        'toggleRevealPrivkey':        function () { window.toggleRevealPrivkey(); },
+        'toggleNsecVisibility':       function () { window.toggleNsecVisibility(); },
+        'copyRevealedNsec':           function () { window.copyRevealedNsec(); },
+        'randomizeNick':              function () { window.randomizeNick(); },
+        'changeNick':                 function () { window.changeNick(); },
+
+        // Setup modal
+        'handleSetupAvatarSelect':    function (e) { window.handleSetupAvatarSelect(e); },
+        'triggerSetupAvatarUpload':   function () { window.triggerSetupAvatarUpload(); },
+        'removeSetupAvatar':          function () { window.removeSetupAvatar(); },
+        'handleSetupBannerSelect':    function (e) { window.handleSetupBannerSelect(e); },
+        'triggerSetupBannerUpload':   function () { var i = byId('setupBannerInput'); if (i) i.click(); },
+        'removeSetupBanner':          function () { window.removeSetupBanner(); },
+        'updateSetupBioCharCount':    function () { window.updateSetupBioCharCount(); },
+        'initializeNym':              function () { window.initializeNym(); },
+
+        // Settings
+        'selectWallpaper':            function (_e, t) { window.selectWallpaper(t.dataset.wallpaper); },
+        'triggerWallpaperUpload':     function () { window.triggerWallpaperUpload(); },
+        'handleWallpaperUpload':      function (e) { window.handleWallpaperUpload(e); },
+        'selectMessageLayout':        function (_e, t) { window.selectMessageLayout(t.dataset.layout); },
+        'previewTextSize':            function (_e, t) { window.previewTextSize(t.value); },
+        'commitTextSize':             function (_e, t) { window.commitTextSize(t.value); },
+        'resetTextSize':              function () { window.resetTextSize(); },
+        'addBlockedKeyword':          function () { nym().addBlockedKeyword(); },
+        'executeSettingsTransfer':    function () { nym().executeSettingsTransfer(); },
+        'clearLocalStorageCache':     function () { window.clearLocalStorageCache(); },
+        'saveSettings':               function () { window.saveSettings(); },
+        'onRandomKeypairChange':      function (_e, t) {
+            var w = byId('hardcoreKeypairWarning');
+            if (w) w.style.display = t.value === 'hardcore' ? 'block' : 'none';
+        },
+
+        // Shop
+        'restorePurchasesFromInput':  function () {
+            var i = byId('recoveryCodeInput');
+            nym().restorePurchases(i ? i.value : '');
+        },
+        'switchShopTab':              function (e, t) { nym().switchShopTab(t.dataset.shopTab, e); },
+
+        // Zap modal
+        'closeZapModal':              function () { nym().closeZapModal(); },
+        'copyZapInvoice':             function () { nym().copyZapInvoice(); },
+        'openInWallet':               function () { nym().openInWallet(); },
+        'generateZapInvoice':         function () { nym().generateZapInvoice(); },
+
+        // Share modal
+        'copyShareUrl':               function () { nym().copyShareUrl(); },
+
+        // Notifications modal toggles
+        'toggleNotificationsEnabled': function (_e, t) { nym().toggleNotificationsEnabled(t.checked); },
+        'toggleGroupMentionsOnly':    function (_e, t) { nym().toggleGroupMentionsOnly(t.checked); },
+        'toggleNotifyFriendsOnly':    function (_e, t) { nym().toggleNotifyFriendsOnly(t.checked); },
+
+        // Dynamically-rendered (innerHTML) handlers from JS modules
+        'reactionShowPicker':         function (_e, t) { nym().showReactionPicker(t.dataset.messageId, t); },
+        'translateHoverMessage':      function (_e, t) { nym().translateHoverMessage(t); },
+        'stopSeeding':                function (_e, t) { nym().stopSeeding(t.dataset.offerId); },
+        'cancelTransfer':             function (_e, t) { nym().cancelTransfer(t.dataset.transferId); },
+        'downloadTorrent':            function (_e, t) { nym().downloadTorrent(t.dataset.offerId); },
+        'requestP2PFile':             function (_e, t) { nym().requestP2PFile(t.dataset.offerId); },
+        'votePoll':                   function (_e, t) { nym().votePoll(t.dataset.pollId, parseInt(t.dataset.optionIndex, 10)); },
+        'expandVideoFromContainer':   function (e, t) {
+            e.stopPropagation();
+            var v = t.previousElementSibling;
+            var src = (v && v.dataset && v.dataset.blobSrc) || t.dataset.videoSrc;
+            nym().expandVideo(src);
+        },
+        'channelLink':                function (e, t) {
+            e.preventDefault();
+            e.stopPropagation();
+            nym().handleChannelLink(t.dataset.channelRef, e);
+            return false;
+        },
+        'codeBlockCopy':              function (_e, t) {
+            try {
+                var code = t.dataset.code;
+                if (!code) return;
+                var text = decodeURIComponent(escape(atob(code)));
+                navigator.clipboard.writeText(text).then(function () {
+                    t.textContent = 'Copied!';
+                    setTimeout(function () { t.textContent = 'Copy'; }, 1500);
+                }).catch(function () {});
+            } catch (e) {}
+        },
+        'deleteGroup':                function (e, t) { e.stopPropagation(); nym().deleteGroup(t.dataset.groupId); },
+        'dismissShopSuccess':         function () { nym().dismissShopSuccess(); },
+
+        // Error-event actions (referenced via data-error-action)
+        'errorHideElement':           function (_e, t) { t.style.display = 'none'; },
+
+        // Generic
+        'removeParent':               function (_e, t) { if (t.parentElement) t.parentElement.remove(); },
+        'removeElementById':          function (_e, t) {
+            var el = byId(t.dataset.removeId);
+            if (el) el.remove();
+        },
+
+        // Shop dynamic
+        'purchaseItem':               function (_e, t) { nym().purchaseItem(t.dataset.itemId); },
+        'activateMessageStyle':       function (_e, t) { nym().activateMessageStyle(t.dataset.itemId); },
+        'activateFlair':              function (_e, t) { nym().activateFlair(t.dataset.itemId); },
+        'activateCosmetic':           function (_e, t) { nym().activateCosmetic(t.dataset.itemId); },
+        'activateSupporter':          function () { nym().activateSupporter(); },
+        'promptTransferShopItem':     function (_e, t) { nym().promptTransferShopItem(t.dataset.itemId); },
+        'executeTransferShopItem':    function (_e, t) { nym().executeTransferShopItem(t.dataset.itemId); },
+        'copyTextFromData':           function (_e, t) {
+            try {
+                navigator.clipboard.writeText(t.dataset.copyText || '').then(function () {
+                    var orig = t.textContent;
+                    t.textContent = 'Copied!';
+                    setTimeout(function () { t.textContent = orig; }, 1500);
+                }).catch(function () {});
+            } catch (e) {}
+        },
+        'acceptSettingsTransfer':     function (_e, t) { nym().acceptSettingsTransfer(t.dataset.eventId); },
+        'rejectSettingsTransfer':     function (_e, t) { nym().rejectSettingsTransfer(t.dataset.eventId); },
+
+        // Autocomplete
+        'selectSpecificAutocomplete': function (_e, t) {
+            nym().selectSpecificAutocomplete(t.dataset.acNym, t.dataset.acPubkey);
+        },
+        'selectChannelAutocompleteItem': function (_e, t) {
+            nym().selectChannelAutocompleteItem(t.dataset.channelName);
+        },
+
+        // Channels (settings list buttons)
+        'unblockChannelFromSettings': function (_e, t) { nym().unblockChannelFromSettings(t.dataset.channelKey); },
+        'unhideChannelFromSettings':  function (_e, t) { nym().unhideChannelFromSettings(t.dataset.channelKey); },
+
+        // PMs dynamic
+        'deletePMStop':               function (e, t) { e.stopPropagation(); nym().deletePM(t.dataset.pubkey); },
+        'removeNewPMRecipient':       function (_e, t) { nym().removeNewPMRecipient(t.dataset.pubkey); }
+    });
+})();

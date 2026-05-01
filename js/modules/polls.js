@@ -31,6 +31,7 @@ Object.assign(NYM.prototype, {
 
         const signedEvent = await this.signEvent(event);
         this.sendToRelay(["EVENT", signedEvent]);
+        this.ensureGeoRelayDelivery(signedEvent, this.currentGeohash);
 
         // Store poll locally
         this.polls.set(signedEvent.id, {
@@ -82,6 +83,7 @@ Object.assign(NYM.prototype, {
 
         const signedEvent = await this.signEvent(event);
         this.sendToRelay(["EVENT", signedEvent]);
+        this.ensureGeoRelayDelivery(signedEvent, poll.geohash);
 
         // Update local state
         poll.votes.set(this.pubkey, optionIndex);
@@ -234,14 +236,14 @@ Object.assign(NYM.prototype, {
                 const vAvatar = this.getAvatarUrl(vpk);
                 const vNym = this.getNymFromPubkey(vpk);
                 const vSuffix = this.getPubkeySuffix(vpk);
-                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" title="${this.escapeHtml(vNym)}" alt="" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${sk}')">`;
+                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" title="${this.escapeHtml(vNym)}" alt="">`;
             }).join('');
             const extraCount = count > 8 ? `<span class="poll-voter-extra">+${count - 8}</span>` : '';
 
             const selectedClass = hasVoted && votes.get(this.pubkey) === opt.index ? ' poll-option-selected' : '';
 
             return `
-                <div class="poll-option${selectedClass}" data-poll-id="${pollId}" data-option-index="${opt.index}" onclick="nym.votePoll('${pollId}', ${opt.index})">
+                <div class="poll-option${selectedClass}" data-poll-id="${pollId}" data-option-index="${opt.index}" data-action="votePoll">
                     <div class="poll-option-bar" style="width: ${pct}%"></div>
                     <div class="poll-option-content">
                         <span class="poll-option-text">${this.escapeHtml(opt.text)}</span>
@@ -264,7 +266,7 @@ Object.assign(NYM.prototype, {
         });
 
         const safePk = this._safePubkey(pubkey);
-        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
 
         messageEl.innerHTML = `
             <span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
@@ -345,14 +347,14 @@ Object.assign(NYM.prototype, {
                 const vAvatar = this.getAvatarUrl(vpk);
                 const vNym = this.getNymFromPubkey(vpk);
                 const vSuffix = this.getPubkeySuffix(vpk);
-                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" title="${this.escapeHtml(vNym)}" alt="" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${sk}')">`;
+                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" title="${this.escapeHtml(vNym)}" alt="">`;
             }).join('');
             const extraCount = count > 8 ? `<span class="poll-voter-extra">+${count - 8}</span>` : '';
 
             const selectedClass = hasVoted && poll.votes.get(this.pubkey) === opt.index ? ' poll-option-selected' : '';
 
             return `
-                <div class="poll-option${selectedClass}" data-poll-id="${pollId}" data-option-index="${opt.index}" onclick="nym.votePoll('${pollId}', ${opt.index})">
+                <div class="poll-option${selectedClass}" data-poll-id="${pollId}" data-option-index="${opt.index}" data-action="votePoll">
                     <div class="poll-option-bar" style="width: ${pct}%"></div>
                     <div class="poll-option-content">
                         <span class="poll-option-text">${this.escapeHtml(opt.text)}</span>

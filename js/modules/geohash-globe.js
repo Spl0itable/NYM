@@ -8,11 +8,18 @@ Object.assign(NYM.prototype, {
             modal.style.display = 'flex';
 
             // Wait for modal to be visible before initializing globe
-            setTimeout(() => {
+            setTimeout(async () => {
                 // Check if canvas container exists
                 const canvasContainer = document.getElementById('geohashGlobeCanvas');
                 if (!canvasContainer || !canvasContainer.parentElement) {
                     return;
+                }
+
+                // Ensure ThreeGlobe has loaded (the script is injected
+                // asynchronously by js/three-loader.js).
+                if (typeof ThreeGlobe === 'undefined' && window.threeGlobeReady) {
+                    try { await window.threeGlobeReady; }
+                    catch (e) { console.error('Failed to load three-globe:', e); return; }
                 }
 
                 // Always reinitialize globe when opening
@@ -98,7 +105,7 @@ Object.assign(NYM.prototype, {
 </div>
 
 <div class="geohash-controls">
-    <button class="geohash-control-btn" onclick="nym.resetGlobeView()">Reset View</button>
+    <button class="geohash-control-btn" data-action="resetGlobeView">Reset View</button>
 </div>
 
 <div class="geohash-legend">

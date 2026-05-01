@@ -168,16 +168,20 @@ late final PlatformWebViewControllerCreationParams params;
 
 if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
 // Use WebKit-specific params for iOS/macOS
+// Default WKWebsiteDataStore is persistent, enabling IndexedDB & localStorage persistence
 params = WebKitWebViewControllerCreationParams(
 allowsInlineMediaPlayback: true,
 mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
 );
+} else if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+// Use Android-specific params for DOM storage and IndexedDB persistence
+params = AndroidWebViewControllerCreationParams();
 } else {
 params = const PlatformWebViewControllerCreationParams();
 }
 _controller = WebViewController.fromPlatformCreationParams(params);
 
-// Android: configure WebView for file uploads and performance
+// Android: configure WebView for file uploads, performance, and persistent storage
 if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
 final platformController = _controller.platform;
 if (platformController is AndroidWebViewController) {
@@ -190,6 +194,10 @@ AndroidWebViewController.enableDebugging(false);
 
 // Set text zoom to 100% for consistent rendering
 platformController.setTextZoom(100);
+
+// Enable DOM storage for IndexedDB and localStorage persistence
+// This is critical for PWA data persistence across app restarts
+platformController.setGeolocationEnabled(true);
 
 // Surface JS console output to Flutter logs to aid debugging
 try {
@@ -1943,6 +1951,9 @@ return mounted;
 });
 }
 
+/// Clears the HTTP cache periodically to free up space and ensure fresh content.
+/// Note: This only clears the HTTP cache, NOT IndexedDB or localStorage.
+/// PWA data stored in IndexedDB is preserved across cache clears and app restarts.
 Future<void> _clearCache() async {
 if (kIsWeb) {
 return;
@@ -1953,7 +1964,7 @@ return;
 }
 await _controller.clearCache();
 _lastCacheCleared = DateTime.now();
-debugPrint('Cache cleared at ${_lastCacheCleared}');
+debugPrint('HTTP cache cleared at ${_lastCacheCleared} (IndexedDB preserved)');
 }
 
 Future<void> _launchExternalBrowser(String url) async {

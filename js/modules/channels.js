@@ -641,7 +641,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 return `
         <div class="blocked-item">
             <span>${this.escapeHtml(displayName)}</span>
-            <button class="unblock-btn" onclick="nym.unblockChannelFromSettings('${this.escapeHtml(key)}')">Unblock</button>
+            <button class="unblock-btn" data-action="unblockChannelFromSettings" data-channel-key="${this.escapeHtml(key)}">Unblock</button>
         </div>
     `;
             }).join('');
@@ -671,7 +671,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 return `
         <div class="blocked-item">
             <span>${label}</span>
-            <button class="unblock-btn" onclick="nym.unhideChannelFromSettings('${this.escapeHtml(key)}')">Unhide</button>
+            <button class="unblock-btn" data-action="unhideChannelFromSettings" data-channel-key="${this.escapeHtml(key)}">Unhide</button>
         </div>
     `;
             }).join('');
@@ -746,6 +746,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // still connecting, so no need to block the channel switch.
         if (geohash) {
             this.connectToGeoRelays(geohash);
+            this.startGeoRelayKeepAlive(geohash);
+        } else {
+            this.stopGeoRelayKeepAlive();
         }
 
         // Always ensure default relays (first 5 broadcast) stay connected

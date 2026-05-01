@@ -362,7 +362,7 @@ Object.assign(NYM.prototype, {
         this.shopItems.styles.forEach(item => {
             const isPurchased = this.userPurchases.has(item.id);
             html += `
-    <div class="shop-item ${isPurchased ? 'purchased' : ''}" onclick="${!isPurchased ? `nym.purchaseItem('${item.id}')` : ''}">
+    <div class="shop-item ${isPurchased ? 'purchased' : ''}" ${!isPurchased ? `data-action="purchaseItem" data-item-id="${item.id}"` : ''}>
         <div class="shop-item-icon">${item.icon}</div>
         <div class="shop-item-name">${item.name}</div>
         <div class="shop-item-description">${item.description}</div>
@@ -388,7 +388,7 @@ Object.assign(NYM.prototype, {
         this.shopItems.flair.forEach(item => {
             const isPurchased = this.userPurchases.has(item.id);
             html += `
-    <div class="shop-item ${isPurchased ? 'purchased' : ''}" onclick="${!isPurchased ? `nym.purchaseItem('${item.id}')` : ''}">
+    <div class="shop-item ${isPurchased ? 'purchased' : ''}" ${!isPurchased ? `data-action="purchaseItem" data-item-id="${item.id}"` : ''}>
         <div class="shop-item-icon">${item.icon}</div>
         <div class="shop-item-name">${item.name}</div>
         <div class="shop-item-description">${item.description}</div>
@@ -414,7 +414,7 @@ Object.assign(NYM.prototype, {
         this.shopItems.special.forEach(item => {
             const isPurchased = this.userPurchases.has(item.id);
             html += `
-    <div class="shop-item ${isPurchased ? 'purchased' : ''}" onclick="${!isPurchased ? `nym.purchaseItem('${item.id}')` : ''}">
+    <div class="shop-item ${isPurchased ? 'purchased' : ''}" ${!isPurchased ? `data-action="purchaseItem" data-item-id="${item.id}"` : ''}>
         <div class="shop-item-icon">${item.icon}</div>
         <div class="shop-item-name">${item.name}</div>
         <div class="shop-item-description">${item.description}</div>
@@ -491,33 +491,33 @@ Object.assign(NYM.prototype, {
                 if (item.type === 'message-style') {
                     const isActive = this.activeMessageStyle === itemId;
                     html += `
-<button class="shop-buy-btn" onclick="nym.activateMessageStyle('${itemId}')" style="margin-top: 10px; width: 100%;">
+<button class="shop-buy-btn" data-action="activateMessageStyle" data-item-id="${itemId}" style="margin-top: 10px; width: 100%;">
 ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
                 } else if (item.type === 'nickname-flair') {
                     const isActive = this.activeFlair === itemId;
                     html += `
-<button class="shop-buy-btn" onclick="nym.activateFlair('${itemId}')" style="margin-top: 10px; width: 100%;">
+<button class="shop-buy-btn" data-action="activateFlair" data-item-id="${itemId}" style="margin-top: 10px; width: 100%;">
 ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
                 } else if (item.type === 'cosmetic') {
                     const isOn = this.activeCosmetics.has(itemId);
                     html += `
-<button class="shop-buy-btn" onclick="nym.activateCosmetic('${itemId}')" style="margin-top: 10px; width: 100%;">
+<button class="shop-buy-btn" data-action="activateCosmetic" data-item-id="${itemId}" style="margin-top: 10px; width: 100%;">
 ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
                 } else if (item.type === 'supporter') {
                     const isActive = this.supporterBadgeActive !== false;
                     html += `<div class="shop-item-preview"><span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span></div>`;
                     html += `
-<button class="shop-buy-btn" onclick="nym.activateSupporter()" style="margin-top: 10px; width: 100%;">
+<button class="shop-buy-btn" data-action="activateSupporter" style="margin-top: 10px; width: 100%;">
 ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
                 }
 
                 // Transfer button for all purchased items
                 html += `
-<button class="shop-buy-btn shop-transfer-btn" onclick="nym.promptTransferShopItem('${itemId}')" style="margin-top: 8px; width: 100%; background: linear-gradient(135deg, rgba(0, 255, 170, 0.12), rgba(0, 255, 170, 0.05)); border-color: rgba(0, 255, 170, 0.3); color: var(--text-bright);">
+<button class="shop-buy-btn shop-transfer-btn" data-action="promptTransferShopItem" data-item-id="${itemId}" style="margin-top: 8px; width: 100%; background: linear-gradient(135deg, rgba(0, 255, 170, 0.12), rgba(0, 255, 170, 0.05)); border-color: rgba(0, 255, 170, 0.3); color: var(--text-bright);">
 TRANSFER TO PUBKEY
 </button>`;
 
@@ -930,7 +930,7 @@ TRANSFER TO PUBKEY
     <div style="margin-top: 20px; padding: 15px; background: var(--bg-tertiary); border: 1px solid var(--warning); border-radius: 5px;">
         <div style="color: var(--warning); font-weight: bold; margin-bottom: 10px;">⚠️ SAVE YOUR RECOVERY CODE</div>
         <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 10px;">Copy this code to restore your purchase in a new session:</div>
-        <div style="font-family: monospace; color: var(--text-bright); font-size: 14px; word-break: break-all; cursor: pointer;" onclick="navigator.clipboard.writeText('${recoveryCode}'); this.textContent = 'Copied!';" title="Click to copy">${recoveryCode}</div>
+        <div style="font-family: monospace; color: var(--text-bright); font-size: 14px; word-break: break-all; cursor: pointer;" data-action="copyTextFromData" data-copy-text="${recoveryCode}" title="Click to copy">${recoveryCode}</div>
     </div>
 `;
         }
@@ -942,9 +942,9 @@ TRANSFER TO PUBKEY
         const modalActions = document.querySelector('#zapModal .modal-actions');
         if (modalActions) {
             if (hasRecovery) {
-                modalActions.innerHTML = `<button class="send-btn" onclick="nym.dismissShopSuccess()">Close</button>`;
+                modalActions.innerHTML = `<button class="send-btn" data-action="dismissShopSuccess">Close</button>`;
             } else {
-                modalActions.innerHTML = `<button class="send-btn" onclick="nym.dismissShopSuccess()">Close</button>`;
+                modalActions.innerHTML = `<button class="send-btn" data-action="dismissShopSuccess">Close</button>`;
                 // Auto-close after 5 seconds for non-recovery purchases
                 this._shopSuccessAutoClose = setTimeout(() => {
                     this.dismissShopSuccess();
@@ -1235,7 +1235,7 @@ ${code}
         modal.id = 'transferModal';
         modal.innerHTML = `
 <div class="modal-content" style="max-width: 420px;">
-    <button class="modal-close" onclick="document.getElementById('transferModal').remove()">✕</button>
+    <button class="modal-close" data-action="removeElementById" data-remove-id="transferModal">✕</button>
     <h3 style="color: var(--text-bright); margin-bottom: 15px;">Transfer Item</h3>
     <div style="margin-bottom: 15px;">
         <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
@@ -1250,8 +1250,8 @@ ${code}
         <p id="transferError" style="color: var(--danger); font-size: 11px; margin-top: 5px; display: none;"></p>
     </div>
     <div style="display: flex; gap: 10px;">
-        <button class="send-btn" onclick="nym.executeTransferShopItem('${itemId}')" style="flex: 1;">Confirm</button>
-        <button class="send-btn" onclick="document.getElementById('transferModal').remove()" style="flex: 1; background: var(--bg-tertiary);">Cancel</button>
+        <button class="send-btn" data-action="executeTransferShopItem" data-item-id="${itemId}" style="flex: 1;">Confirm</button>
+        <button class="send-btn" data-action="removeElementById" data-remove-id="transferModal" style="flex: 1; background: var(--bg-tertiary);">Cancel</button>
     </div>
 </div>`;
         document.body.appendChild(modal);
@@ -1407,6 +1407,12 @@ ${code}
             return;
         }
 
+        if (!this._canSendGiftWraps()) {
+            errorEl.textContent = 'Settings transfer requires a logged-in account.';
+            errorEl.style.display = 'block';
+            return;
+        }
+
         try {
             const avatarUrl = this.userAvatars.get(this.pubkey) || localStorage.getItem('nym_avatar_url') || '';
 
@@ -1440,7 +1446,7 @@ ${code}
                 }
             };
 
-            const transferEvent = {
+            const rumor = {
                 kind: 30078,
                 created_at: Math.floor(Date.now() / 1000),
                 tags: [
@@ -1453,10 +1459,7 @@ ${code}
                 pubkey: this.pubkey
             };
 
-            const signedEvent = await this.signEvent(transferEvent);
-            if (signedEvent) {
-                this.sendToRelay(['EVENT', signedEvent]);
-            }
+            await this._sendGiftWrapsAsync([recipientPubkey], rumor, null);
 
             input.value = '';
             this.displaySystemMessage(`Settings transfer sent to ${recipientPubkey.substring(0, 8)}...!`);
@@ -1468,8 +1471,7 @@ ${code}
 
     handleSettingsTransferEvent(event) {
         try {
-            // Verify event signature
-            if (!window.NostrTools.verifyEvent(event)) return;
+            if (!event._giftWrapped && !window.NostrTools.verifyEvent(event)) return;
 
             const transferTo = event.tags.find(t => t[0] === 'settings-transfer-to');
             if (!transferTo || transferTo[1] !== this.pubkey) return;
@@ -1724,8 +1726,8 @@ ${code}
                         <div style="font-size: 11px; color: var(--text-dim);">Includes: ${t.nickname ? 'nickname' : ''}${t.avatarUrl ? ', avatar' : ''}${t.settings ? ', preferences' : ''}</div>
                     </div>
                     <div style="display: flex; gap: 6px; margin-left: 8px;">
-                        <button class="icon-btn" onclick="nym.acceptSettingsTransfer('${t.eventId}')" style="padding: 4px 10px; font-size: 12px;">Accept</button>
-                        <button class="icon-btn" onclick="nym.rejectSettingsTransfer('${t.eventId}')" style="padding: 4px 10px; font-size: 12px; color: var(--danger); border-color: var(--danger);">Reject</button>
+                        <button class="icon-btn" data-action="acceptSettingsTransfer" data-event-id="${t.eventId}" style="padding: 4px 10px; font-size: 12px;">Accept</button>
+                        <button class="icon-btn" data-action="rejectSettingsTransfer" data-event-id="${t.eventId}" style="padding: 4px 10px; font-size: 12px; color: var(--danger); border-color: var(--danger);">Reject</button>
                     </div>
                 </div>`;
         }).join('');
