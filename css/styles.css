@@ -2632,6 +2632,11 @@ body.chat-bubbles .edited-indicator-irc {
     margin: 2px 0;
 }
 
+.list-empty-msg {
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
 .blocked-item:hover,
 .keyword-item:hover {
     background: rgba(255, 255, 255, 0.04);

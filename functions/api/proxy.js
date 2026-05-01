@@ -6,6 +6,7 @@
 //   GET  /api/proxy?url=<encoded-url>            — Proxy any allowed media/resource
 //   POST /api/proxy?action=translate             — Translate text
 //   GET  /api/proxy?action=unfurl&url=<url>      — Fetch Open Graph metadata for URL preview
+//   PUT  /api/proxy?action=upload                — Upload a blob to blossom.band (Nostr auth header)
 
 const ALLOWED_MEDIA_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
@@ -48,12 +49,57 @@ export async function onRequest(context) {
       return await handleTranslate(request);
     } else if (action === 'unfurl') {
       return await handleUnfurl(url.searchParams.get('url'));
+    } else if (action === 'upload') {
+      return await handleBlossomUpload(request);
     } else {
       return await handleMediaProxy(url.searchParams.get('url'), request);
     }
   } catch (err) {
     return jsonResponse({ error: err.message || 'Internal error' }, 500);
   }
+}
+
+const BLOSSOM_UPLOAD_URL = 'https://blossom.band/upload';
+const ALLOWED_UPLOAD_PREFIXES = ['image/', 'video/', 'audio/'];
+const UPLOAD_OCTET_STREAM = 'application/octet-stream';
+
+async function handleBlossomUpload(request) {
+  if (request.method !== 'PUT' && request.method !== 'POST') {
+    return jsonResponse({ error: 'PUT required' }, 405);
+  }
+
+  const auth = request.headers.get('Authorization');
+  if (!auth || !auth.startsWith('Nostr ')) {
+    return jsonResponse({ error: 'Missing Nostr auth' }, 401);
+  }
+
+  const contentType = (request.headers.get('Content-Type') || UPLOAD_OCTET_STREAM).split(';')[0].trim().toLowerCase();
+  const allowed = contentType === UPLOAD_OCTET_STREAM ||
+    ALLOWED_UPLOAD_PREFIXES.some(p => contentType.startsWith(p));
+  if (!allowed) {
+    return jsonResponse({ error: 'Content type not allowed: ' + contentType }, 415);
+  }
+
+  const upstreamHeaders = new Headers({
+    'Authorization': auth,
+    'Content-Type': contentType,
+    'User-Agent': 'NymchatProxy/1.0',
+    'Accept': 'application/json',
+  });
+  const contentLength = request.headers.get('Content-Length');
+  if (contentLength) upstreamHeaders.set('Content-Length', contentLength);
+
+  const resp = await fetch(BLOSSOM_UPLOAD_URL, {
+    method: 'PUT',
+    headers: upstreamHeaders,
+    body: request.body,
+  });
+
+  const respHeaders = new Headers(CORS_HEADERS);
+  const respCT = resp.headers.get('content-type');
+  if (respCT) respHeaders.set('Content-Type', respCT);
+
+  return new Response(resp.body, { status: resp.status, headers: respHeaders });
 }
 
 // Media Proxy — supports Range requests for video/audio streaming

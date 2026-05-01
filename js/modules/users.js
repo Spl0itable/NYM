@@ -22,40 +22,34 @@ Object.assign(NYM.prototype, {
         return colorClass;
     },
 
-    // Generate a unique color based on pubkey
     generateUniqueColor(pubkey) {
+        if (!pubkey) return '';
         let hash = 0;
         for (let i = 0; i < pubkey.length; i++) {
             hash = pubkey.charCodeAt(i) + ((hash << 5) - hash);
         }
-
+        const bucket = Math.abs(hash) % 1000;
         const isLight = document.body.classList.contains('light-mode');
+        this._ensureBitchatColorSheet(isLight);
+        return `bitchat-user-${isLight ? 'l' : 'd'}${bucket}`;
+    },
 
-        // Generate HSL color (adjusted for light/dark backgrounds)
-        const hue = Math.abs(hash) % 360;
-        const saturation = isLight ? (55 + (Math.abs(hash) % 35)) : (65 + (Math.abs(hash) % 35));
-        const lightness = isLight ? (25 + (Math.abs(hash) % 20)) : (60 + (Math.abs(hash) % 25));
-
-        // Create unique class name (include mode so it regenerates on switch)
-        const modeTag = isLight ? 'l' : 'd';
-        const uniqueClass = `bitchat-user-${modeTag}${Math.abs(hash) % 1000}`;
-
-        // Add dynamic style if not exists
-        if (!document.getElementById(uniqueClass)) {
-            const style = document.createElement('style');
-            style.id = uniqueClass;
-            style.textContent = `
-    .${uniqueClass} {
-        color: hsl(${hue}, ${saturation}%, ${lightness}%) !important;
-    }
-    .${uniqueClass} .nym-suffix {
-        color: hsl(${hue}, ${saturation}%, ${lightness}%) !important;
-    }
-`;
-            document.head.appendChild(style);
+    _ensureBitchatColorSheet(isLight) {
+        const id = isLight ? 'bitchat-colors-l' : 'bitchat-colors-d';
+        if (document.getElementById(id)) return;
+        const style = document.createElement('style');
+        style.id = id;
+        const parts = new Array(1000);
+        const tag = isLight ? 'l' : 'd';
+        for (let i = 0; i < 1000; i++) {
+            const hue = (i * 360 / 1000) | 0;
+            const sat = isLight ? 55 + (i % 35) : 65 + (i % 35);
+            const light = isLight ? 25 + (i % 20) : 60 + (i % 25);
+            const cls = `bitchat-user-${tag}${i}`;
+            parts[i] = `.${cls},.${cls} .nym-suffix{color:hsl(${hue},${sat}%,${light}%)!important}`;
         }
-
-        return uniqueClass;
+        style.textContent = parts.join('');
+        document.head.appendChild(style);
     },
 
     isVerifiedDeveloper(pubkey) {
@@ -180,21 +174,30 @@ Object.assign(NYM.prototype, {
 
     updateKeywordList() {
         const list = document.getElementById('keywordList');
+        if (!list) return;
+        list.textContent = '';
         if (this.blockedKeywords.size === 0) {
-            list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked keywords</div>';
-        } else {
-            list.innerHTML = Array.from(this.blockedKeywords).map(keyword => {
-                const safeAttr = this.escapeHtml(keyword);
-                return `
-                <div class="keyword-item">
-                    <span>${safeAttr}</span>
-                    <button class="remove-keyword-btn" data-keyword="${safeAttr}">Remove</button>
-                </div>`;
-            }).join('');
-            list.querySelectorAll('.remove-keyword-btn').forEach(btn => {
-                btn.addEventListener('click', () => this.removeBlockedKeyword(btn.dataset.keyword));
-            });
+            const empty = document.createElement('div');
+            empty.className = 'list-empty-msg';
+            empty.textContent = 'No blocked keywords';
+            list.appendChild(empty);
+            return;
         }
+        const frag = document.createDocumentFragment();
+        this.blockedKeywords.forEach(keyword => {
+            const row = document.createElement('div');
+            row.className = 'keyword-item';
+            const span = document.createElement('span');
+            span.textContent = keyword;
+            const btn = document.createElement('button');
+            btn.className = 'remove-keyword-btn';
+            btn.textContent = 'Remove';
+            btn.addEventListener('click', () => this.removeBlockedKeyword(keyword));
+            row.appendChild(span);
+            row.appendChild(btn);
+            frag.appendChild(row);
+        });
+        list.appendChild(frag);
     },
 
     generateRandomNym() {
@@ -304,8 +307,13 @@ Object.assign(NYM.prototype, {
     // any external network requests. Cached per-seed for performance.
     generateAvatarSvg(seed) {
         const key = String(seed == null ? '' : seed);
-        const cached = this._avatarSvgCache.get(key);
-        if (cached) return cached;
+        const cache = this._avatarSvgCache;
+        const cached = cache.get(key);
+        if (cached) {
+            cache.delete(key);
+            cache.set(key, cached);
+            return cached;
+        }
 
         // FNV-1a-ish 32-bit hash, then Mulberry32 PRNG for stable randomness.
         let h = 2166136261 >>> 0;
@@ -348,19 +356,39 @@ Object.assign(NYM.prototype, {
 
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" width="80" height="80" shape-rendering="crispEdges"><rect width="80" height="80" fill="${bg}"/><g fill="${fg}">${rects}</g></svg>`;
         const dataUri = 'data:image/svg+xml;base64,' + btoa(svg);
-        this._avatarSvgCache.set(key, dataUri);
+        cache.set(key, dataUri);
+        const MAX_AVATAR_CACHE = 5000;
+        if (cache.size > MAX_AVATAR_CACHE) {
+            const firstKey = cache.keys().next().value;
+            if (firstKey !== undefined) cache.delete(firstKey);
+        }
         return dataUri;
     },
 
     getAvatarUrl(pubkey) {
-        // Prefer cached blob URL (instant, no network)
         const blob = this.avatarBlobCache.get(pubkey);
-        if (blob) return blob;
-        // Check custom avatar URL
+        if (blob) {
+            this.avatarBlobCache.delete(pubkey);
+            this.avatarBlobCache.set(pubkey, blob);
+            return blob;
+        }
         const custom = this.userAvatars.get(pubkey);
         if (custom) return custom;
-        // Fall back to a locally-generated identicon SVG (no external requests)
         return this.generateAvatarSvg(pubkey);
+    },
+
+    _evictAvatarBlobIfFull() {
+        const MAX = 200;
+        if (this.avatarBlobCache.size <= MAX) return;
+        const it = this.avatarBlobCache.keys();
+        while (this.avatarBlobCache.size > MAX) {
+            const k = it.next().value;
+            if (k === undefined) break;
+            if (k === this.pubkey) continue;
+            const url = this.avatarBlobCache.get(k);
+            this.avatarBlobCache.delete(k);
+            if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+        }
     },
 
     // Fetch an avatar image and cache it as a blob object URL.
@@ -377,6 +405,7 @@ Object.assign(NYM.prototype, {
                 if (old) URL.revokeObjectURL(old);
                 const objectUrl = URL.createObjectURL(blob);
                 this.avatarBlobCache.set(pubkey, objectUrl);
+                this._evictAvatarBlobIfFull();
                 this.updateRenderedAvatars(pubkey, objectUrl);
             })
             .catch(() => {
@@ -471,7 +500,7 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(uploadEvent);
             const eventBase64 = btoa(JSON.stringify(signedEvent));
 
-            const response = await fetch('https://blossom.band/upload', {
+            const response = await fetch('/api/proxy?action=upload', {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -552,7 +581,7 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(uploadEvent);
             const eventBase64 = btoa(JSON.stringify(signedEvent));
 
-            const response = await fetch('https://blossom.band/upload', {
+            const response = await fetch('/api/proxy?action=upload', {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -637,7 +666,7 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(uploadEvent);
             const eventBase64 = btoa(JSON.stringify(signedEvent));
 
-            const response = await fetch('https://blossom.band/upload', {
+            const response = await fetch('/api/proxy?action=upload', {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -752,7 +781,7 @@ Object.assign(NYM.prototype, {
             progressFill.style.width = '80%';
 
             // Upload to blossom.band
-            const response = await fetch('https://blossom.band/upload', {
+            const response = await fetch('/api/proxy?action=upload', {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -907,6 +936,8 @@ Object.assign(NYM.prototype, {
         }
         this.channelUsers.get(channelKey).add(pubkey);
 
+        if (this.users.size > 10000) this._evictStaleUsers();
+
         this.updateUserList();
     },
 
@@ -922,140 +953,100 @@ Object.assign(NYM.prototype, {
 
     _doUpdateUserList() {
         const userListContent = document.getElementById('userListContent');
-        const currentChannelKey = this.currentGeohash || this.currentChannel;
+        if (!userListContent) return;
 
-        // Build set of pubkeys from PM conversations and group chats for PM-only mode filtering
+        const currentChannelKey = this.currentGeohash || this.currentChannel;
+        const now = Date.now();
+        const ACTIVE_THRESHOLD = 300000;
+
         let pmOnlyPubkeys = null;
         if (this.settings.groupChatPMOnlyMode) {
             pmOnlyPubkeys = new Set();
-            // Add all PM conversation peers
-            this.pmConversations.forEach((conv, pubkey) => {
-                pmOnlyPubkeys.add(pubkey);
-            });
-            // Add all group chat members
-            this.groupConversations.forEach((group) => {
-                if (group.members) {
-                    group.members.forEach(pk => pmOnlyPubkeys.add(pk));
-                }
+            this.pmConversations.forEach((_c, pk) => pmOnlyPubkeys.add(pk));
+            this.groupConversations.forEach(g => {
+                if (g.members) g.members.forEach(pk => pmOnlyPubkeys.add(pk));
             });
         }
 
-        // Get deduplicated users (one entry per pubkey), including inactive
-        // Compute effective status without mutating the source user objects
-        const uniqueUsers = new Map();
-        const now = Date.now();
-        const activeThreshold = 300000; // 5 minutes
-        this.users.forEach((user, pubkey) => {
-            if (!this.blockedUsers.has(user.nym)) {
-                // In PM-only mode, only show users from PMs and group chats
-                if (pmOnlyPubkeys && !pmOnlyPubkeys.has(pubkey)) return;
+        const themeBitchat = this.settings.theme === 'bitchat';
+        const verifiedBotSet = this.verifiedBotPubkeys;
+        const blockedUsers = this.blockedUsers;
 
-                if (!uniqueUsers.has(pubkey)) {
-                    let effectiveStatus = user.status;
-                    if (this.isVerifiedBot(pubkey)) {
-                        effectiveStatus = 'online';
-                    } else if (now - user.lastSeen >= activeThreshold && effectiveStatus !== 'away') {
-                        effectiveStatus = 'offline';
-                    }
-                    uniqueUsers.set(pubkey, { ...user, effectiveStatus });
-                }
-            }
-        });
-
-        // Sort into three explicit groups: active first, then away, then inactive
-        // Each group is alphabetically sorted by nym
-        const alphabetical = (a, b) => {
-            const nymA = this.parseNymFromDisplay(a.nym || '').toLowerCase();
-            const nymB = this.parseNymFromDisplay(b.nym || '').toLowerCase();
-            return nymA.localeCompare(nymB);
-        };
-        const validUsers = Array.from(uniqueUsers.values()).filter(user => user && user.nym);
-        const activeUsers = validUsers.filter(u => u.effectiveStatus === 'online').sort(alphabetical);
-        const awayUsers = validUsers.filter(u => u.effectiveStatus === 'away').sort(alphabetical);
-        const inactiveUsers = validUsers.filter(u => u.effectiveStatus === 'offline').sort(alphabetical);
-        const allUsers = [...activeUsers, ...awayUsers, ...inactiveUsers];
-
-        // Filter users based on search term
-        let displayUsers = allUsers;
-        if (this.userSearchTerm) {
-            const term = this.userSearchTerm.toLowerCase();
-            displayUsers = allUsers.filter(user =>
-                this.parseNymFromDisplay(user.nym).toLowerCase().includes(term)
-            );
-        }
-
-        // Get users in current channel for the count
+        const candidates = [];
+        let activeCount = 0;
         let channelUserCount = 0;
+
         this.users.forEach((user, pubkey) => {
-            if (Date.now() - user.lastSeen < 300000 &&
-                !this.blockedUsers.has(user.nym) &&
-                user.channels && user.channels.has(currentChannelKey)) {
+            if (!user || !user.nym) return;
+            if (blockedUsers.has(user.nym)) return;
+            if (pmOnlyPubkeys && !pmOnlyPubkeys.has(pubkey)) return;
+
+            const isRecent = (now - user.lastSeen) < ACTIVE_THRESHOLD;
+            let effectiveStatus = user.status;
+            if (verifiedBotSet.has(pubkey)) {
+                effectiveStatus = 'online';
+            } else if (!isRecent && effectiveStatus !== 'away') {
+                effectiveStatus = 'offline';
+            }
+            if (effectiveStatus !== 'offline') activeCount++;
+
+            if (isRecent && user.channels && user.channels.has(currentChannelKey)) {
                 channelUserCount++;
             }
+
+            const sortKey = this.parseNymFromDisplay(user.nym).toLowerCase();
+            candidates.push({ user, pubkey, effectiveStatus, sortKey });
         });
 
-        // Build updated DOM by reusing existing nodes where possible
-        // so that unchanged avatar <img> elements are never removed/re-added
-        // (which would cause visible flickering).
-        const existingItems = new Map();
-        userListContent.querySelectorAll('.user-item[data-pubkey]').forEach(el => {
-            existingItems.set(el.dataset.pubkey, el);
+        const statusRank = s => s === 'online' ? 0 : (s === 'away' ? 1 : 2);
+        candidates.sort((a, b) => {
+            const r = statusRank(a.effectiveStatus) - statusRank(b.effectiveStatus);
+            if (r !== 0) return r;
+            return a.sortKey < b.sortKey ? -1 : (a.sortKey > b.sortKey ? 1 : 0);
         });
 
-        const fragment = document.createDocumentFragment();
-
-        displayUsers.forEach((user) => {
-            const baseNym = this.parseNymFromDisplay(user.nym);
-            const suffix = this.getPubkeySuffix(user.pubkey);
-            const flairHtml = this.getFlairForUser(user.pubkey);
-            const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
-            const verifiedBadge = this.isVerifiedDeveloper(user.pubkey)
-                ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}" style="margin-left: 3px;">✓</span>`
-                : this.verifiedBotPubkeys.has(user.pubkey)
-                    ? '<span class="verified-badge" title="Nymchat Bot" style="margin-left: 3px;">✓</span>'
-                    : '';
-            const userColorClass = this.settings.theme === 'bitchat' ? this.getUserColorClass(user.pubkey) : '';
-            const avatarSrc = this.getAvatarUrl(user.pubkey);
-
-            let el = existingItems.get(user.pubkey);
-            if (el) {
-                // Reuse existing DOM node — only update mutable parts
-                existingItems.delete(user.pubkey);
-                const statusSpan = el.querySelector('.user-status');
-                if (statusSpan) statusSpan.className = `user-status ${user.effectiveStatus}`;
-                const img = el.querySelector('img.avatar-user-list');
-                if (img && img.getAttribute('src') !== avatarSrc) img.src = avatarSrc;
-                el.className = `user-item list-item ${userColorClass}`;
-                fragment.appendChild(el);
-            } else {
-                // Create new element for a user not previously in the list
-                const wrapper = document.createElement('div');
-                const safePk = this._safePubkey(user.pubkey);
-                wrapper.innerHTML = `<div class="user-item list-item ${userColorClass}"
-                        data-pubkey="${safePk}"
-                        data-nym="${this.escapeHtml(baseNym)}">
-                    <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" data-avatar-pubkey="${safePk}" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">
-                    <span class="user-status ${user.effectiveStatus}"></span>
-                    <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
-                </div>`;
-                const itemEl = wrapper.firstElementChild;
-                const ctxHandler = (e) => this.showContextMenu(e, displayNym, user.pubkey, null, null, true);
-                itemEl.addEventListener('click', ctxHandler);
-                itemEl.addEventListener('contextmenu', ctxHandler);
-                fragment.appendChild(itemEl);
+        let displayUsers = candidates;
+        const term = this.userSearchTerm ? this.userSearchTerm.toLowerCase() : '';
+        if (term) {
+            displayUsers = [];
+            for (let i = 0; i < candidates.length; i++) {
+                if (candidates[i].sortKey.includes(term)) displayUsers.push(candidates[i]);
             }
-        });
+        }
 
-        // Remove users no longer in the list
-        existingItems.forEach(el => el.remove());
+        const COLLAPSED_CAP = 20;
+        const EXPANDED_STEP = 500;
+        const isExpanded = this.listExpansionStates && this.listExpansionStates.get('userListContent');
+        if (this._userListExpandedCap == null) this._userListExpandedCap = EXPANDED_STEP;
+        const totalCount = displayUsers.length;
+        let renderCap;
+        if (term) {
+            renderCap = totalCount;
+        } else if (isExpanded) {
+            renderCap = Math.min(totalCount, this._userListExpandedCap);
+        } else {
+            renderCap = Math.min(totalCount, COLLAPSED_CAP);
+        }
+        const renderUsers = renderCap < totalCount ? displayUsers.slice(0, renderCap) : displayUsers;
 
-        // Replace content — moves existing nodes (preserving loaded images)
-        userListContent.textContent = '';
-        userListContent.appendChild(fragment);
+        const isLight = themeBitchat && document.body.classList.contains('light-mode');
+        const sigParts = [
+            themeBitchat ? (isLight ? 'bl' : 'bd') : 'n',
+            term, totalCount, renderCap, isExpanded ? '1' : '0',
+        ];
+        for (let i = 0; i < renderUsers.length; i++) {
+            const c = renderUsers[i];
+            sigParts.push(c.pubkey, c.effectiveStatus[0], c.sortKey);
+        }
+        const sig = sigParts.join('|');
 
-        this.updateViewMoreButton('userListContent');
+        if (sig !== this._userListSig) {
+            this._userListSig = sig;
+            this._renderUserListItems(userListContent, renderUsers, themeBitchat);
+        }
 
-        const activeCount = allUsers.filter(u => u.effectiveStatus !== 'offline').length;
+        this._updateUserListViewMoreButton(userListContent, totalCount, renderCap, isExpanded, EXPANDED_STEP);
+
         const userListTitle = document.querySelector('#userList .nav-title-text');
         if (userListTitle) {
             userListTitle.textContent = `Nyms (${this.abbreviateNumber(activeCount)} active)`;
@@ -1066,8 +1057,224 @@ Object.assign(NYM.prototype, {
             if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} active nyms`;
         }
 
-        // Refresh mention menu if it's currently open so it reflects latest presence
         this.refreshAutocompleteIfOpen();
+    },
+
+    _renderUserListItems(container, displayUsers, themeBitchat) {
+        const existing = new Map();
+        const itemEls = container.querySelectorAll('.user-item[data-pubkey]');
+        for (let i = 0; i < itemEls.length; i++) {
+            existing.set(itemEls[i].dataset.pubkey, itemEls[i]);
+        }
+
+        const fragment = document.createDocumentFragment();
+        for (let i = 0; i < displayUsers.length; i++) {
+            const { user, pubkey, effectiveStatus } = displayUsers[i];
+            const safePk = this._safePubkey(pubkey);
+            if (!safePk) continue;
+
+            const baseNym = this.parseNymFromDisplay(user.nym);
+            const userColorClass = themeBitchat ? this.getUserColorClass(pubkey) : '';
+            const avatarSrc = this.getAvatarUrl(pubkey);
+            const isDev = this.isVerifiedDeveloper(pubkey);
+            const isBot = !isDev && this.verifiedBotPubkeys.has(pubkey);
+            const flairKey = this._userFlairKey ? this._userFlairKey(pubkey) : '';
+            const fp = `${effectiveStatus}|${baseNym}|${userColorClass}|${avatarSrc}|${isDev?1:0}${isBot?1:0}|${flairKey}`;
+
+            let el = existing.get(safePk);
+            if (el) {
+                existing.delete(safePk);
+                if (el._fp !== fp) {
+                    this._updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot });
+                    el._fp = fp;
+                }
+            } else {
+                el = this._createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot });
+                el._fp = fp;
+            }
+            fragment.appendChild(el);
+        }
+
+        existing.forEach(el => el.remove());
+        container.textContent = '';
+        container.appendChild(fragment);
+
+        if (!container._delegated) {
+            container._delegated = true;
+            const handler = (e) => {
+                const item = e.target.closest && e.target.closest('.user-item[data-pubkey]');
+                if (!item || !container.contains(item)) return;
+                const pk = item.dataset.pubkey;
+                if (!pk) return;
+                const baseNym = item.dataset.nym || '';
+                const suffix = this.getPubkeySuffix(pk);
+                const flairHtml = this.getFlairForUser(pk);
+                const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+                this.showContextMenu(e, displayNym, pk, null, null, true);
+            };
+            container.addEventListener('click', handler);
+            container.addEventListener('contextmenu', handler);
+        }
+    },
+
+    _createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot }) {
+        const item = document.createElement('div');
+        item.className = userColorClass ? `user-item list-item ${userColorClass}` : 'user-item list-item';
+        item.dataset.pubkey = pubkey;
+        item.dataset.nym = baseNym;
+
+        const img = document.createElement('img');
+        img.className = 'avatar-user-list';
+        img.alt = '';
+        img.loading = 'lazy';
+        img.dataset.avatarPubkey = pubkey;
+        img.src = avatarSrc;
+        const fallback = this.generateAvatarSvg(pubkey);
+        img.onerror = () => { img.onerror = null; img.src = fallback; };
+        item.appendChild(img);
+
+        const status = document.createElement('span');
+        status.className = `user-status ${effectiveStatus}`;
+        item.appendChild(status);
+
+        const label = document.createElement('span');
+        if (userColorClass) label.className = userColorClass;
+        this._fillUserLabel(label, baseNym, pubkey, isDev, isBot);
+        item.appendChild(label);
+        return item;
+    },
+
+    _updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot }) {
+        el.className = userColorClass ? `user-item list-item ${userColorClass}` : 'user-item list-item';
+        el.dataset.nym = baseNym;
+        const img = el.querySelector('img.avatar-user-list');
+        if (img && img.getAttribute('src') !== avatarSrc) img.src = avatarSrc;
+        const statusSpan = el.querySelector('.user-status');
+        if (statusSpan) statusSpan.className = `user-status ${effectiveStatus}`;
+        const label = el.querySelector('span:last-child');
+        if (label) {
+            label.className = userColorClass || '';
+            label.textContent = '';
+            this._fillUserLabel(label, baseNym, pubkey, isDev, isBot);
+        }
+    },
+
+    _fillUserLabel(label, baseNym, pubkey, isDev, isBot) {
+        label.appendChild(document.createTextNode(baseNym));
+        const suffix = this.getPubkeySuffix(pubkey);
+        const suffixSpan = document.createElement('span');
+        suffixSpan.className = 'nym-suffix';
+        suffixSpan.textContent = `#${suffix}`;
+        label.appendChild(suffixSpan);
+
+        const flairHtml = this.getFlairForUser(pubkey);
+        if (flairHtml) {
+            const tmpl = document.createElement('template');
+            tmpl.innerHTML = flairHtml;
+            label.appendChild(tmpl.content);
+        }
+
+        if (isDev || isBot) {
+            label.appendChild(document.createTextNode(' '));
+            const badge = document.createElement('span');
+            badge.className = 'verified-badge';
+            badge.title = isDev ? this.verifiedDeveloper.title : 'Nymchat Bot';
+            badge.textContent = '✓';
+            label.appendChild(badge);
+        }
+    },
+
+    _userFlairKey(pubkey) {
+        const items = this.getUserShopItems && this.getUserShopItems(pubkey);
+        return items && items.flair ? items.flair : '';
+    },
+
+    _evictStaleUsers() {
+        const TARGET = 8000;
+        const STALE_AGE = 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        if (this.users.size <= TARGET) return;
+
+        const candidates = [];
+        this.users.forEach((u, pk) => {
+            if (pk === this.pubkey) return;
+            if (this.friends && this.friends.has(pk)) return;
+            const age = now - (u.lastSeen || 0);
+            if (age > STALE_AGE) candidates.push({ pk, age });
+        });
+        candidates.sort((a, b) => b.age - a.age);
+
+        let removed = 0;
+        const target = this.users.size - TARGET;
+        for (let i = 0; i < candidates.length && removed < target; i++) {
+            const pk = candidates[i].pk;
+            this.users.delete(pk);
+            this.userColors && this.userColors.delete(pk);
+            const blobUrl = this.avatarBlobCache && this.avatarBlobCache.get(pk);
+            if (blobUrl && blobUrl.startsWith('blob:')) URL.revokeObjectURL(blobUrl);
+            this.avatarBlobCache && this.avatarBlobCache.delete(pk);
+            this.channelUsers && this.channelUsers.forEach(set => set.delete(pk));
+            removed++;
+        }
+        if (removed > 0) this._userListSig = '';
+    },
+
+    _updateUserListViewMoreButton(container, totalCount, renderCap, isExpanded, expandedStep) {
+        const list = container.parentElement;
+        if (!list) return;
+
+        const searchInput = list.querySelector('.search-input');
+        const searchActive = !!(searchInput && searchInput.value.trim().length > 0);
+
+        let btn = container.querySelector('.view-more-btn');
+
+        if (searchActive || totalCount <= 20) {
+            if (btn) btn.remove();
+            list.classList.remove('list-collapsed', 'list-expanded');
+            return;
+        }
+
+        if (isExpanded) {
+            list.classList.remove('list-collapsed');
+            list.classList.add('list-expanded');
+        } else {
+            list.classList.add('list-collapsed');
+            list.classList.remove('list-expanded');
+        }
+
+        if (!btn) {
+            btn = document.createElement('div');
+            btn.className = 'view-more-btn';
+            container.appendChild(btn);
+        } else if (btn.parentElement !== container || btn !== container.lastElementChild) {
+            container.appendChild(btn);
+        }
+
+        const remaining = totalCount - renderCap;
+        if (!isExpanded) {
+            btn.textContent = `View ${this.abbreviateNumber(totalCount - 20)} more...`;
+            btn.onclick = () => {
+                this.listExpansionStates.set('userListContent', true);
+                this._userListExpandedCap = expandedStep;
+                this._userListSig = '';
+                this.updateUserList();
+            };
+        } else if (remaining > 0) {
+            btn.textContent = `Show ${this.abbreviateNumber(Math.min(remaining, expandedStep))} more...`;
+            btn.onclick = () => {
+                this._userListExpandedCap = (this._userListExpandedCap || expandedStep) + expandedStep;
+                this._userListSig = '';
+                this.updateUserList();
+            };
+        } else {
+            btn.textContent = 'Show less';
+            btn.onclick = () => {
+                this.listExpansionStates.set('userListContent', false);
+                this._userListExpandedCap = expandedStep;
+                this._userListSig = '';
+                this.updateUserList();
+            };
+        }
     },
 
     unblockByPubkey(pubkey) {
@@ -1107,13 +1314,16 @@ Object.assign(NYM.prototype, {
 
     updateBlockedList() {
         const list = document.getElementById('blockedList');
+        if (!list) return;
+        list.textContent = '';
+        const msg = document.createElement('div');
+        msg.className = 'list-empty-msg';
         if (this.blockedUsers.size === 0) {
-            list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked users</div>';
+            msg.textContent = 'No blocked users';
+            list.appendChild(msg);
         } else {
-            // Show loading state
-            list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">Loading...</div>';
-
-            // Load async without blocking
+            msg.textContent = 'Loading...';
+            list.appendChild(msg);
             this.loadBlockedUsersAsync(list);
         }
     },
@@ -1132,16 +1342,25 @@ Object.assign(NYM.prototype, {
             await this.fetchMetadataForBlockedUsers(uncachedPubkeys);
         }
 
-        // Now render with proper nyms
-        listElement.innerHTML = blockedArray.map(pubkey => {
-            const nym = this.escapeHtml(this.getNymFromPubkey(pubkey));
-            return `
-    <div class="blocked-item">
-        <span>${nym}</span>
-        <button class="unblock-btn" onclick="nym.unblockByPubkey('${pubkey}')">Unblock</button>
-    </div>
-`;
-        }).join('');
+        listElement.textContent = '';
+        const frag = document.createDocumentFragment();
+        blockedArray.forEach(pubkey => {
+            const safePk = this._safePubkey(pubkey);
+            if (!safePk) return;
+            const nym = this.getNymFromPubkey(pubkey);
+            const row = document.createElement('div');
+            row.className = 'blocked-item';
+            const span = document.createElement('span');
+            span.textContent = nym;
+            const btn = document.createElement('button');
+            btn.className = 'unblock-btn';
+            btn.textContent = 'Unblock';
+            btn.addEventListener('click', () => this.unblockByPubkey(safePk));
+            row.appendChild(span);
+            row.appendChild(btn);
+            frag.appendChild(row);
+        });
+        listElement.appendChild(frag);
     },
 
     // Fetch metadata for blocked users
@@ -1283,10 +1502,15 @@ Object.assign(NYM.prototype, {
     updateFriendsList() {
         const list = document.getElementById('friendsList');
         if (!list) return;
+        list.textContent = '';
+        const msg = document.createElement('div');
+        msg.className = 'list-empty-msg';
         if (this.friends.size === 0) {
-            list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No friends added</div>';
+            msg.textContent = 'No friends added';
+            list.appendChild(msg);
         } else {
-            list.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">Loading...</div>';
+            msg.textContent = 'Loading...';
+            list.appendChild(msg);
             this.loadFriendsListAsync(list);
         }
     },
@@ -1303,15 +1527,25 @@ Object.assign(NYM.prototype, {
             await this.fetchMetadataForBlockedUsers(uncachedPubkeys);
         }
 
-        listElement.innerHTML = friendsArray.map(pubkey => {
-            const nym = this.escapeHtml(this.getNymFromPubkey(pubkey));
-            return `
-    <div class="blocked-item">
-        <span>${nym}</span>
-        <button class="unblock-btn" onclick="nym.removeFriendByPubkey('${pubkey}')">Remove</button>
-    </div>
-`;
-        }).join('');
+        listElement.textContent = '';
+        const frag = document.createDocumentFragment();
+        friendsArray.forEach(pubkey => {
+            const safePk = this._safePubkey(pubkey);
+            if (!safePk) return;
+            const nym = this.getNymFromPubkey(pubkey);
+            const row = document.createElement('div');
+            row.className = 'blocked-item';
+            const span = document.createElement('span');
+            span.textContent = nym;
+            const btn = document.createElement('button');
+            btn.className = 'unblock-btn';
+            btn.textContent = 'Remove';
+            btn.addEventListener('click', () => this.removeFriendByPubkey(safePk));
+            row.appendChild(span);
+            row.appendChild(btn);
+            frag.appendChild(row);
+        });
+        listElement.appendChild(frag);
     },
 
     escapeHtml(text) {
