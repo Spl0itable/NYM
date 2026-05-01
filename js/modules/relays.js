@@ -1883,7 +1883,9 @@ Object.assign(NYM.prototype, {
                         this._resubscribeChannels();
                     })
                     .catch(() => {
-                        if (retries < 1) {
+                        const isCritical = shardId.startsWith('critical');
+                        const maxRetries = isCritical ? 6 : 3;
+                        if (retries < maxRetries) {
                             attempt(retries + 1);
                         } else {
                             this._shardReconnecting.delete(shardId);
@@ -1989,10 +1991,10 @@ Object.assign(NYM.prototype, {
 
             const timeout = setTimeout(() => {
                 if (ws.readyState !== WebSocket.OPEN) {
-                    ws.close();
+                    try { ws.close(); } catch (_) { }
                     reject(new Error(`Pool worker ${shard.id} connection timeout`));
                 }
-            }, 5000);
+            }, 12000);
 
             ws.onopen = () => {
                 clearTimeout(timeout);

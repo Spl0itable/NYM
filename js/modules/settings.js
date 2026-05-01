@@ -129,11 +129,24 @@ Object.assign(NYM.prototype, {
     // Encrypt settings into a self-addressed gift wrap (kind 1059) and publish.
     // Adds a d-tag on the outer wrap so relays can be queried for it.
     async _publishEncryptedSettings(settingsData) {
-        const NT = window.NostrTools;
         const now = Math.floor(Date.now() / 1000);
 
-        // NIP-44 max plaintext is 65535 bytes. Content is encrypted twice
+        // NIP-44 max plaintext is 65535 bytes. Content is encrypted twice.
         const MAX_PLAINTEXT = 28000;
+
+        // Always mirror group ephemeral keys to a dedicated nymchat-keys event so
+        // they survive even when the main settings payload is truncated for size.
+        const ekData = settingsData.groupEphemeralKeys || null;
+        if (ekData) {
+            try {
+                await this._publishWrappedNostrEvent(
+                    { groupEphemeralKeys: ekData },
+                    'nymchat-keys',
+                    now
+                );
+            } catch (_) { }
+        }
+
         let content = JSON.stringify(settingsData);
         if (content.length > MAX_PLAINTEXT) {
             delete settingsData.groupMessageHistory;
@@ -144,23 +157,33 @@ Object.assign(NYM.prototype, {
             content = JSON.stringify(settingsData);
         }
         if (content.length > MAX_PLAINTEXT) {
+            // Keys are also stored in the dedicated nymchat-keys event above,
+            // so dropping them here doesn't lose data.
             delete settingsData.groupEphemeralKeys;
             content = JSON.stringify(settingsData);
         }
 
+        await this._publishWrappedNostrEvent(settingsData, 'nymchat-settings', now);
+    },
+
+    // Wrap an arbitrary settings payload as a NIP-59 self-addressed gift wrap
+    // (kind 1059 outer, kind 30078 inner) with the given d-tag.
+    async _publishWrappedNostrEvent(payload, dTag, createdAt) {
+        const NT = window.NostrTools;
+        const now = createdAt || Math.floor(Date.now() / 1000);
+
         const rumor = {
             kind: 30078,
             created_at: now,
-            tags: [['d', 'nymchat-settings']],
-            content,
+            tags: [['d', dTag]],
+            content: JSON.stringify(payload),
             pubkey: this.pubkey
         };
         rumor.id = NT.getEventHash(rumor);
 
-        const outerTags = [['p', this.pubkey], ['d', 'nymchat-settings']];
+        const outerTags = [['p', this.pubkey], ['d', dTag]];
 
         if (this.privkey) {
-            // Local privkey fast path
             const ckSeal = NT.nip44.getConversationKey(this.privkey, this.pubkey);
             const sealContent = NT.nip44.encrypt(JSON.stringify(rumor), ckSeal);
             const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
@@ -178,7 +201,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Extension or NIP-46 remote signer path
         const useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
         const useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
         if (!useExt && !useN46) return;

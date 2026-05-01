@@ -742,12 +742,10 @@ Object.assign(NYM.prototype, {
                     try {
                         const s = JSON.parse(rumor.content);
                         const rumorTs = rumor.created_at || 0;
-                        // Always merge additive data (group history, ephemeral keys, group list)
-                        // from every settings event regardless of timestamp order — older saves
-                        // may contain unique messages or keys absent from the newest event.
+                        const dTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'd' && t[1])?.[1];
+                        const isKeysOnly = dTag === 'nymchat-keys';
                         await applyNostrSettingsAdditive(s);
-                        // Only apply state-replacing preferences from events newer than what we've seen
-                        if (rumorTs > (this._lastSettingsSyncTs || 0)) {
+                        if (!isKeysOnly && rumorTs > (this._lastSettingsSyncTs || 0)) {
                             this._lastSettingsSyncTs = rumorTs;
                             await applyNostrSettings(s);
                         }

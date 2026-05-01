@@ -430,6 +430,7 @@ Object.assign(NYM.prototype, {
             if (ephTag) {
                 this._updateMemberEphemeralKey(groupId, senderPubkey, ephTag[1], rumor.created_at || 0);
                 this._saveEphemeralKeys();
+                this._debouncedNostrSettingsSave(15000);
             }
         }
 

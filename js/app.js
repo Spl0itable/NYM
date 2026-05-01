@@ -3142,7 +3142,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.298 ═══<br/>
+═══ Nymchat v3.59.299 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4626,8 +4626,8 @@ function nostrSettingsLoad() {
     const filter = {
         kinds: [1059],
         '#p': [pubkey],
-        '#d': ['nymchat-settings'],
-        limit: 1
+        '#d': ['nymchat-settings', 'nymchat-keys'],
+        limit: 8
     };
 
     // Pool mode: send REQ through the multiplexed pool workers
