@@ -28,8 +28,8 @@ const TRANSLATE_TIMEOUT = 8000;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Range',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Range, Authorization',
   'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
 };
 

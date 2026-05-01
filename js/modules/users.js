@@ -500,7 +500,9 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(uploadEvent);
             const eventBase64 = btoa(JSON.stringify(signedEvent));
 
-            const response = await fetch('/api/proxy?action=upload', {
+            const base = this._getProxyBaseUrl();
+            if (!base) throw new Error('Upload proxy unavailable');
+            const response = await fetch(`${base}?action=upload`, {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -581,7 +583,9 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(uploadEvent);
             const eventBase64 = btoa(JSON.stringify(signedEvent));
 
-            const response = await fetch('/api/proxy?action=upload', {
+            const base = this._getProxyBaseUrl();
+            if (!base) throw new Error('Upload proxy unavailable');
+            const response = await fetch(`${base}?action=upload`, {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -666,7 +670,9 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(uploadEvent);
             const eventBase64 = btoa(JSON.stringify(signedEvent));
 
-            const response = await fetch('/api/proxy?action=upload', {
+            const base = this._getProxyBaseUrl();
+            if (!base) throw new Error('Upload proxy unavailable');
+            const response = await fetch(`${base}?action=upload`, {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -781,7 +787,9 @@ Object.assign(NYM.prototype, {
             progressFill.style.width = '80%';
 
             // Upload to blossom.band
-            const response = await fetch('/api/proxy?action=upload', {
+            const base = this._getProxyBaseUrl();
+            if (!base) throw new Error('Upload proxy unavailable');
+            const response = await fetch(`${base}?action=upload`, {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,

@@ -2725,7 +2725,7 @@ async function refreshAppCacheSize() {
     if (totalItems === 0 && sizeBytes === 0) {
         const probe = await probeAppCacheWritable();
         if (!probe.ok) {
-            el.textContent = `IndexedDB unavailable (${probe.reason}) — cache disabled in this browser`;
+            el.textContent = `IndexedDB unavailable (${probe.reason}) — cache disabled in this app`;
         } else {
             el.textContent = 'No cached data on device yet';
         }
@@ -3143,7 +3143,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.304 ═══<br/>
+═══ Nymchat v3.59.305 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
