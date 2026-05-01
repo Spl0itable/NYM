@@ -235,7 +235,7 @@ Object.assign(NYM.prototype, {
                 data-nym="${this.escapeHtml(user.nym)}"
                 data-pubkey="${safePk}"
                 onclick="nym.selectSpecificAutocomplete('${this.escapeHtml(user.nym)}', '${safePk}')">
-            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">${statusIndicator}<strong>@${user.displayNym}</strong>
+            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">${statusIndicator}<strong>@${user.displayNym}</strong>
         </div>
     `;
             }).join('');

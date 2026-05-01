@@ -989,6 +989,7 @@ class NYM {
         this.userBios = new Map();
         this.avatarBlobCache = new Map();
         this.avatarBlobInflight = new Map();
+        this._avatarSvgCache = new Map();
         this.bannerBlobCache = new Map();
         this.bannerBlobInflight = new Map();
         this._proxyFetchQueue = [];
@@ -1035,7 +1036,7 @@ class NYM {
             status: 'online',
             channels: new Set()
         });
-        // Seed nymbot avatar so it shows in sidebar and user list instead of robohash
+        // Seed nymbot avatar so it shows in sidebar and user list instead of the generated identicon
         this.userAvatars.set(this.verifiedBot.pubkey, 'https://nymchat.app/images/nymbot-icon.png');
         this.isFlutterWebView = navigator.userAgent.includes('NYMApp') ||
             navigator.userAgent.includes('Flutter');
@@ -1837,11 +1838,11 @@ function randomizeNick() {
     const baseName = nym.stripPubkeySuffix(generated);
     document.getElementById('newNickInput').value = baseName;
 
-    // Randomize the robohash avatar preview if no custom avatar is set
+    // Randomize the generated avatar preview if no custom avatar is set
     if (!nym.userAvatars.has(nym.pubkey)) {
         const preview = document.getElementById('nickEditAvatarPreview');
         if (preview) {
-            preview.src = `https://robohash.org/${encodeURIComponent(baseName)}.png?set=set1&size=80x80`;
+            preview.src = nym.generateAvatarSvg(baseName);
         }
     }
 }
@@ -1921,7 +1922,7 @@ async function handleSetupAvatarSelect(event) {
             showRemove: true
         });
     } else {
-        if (preview) preview.src = 'https://robohash.org/default.png?set=set1&size=80x80';
+        if (preview) preview.src = nym.generateAvatarSvg(setupKeypair?.pubkey || 'default');
         setAvatarUploadState('setup', {
             spinning: false,
             statusText: 'Upload failed — try again',
@@ -1945,7 +1946,7 @@ function removeSetupAvatar() {
         localStorage.removeItem('nym_avatar_url');
     }
     const preview = document.getElementById('setupAvatarPreview');
-    if (preview) preview.src = 'https://robohash.org/default.png?set=set1&size=80x80';
+    if (preview) preview.src = nym.generateAvatarSvg(setupKeypair?.pubkey || 'default');
     setAvatarUploadState('setup', {
         spinning: false, statusText: '', statusType: '',
         btnText: 'Choose photo', btnDisabled: false, showRemove: false
@@ -3142,7 +3143,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.301 ═══<br/>
+═══ Nymchat v3.59.302 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>

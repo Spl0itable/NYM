@@ -271,7 +271,8 @@ Object.assign(NYM.prototype, {
             const pubkey = this.pubkey;
             el.setAttribute('data-avatar-pubkey', pubkey);
             el.src = this.getAvatarUrl(pubkey);
-            el.onerror = function () { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
+            const fallback = this.generateAvatarSvg(pubkey);
+            el.onerror = function () { this.onerror = null; this.src = fallback; };
         }
     },
 
@@ -298,6 +299,59 @@ Object.assign(NYM.prototype, {
         return cleaned.replace(/#[0-9a-f]{4}$/i, '') || cleaned || 'anon';
     },
 
+    // Generate a deterministic identicon SVG from a seed (pubkey or any string).
+    // Returned as a data URI so it can be used directly as an <img> src without
+    // any external network requests. Cached per-seed for performance.
+    generateAvatarSvg(seed) {
+        const key = String(seed == null ? '' : seed);
+        const cached = this._avatarSvgCache.get(key);
+        if (cached) return cached;
+
+        // FNV-1a-ish 32-bit hash, then Mulberry32 PRNG for stable randomness.
+        let h = 2166136261 >>> 0;
+        for (let i = 0; i < key.length; i++) {
+            h ^= key.charCodeAt(i);
+            h = Math.imul(h, 16777619) >>> 0;
+        }
+        let s = h || 1;
+        const rand = () => {
+            s = (s + 0x6D2B79F5) >>> 0;
+            let t = Math.imul(s ^ (s >>> 15), 1 | s);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+
+        const hue = Math.floor(rand() * 360);
+        const sat = 60 + Math.floor(rand() * 25);
+        const light = 50 + Math.floor(rand() * 15);
+        const fg = `hsl(${hue},${sat}%,${light}%)`;
+        const bgHue = (hue + 180) % 360;
+        const bg = `hsl(${bgHue},25%,18%)`;
+
+        // 5x5 grid, mirrored horizontally; cells are 16px so the image is 80x80.
+        const cell = 16;
+        const cols = 5;
+        const rows = 5;
+        const half = Math.ceil(cols / 2);
+        let rects = '';
+        for (let y = 0; y < rows; y++) {
+            for (let x = 0; x < half; x++) {
+                if (rand() < 0.5) {
+                    rects += `<rect x="${x * cell}" y="${y * cell}" width="${cell}" height="${cell}"/>`;
+                    const mirror = cols - 1 - x;
+                    if (mirror !== x) {
+                        rects += `<rect x="${mirror * cell}" y="${y * cell}" width="${cell}" height="${cell}"/>`;
+                    }
+                }
+            }
+        }
+
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" width="80" height="80" shape-rendering="crispEdges"><rect width="80" height="80" fill="${bg}"/><g fill="${fg}">${rects}</g></svg>`;
+        const dataUri = 'data:image/svg+xml;base64,' + btoa(svg);
+        this._avatarSvgCache.set(key, dataUri);
+        return dataUri;
+    },
+
     getAvatarUrl(pubkey) {
         // Prefer cached blob URL (instant, no network)
         const blob = this.avatarBlobCache.get(pubkey);
@@ -305,8 +359,8 @@ Object.assign(NYM.prototype, {
         // Check custom avatar URL
         const custom = this.userAvatars.get(pubkey);
         if (custom) return custom;
-        // Fall back to robohash
-        return `https://robohash.org/${pubkey}.png?set=set1&size=80x80`;
+        // Fall back to a locally-generated identicon SVG (no external requests)
+        return this.generateAvatarSvg(pubkey);
     },
 
     // Fetch an avatar image and cache it as a blob object URL.
@@ -379,7 +433,7 @@ Object.assign(NYM.prototype, {
     updateRenderedAvatars(pubkey, avatarUrl) {
         const safePk = this._safePubkey(pubkey);
         if (!safePk) return;
-        const fallback = `https://robohash.org/${safePk}.png?set=set1&size=80x80`;
+        const fallback = this.generateAvatarSvg(safePk);
         document.querySelectorAll(`img[data-avatar-pubkey="${safePk}"]`).forEach(img => {
             img.onerror = function () { this.onerror = null; this.src = fallback; };
             img.src = avatarUrl;
@@ -785,7 +839,7 @@ Object.assign(NYM.prototype, {
                 this.cacheAvatarImage(pubkey, newAvatarUrl);
                 this.updateRenderedAvatars(pubkey, newAvatarUrl);
             } else {
-                // Avatar removed - fall back to robohash
+                // Avatar removed - fall back to generated identicon
                 this.userAvatars.delete(pubkey);
                 this.updateRenderedAvatars(pubkey, this.getAvatarUrl(pubkey));
             }
@@ -980,7 +1034,7 @@ Object.assign(NYM.prototype, {
                 wrapper.innerHTML = `<div class="user-item list-item ${userColorClass}"
                         data-pubkey="${safePk}"
                         data-nym="${this.escapeHtml(baseNym)}">
-                    <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" data-avatar-pubkey="${safePk}" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">
+                    <img src="${this.escapeHtml(avatarSrc)}" class="avatar-user-list" alt="" loading="lazy" data-avatar-pubkey="${safePk}" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">
                     <span class="user-status ${user.effectiveStatus}"></span>
                     <span class="${userColorClass}">${displayNym} ${verifiedBadge}</span>
                 </div>`;

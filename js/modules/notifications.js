@@ -252,7 +252,7 @@ Object.assign(NYM.prototype, {
                 if (pubkey) {
                     const avatarSrc = this.getAvatarUrl(pubkey);
                     const safePk = this._safePubkey(pubkey);
-                    avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${safePk}.png?set=set1&size=80x80'">`;
+                    avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${safePk}')">`;
                     // Use live profile lookup, fall back to stored senderNym
                     const user = this.users.get(pubkey);
                     const baseNym = user

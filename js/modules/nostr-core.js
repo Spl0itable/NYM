@@ -1235,7 +1235,7 @@ Object.assign(NYM.prototype, {
         const avatarHtml = typers.slice(0, 3).map(([pk]) => {
             const sk = this._safePubkey(pk);
             const src = this.getAvatarUrl(pk);
-            return `<img src="${this.escapeHtml(src)}" data-avatar-pubkey="${sk}" alt="" loading="lazy" onerror="this.onerror=null;this.src='https://robohash.org/${sk}.png?set=set1&size=80x80'">`;
+            return `<img src="${this.escapeHtml(src)}" data-avatar-pubkey="${sk}" alt="" loading="lazy" onerror="this.onerror=null;this.src=nym.generateAvatarSvg('${sk}')">`;
         }).join('');
         avatarsEl.innerHTML = avatarHtml;
 

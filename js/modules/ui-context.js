@@ -389,7 +389,8 @@ Object.assign(NYM.prototype, {
         const ctxAvatarNym = document.getElementById('ctxAvatarNym');
         if (ctxAvatarImg) {
             ctxAvatarImg.src = this.getAvatarUrl(pubkey);
-            ctxAvatarImg.onerror = function () { this.onerror = null; this.src = `https://robohash.org/${pubkey}.png?set=set1&size=80x80`; };
+            const fallback = this.generateAvatarSvg(pubkey);
+            ctxAvatarImg.onerror = function () { this.onerror = null; this.src = fallback; };
         }
         if (ctxAvatarNym) {
             const flairHtml = this.getFlairForUser(pubkey);
