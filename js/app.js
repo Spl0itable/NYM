@@ -3142,7 +3142,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.300 ═══<br/>
+═══ Nymchat v3.59.301 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4354,17 +4354,6 @@ async function nostrSettingsSave() {
                     };
                 }
                 settingsPayload.groupConversations = groupData;
-            }
-        } catch (_) { }
-
-        // Include ephemeral keys for timing-attack mitigation sync
-        try {
-            if (nym.groupEphemeralKeys && nym.groupEphemeralKeys.size > 0) {
-                const ekData = {};
-                for (const [groupId, ek] of nym.groupEphemeralKeys) {
-                    ekData[groupId] = nym._serializeEphemeralKeys(ek);
-                }
-                settingsPayload.groupEphemeralKeys = ekData;
             }
         } catch (_) { }
 

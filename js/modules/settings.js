@@ -30,18 +30,6 @@ Object.assign(NYM.prototype, {
                 }
             } catch (_) { }
 
-            // Include ephemeral keys for timing-attack mitigation sync.
-            // Keys are stored encrypted (settings are gift-wrapped to self).
-            try {
-                if (this.groupEphemeralKeys && this.groupEphemeralKeys.size > 0) {
-                    const ekData = {};
-                    for (const [groupId, ek] of this.groupEphemeralKeys) {
-                        ekData[groupId] = this._serializeEphemeralKeys(ek);
-                    }
-                    settingsData.groupEphemeralKeys = ekData;
-                }
-            } catch (_) { }
-
             // Include group message history backup for new-device recovery
             try {
                 if (this.pmMessages && this.pmMessages.size > 0) {
@@ -126,24 +114,20 @@ Object.assign(NYM.prototype, {
         }, delayMs);
     },
 
-    // Encrypt settings into a self-addressed gift wrap (kind 1059) and publish.
-    // Adds a d-tag on the outer wrap so relays can be queried for it.
+    // Publishes group ephemeral keys to a dedicated nymchat-keys self-addressed encrypted giftwrap
     async _publishEncryptedSettings(settingsData) {
         const now = Math.floor(Date.now() / 1000);
-
-        // NIP-44 max plaintext is 65535 bytes. Content is encrypted twice.
         const MAX_PLAINTEXT = 28000;
 
-        // Always mirror group ephemeral keys to a dedicated nymchat-keys event so
-        // they survive even when the main settings payload is truncated for size.
-        const ekData = settingsData.groupEphemeralKeys || null;
-        if (ekData) {
+        delete settingsData.groupEphemeralKeys;
+
+        if (this.groupEphemeralKeys && this.groupEphemeralKeys.size > 0) {
             try {
-                await this._publishWrappedNostrEvent(
-                    { groupEphemeralKeys: ekData },
-                    'nymchat-keys',
-                    now
-                );
+                const ekData = {};
+                for (const [groupId, ek] of this.groupEphemeralKeys) {
+                    ekData[groupId] = this._serializeEphemeralKeys(ek);
+                }
+                await this._publishWrappedNostrEvent({ groupEphemeralKeys: ekData }, 'nymchat-keys', now);
             } catch (_) { }
         }
 
@@ -154,12 +138,6 @@ Object.assign(NYM.prototype, {
         }
         if (content.length > MAX_PLAINTEXT) {
             delete settingsData.groupConversations;
-            content = JSON.stringify(settingsData);
-        }
-        if (content.length > MAX_PLAINTEXT) {
-            // Keys are also stored in the dedicated nymchat-keys event above,
-            // so dropping them here doesn't lose data.
-            delete settingsData.groupEphemeralKeys;
             content = JSON.stringify(settingsData);
         }
 
