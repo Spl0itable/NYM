@@ -1416,6 +1416,14 @@ ${code}
         try {
             const avatarUrl = this.userAvatars.get(this.pubkey) || localStorage.getItem('nym_avatar_url') || '';
 
+            const transferSettings = this._buildSettingsPayload();
+            delete transferSettings.closedPMs;
+            delete transferSettings.leftGroups;
+            delete transferSettings.notificationLastReadTime;
+            delete transferSettings.userJoinedChannels;
+            delete transferSettings.pinnedChannels;
+            delete transferSettings.keypairMode;
+
             const settingsPayload = {
                 fromPubkey: this.pubkey,
                 fromNym: this.nym,
@@ -1423,27 +1431,7 @@ ${code}
                 transferredAt: Math.floor(Date.now() / 1000),
                 nickname: this.nym,
                 avatarUrl: avatarUrl,
-                settings: {
-                    theme: this.settings.theme,
-                    sound: this.settings.sound,
-                    autoscroll: this.settings.autoscroll,
-                    showTimestamps: this.settings.showTimestamps,
-                    timeFormat: this.settings.timeFormat,
-                    sortByProximity: this.settings.sortByProximity,
-                    blurOthersImages: this.blurOthersImages,
-                    lightningAddress: this.lightningAddress,
-                    dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
-                    dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
-                    readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,
-                    typingIndicatorsEnabled: this.settings.typingIndicatorsEnabled !== false,
-                    pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
-                    wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'geometric',
-                    wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
-                    chatLayout: this.settings.chatLayout || 'irc',
-                    colorMode: this.getColorMode(),
-                    nickStyle: this.settings.nickStyle || 'fancy',
-                    groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false
-                }
+                settings: transferSettings
             };
 
             const rumor = {
@@ -1507,7 +1495,7 @@ ${code}
         }
     },
 
-    acceptSettingsTransfer(eventId) {
+    async acceptSettingsTransfer(eventId) {
         const transfer = this.pendingSettingsTransfers.find(t => t.eventId === eventId);
         if (!transfer) return;
 
@@ -1526,87 +1514,18 @@ ${code}
             this.cacheAvatarImage(this.pubkey, transfer.avatarUrl);
         }
 
-        // Apply settings
+        // Apply settings — share the same code path as our own giftwrap
+        // settings sync so every preference in the modal gets applied.
         const s = transfer.settings;
         if (s) {
-            if (s.theme) {
-                this.settings.theme = s.theme;
-                this.applyTheme(s.theme);
-                localStorage.setItem('nym_theme', s.theme);
+            if (typeof applyNostrSettings === 'function') {
+                try { await applyNostrSettings(s); } catch (_) { }
             }
-            if (s.sound !== undefined) {
-                this.settings.sound = s.sound;
-                localStorage.setItem('nym_sound', s.sound);
-            }
-            if (s.autoscroll !== undefined) {
-                this.settings.autoscroll = s.autoscroll;
-                localStorage.setItem('nym_autoscroll', s.autoscroll);
-            }
-            if (s.showTimestamps !== undefined) {
-                this.settings.showTimestamps = s.showTimestamps;
-                localStorage.setItem('nym_timestamps', s.showTimestamps);
-            }
-            if (s.timeFormat !== undefined) {
-                this.settings.timeFormat = s.timeFormat;
-                localStorage.setItem('nym_time_format', s.timeFormat);
-            }
-            if (s.sortByProximity !== undefined) {
-                this.settings.sortByProximity = s.sortByProximity;
-                localStorage.setItem('nym_sort_proximity', s.sortByProximity);
-            }
-            if (s.blurOthersImages !== undefined) {
-                this.blurOthersImages = s.blurOthersImages;
-                localStorage.setItem('nym_image_blur', s.blurOthersImages.toString());
-                if (this.pubkey) {
-                    localStorage.setItem(`nym_image_blur_${this.pubkey}`, s.blurOthersImages.toString());
-                }
-            }
-            if (s.lightningAddress) {
+
+            // Lightning address uses a per-pubkey key for the receiving user
+            if (s.lightningAddress && this.pubkey) {
                 this.lightningAddress = s.lightningAddress;
                 localStorage.setItem(`nym_lightning_address_${this.pubkey}`, s.lightningAddress);
-            }
-            if (s.dmForwardSecrecyEnabled !== undefined) {
-                this.settings.dmForwardSecrecyEnabled = s.dmForwardSecrecyEnabled;
-                localStorage.setItem('nym_dm_fwdsec_enabled', String(s.dmForwardSecrecyEnabled));
-            }
-            if (s.dmTTLSeconds !== undefined) {
-                this.settings.dmTTLSeconds = s.dmTTLSeconds;
-                localStorage.setItem('nym_dm_ttl_seconds', String(s.dmTTLSeconds));
-            }
-            if (s.readReceiptsEnabled !== undefined) {
-                this.settings.readReceiptsEnabled = s.readReceiptsEnabled;
-                localStorage.setItem('nym_read_receipts_enabled', String(s.readReceiptsEnabled));
-            }
-            if (s.typingIndicatorsEnabled !== undefined) {
-                this.settings.typingIndicatorsEnabled = s.typingIndicatorsEnabled;
-                localStorage.setItem('nym_typing_indicators_enabled', String(s.typingIndicatorsEnabled));
-            }
-            if (s.pinnedLandingChannel) {
-                this.pinnedLandingChannel = s.pinnedLandingChannel;
-                this.settings.pinnedLandingChannel = s.pinnedLandingChannel;
-                localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(s.pinnedLandingChannel));
-            }
-            if (s.wallpaperType !== undefined) {
-                this.saveWallpaper(s.wallpaperType, s.wallpaperCustomUrl || '');
-                this.applyWallpaper(s.wallpaperType, s.wallpaperCustomUrl || '');
-            }
-            if (s.chatLayout) {
-                this.settings.chatLayout = s.chatLayout;
-                localStorage.setItem('nym_chat_layout', s.chatLayout);
-                applyMessageLayout(s.chatLayout);
-            }
-            if (s.colorMode) {
-                localStorage.setItem('nym_color_mode', s.colorMode);
-                this.applyColorMode();
-            }
-            if (s.nickStyle) {
-                this.settings.nickStyle = s.nickStyle;
-                localStorage.setItem('nym_nick_style', s.nickStyle);
-            }
-            if (s.groupChatPMOnlyMode !== undefined) {
-                this.settings.groupChatPMOnlyMode = s.groupChatPMOnlyMode;
-                localStorage.setItem('nym_groupchat_pm_only_mode', String(s.groupChatPMOnlyMode));
-                this.applyGroupChatPMOnlyMode(s.groupChatPMOnlyMode);
             }
 
             // Save synced settings to Nostr

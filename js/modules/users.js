@@ -1225,14 +1225,21 @@ Object.assign(NYM.prototype, {
             if (img.getAttribute('src') !== avatarSrc) img.src = avatarSrc;
             img.classList.remove('status-online', 'status-away', 'status-offline');
         }
-        const dot = wrap.querySelector('.user-status-dot');
-        if (dot) {
-            dot.classList.remove('status-online', 'status-away', 'status-offline');
-            dot.classList.add(`status-${effectiveStatus}`);
+        let dot = wrap.querySelector('.user-status-dot');
+        if (!dot) {
+            for (const child of Array.from(wrap.children)) {
+                if (child !== img) child.remove();
+            }
+            dot = document.createElement('span');
+            wrap.appendChild(dot);
         }
+        dot.className = `user-status-dot status-${effectiveStatus}`;
         const oldStatusSpan = el.querySelector('.user-status');
         if (oldStatusSpan) oldStatusSpan.remove();
-        const label = el.querySelector('span:last-child');
+        let label = el.lastElementChild;
+        if (label && label.classList && label.classList.contains('user-avatar-wrap')) {
+            label = null;
+        }
         if (label) {
             label.className = userColorClass || '';
             label.textContent = '';

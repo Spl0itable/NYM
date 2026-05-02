@@ -73,19 +73,8 @@ Object.assign(NYM.prototype, {
     },
 
     _applyPerformanceMode() {
-        const setting = this.settings.performanceMode || 'auto';
-        if (setting === 'auto') {
-            const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-            this.performanceMode = this._deviceCapabilities.tier === 'low' || prefersReduced;
-        } else {
-            this.performanceMode = setting === 'enabled';
-        }
-
-        if (this.performanceMode) {
-            document.body.classList.add('performance-mode');
-        } else {
-            document.body.classList.remove('performance-mode');
-        }
+        this.performanceMode = true;
+        document.body.classList.add('performance-mode');
     },
 
     async initialize() {

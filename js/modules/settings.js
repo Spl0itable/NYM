@@ -104,7 +104,9 @@ Object.assign(NYM.prototype, {
             leftGroups: Array.from(this.leftGroups || []),
             acceptPMs: this.settings.acceptPMs || 'enabled',
             syncMLSHistory: this.settings.syncMLSHistory !== false,
-            showStatus: this.settings.showStatus !== false
+            showStatus: this.settings.showStatus !== false,
+            cachePMs: this.settings.cachePMs !== false,
+            keypairMode: localStorage.getItem('nym_keypair_mode') || 'persistent'
         };
     },
 
@@ -427,7 +429,6 @@ Object.assign(NYM.prototype, {
             textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10),
             groupChatPMOnlyMode: localStorage.getItem('nym_groupchat_pm_only_mode') === 'true',
             translateLanguage: localStorage.getItem('nym_translate_language') || '',
-            performanceMode: localStorage.getItem('nym_performance_mode') || 'auto',
             acceptPMs: localStorage.getItem('nym_accept_pms') || 'enabled',
             cachePMs: localStorage.getItem('nym_cache_pms') !== 'false', // default true
             syncMLSHistory: localStorage.getItem('nym_sync_mls_history') !== 'false', // default true

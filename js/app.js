@@ -2642,12 +2642,6 @@ async function showSettings() {
         lowDataSelect.value = nym.settings.lowDataMode ? 'true' : 'false';
     }
 
-    // Initialize performance mode select
-    const perfSelect = document.getElementById('performanceModeSelect');
-    if (perfSelect) {
-        perfSelect.value = nym.settings.performanceMode || 'auto';
-    }
-
     // Render pending settings transfers
     nym.renderPendingSettingsTransfers();
 
@@ -2972,18 +2966,6 @@ async function saveSettings() {
         nym.applyLowDataMode(lowDataMode);
     }
 
-    // Save performance mode
-    const perfModeSelect = document.getElementById('performanceModeSelect');
-    if (perfModeSelect) {
-        const perfMode = perfModeSelect.value;
-        const wasPerfMode = nym.settings.performanceMode;
-        nym.settings.performanceMode = perfMode;
-        localStorage.setItem('nym_performance_mode', perfMode);
-        if (perfMode !== wasPerfMode) {
-            nym._applyPerformanceMode();
-        }
-    }
-
     nym.displaySystemMessage('Settings saved');
 
     // Sync settings to Nostr relays if logged in
@@ -3161,7 +3143,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.60.307 ═══<br/>
+═══ Nymchat v3.60.308 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4896,14 +4878,17 @@ async function applyNostrSettings(s) {
     }
 
     // Wallpaper
-    if (s.wallpaperType) {
-        localStorage.setItem('nym_wallpaper_type', s.wallpaperType);
-        if (typeof selectWallpaper === 'function') {
-            selectWallpaper(s.wallpaperType);
-        }
-    }
     if (s.wallpaperCustomUrl) {
         localStorage.setItem('nym_wallpaper_custom_url', s.wallpaperCustomUrl);
+    }
+    if (s.wallpaperType) {
+        localStorage.setItem('nym_wallpaper_type', s.wallpaperType);
+        if (s.wallpaperType === 'custom' && s.wallpaperCustomUrl) {
+            nym.applyWallpaper('custom', s.wallpaperCustomUrl);
+            nym.saveWallpaper('custom', s.wallpaperCustomUrl);
+        } else if (typeof selectWallpaper === 'function') {
+            selectWallpaper(s.wallpaperType);
+        }
     }
 
     // Chat layout
@@ -5043,6 +5028,22 @@ async function applyNostrSettings(s) {
     if (typeof s.translateLanguage === 'string') {
         nym.settings.translateLanguage = s.translateLanguage;
         localStorage.setItem('nym_translate_language', s.translateLanguage);
+    }
+
+    // Cache PMs & group chats on device
+    if (typeof s.cachePMs === 'boolean') {
+        const wasOn = nym.settings.cachePMs !== false;
+        nym.settings.cachePMs = s.cachePMs;
+        localStorage.setItem('nym_cache_pms', String(s.cachePMs));
+        if (wasOn && !s.cachePMs && typeof nym.clearPMCache === 'function') {
+            nym.clearPMCache().catch(() => { });
+        }
+    }
+
+    // MLS history sync preference
+    if (typeof s.syncMLSHistory === 'boolean') {
+        nym.settings.syncMLSHistory = s.syncMLSHistory;
+        localStorage.setItem('nym_sync_mls_history', String(s.syncMLSHistory));
     }
 
     // Notifications enabled

@@ -1017,14 +1017,6 @@ Object.assign(NYM.prototype, {
 
             // Use multiplexed relay pool when running on Cloudflare (or remote proxy)
             if (this.useRelayProxy) {
-                // Wait for geo relay CSV so the pool connects to all relays right away
-                try {
-                    await Promise.race([
-                        this._geoRelaysReady || Promise.resolve(),
-                        new Promise(r => setTimeout(r, 3000))
-                    ]);
-                } catch (_) { }
-
                 let poolConnected = false;
                 const maxRetries = 2;
                 for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -1976,32 +1968,44 @@ Object.assign(NYM.prototype, {
             try { if (p.ws) p.ws.close(); } catch (_) { }
         }
 
-        // Connect all shards in parallel, resolve when at least one opens
-        const workerPromises = shards.map(shard => this._connectSinglePoolWorker(shard));
+        if (shards.length === 0) {
+            this._poolConnecting = false;
+            return Promise.reject(new Error('No relay shards to connect'));
+        }
+
+        const [firstShard, ...restShards] = shards;
 
         return new Promise((resolve, reject) => {
-            let resolved = false;
-            let failures = 0;
+            this._connectSinglePoolWorker(firstShard).then(() => {
+                this._poolConnecting = false;
+                this.poolReady = true;
+                this.connected = true;
+                this._syncLegacyPoolSocket();
+                resolve();
+                if (restShards.length > 0) this._connectRemainingShards(restShards);
+            }).catch((err) => {
+                this._poolConnecting = false;
+                reject(err);
+            });
+        });
+    },
 
-            for (const p of workerPromises) {
-                p.then(() => {
-                    if (!resolved) {
-                        resolved = true;
-                        this._poolConnecting = false;
-                        this.poolReady = true;
-                        this.connected = true;
-                        // Set legacy poolSocket to first open socket for external compat
-                        this._syncLegacyPoolSocket();
-                        resolve();
-                    }
-                }).catch(() => {
-                    failures++;
-                    if (failures === workerPromises.length && !resolved) {
-                        this._poolConnecting = false;
-                        reject(new Error('All relay pool workers failed to connect'));
-                    }
-                });
-            }
+    _connectRemainingShards(shards) {
+        const STAGGER_MS = 250;
+        shards.forEach((shard, i) => {
+            setTimeout(() => {
+                if (!this.useRelayProxy) return;
+                const existing = this.poolSockets.find(p => p.id === shard.id);
+                if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) return;
+                this._connectSinglePoolWorker(shard)
+                    .then(() => {
+                        this._poolSubscribeOnWorker(shard.id);
+                        this._resubscribeChannels();
+                    })
+                    .catch(() => {
+                        this._reconnectPoolShard(shard);
+                    });
+            }, (i + 1) * STAGGER_MS);
         });
     },
 
