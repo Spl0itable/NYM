@@ -3143,7 +3143,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.59.305 ═══<br/>
+═══ Nymchat v3.60.305 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4675,14 +4675,44 @@ function nostrSettingsLoad() {
 async function applyNostrSettingsAdditive(s) {
     if (!s || typeof s !== 'object') return;
 
-    // Group conversations — additive: only add groups we don't already know about
+    // Group conversations — additive for new groups, merge role data for existing.
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
             if (!nym.groupConversations.has(groupId)) {
-                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
+                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy });
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (group.createdBy) g.createdBy = group.createdBy;
+                    g.mods = Array.isArray(group.mods) ? [...group.mods] : [];
+                    g.banned = Array.isArray(group.banned) ? [...group.banned] : [];
+                    g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
+                }
+            } else {
+                // Merge role data so a moderator change made on another device
+                // becomes visible without a full reload.
+                const g = nym.groupConversations.get(groupId);
+                if (g) {
+                    if (!g.createdBy && group.createdBy) g.createdBy = group.createdBy;
+                    if (Array.isArray(group.mods)) {
+                        const cur = new Set(Array.isArray(g.mods) ? g.mods : []);
+                        for (const pk of group.mods) cur.add(pk);
+                        g.mods = [...cur];
+                    }
+                    if (Array.isArray(group.banned)) {
+                        const cur = new Set(Array.isArray(g.banned) ? g.banned : []);
+                        for (const pk of group.banned) cur.add(pk);
+                        g.banned = [...cur];
+                    }
+                    if (Array.isArray(group.modLog) && group.modLog.length > 0) {
+                        const seen = new Set((g.modLog || []).map(e => `${e.type}:${e.actor}:${e.target}:${e.ts}`));
+                        const merged = [...(g.modLog || [])];
+                        for (const e of group.modLog) {
+                            const k = `${e.type}:${e.actor}:${e.target}:${e.ts}`;
+                            if (!seen.has(k)) { merged.push(e); seen.add(k); }
+                        }
+                        merged.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+                        g.modLog = merged.slice(-50);
+                    }
                 }
             }
         }

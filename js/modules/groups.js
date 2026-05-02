@@ -312,10 +312,32 @@ Object.assign(NYM.prototype, {
                     memberProfiles,
                     lastMessageTime: group.lastMessageTime,
                     createdBy: group.createdBy,
+                    mods: Array.isArray(group.mods) ? group.mods : [],
+                    banned: Array.isArray(group.banned) ? group.banned : [],
+                    modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
                 };
             }
             localStorage.setItem(`nym_groups_${this.pubkey}`, JSON.stringify(data));
         } catch (_) { }
+    },
+
+    // Role helpers
+    _isGroupOwner(groupId, pubkey) {
+        const g = this.groupConversations.get(groupId);
+        return !!(g && g.createdBy && g.createdBy === pubkey);
+    },
+    _isGroupMod(groupId, pubkey) {
+        const g = this.groupConversations.get(groupId);
+        return !!(g && Array.isArray(g.mods) && g.mods.includes(pubkey));
+    },
+    _canModerate(groupId, pubkey) {
+        return this._isGroupOwner(groupId, pubkey) || this._isGroupMod(groupId, pubkey);
+    },
+    _appendModLog(group, entry) {
+        if (!group) return;
+        if (!Array.isArray(group.modLog)) group.modLog = [];
+        group.modLog.push({ ...entry, ts: Math.floor(Date.now() / 1000) });
+        if (group.modLog.length > 50) group.modLog = group.modLog.slice(-50);
     },
 
     // Persist left-group IDs so they survive reload. Uses a per-pubkey key when
@@ -368,11 +390,14 @@ Object.assign(NYM.prototype, {
                     }
                 }
                 if (!this.groupConversations.has(groupId)) {
-                    this.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
-                    // Restore createdBy which addGroupConversation doesn't accept
+                    this.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy });
+                    // Restore role data which addGroupConversation doesn't merge
                     const g = this.groupConversations.get(groupId);
                     if (g) {
                         if (group.createdBy) g.createdBy = group.createdBy;
+                        g.mods = Array.isArray(group.mods) ? [...group.mods] : [];
+                        g.banned = Array.isArray(group.banned) ? [...group.banned] : [];
+                        g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                     }
                 }
             }
@@ -498,9 +523,26 @@ Object.assign(NYM.prototype, {
                 this._saveLeftGroups();
                 this._debouncedNostrSettingsSave();
             }
+            // Pre-create the group entry with createdBy set BEFORE _addGroupMessage
+            // runs later in this handler. Otherwise the merge-branch in
+            // addGroupConversation creates the entry with createdBy: null first.
+            const inviteMembers = (rumor.tags || [])
+                .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
+                .map(t => t[1]);
+            if (!this.groupConversations.has(groupId)) {
+                this.addGroupConversation(
+                    groupId,
+                    groupName,
+                    inviteMembers,
+                    (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
+                    { createdBy: senderPubkey }
+                );
+            }
             const grp = this.groupConversations.get(groupId);
             if (grp && !grp.createdBy) {
                 grp.createdBy = senderPubkey;
+            }
+            if (grp) {
                 this._saveGroupConversations();
                 this._debouncedNostrSettingsSave();
             }
@@ -577,6 +619,19 @@ Object.assign(NYM.prototype, {
             const kickTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'kick' && t[1]);
             if (!kickTag) return;
             const removedPubkey = kickTag[1];
+            const banTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ban' && t[1] === '1');
+            // Verify the kick was actually issued by the owner or a moderator
+            const grpForCheck = this.groupConversations.get(groupId);
+            if (grpForCheck) {
+                const isOwnerKick = grpForCheck.createdBy === senderPubkey;
+                const isModKick = Array.isArray(grpForCheck.mods) && grpForCheck.mods.includes(senderPubkey);
+                if (!isOwnerKick && !isModKick) return;
+                // Mods can't kick the owner or other mods
+                if (!isOwnerKick) {
+                    if (grpForCheck.createdBy === removedPubkey) return;
+                    if (Array.isArray(grpForCheck.mods) && grpForCheck.mods.includes(removedPubkey)) return;
+                }
+            }
             // Fetch profiles so nicknames display correctly instead of anon#xxxx
             const profileFetches = [];
             if (!this.users.has(removedPubkey)) profileFetches.push(this.fetchProfileDirect(removedPubkey));
@@ -608,6 +663,12 @@ Object.assign(NYM.prototype, {
                 const grp = this.groupConversations.get(groupId);
                 if (grp) {
                     grp.members = grp.members.filter(pk => pk !== removedPubkey);
+                    if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== removedPubkey);
+                    if (banTag) {
+                        if (!Array.isArray(grp.banned)) grp.banned = [];
+                        if (!grp.banned.includes(removedPubkey)) grp.banned.push(removedPubkey);
+                    }
+                    this._appendModLog(grp, { type: 'kick', actor: senderPubkey, target: removedPubkey });
                     this.groupConversations.set(groupId, grp);
                     this._saveGroupConversations();
                     this._debouncedNostrSettingsSave();
@@ -617,6 +678,108 @@ Object.assign(NYM.prototype, {
                         this.displaySystemMessage(`${removedName} was removed by ${removerName}.`);
                     }
                 }
+            }
+            return;
+        }
+
+        // group-promote-mod: promote a member to moderator (owner-issued only).
+        if (typeTag && typeTag[1] === 'group-promote-mod') {
+            const modTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'mod' && t[1]);
+            if (!modTag) return;
+            const targetPubkey = modTag[1];
+            const grp = this.groupConversations.get(groupId);
+            if (!grp) return;
+            if (grp.createdBy !== senderPubkey) return; // only owner can promote
+            if (!Array.isArray(grp.mods)) grp.mods = [];
+            if (!grp.mods.includes(targetPubkey)) grp.mods.push(targetPubkey);
+            this._appendModLog(grp, { type: 'promote', actor: senderPubkey, target: targetPubkey });
+            this.groupConversations.set(groupId, grp);
+            this._saveGroupConversations();
+            this._debouncedNostrSettingsSave();
+            if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
+                if (!this.users.has(targetPubkey)) await this.fetchProfileDirect(targetPubkey);
+                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+                const targetName = this.getNymFromPubkey(targetPubkey);
+                const actorName = this.getNymFromPubkey(senderPubkey);
+                this.displaySystemMessage(`${targetName} was promoted to moderator by ${actorName}.`);
+                this.openGroup(groupId);
+            }
+            return;
+        }
+
+        // group-revoke-mod: revoke a member's moderator role (owner-issued only).
+        if (typeTag && typeTag[1] === 'group-revoke-mod') {
+            const modTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'mod' && t[1]);
+            if (!modTag) return;
+            const targetPubkey = modTag[1];
+            const grp = this.groupConversations.get(groupId);
+            if (!grp) return;
+            if (grp.createdBy !== senderPubkey) return;
+            if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== targetPubkey);
+            this._appendModLog(grp, { type: 'revoke', actor: senderPubkey, target: targetPubkey });
+            this.groupConversations.set(groupId, grp);
+            this._saveGroupConversations();
+            this._debouncedNostrSettingsSave();
+            if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
+                if (!this.users.has(targetPubkey)) await this.fetchProfileDirect(targetPubkey);
+                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+                const targetName = this.getNymFromPubkey(targetPubkey);
+                const actorName = this.getNymFromPubkey(senderPubkey);
+                this.displaySystemMessage(`${targetName}'s moderator role was revoked by ${actorName}.`);
+                this.openGroup(groupId);
+            }
+            return;
+        }
+
+        // group-transfer-owner: change owner (current-owner-issued only).
+        if (typeTag && typeTag[1] === 'group-transfer-owner') {
+            const ownerTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'owner' && t[1]);
+            if (!ownerTag) return;
+            const newOwner = ownerTag[1];
+            const grp = this.groupConversations.get(groupId);
+            if (!grp) return;
+            if (grp.createdBy !== senderPubkey) return;
+            grp.createdBy = newOwner;
+            if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== newOwner);
+            this._appendModLog(grp, { type: 'transfer', actor: senderPubkey, target: newOwner });
+            this.groupConversations.set(groupId, grp);
+            this._saveGroupConversations();
+            this._debouncedNostrSettingsSave();
+            if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
+                if (!this.users.has(newOwner)) await this.fetchProfileDirect(newOwner);
+                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+                const targetName = this.getNymFromPubkey(newOwner);
+                const actorName = this.getNymFromPubkey(senderPubkey);
+                this.displaySystemMessage(`${actorName} transferred group ownership to ${targetName}.`);
+                this.openGroup(groupId);
+            }
+            return;
+        }
+
+        // group-delete-message: owner or moderator deletes another member's message.
+        if (typeTag && typeTag[1] === 'group-delete-message') {
+            const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
+            if (!eTag) return;
+            const targetMessageId = eTag[1];
+            const targetAuthorTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'target_pubkey' && t[1]);
+            const targetAuthor = targetAuthorTag ? targetAuthorTag[1] : null;
+            const grp = this.groupConversations.get(groupId);
+            if (!grp) return;
+            const isOwnerSender = grp.createdBy === senderPubkey;
+            const isModSender = Array.isArray(grp.mods) && grp.mods.includes(senderPubkey);
+            if (!isOwnerSender && !isModSender) return;
+            // Mods can't delete the owner's messages
+            if (!isOwnerSender && targetAuthor && grp.createdBy === targetAuthor) return;
+            this._applyGroupMessageDeletion(groupId, targetMessageId);
+            this._appendModLog(grp, { type: 'delete-message', actor: senderPubkey, target: targetAuthor, messageId: targetMessageId });
+            this._saveGroupConversations();
+            this._debouncedNostrSettingsSave();
+            if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
+                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+                const actorName = this.getNymFromPubkey(senderPubkey);
+                if (targetAuthor && !this.users.has(targetAuthor)) await this.fetchProfileDirect(targetAuthor);
+                const authorName = targetAuthor ? this.getNymFromPubkey(targetAuthor) : 'a member';
+                this.displaySystemMessage(`${actorName} deleted a message from ${authorName}.`);
             }
             return;
         }
@@ -782,11 +945,11 @@ Object.assign(NYM.prototype, {
         await this._sendGiftWrapsAsync(allMembers, rumor, expirationTs);
         this._saveEphemeralKeys();
 
-        // addGroupConversation creates the sidebar item (existing is null at this point)
-        this.addGroupConversation(groupId, name, allMembers, Date.now());
-        // Mark this user as the group owner
+        // addGroupConversation creates the sidebar item with us marked as owner
+        this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey });
+        // Defensive: ensure createdBy is set even if a relay echo created the entry first
         const grp = this.groupConversations.get(groupId);
-        if (grp) grp.createdBy = this.pubkey;
+        if (grp && grp.createdBy !== this.pubkey) grp.createdBy = this.pubkey;
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.openGroup(groupId);
@@ -807,6 +970,15 @@ Object.assign(NYM.prototype, {
         if (group.members.includes(newMemberPubkey)) {
             this.displaySystemMessage('User is already in this group');
             return false;
+        }
+        // Banlist: only the owner can re-admit a banned user; mods/members cannot.
+        if (Array.isArray(group.banned) && group.banned.includes(newMemberPubkey)) {
+            if (!this._isGroupOwner(groupId, this.pubkey)) {
+                this.displaySystemMessage('That user was removed from this group and can only be re-invited by the group owner.');
+                return false;
+            }
+            // Owner is re-admitting: clear the ban
+            group.banned = group.banned.filter(pk => pk !== newMemberPubkey);
         }
 
         group.members = [...group.members, newMemberPubkey];
@@ -1099,23 +1271,44 @@ Object.assign(NYM.prototype, {
         this.leaveGroup(groupId);
     },
 
-    // Remove a member from the current group (owner only) via NIP-17 gift-wrapped rumor.
+    // Remove a member from the current group (owner or moderator) via NIP-17 gift-wrapped rumor.
+    // /kick: removes membership; the user can be re-invited by anyone.
     async kickFromGroup(pubkey) {
+        return this._removeFromGroup(pubkey, { ban: false });
+    },
+
+    // Remove and banlist a member. Only the owner can re-admit them.
+    async banFromGroup(pubkey) {
+        return this._removeFromGroup(pubkey, { ban: true });
+    },
+
+    async _removeFromGroup(pubkey, { ban }) {
         this.closeContextMenu();
         const groupId = this.currentGroup;
         if (!groupId || !this._canSendGiftWraps()) return;
         const group = this.groupConversations.get(groupId);
-        if (!group || group.createdBy !== this.pubkey) return;
+        if (!group) return;
+        if (!this._canModerate(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or a moderator can remove members.');
+            return;
+        }
         if (!group.members.includes(pubkey)) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            if (this._isGroupOwner(groupId, pubkey) || this._isGroupMod(groupId, pubkey)) {
+                this.displaySystemMessage("You can't remove the group owner or another moderator.");
+                return;
+            }
+        }
 
-        // Fetch profile if we don't have it yet so the nickname displays correctly
         if (!this.users.has(pubkey)) {
             await this.fetchProfileDirect(pubkey);
         }
 
         const kickedName = this.getNymFromPubkey(pubkey);
         const kickerName = this.getNymFromPubkey(this.pubkey);
-        const content = `${kickedName} was removed by ${kickerName}.`;
+        const content = ban
+            ? `${kickedName} was banned by ${kickerName}.`
+            : `${kickedName} was removed by ${kickerName}.`;
         const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this.generateUUID();
 
@@ -1124,26 +1317,248 @@ Object.assign(NYM.prototype, {
         tags.push(['subject', group.name]);
         tags.push(['type', 'group-remove-member']);
         tags.push(['kick', pubkey]);
+        if (ban) tags.push(['ban', '1']);
         tags.push(['x', nymMessageId]);
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
 
-        // Send to everyone including the kicked member so they can remove themselves
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
 
-        // Update local state immediately — also clean up kicked member's ephemeral key
         const ek = this.groupEphemeralKeys.get(groupId);
         if (ek) { delete ek.members[pubkey]; this._saveEphemeralKeys(); }
         group.members = group.members.filter(pk => pk !== pubkey);
+        if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => pk !== pubkey);
+        if (ban) {
+            if (!Array.isArray(group.banned)) group.banned = [];
+            if (!group.banned.includes(pubkey)) group.banned.push(pubkey);
+        }
+        this._appendModLog(group, { type: ban ? 'ban' : 'kick', actor: this.pubkey, target: pubkey });
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.updateGroupConversationUI(groupId);
-        this.openGroup(groupId); // refresh header member count
+        this.openGroup(groupId);
         this.displaySystemMessage(content);
     },
 
+    // Owner-only: lift a ban (does not re-invite the user).
+    async unbanFromGroup(pubkey) {
+        const groupId = this.currentGroup;
+        if (!groupId) return;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can unban users.');
+            return;
+        }
+        if (!Array.isArray(group.banned) || !group.banned.includes(pubkey)) {
+            this.displaySystemMessage('That user is not banned.');
+            return;
+        }
+        group.banned = group.banned.filter(pk => pk !== pubkey);
+        this._appendModLog(group, { type: 'unban', actor: this.pubkey, target: pubkey });
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
+        this.displaySystemMessage(`@${this.getNymFromPubkey(pubkey)} was unbanned. They can be re-invited.`);
+    },
+
+    // Owner-only: promote a member to moderator
+    async promoteModerator(pubkey) {
+        this.closeContextMenu();
+        const groupId = this.currentGroup;
+        if (!groupId || !this._canSendGiftWraps()) return;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can assign moderators.');
+            return;
+        }
+        if (!group.members.includes(pubkey)) {
+            this.displaySystemMessage('That user is not a member of this group.');
+            return;
+        }
+        if (pubkey === this.pubkey) {
+            this.displaySystemMessage("You're already the group owner.");
+            return;
+        }
+        if (this._isGroupMod(groupId, pubkey)) {
+            this.displaySystemMessage('That user is already a moderator.');
+            return;
+        }
+
+        if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
+        const targetName = this.getNymFromPubkey(pubkey);
+        const actorName = this.getNymFromPubkey(this.pubkey);
+        const content = `${targetName} was promoted to moderator by ${actorName}.`;
+        const now = Math.floor(Date.now() / 1000);
+
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'group-promote-mod']);
+        tags.push(['mod', pubkey]);
+        tags.push(['x', this.generateUUID()]);
+        const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
+
+        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
+
+        if (!Array.isArray(group.mods)) group.mods = [];
+        if (!group.mods.includes(pubkey)) group.mods.push(pubkey);
+        this._appendModLog(group, { type: 'promote', actor: this.pubkey, target: pubkey });
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.displaySystemMessage(content);
+    },
+
+    // Owner-only: revoke a member's moderator role
+    async revokeModerator(pubkey) {
+        this.closeContextMenu();
+        const groupId = this.currentGroup;
+        if (!groupId || !this._canSendGiftWraps()) return;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can revoke moderators.');
+            return;
+        }
+        if (!this._isGroupMod(groupId, pubkey)) {
+            this.displaySystemMessage('That user is not a moderator.');
+            return;
+        }
+
+        if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
+        const targetName = this.getNymFromPubkey(pubkey);
+        const actorName = this.getNymFromPubkey(this.pubkey);
+        const content = `${targetName}'s moderator role was revoked by ${actorName}.`;
+        const now = Math.floor(Date.now() / 1000);
+
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'group-revoke-mod']);
+        tags.push(['mod', pubkey]);
+        tags.push(['x', this.generateUUID()]);
+        const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
+
+        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
+
+        if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => pk !== pubkey);
+        this._appendModLog(group, { type: 'revoke', actor: this.pubkey, target: pubkey });
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.displaySystemMessage(content);
+    },
+
+    // Owner-only: transfer ownership of the group to another member
+    async transferOwner(pubkey) {
+        this.closeContextMenu();
+        const groupId = this.currentGroup;
+        if (!groupId || !this._canSendGiftWraps()) return;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the current owner can transfer ownership.');
+            return;
+        }
+        if (!group.members.includes(pubkey)) {
+            this.displaySystemMessage('That user is not a member of this group.');
+            return;
+        }
+        if (pubkey === this.pubkey) return;
+
+        if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
+        const targetName = this.getNymFromPubkey(pubkey);
+        const actorName = this.getNymFromPubkey(this.pubkey);
+        const content = `${actorName} transferred group ownership to ${targetName}.`;
+        const now = Math.floor(Date.now() / 1000);
+
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'group-transfer-owner']);
+        tags.push(['owner', pubkey]);
+        tags.push(['x', this.generateUUID()]);
+        const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
+
+        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
+
+        group.createdBy = pubkey;
+        if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => pk !== pubkey);
+        this._appendModLog(group, { type: 'transfer', actor: this.pubkey, target: pubkey });
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.displaySystemMessage(content);
+    },
+
+    // Owner or moderator: delete a message in the current group for everyone.
+    async modDeleteGroupMessage(messageId, authorPubkey) {
+        this.closeContextMenu();
+        const groupId = this.currentGroup;
+        if (!groupId || !this._canSendGiftWraps()) return;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._canModerate(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or a moderator can delete messages.');
+            return;
+        }
+        // Mods can't delete the owner's messages; only the owner can.
+        if (!this._isGroupOwner(groupId, this.pubkey) && this._isGroupOwner(groupId, authorPubkey)) {
+            this.displaySystemMessage("Moderators can't delete the group owner's messages.");
+            return;
+        }
+        if (!messageId) return;
+
+        const actorName = this.getNymFromPubkey(this.pubkey);
+        const authorName = authorPubkey ? this.getNymFromPubkey(authorPubkey) : 'a member';
+        const content = `${actorName} deleted a message from ${authorName}.`;
+        const now = Math.floor(Date.now() / 1000);
+
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'group-delete-message']);
+        tags.push(['e', messageId]);
+        if (authorPubkey) tags.push(['target_pubkey', authorPubkey]);
+        tags.push(['x', this.generateUUID()]);
+        const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
+
+        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
+
+        // Apply locally
+        this._applyGroupMessageDeletion(groupId, messageId);
+        this._appendModLog(group, { type: 'delete-message', actor: this.pubkey, target: authorPubkey || null, messageId });
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.displaySystemMessage(content);
+    },
+
+    // Local-only: drop a message from group state and remove from DOM.
+    _applyGroupMessageDeletion(groupId, messageId) {
+        if (!messageId) return;
+        if (this.deletedEventIds && this.deletedEventIds.add) {
+            this.deletedEventIds.add(messageId);
+            if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+        }
+        const groupConvKey = this.getGroupConversationKey(groupId);
+        const list = this.pmMessages.get(groupConvKey);
+        if (list) {
+            const idx = list.findIndex(m => m.id === messageId || m.nymMessageId === messageId);
+            if (idx !== -1) {
+                list.splice(idx, 1);
+                this.channelDOMCache.delete(groupConvKey);
+                if (typeof this.persistPMMessages === 'function') this.persistPMMessages(groupConvKey);
+            }
+        }
+        const el = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (el) el.remove();
+    },
+
     // Add or update a group entry in the PM sidebar list
-    addGroupConversation(groupId, name, members, timestamp = Date.now()) {
+    addGroupConversation(groupId, name, members, timestamp = Date.now(), opts = {}) {
         const existing = this.groupConversations.get(groupId);
         const allMembers = [...new Set(members)];
 
@@ -1151,7 +1566,13 @@ Object.assign(NYM.prototype, {
             // Don't re-show groups the user previously left
             if (this.leftGroups.has(groupId)) return;
             this.groupConversations.set(groupId, {
-                name, members: allMembers, lastMessageTime: timestamp, createdBy: null
+                name,
+                members: allMembers,
+                lastMessageTime: timestamp,
+                createdBy: opts.createdBy || null,
+                mods: Array.isArray(opts.mods) ? [...opts.mods] : [],
+                banned: Array.isArray(opts.banned) ? [...opts.banned] : [],
+                modLog: []
             });
             const pmList = document.getElementById('pmList');
             const item = document.createElement('div');
@@ -1175,12 +1596,18 @@ Object.assign(NYM.prototype, {
         } else {
             // Merge members (new invitees may arrive with updated member list)
             const merged = [...new Set([...existing.members, ...allMembers])];
-            this.groupConversations.set(groupId, {
+            const next = {
                 ...existing,
                 name: name || existing.name,
                 members: merged,
-                lastMessageTime: Math.max(existing.lastMessageTime || 0, timestamp)
-            });
+                lastMessageTime: Math.max(existing.lastMessageTime || 0, timestamp),
+                mods: Array.isArray(existing.mods) ? existing.mods : [],
+                banned: Array.isArray(existing.banned) ? existing.banned : [],
+                modLog: Array.isArray(existing.modLog) ? existing.modLog : []
+            };
+            // Adopt createdBy if missing and provided
+            if (!next.createdBy && opts.createdBy) next.createdBy = opts.createdBy;
+            this.groupConversations.set(groupId, next);
             this.updateGroupConversationUI(groupId);
         }
     },
@@ -1584,7 +2011,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // /groupinfo — list members of the current group
+    // /groupinfo — list members of the current group, including owner and moderators
     cmdGroupInfo() {
         if (!this.inPMMode || !this.currentGroup) {
             this.displaySystemMessage('You must be in a group conversation to use /groupinfo');
@@ -1592,13 +2019,33 @@ Object.assign(NYM.prototype, {
         }
         const group = this.groupConversations.get(this.currentGroup);
         if (!group) return;
-        const memberList = group.members.map(pk => {
+        const mods = Array.isArray(group.mods) ? group.mods : [];
+        // Sort: owner first, then mods, then everyone else (each group alphabetized by nym)
+        const ownerPk = group.createdBy;
+        const sorted = [...group.members].sort((a, b) => {
+            const rank = (pk) => (pk === ownerPk ? 0 : mods.includes(pk) ? 1 : 2);
+            const ra = rank(a), rb = rank(b);
+            if (ra !== rb) return ra - rb;
+            const na = (this.getNymFromPubkey(a) || '').toLowerCase();
+            const nb = (this.getNymFromPubkey(b) || '').toLowerCase();
+            return na.localeCompare(nb);
+        });
+        const memberList = sorted.map(pk => {
             const name = this.getNymFromPubkey(pk);
-            const suffix = this.getPubkeySuffix(pk);
-            const isYou = pk === this.pubkey ? ' (you)' : '';
-            return `  @${name}${isYou}`;
+            const labels = [];
+            if (pk === ownerPk) labels.push('owner');
+            else if (mods.includes(pk)) labels.push('mod');
+            if (pk === this.pubkey) labels.push('you');
+            const suffix = labels.length ? ` (${labels.join(', ')})` : '';
+            return `  @${name}${suffix}`;
         }).join('\n');
-        this.displaySystemMessage(`Group: "${group.name}"\nMembers (${group.members.length}):\n${memberList}`);
+        const ownerLine = ownerPk
+            ? `Owner: @${this.getNymFromPubkey(ownerPk)}`
+            : 'Owner: unknown';
+        const modLine = mods.length > 0
+            ? `Moderators: ${mods.map(pk => '@' + this.getNymFromPubkey(pk)).join(', ')}`
+            : 'Moderators: none';
+        this.displaySystemMessage(`Group: "${group.name}"\n${ownerLine}\n${modLine}\nMembers (${group.members.length}):\n${memberList}`);
     },
 
     toggleGroupMentionsOnly(enabled) {

@@ -235,6 +235,53 @@
         'deleteGroup':                function (e, t) { e.stopPropagation(); nym().deleteGroup(t.dataset.groupId); },
         'dismissShopSuccess':         function () { nym().dismissShopSuccess(); },
 
+        // Group moderation context-menu actions. Target pubkey lives on
+        // nym().contextMenuData, set when the menu was opened.
+        'kickMemberFromContext':      function () {
+            var d = nym().contextMenuData;
+            if (d && d.pubkey) nym().kickFromGroup(d.pubkey);
+        },
+        'banMemberFromContext':       function () {
+            var d = nym().contextMenuData;
+            if (!d || !d.pubkey) return;
+            if (window.confirm('Ban this user from the group? They cannot be re-invited unless the owner unbans them.')) {
+                nym().banFromGroup(d.pubkey);
+            }
+        },
+        'addModFromContext':          function () {
+            var d = nym().contextMenuData;
+            if (d && d.pubkey) nym().promoteModerator(d.pubkey);
+        },
+        'removeModFromContext':       function () {
+            var d = nym().contextMenuData;
+            if (d && d.pubkey) nym().revokeModerator(d.pubkey);
+        },
+        'transferOwnerFromContext':   function () {
+            var d = nym().contextMenuData;
+            if (!d || !d.pubkey) return;
+            if (window.confirm('Transfer group ownership to this user? You will lose owner privileges.')) {
+                nym().transferOwner(d.pubkey);
+            }
+        },
+        'deleteMessageFromContext':   function () {
+            var n = nym();
+            var d = n.contextMenuData;
+            if (!d || !d.messageId) { n.closeContextMenu(); return; }
+            var isOwn = d.pubkey === n.pubkey;
+            if (isOwn) {
+                if (window.confirm('Are you sure you want to delete this message? This will send a deletion request to relays.')) {
+                    n.publishDeletionEvent(d.messageId, n.inPMMode ? 1059 : 20000).then(function () {
+                        n.displaySystemMessage('Deletion request sent to relays');
+                    });
+                }
+            } else if (n.inPMMode && n.currentGroup) {
+                if (window.confirm("Delete this member's message for everyone in the group?")) {
+                    n.modDeleteGroupMessage(d.messageId, d.pubkey);
+                }
+            }
+            n.closeContextMenu();
+        },
+
         // Error-event actions (referenced via data-error-action)
         'errorHideElement':           function (_e, t) { t.style.display = 'none'; },
 

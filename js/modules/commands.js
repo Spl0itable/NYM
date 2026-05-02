@@ -277,6 +277,12 @@ Object.assign(NYM.prototype, {
             '/invite': { desc: 'Invite a user to channel, or add to group when in a group chat', fn: (args) => this.cmdInvite(args) },
             '/group': { desc: 'Create a private group: /group @user1 @user2 [GroupName]', fn: (args) => this.cmdGroup(args) },
             '/addmember': { desc: 'Add a member to the current group chat', fn: (args) => this.cmdAddMember(args) },
+            '/kick': { desc: 'Remove a member from the current group (owner/mod)', fn: (args) => this.cmdKick(args) },
+            '/ban': { desc: 'Remove and banlist a member from the current group (owner/mod)', fn: (args) => this.cmdBanFromGroup(args) },
+            '/unban': { desc: 'Remove a user from the group banlist (owner only)', fn: (args) => this.cmdUnbanFromGroup(args) },
+            '/addmod': { desc: 'Promote a member to moderator (owner only)', fn: (args) => this.cmdAddMod(args) },
+            '/removemod': { desc: 'Revoke a member\'s moderator role (owner only)', fn: (args) => this.cmdRemoveMod(args) },
+            '/transferowner': { desc: 'Transfer group ownership to another member', fn: (args) => this.cmdTransferOwner(args) },
             '/groupinfo': { desc: 'Show members of the current group', fn: () => this.cmdGroupInfo() },
             '/share': { desc: 'Share current channel URL', fn: () => this.cmdShare() },
             '/leave': { desc: 'Leave current channel, group chat, or PM', fn: () => this.cmdLeave() },
@@ -495,6 +501,11 @@ Object.assign(NYM.prototype, {
     },
 
     async cmdWho() {
+        // /who and /w only make sense in public channels — block in PMs and group chats.
+        if (this.inPMMode) {
+            this.displaySystemMessage('/who only works in public channels.');
+            return;
+        }
         const currentChannelKey = this.currentGeohash || this.currentChannel;
         const channelUserSet = this.channelUsers.get(currentChannelKey) || new Set();
 
@@ -666,6 +677,64 @@ Object.assign(NYM.prototype, {
             return;
         }
         await this.addMemberToGroup(this.currentGroup, targetPubkey);
+    },
+
+    _resolveGroupTarget(args, usage) {
+        if (!this.inPMMode || !this.currentGroup) {
+            this.displaySystemMessage('You must be in a group conversation to use this command.');
+            return null;
+        }
+        if (!args || !args.trim()) {
+            this.displaySystemMessage(usage);
+            return null;
+        }
+        const targetInput = args.trim().replace(/^@/, '');
+        const targetPubkey = this.resolvePubkeyFromNym(targetInput);
+        if (!targetPubkey) {
+            this.displaySystemMessage(`User @${targetInput} not found. Try @nym#xxxx or a hex pubkey.`);
+            return null;
+        }
+        return targetPubkey;
+    },
+
+    async cmdKick(args) {
+        const pk = this._resolveGroupTarget(args, 'Usage: /kick @nym (or hex pubkey)');
+        if (!pk) return;
+        if (pk === this.pubkey) { this.displaySystemMessage("You can't kick yourself."); return; }
+        await this.kickFromGroup(pk);
+    },
+
+    async cmdBanFromGroup(args) {
+        const pk = this._resolveGroupTarget(args, 'Usage: /ban @nym (or hex pubkey)');
+        if (!pk) return;
+        if (pk === this.pubkey) { this.displaySystemMessage("You can't ban yourself."); return; }
+        await this.banFromGroup(pk);
+    },
+
+    async cmdUnbanFromGroup(args) {
+        const pk = this._resolveGroupTarget(args, 'Usage: /unban @nym (or hex pubkey)');
+        if (!pk) return;
+        await this.unbanFromGroup(pk);
+    },
+
+    async cmdAddMod(args) {
+        const pk = this._resolveGroupTarget(args, 'Usage: /addmod @nym (or hex pubkey)');
+        if (!pk) return;
+        await this.promoteModerator(pk);
+    },
+
+    async cmdRemoveMod(args) {
+        const pk = this._resolveGroupTarget(args, 'Usage: /removemod @nym (or hex pubkey)');
+        if (!pk) return;
+        await this.revokeModerator(pk);
+    },
+
+    async cmdTransferOwner(args) {
+        const pk = this._resolveGroupTarget(args, 'Usage: /transferowner @nym (or hex pubkey)');
+        if (!pk) return;
+        if (pk === this.pubkey) { this.displaySystemMessage("You're already the owner."); return; }
+        if (!confirm('Transfer group ownership to this user? You will lose owner privileges.')) return;
+        await this.transferOwner(pk);
     },
 
     async cmdBlock(args) {

@@ -261,16 +261,8 @@ Object.assign(NYM.prototype, {
             this.cancelEditMessage();
         });
 
-        // Add delete message handler
-        document.getElementById('ctxDeleteMessage').addEventListener('click', async () => {
-            if (this.contextMenuData && this.contextMenuData.messageId && this.contextMenuData.pubkey === this.pubkey) {
-                if (confirm('Are you sure you want to delete this message? This will send a deletion request to relays.')) {
-                    await this.publishDeletionEvent(this.contextMenuData.messageId, this.inPMMode ? 1059 : 20000);
-                    this.displaySystemMessage('Deletion request sent to relays');
-                }
-            }
-            this.closeContextMenu();
-        });
+        // Note: ctxDeleteMessage is wired via data-action="deleteMessageFromContext"
+        // in index.html and dispatched through inline-bindings.js.
     },
 
     openReportModal() {
@@ -411,28 +403,48 @@ Object.assign(NYM.prototype, {
             } else if (this.isVerifiedBot(pubkey)) {
                 nymHtml += `<div class="context-menu-dev-label">Nymchat Bot</div>`;
             }
-            // Show "Group Owner" badge when this user is the creator of the current group
+            // Show "Group Owner" or "Moderator" badge for the user in the current group
             if (this.inPMMode && this.currentGroup) {
                 const grp = this.groupConversations.get(this.currentGroup);
                 if (grp && grp.createdBy === pubkey) {
                     nymHtml += `<div class="context-menu-owner-label">Group Owner</div>`;
+                } else if (grp && Array.isArray(grp.mods) && grp.mods.includes(pubkey)) {
+                    nymHtml += `<div class="context-menu-owner-label">Moderator</div>`;
                 }
             }
             ctxAvatarNym.innerHTML = nymHtml;
         }
 
-        // Show "Remove from Group" only when the current user is the group owner
-        // and the target is a different member of the current group.
+        // Group moderation entries: visibility only — actions are bound via
+        // data-action in index.html and dispatched through inline-bindings.js,
+        // which reads the target pubkey from this.contextMenuData.
+        const grpForCtx = (this.inPMMode && this.currentGroup) ? this.groupConversations.get(this.currentGroup) : null;
+        const targetIsMember = !!(grpForCtx && grpForCtx.members.includes(pubkey));
+        const iAmOwner = !!(grpForCtx && grpForCtx.createdBy === this.pubkey);
+        const iAmMod = !!(grpForCtx && Array.isArray(grpForCtx.mods) && grpForCtx.mods.includes(this.pubkey));
+        const iCanModerate = iAmOwner || iAmMod;
+        const targetIsOwner = !!(grpForCtx && grpForCtx.createdBy === pubkey);
+        const targetIsMod = !!(grpForCtx && Array.isArray(grpForCtx.mods) && grpForCtx.mods.includes(pubkey));
+
+        const showKickOrBan = !!(grpForCtx && targetIsMember && pubkey !== this.pubkey
+            && iCanModerate
+            && (iAmOwner || (!targetIsOwner && !targetIsMod)));
+        const showAddMod = !!(grpForCtx && targetIsMember && pubkey !== this.pubkey
+            && iAmOwner && !targetIsOwner && !targetIsMod);
+        const showRemoveMod = !!(grpForCtx && targetIsMember && pubkey !== this.pubkey
+            && iAmOwner && targetIsMod);
+        const showTransfer = !!(grpForCtx && targetIsMember && pubkey !== this.pubkey && iAmOwner);
+
+        const setDisplay = (id, show) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = show ? 'block' : 'none';
+        };
         const kickOption = document.getElementById('ctxKickMember');
-        if (kickOption) {
-            let showKick = false;
-            if (this.inPMMode && this.currentGroup && pubkey !== this.pubkey) {
-                const grp = this.groupConversations.get(this.currentGroup);
-                showKick = !!(grp && grp.createdBy === this.pubkey && grp.members.includes(pubkey));
-            }
-            kickOption.style.display = showKick ? 'block' : 'none';
-            kickOption.onclick = showKick ? () => this.kickFromGroup(pubkey) : null;
-        }
+        setDisplay('ctxKickMember', showKickOrBan);
+        setDisplay('ctxBanMember', showKickOrBan);
+        setDisplay('ctxAddMod', showAddMod);
+        setDisplay('ctxRemoveMod', showRemoveMod);
+        setDisplay('ctxTransferOwner', showTransfer);
 
         // Add slap option if it doesn't exist
         let slapOption = document.getElementById('ctxSlap');
@@ -540,13 +552,22 @@ Object.assign(NYM.prototype, {
             editOption.style.display = 'none';
         }
 
-        // Show/hide Delete Message option - only for own messages
+        // Show/hide Delete Message option - own messages, or mod/owner deleting
+        // another member's message in the current group.
         const deleteOption = document.getElementById('ctxDeleteMessage');
-        if (pubkey === this.pubkey && messageId) {
-            deleteOption.style.display = 'block';
-        } else {
-            deleteOption.style.display = 'none';
+        let canDeleteOwn = pubkey === this.pubkey && messageId;
+        let canModDelete = false;
+        if (!canDeleteOwn && messageId && this.inPMMode && this.currentGroup && pubkey !== this.pubkey) {
+            const grp = this.groupConversations.get(this.currentGroup);
+            if (grp) {
+                const ownerSelf = grp.createdBy === this.pubkey;
+                const modSelf = Array.isArray(grp.mods) && grp.mods.includes(this.pubkey);
+                const targetIsOwner = grp.createdBy === pubkey;
+                // Mods can delete anyone but the owner; the owner can delete anyone.
+                canModDelete = (ownerSelf || (modSelf && !targetIsOwner));
+            }
         }
+        deleteOption.style.display = (canDeleteOwn || canModDelete) ? 'block' : 'none';
 
         // Hide report option for own messages
         document.getElementById('ctxReport').style.display = pubkey === this.pubkey ? 'none' : 'block';
@@ -561,6 +582,11 @@ Object.assign(NYM.prototype, {
             if (hugOption) hugOption.style.display = 'none';
             if (kickOption) kickOption.style.display = 'none';
             if (editOption) editOption.style.display = 'none';
+            const idsToHide = ['ctxBanMember', 'ctxAddMod', 'ctxRemoveMod', 'ctxTransferOwner'];
+            for (const id of idsToHide) {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            }
         }
 
         // Populate bio

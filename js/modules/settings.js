@@ -23,7 +23,10 @@ Object.assign(NYM.prototype, {
                             name: group.name,
                             members: group.members,
                             lastMessageTime: group.lastMessageTime,
-                            createdBy: group.createdBy
+                            createdBy: group.createdBy,
+                            mods: Array.isArray(group.mods) ? group.mods : [],
+                            banned: Array.isArray(group.banned) ? group.banned : [],
+                            modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
                         };
                     }
                     settingsData.groupConversations = groupData;

@@ -180,7 +180,7 @@
             Edit Message
         </div>
 
-        <div class="context-menu-item danger" id="ctxDeleteMessage">
+        <div class="context-menu-item danger" id="ctxDeleteMessage" data-action="deleteMessageFromContext">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 style="vertical-align: middle; margin-right: 8px;">
                 <path d="M 3 5 L 13 5" stroke-linecap="round" />
@@ -193,7 +193,36 @@
             Delete Message
         </div>
 
-        <div class="context-menu-item danger" id="ctxKickMember" style="display: none;">
+        <div class="context-menu-item" id="ctxAddMod" data-action="addModFromContext" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <path d="M 8 1.5 L 10 5.5 L 14 6 L 11 9 L 12 13.5 L 8 11 L 4 13.5 L 5 9 L 2 6 L 6 5.5 Z"
+                    stroke-linejoin="round" />
+            </svg>
+            Make Moderator
+        </div>
+
+        <div class="context-menu-item" id="ctxRemoveMod" data-action="removeModFromContext" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <path d="M 8 1.5 L 10 5.5 L 14 6 L 11 9 L 12 13.5 L 8 11 L 4 13.5 L 5 9 L 2 6 L 6 5.5 Z"
+                    stroke-linejoin="round" />
+                <line x1="3" y1="3" x2="13" y2="13" stroke-linecap="round" />
+            </svg>
+            Revoke Moderator
+        </div>
+
+        <div class="context-menu-item" id="ctxTransferOwner" data-action="transferOwnerFromContext" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <circle cx="8" cy="5" r="2.5" />
+                <path d="M 2 14 C 2 10 4 9 8 9 C 12 9 14 10 14 14" stroke-linecap="round" />
+                <path d="M 12 4 L 15 4 L 13.5 2 M 15 4 L 13.5 6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            Transfer Ownership
+        </div>
+
+        <div class="context-menu-item danger" id="ctxKickMember" data-action="kickMemberFromContext" style="display: none;">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 style="vertical-align: middle; margin-right: 8px;">
                 <path d="M 6 8 L 2 8" stroke-linecap="round" />
@@ -202,6 +231,15 @@
                 <path d="M 5.5 14 C 5.5 11.5 7.5 10 10 10 C 12.5 10 14.5 11.5 14.5 14" stroke-linecap="round" />
             </svg>
             Remove from Group
+        </div>
+
+        <div class="context-menu-item danger" id="ctxBanMember" data-action="banMemberFromContext" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <circle cx="8" cy="8" r="6.5" />
+                <line x1="3.5" y1="3.5" x2="12.5" y2="12.5" stroke-linecap="round" />
+            </svg>
+            Ban from Group
         </div>
 
         <div class="context-menu-item danger" id="ctxBlock">
