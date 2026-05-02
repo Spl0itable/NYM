@@ -485,12 +485,16 @@ Object.assign(NYM.prototype, {
             if (this.blockedUsers.has(senderPubkey)) return;
             if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
             const actorName = this.getNymFromPubkey(senderPubkey);
-            this.showNotification(`Unbanned from ${groupName}`, `${actorName} unbanned you from "${groupName}". You may be re-invited.`, {
-                type: 'group',
-                groupId,
-                id: groupConvKey,
-                pubkey: senderPubkey
-            });
+            const unbanTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
+            const unbanIsHistorical = (Math.floor(Date.now() / 1000) - unbanTsSec) > 10;
+            const unbanTitle = `Unbanned from ${groupName}`;
+            const unbanBody = `${actorName} unbanned you from "${groupName}". You may be re-invited.`;
+            const unbanChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
+            if (!unbanIsHistorical) {
+                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo);
+            } else {
+                this._addNotificationToHistory(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
+            }
             return;
         }
 
@@ -673,17 +677,19 @@ Object.assign(NYM.prototype, {
                     this.switchChannel(this.currentChannel || 'nym', this.currentChannel || 'nym');
                     this.displaySystemMessage(`You were removed from "${groupName}" by ${removerName}.`);
                 }
-                // Always notify — the user might not have the group open.
+                // Notify — the user might not have the group open.
                 const titleSelf = banTag ? `Banned from ${groupName}` : `Removed from ${groupName}`;
                 const bodySelf = banTag
                     ? `${removerName} banned you. You can be re-invited only by the group owner.`
                     : `${removerName} removed you from the group.`;
-                this.showNotification(titleSelf, bodySelf, {
-                    type: 'group',
-                    groupId,
-                    id: gck,
-                    pubkey: senderPubkey
-                });
+                const removeSelfChannelInfo = { type: 'group', groupId, id: gck, pubkey: senderPubkey };
+                const removeSelfTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
+                const removeSelfIsHistorical = (Math.floor(Date.now() / 1000) - removeSelfTsSec) > 10;
+                if (!removeSelfIsHistorical) {
+                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo);
+                } else {
+                    this._addNotificationToHistory(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
+                }
             } else {
                 // Another member was kicked — update local state and show system notice
                 const grp = this.groupConversations.get(groupId);
@@ -732,12 +738,15 @@ Object.assign(NYM.prototype, {
                     this.openGroup(groupId);
                 }
                 if (targetPubkey === this.pubkey) {
-                    this.showNotification(`Promoted in ${grp.name || groupName}`, `${actorName} made you a moderator.`, {
-                        type: 'group',
-                        groupId,
-                        id: groupConvKey,
-                        pubkey: senderPubkey
-                    });
+                    const promoteTitle = `Promoted in ${grp.name || groupName}`;
+                    const promoteBody = `${actorName} made you a moderator.`;
+                    const promoteChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
+                    const promoteTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
+                    if ((Math.floor(Date.now() / 1000) - promoteTsSec) > 10) {
+                        this._addNotificationToHistory(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
+                    } else {
+                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo);
+                    }
                 }
             }
             return;
@@ -766,12 +775,15 @@ Object.assign(NYM.prototype, {
                     this.openGroup(groupId);
                 }
                 if (targetPubkey === this.pubkey) {
-                    this.showNotification(`Moderator removed in ${grp.name || groupName}`, `${actorName} revoked your moderator role.`, {
-                        type: 'group',
-                        groupId,
-                        id: groupConvKey,
-                        pubkey: senderPubkey
-                    });
+                    const revokeTitle = `Moderator removed in ${grp.name || groupName}`;
+                    const revokeBody = `${actorName} revoked your moderator role.`;
+                    const revokeChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
+                    const revokeTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
+                    if ((Math.floor(Date.now() / 1000) - revokeTsSec) > 10) {
+                        this._addNotificationToHistory(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
+                    } else {
+                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo);
+                    }
                 }
             }
             return;
@@ -801,12 +813,15 @@ Object.assign(NYM.prototype, {
                     this.openGroup(groupId);
                 }
                 if (newOwner === this.pubkey) {
-                    this.showNotification(`Owner of ${grp.name || groupName}`, `${actorName} transferred group ownership to you.`, {
-                        type: 'group',
-                        groupId,
-                        id: groupConvKey,
-                        pubkey: senderPubkey
-                    });
+                    const transferTitle = `Owner of ${grp.name || groupName}`;
+                    const transferBody = `${actorName} transferred group ownership to you.`;
+                    const transferChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
+                    const transferTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
+                    if ((Math.floor(Date.now() / 1000) - transferTsSec) > 10) {
+                        this._addNotificationToHistory(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
+                    } else {
+                        this.showNotification(transferTitle, transferBody, transferChannelInfo);
+                    }
                 }
             }
             return;
