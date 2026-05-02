@@ -464,12 +464,15 @@ Object.assign(NYM.prototype, {
         if (!safePk) return;
         const fallback = this.generateAvatarSvg(safePk);
         document.querySelectorAll(`img[data-avatar-pubkey="${safePk}"]`).forEach(img => {
+            // Skip if already showing the desired URL — avoids cancelling
+            // an in-flight load and triggering a spurious error → SVG swap.
+            if (img.getAttribute('src') === avatarUrl) return;
             img.onerror = function () { this.onerror = null; this.src = fallback; };
             img.src = avatarUrl;
         });
         // Update context menu avatar if open for this user
         const ctxImg = document.getElementById('ctxAvatarImg');
-        if (ctxImg && this.contextMenuData?.pubkey === pubkey) {
+        if (ctxImg && this.contextMenuData?.pubkey === pubkey && ctxImg.getAttribute('src') !== avatarUrl) {
             ctxImg.onerror = function () { this.onerror = null; this.src = fallback; };
             ctxImg.src = avatarUrl;
         }
@@ -842,6 +845,23 @@ Object.assign(NYM.prototype, {
         return `anon#${pubkey.slice(-4)}`;
     },
 
+    // Compute the effective status (online / away / offline / hidden) for a user.
+    // Returns 'hidden' when the user has opted out of broadcasting their status
+    // — callers should suppress the status indicator entirely in that case.
+    getEffectiveUserStatus(pubkey) {
+        if (!pubkey) return 'offline';
+        if (this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey)) return 'hidden';
+        if (this.verifiedBotPubkeys && this.verifiedBotPubkeys.has(pubkey)) return 'online';
+        const user = this.users.get(pubkey);
+        const now = Date.now();
+        const ACTIVE_THRESHOLD = 300000;
+        const lastSeen = user ? (user.lastSeen || 0) : 0;
+        const isRecent = (now - lastSeen) < ACTIVE_THRESHOLD;
+        if (this.awayMessages && this.awayMessages.has(pubkey)) return 'away';
+        if (user && user.status === 'away') return 'away';
+        return isRecent ? 'online' : 'offline';
+    },
+
     handlePresenceEvent(event) {
         const nymTag = event.tags.find(t => t[0] === 'n');
         const statusTag = event.tags.find(t => t[0] === 'status');
@@ -882,6 +902,15 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        // Track users who have opted to hide their status indicator
+        if (!this.statusHiddenUsers) this.statusHiddenUsers = new Set();
+        if (status === 'hidden') {
+            this.statusHiddenUsers.add(pubkey);
+            this.awayMessages.delete(pubkey);
+        } else {
+            this.statusHiddenUsers.delete(pubkey);
+        }
+
         // Update away messages map for this user
         if (status === 'away' && awayTag) {
             this.awayMessages.set(pubkey, awayTag[1]);
@@ -892,7 +921,10 @@ Object.assign(NYM.prototype, {
         // Update user status if we know this user
         if (this.users.has(pubkey)) {
             const user = this.users.get(pubkey);
-            user.status = status;
+            // Don't overwrite the activity-derived status with 'hidden' —
+            // visibility is tracked separately via statusHiddenUsers so the
+            // user still appears in the list, just without a status dot.
+            if (status !== 'hidden') user.status = status;
             if (nym) user.nym = nym;
             this.updateUserList();
         }
@@ -996,14 +1028,19 @@ Object.assign(NYM.prototype, {
             } else if (!isRecent && effectiveStatus !== 'away') {
                 effectiveStatus = 'offline';
             }
-            if (effectiveStatus !== 'offline') activeCount++;
+            // Only count users who have sent a recent channel message (or verified bots).
+            // Away users without recent activity don't count as active.
+            if (effectiveStatus !== 'offline' && (isRecent || verifiedBotSet.has(pubkey))) {
+                activeCount++;
+            }
 
             if (isRecent && user.channels && user.channels.has(currentChannelKey)) {
                 channelUserCount++;
             }
 
             const sortKey = this.parseNymFromDisplay(user.nym).toLowerCase();
-            candidates.push({ user, pubkey, effectiveStatus, sortKey });
+            const statusHidden = this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey);
+            candidates.push({ user, pubkey, effectiveStatus, sortKey, statusHidden });
         });
 
         const statusRank = s => s === 'online' ? 0 : (s === 'away' ? 1 : 2);
@@ -1044,7 +1081,7 @@ Object.assign(NYM.prototype, {
         ];
         for (let i = 0; i < renderUsers.length; i++) {
             const c = renderUsers[i];
-            sigParts.push(c.pubkey, c.effectiveStatus[0], c.sortKey);
+            sigParts.push(c.pubkey, c.effectiveStatus[0], c.sortKey, c.statusHidden ? 'h' : 'v');
         }
         const sig = sigParts.join('|');
 
@@ -1077,7 +1114,7 @@ Object.assign(NYM.prototype, {
 
         const fragment = document.createDocumentFragment();
         for (let i = 0; i < displayUsers.length; i++) {
-            const { user, pubkey, effectiveStatus } = displayUsers[i];
+            const { user, pubkey, effectiveStatus, statusHidden } = displayUsers[i];
             const safePk = this._safePubkey(pubkey);
             if (!safePk) continue;
 
@@ -1087,17 +1124,17 @@ Object.assign(NYM.prototype, {
             const isDev = this.isVerifiedDeveloper(pubkey);
             const isBot = !isDev && this.verifiedBotPubkeys.has(pubkey);
             const flairKey = this._userFlairKey ? this._userFlairKey(pubkey) : '';
-            const fp = `${effectiveStatus}|${baseNym}|${userColorClass}|${avatarSrc}|${isDev?1:0}${isBot?1:0}|${flairKey}`;
+            const fp = `${effectiveStatus}|${baseNym}|${userColorClass}|${avatarSrc}|${isDev?1:0}${isBot?1:0}|${flairKey}|${statusHidden?'h':'v'}`;
 
             let el = existing.get(safePk);
             if (el) {
                 existing.delete(safePk);
                 if (el._fp !== fp) {
-                    this._updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot });
+                    this._updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot, statusHidden });
                     el._fp = fp;
                 }
             } else {
-                el = this._createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot });
+                el = this._createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot, statusHidden });
                 el._fp = fp;
             }
             fragment.appendChild(el);
@@ -1125,21 +1162,30 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot }) {
+    _createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot, statusHidden }) {
         const item = document.createElement('div');
         item.className = userColorClass ? `user-item list-item ${userColorClass}` : 'user-item list-item';
         item.dataset.pubkey = pubkey;
         item.dataset.nym = baseNym;
 
+        const wrap = document.createElement('span');
+        wrap.className = statusHidden ? 'user-avatar-wrap no-status' : 'user-avatar-wrap';
+
         const img = document.createElement('img');
-        img.className = `avatar-user-list status-${effectiveStatus}`;
+        img.className = 'avatar-user-list';
         img.alt = '';
         img.loading = 'lazy';
         img.dataset.avatarPubkey = pubkey;
         img.src = avatarSrc;
         const fallback = this.generateAvatarSvg(pubkey);
         img.onerror = () => { img.onerror = null; img.src = fallback; };
-        item.appendChild(img);
+        wrap.appendChild(img);
+
+        const dot = document.createElement('span');
+        dot.className = `user-status-dot status-${effectiveStatus}`;
+        wrap.appendChild(dot);
+
+        item.appendChild(wrap);
 
         const label = document.createElement('span');
         if (userColorClass) label.className = userColorClass;
@@ -1148,15 +1194,41 @@ Object.assign(NYM.prototype, {
         return item;
     },
 
-    _updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot }) {
+    _updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot, statusHidden }) {
         el.className = userColorClass ? `user-item list-item ${userColorClass}` : 'user-item list-item';
         el.dataset.nym = baseNym;
-        const img = el.querySelector('img.avatar-user-list');
+
+        let wrap = el.querySelector('.user-avatar-wrap');
+        if (!wrap) {
+            const oldImg = el.querySelector('img.avatar-user-list');
+            if (oldImg) oldImg.remove();
+            wrap = document.createElement('span');
+            wrap.className = 'user-avatar-wrap';
+            const img = document.createElement('img');
+            img.className = 'avatar-user-list';
+            img.alt = '';
+            img.loading = 'lazy';
+            img.dataset.avatarPubkey = pubkey;
+            img.src = avatarSrc;
+            const fallback = this.generateAvatarSvg(pubkey);
+            img.onerror = () => { img.onerror = null; img.src = fallback; };
+            wrap.appendChild(img);
+            const dot = document.createElement('span');
+            dot.className = `user-status-dot status-${effectiveStatus}`;
+            wrap.appendChild(dot);
+            el.insertBefore(wrap, el.firstChild);
+        }
+
+        wrap.classList.toggle('no-status', !!statusHidden);
+        const img = wrap.querySelector('img.avatar-user-list');
         if (img) {
             if (img.getAttribute('src') !== avatarSrc) img.src = avatarSrc;
-            const statusClass = `status-${effectiveStatus}`;
             img.classList.remove('status-online', 'status-away', 'status-offline');
-            img.classList.add(statusClass);
+        }
+        const dot = wrap.querySelector('.user-status-dot');
+        if (dot) {
+            dot.classList.remove('status-online', 'status-away', 'status-offline');
+            dot.classList.add(`status-${effectiveStatus}`);
         }
         const oldStatusSpan = el.querySelector('.user-status');
         if (oldStatusSpan) oldStatusSpan.remove();

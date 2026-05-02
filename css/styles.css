@@ -6625,31 +6625,65 @@ body.light-mode .friend-badge svg {
     border-radius: 50%;
     object-fit: cover;
     flex-shrink: 0;
-    box-shadow: 0 0 0 2px #6b7280;
 }
 
-.avatar-user-list.status-online {
-    box-shadow: 0 0 0 2px #22c55e;
+.user-avatar-wrap {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    line-height: 0;
 }
 
-.avatar-user-list.status-away {
-    box-shadow: 0 0 0 2px #eab308;
+.user-status-dot {
+    position: absolute;
+    bottom: -1px;
+    right: -1px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #6b7280;
+    border: 2px solid #0a0a0f;
+    box-sizing: content-box;
+    pointer-events: none;
 }
 
-.avatar-user-list.status-offline {
-    box-shadow: 0 0 0 2px #6b7280;
+body.light-mode .user-status-dot {
+    border-color: #f5f5f2;
 }
 
-.avatar-message.status-online {
-    box-shadow: 0 0 0 2px #22c55e;
+.user-status-dot.status-online {
+    background: #22c55e;
 }
 
-.avatar-message.status-away {
-    box-shadow: 0 0 0 2px #eab308;
+.user-status-dot.status-away {
+    background: #eab308;
 }
 
-.avatar-message.status-offline {
-    box-shadow: 0 0 0 2px #6b7280;
+.user-status-dot.status-offline {
+    background: #6b7280;
+}
+
+body.status-hidden .user-status-dot,
+body.status-hidden .ctx-status-row,
+.user-avatar-wrap.no-status .user-status-dot {
+    display: none !important;
+}
+
+.ctx-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.ctx-status-row .user-status-dot {
+    position: static;
+    box-shadow: none;
 }
 
 .avatar-pm {

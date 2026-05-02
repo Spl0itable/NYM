@@ -415,6 +415,27 @@ Object.assign(NYM.prototype, {
             ctxAvatarNym.innerHTML = nymHtml;
         }
 
+        // Populate status row (online / away / not online)
+        const ctxStatusRow = document.getElementById('ctxStatusRow');
+        if (ctxStatusRow) {
+            ctxStatusRow.textContent = '';
+            const status = this.getEffectiveUserStatus(pubkey);
+            const targetHidden = this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey);
+            if (this.settings.showStatus !== false && !targetHidden && status !== 'hidden') {
+                const dot = document.createElement('span');
+                dot.className = `user-status-dot status-${status}`;
+                const label = document.createElement('span');
+                label.textContent = status === 'online' ? 'Online'
+                    : status === 'away' ? 'Away'
+                        : 'Not online';
+                ctxStatusRow.appendChild(dot);
+                ctxStatusRow.appendChild(label);
+                ctxStatusRow.style.display = '';
+            } else {
+                ctxStatusRow.style.display = 'none';
+            }
+        }
+
         // Group moderation entries: visibility only — actions are bound via
         // data-action in index.html and dispatched through inline-bindings.js,
         // which reads the target pubkey from this.contextMenuData.

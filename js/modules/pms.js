@@ -1832,59 +1832,87 @@ Object.assign(NYM.prototype, {
         document.getElementById('newPMModal').classList.add('active');
         setTimeout(() => {
             document.getElementById('pmRecipientInput').focus();
-            // Show follow list suggestions when Nostr-logged-in user opens the modal
-            if (this.nostrFollowList.length > 0) {
-                this._showFollowListSuggestions('');
-            } else if (this.pubkey) {
-                // Follow list not loaded yet — retry fetch and show when ready
-                this.fetchNostrFollowList(this.pubkey);
-            }
+            this._showRecentlySeenSuggestions('');
         }, 80);
         if (window.innerWidth <= 768) this.closeSidebar();
     },
 
-    // Show follow list suggestions in the New Message modal
-    _showFollowListSuggestions(query) {
+    // Show recently seen users in the New Message modal (sorted most-recent first)
+    _showRecentlySeenSuggestions(query) {
         const suggestions = document.getElementById('pmSuggestions');
         if (!suggestions) return;
 
-        const followMatches = [];
-        for (const pk of this.nostrFollowList) {
-            if (pk === this.pubkey) continue;
-            if (this._newPMRecipients.some(r => r.pubkey === pk)) continue;
-            const user = this.users.get(pk);
-            const name = user ? this.stripPubkeySuffix(user.nym) : pk.slice(0, 12) + '...';
-            if (query && !name.toLowerCase().includes(query)) continue;
-            followMatches.push({ nym: name, pubkey: pk, isFollow: true });
+        const matches = [];
+        this.users.forEach((user, pubkey) => {
+            if (!user || !user.nym) return;
+            if (pubkey === this.pubkey) return;
+            if (this.isVerifiedBot && this.isVerifiedBot(pubkey)) return;
+            if (this.blockedUsers && this.blockedUsers.has(user.nym)) return;
+            if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
+            const name = this.stripPubkeySuffix(user.nym);
+            if (query && !name.toLowerCase().includes(query)) return;
+            matches.push({ nym: name, pubkey, lastSeen: user.lastSeen || 0 });
+        });
+
+        if (matches.length === 0) {
+            suggestions.style.display = 'none';
+            suggestions.textContent = '';
+            return;
         }
 
-        if (followMatches.length === 0) return;
+        matches.sort((a, b) => b.lastSeen - a.lastSeen);
+        const top = matches.slice(0, 10);
 
-        const header = query ? '' : '<div class="pm-suggestion-header">From your Nostr follows</div>';
-        const html = header + followMatches.slice(0, 10).map(m => {
-            const suffix = this.getPubkeySuffix(m.pubkey);
-            const safePk = this._safePubkey(m.pubkey);
-            const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
-            return `<div class="pm-suggestion-item" data-pubkey="${safePk}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" data-avatar-pubkey="${safePk}" loading="lazy"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span><span class="pm-suggestion-follow-badge">following</span></div>`;
-        }).join('');
+        suggestions.textContent = '';
+        if (!query) {
+            const header = document.createElement('div');
+            header.className = 'pm-suggestion-header';
+            header.textContent = 'Recently seen users';
+            suggestions.appendChild(header);
+        }
 
-        suggestions.innerHTML = html;
-        suggestions.querySelectorAll('.pm-suggestion-item[data-pubkey]').forEach(el => {
-            el.addEventListener('click', () => this.addNewPMRecipient(el.dataset.pubkey, el.dataset.nym));
-        });
+        for (const m of top) {
+            suggestions.appendChild(this._buildPMSuggestionItem(m.pubkey, m.nym));
+        }
         suggestions.style.display = 'block';
+    },
+
+    // Build a pm-suggestion-item DOM node (no innerHTML).
+    _buildPMSuggestionItem(pubkey, nym) {
+        const safePk = this._safePubkey(pubkey);
+        const item = document.createElement('div');
+        item.className = 'pm-suggestion-item';
+        item.dataset.pubkey = safePk;
+        item.dataset.nym = nym;
+
+        const img = document.createElement('img');
+        img.className = 'pm-suggestion-avatar';
+        img.dataset.avatarPubkey = safePk;
+        img.loading = 'lazy';
+        img.alt = '';
+        img.src = this.getAvatarUrl(pubkey);
+
+        const nymSpan = document.createElement('span');
+        nymSpan.className = 'pm-suggestion-nym';
+        nymSpan.textContent = nym;
+
+        const suffixSpan = document.createElement('span');
+        suffixSpan.className = 'pm-suggestion-suffix';
+        suffixSpan.textContent = '#' + this.getPubkeySuffix(pubkey);
+
+        item.appendChild(img);
+        item.appendChild(nymSpan);
+        item.appendChild(suffixSpan);
+
+        item.addEventListener('click', () => this.addNewPMRecipient(safePk, nym));
+        return item;
     },
 
     onNewPMRecipientInput(value) {
         const suggestions = document.getElementById('pmSuggestions');
         const query = value.trim().replace(/^@/, '').toLowerCase();
         if (!query) {
-            // Show follow list when input is empty (if Nostr-logged-in)
-            if (this.nostrFollowList.length > 0) {
-                this._showFollowListSuggestions('');
-            } else {
-                suggestions.style.display = 'none';
-            }
+            this._showRecentlySeenSuggestions('');
             return;
         }
 
@@ -1894,10 +1922,8 @@ Object.assign(NYM.prototype, {
             if (!this._newPMRecipients.some(r => r.pubkey === pk) && pk !== this.pubkey) {
                 const renderPubkeySuggestion = () => {
                     const nym = this.stripPubkeySuffix(this.getNymFromPubkey(pk));
-                    const suffix = this.getPubkeySuffix(pk);
-                    const avatarSrc = this.escapeHtml(this.getAvatarUrl(pk));
-                    suggestions.innerHTML = `<div class="pm-suggestion-item" data-pubkey="${pk}" data-nym="${this.escapeHtml(nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" data-avatar-pubkey="${pk}" loading="lazy"><span class="pm-suggestion-nym">${this.escapeHtml(nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span></div>`;
-                    suggestions.querySelector('.pm-suggestion-item').addEventListener('click', () => this.addNewPMRecipient(pk, nym));
+                    suggestions.textContent = '';
+                    suggestions.appendChild(this._buildPMSuggestionItem(pk, nym));
                     suggestions.style.display = 'block';
                 };
                 renderPubkeySuggestion();
@@ -1915,49 +1941,8 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Search active users
-        const matches = [];
-        const matchedPubkeys = new Set();
-        this.users.forEach((user, pubkey) => {
-            if (pubkey === this.pubkey) return;
-            if (this.isVerifiedBot(pubkey)) return;
-            if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
-            const baseNym = this.stripPubkeySuffix(user.nym).toLowerCase();
-            if (baseNym.includes(query)) {
-                matches.push({ nym: this.stripPubkeySuffix(user.nym), pubkey, isFollow: this.nostrFollowList.includes(pubkey) });
-                matchedPubkeys.add(pubkey);
-            }
-        });
-
-        // Also search follow list for users not in active users
-        if (this.nostrFollowList.length > 0) {
-            for (const pk of this.nostrFollowList) {
-                if (pk === this.pubkey || matchedPubkeys.has(pk)) continue;
-                if (this._newPMRecipients.some(r => r.pubkey === pk)) continue;
-                const user = this.users.get(pk);
-                const name = user ? this.stripPubkeySuffix(user.nym) : pk.slice(0, 12) + '...';
-                if (name.toLowerCase().includes(query)) {
-                    matches.push({ nym: name, pubkey: pk, isFollow: true });
-                }
-            }
-        }
-
-        if (matches.length === 0) { suggestions.style.display = 'none'; return; }
-
-        // Sort: follows first, then by name
-        matches.sort((a, b) => (b.isFollow ? 1 : 0) - (a.isFollow ? 1 : 0));
-
-        suggestions.innerHTML = matches.slice(0, 10).map(m => {
-            const suffix = this.getPubkeySuffix(m.pubkey);
-            const safePk = this._safePubkey(m.pubkey);
-            const avatarSrc = this.escapeHtml(this.getAvatarUrl(m.pubkey));
-            const followBadge = m.isFollow ? '<span class="pm-suggestion-follow-badge">following</span>' : '';
-            return `<div class="pm-suggestion-item" data-pubkey="${safePk}" data-nym="${this.escapeHtml(m.nym)}"><img src="${avatarSrc}" class="pm-suggestion-avatar" data-avatar-pubkey="${safePk}" loading="lazy"><span class="pm-suggestion-nym">${this.escapeHtml(m.nym)}</span><span class="pm-suggestion-suffix">#${suffix}</span>${followBadge}</div>`;
-        }).join('');
-        suggestions.querySelectorAll('.pm-suggestion-item[data-pubkey]').forEach(el => {
-            el.addEventListener('click', () => this.addNewPMRecipient(el.dataset.pubkey, el.dataset.nym));
-        });
-        suggestions.style.display = 'block';
+        // Search recently seen / active users by nym substring
+        this._showRecentlySeenSuggestions(query);
     },
 
     onNewPMRecipientKeydown(event) {

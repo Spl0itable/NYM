@@ -103,7 +103,8 @@ Object.assign(NYM.prototype, {
             closedPMs: Array.from(this.closedPMs || []),
             leftGroups: Array.from(this.leftGroups || []),
             acceptPMs: this.settings.acceptPMs || 'enabled',
-            syncMLSHistory: this.settings.syncMLSHistory !== false
+            syncMLSHistory: this.settings.syncMLSHistory !== false,
+            showStatus: this.settings.showStatus !== false
         };
     },
 
@@ -429,7 +430,8 @@ Object.assign(NYM.prototype, {
             performanceMode: localStorage.getItem('nym_performance_mode') || 'auto',
             acceptPMs: localStorage.getItem('nym_accept_pms') || 'enabled',
             cachePMs: localStorage.getItem('nym_cache_pms') !== 'false', // default true
-            syncMLSHistory: localStorage.getItem('nym_sync_mls_history') !== 'false' // default true
+            syncMLSHistory: localStorage.getItem('nym_sync_mls_history') !== 'false', // default true
+            showStatus: localStorage.getItem('nym_show_status') !== 'false' // default true
         };
     },
 

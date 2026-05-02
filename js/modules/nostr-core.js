@@ -738,9 +738,6 @@ Object.assign(NYM.prototype, {
             } catch (e) {
                 // Ignore profile parse errors
             }
-        } else if (event.kind === 3) {
-            // Handle follow list (kind:3 contact list) for Nostr login follow suggestions
-            this._handleFollowListEvent(event);
         } else if (event.kind === this.P2P_SIGNALING_KIND) {
             // Handle P2P signaling (WebRTC SDP/ICE)
             this.handleP2PSignalingEvent(event);
@@ -1467,62 +1464,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Fetch the Nostr kind:3 contact list (follow list) for a pubkey
-    // This allows suggesting followed users when composing new messages
-    async fetchNostrFollowList(pubkey) {
-        if (this._followListFetched) return;
-        this._followListFetched = true;
-
-        const subId = 'follow-list-' + Math.random().toString(36).slice(2);
-        const req = ["REQ", subId, { kinds: [3], authors: [pubkey], limit: 1 }];
-
-        try { this.sendRequestToFewRelays(req); } catch (_) {
-            // Send failed — allow retry on next call
-            this._followListFetched = false;
-            return;
-        }
-
-        // Listen for the response via a one-time handler
-        let received = false;
-        const handleFollowList = (event) => {
-            if (event.kind !== 3 || event.pubkey !== pubkey) return;
-            received = true;
-            const followPubkeys = (event.tags || [])
-                .filter(t => Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string' && t[1].length === 64)
-                .map(t => t[1]);
-
-            this.nostrFollowList = [...new Set(followPubkeys)];
-
-            // Fetch follow-list profiles via the batched queue, which
-            // dedupes against fresh-cached profiles and any in-flight REQs.
-            const unknownPubkeys = this.nostrFollowList.filter(pk => !this.users.has(pk));
-            for (const pk of unknownPubkeys) {
-                this.queueProfileFetch(pk);
-            }
-        };
-
-        // Register a temporary follow list handler
-        this._pendingFollowListHandler = handleFollowList;
-
-        // Auto-close subscription after 6 seconds
-        setTimeout(() => {
-            try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
-            this._pendingFollowListHandler = null;
-            // If no response was received, allow retry on next call
-            if (!received) {
-                this._followListFetched = false;
-            }
-        }, 6000);
-    },
-
-    // Called from event handler when a kind:3 event arrives
-    _handleFollowListEvent(event) {
-        if (this._pendingFollowListHandler) {
-            this._pendingFollowListHandler(event);
-            this._pendingFollowListHandler = null;
-        }
-    },
-
     // Resolve all pending profile callbacks for a pubkey (called from kind 0 handler)
     _resolveProfileCallbacks(pubkey) {
         const entries = this.pendingProfileResolvers.get(pubkey);
@@ -2148,6 +2089,32 @@ Object.assign(NYM.prototype, {
             this.sendToRelay(["EVENT", signedEvent]);
         } catch (error) {
             // Silently fail - presence is best-effort
+        }
+    },
+
+    // Broadcast whether this user wants their status indicator hidden from
+    // other clients. Other clients track this in `statusHiddenUsers` and
+    // suppress the status dot / context-menu status row accordingly.
+    async publishStatusVisibility(hidden) {
+        try {
+            if (!this.connected) return;
+            const tags = [
+                ['d', 'nym-presence'],
+                ['t', 'nym-presence'],
+                ['n', this.nym],
+                ['status', hidden ? 'hidden' : 'online']
+            ];
+            const event = {
+                kind: 30078,
+                created_at: Math.floor(Date.now() / 1000),
+                tags,
+                content: '',
+                pubkey: this.pubkey
+            };
+            const signedEvent = await this.signEvent(event);
+            this.sendToRelay(["EVENT", signedEvent]);
+        } catch (_) {
+            // Best-effort broadcast.
         }
     },
 

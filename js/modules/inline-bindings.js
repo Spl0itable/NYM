@@ -38,9 +38,14 @@
         var t = e.target;
         if (!t || t.tagName !== 'IMG') return;
         if (t.dataset && t.dataset.avatarPubkey && window.nym && typeof window.nym.generateAvatarSvg === 'function') {
-            // Prevent further error firing on the swap.
+            // If the image actually decoded (e.g. error fired on a cancelled
+            // load while the new src is already painting), don't replace it.
+            if (t.complete && t.naturalHeight > 0) return;
+            var fallback = window.nym.generateAvatarSvg(t.dataset.avatarPubkey);
+            // Avoid loops if the fallback itself somehow errors.
+            if (t.src === fallback) return;
             t.onerror = null;
-            t.src = window.nym.generateAvatarSvg(t.dataset.avatarPubkey);
+            t.src = fallback;
             return;
         }
         if (t.dataset && t.dataset.errorAction) {

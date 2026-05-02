@@ -595,9 +595,6 @@ class NYM {
         this._newPMRecipients = [];
         this.groupMessageReaders = new Map();
         this._unfurlCache = new Map();
-        this.nostrFollowList = [];
-        this.nostrFollowProfiles = [];
-        this._followListFetched = false;
         this.unreadCounts = new Map();
         this.channelLastActivity = new Map();
         this.blockedUsers = new Set();
@@ -692,6 +689,7 @@ class NYM {
         this.torrentClient = null;
         this.torrentSeeds = new Map();
         this.awayMessages = new Map();
+        this.statusHiddenUsers = new Set();
         this.typingUsers = new Map();
         this._typingThrottleTime = 0;
         this._typingSendInterval = 3000;
@@ -2591,6 +2589,12 @@ async function showSettings() {
         typingIndicatorsSel.value = nym.settings.typingIndicatorsEnabled !== false ? 'true' : 'false';
     }
 
+    // Fill in show-status toggle
+    const showStatusSel = document.getElementById('showStatusSelect');
+    if (showStatusSel) {
+        showStatusSel.value = nym.settings.showStatus !== false ? 'true' : 'false';
+    }
+
     // Fill in cache-PMs toggle
     const cachePMsSel = document.getElementById('cachePMsSelect');
     if (cachePMsSel) {
@@ -2811,6 +2815,20 @@ async function saveSettings() {
     const typingIndicatorsEnabled = document.getElementById('typingIndicatorsSelect').value === 'true';
     nym.settings.typingIndicatorsEnabled = typingIndicatorsEnabled;
     localStorage.setItem('nym_typing_indicators_enabled', String(typingIndicatorsEnabled));
+
+    // Read and save status indicator visibility setting. When changed,
+    // broadcast to other clients so they suppress this user's status dot.
+    const showStatusEl = document.getElementById('showStatusSelect');
+    if (showStatusEl) {
+        const showStatus = showStatusEl.value === 'true';
+        const wasShown = nym.settings.showStatus !== false;
+        nym.settings.showStatus = showStatus;
+        localStorage.setItem('nym_show_status', String(showStatus));
+        document.body.classList.toggle('status-hidden', !showStatus);
+        if (wasShown !== showStatus && typeof nym.publishStatusVisibility === 'function') {
+            nym.publishStatusVisibility(!showStatus);
+        }
+    }
 
     // Read and save PM/group cache opt-out. When the user turns it off,
     // wipe the existing cache so we don't leave decrypted content at rest.
@@ -3143,7 +3161,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.60.306 ═══<br/>
+═══ Nymchat v3.60.307 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4250,9 +4268,6 @@ function applyNostrLogin(pubkey, secretKey, method) {
         }, 3000);
     });
 
-    // Fetch Nostr follow list (kind:3 contact list) for search in New Message modal
-    nym.fetchNostrFollowList(pubkey);
-
     // Reload blur setting now that pubkey is known
     nym.blurOthersImages = nym.loadImageBlurSettings();
 
@@ -4867,6 +4882,13 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_typing_indicators_enabled', String(s.typingIndicatorsEnabled));
     }
 
+    // Show status indicators
+    if (typeof s.showStatus === 'boolean') {
+        nym.settings.showStatus = s.showStatus;
+        localStorage.setItem('nym_show_status', String(s.showStatus));
+        document.body.classList.toggle('status-hidden', !s.showStatus);
+    }
+
     // Nick style
     if (s.nickStyle) {
         nym.settings.nickStyle = s.nickStyle;
@@ -5311,6 +5333,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             nym.updateUserList();
         }
     }, 5000);
+
+    // Once connected, broadcast our status-visibility preference
+    nym._initialStatusVisibilityBroadcast = false;
+    nym._setManagedInterval('initialStatusVisibility', () => {
+        if (nym._initialStatusVisibilityBroadcast) return;
+        if (!nym.connected || !nym.pubkey) return;
+        nym._initialStatusVisibilityBroadcast = true;
+        if (nym.settings.showStatus === false && typeof nym.publishStatusVisibility === 'function') {
+            nym.publishStatusVisibility(true);
+        }
+    }, 2000);
 
     // Override the existing search functions to handle collapsed lists properly
     const originalHandleChannelSearch = nym.handleChannelSearch;
