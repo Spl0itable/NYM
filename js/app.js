@@ -3143,7 +3143,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.60.305 ═══<br/>
+═══ Nymchat v3.60.306 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -3336,10 +3336,15 @@ async function checkSavedConnection() {
                         localStorage.setItem('nym_session_nsec', nsec);
                     } catch (e) { }
                 }
+                // Persist the auto-generated nick so it survives reload
+                if (!savedNick && nym.nym) {
+                    try { localStorage.setItem('nym_auto_ephemeral_nick', nym.nym); } catch (e) { }
+                }
             } else {
-                // Generate fresh ephemeral keypair each session (random keypair mode)
+                // Generate fresh ephemeral keypair each session (random/hardcore keypair mode).
+                // Rotate the nick too — users opted in to a fresh identity each session.
                 await nym.generateKeypair();
-                nym.nym = savedNick || nym.generateRandomNym();
+                nym.nym = nym.generateRandomNym();
                 nym.connectionMode = 'ephemeral';
             }
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);

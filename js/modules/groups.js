@@ -474,8 +474,23 @@ Object.assign(NYM.prototype, {
         const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
         const msgType = typeTag ? typeTag[1] : null;
 
-        // Drop messages for groups the user has left, unless it's a reinvite
-        if (this.leftGroups.has(groupId) && msgType !== 'group-invite' && msgType !== 'group-add-member') {
+        // Drop messages for groups the user has left, unless it's a reinvite or unban
+        if (this.leftGroups.has(groupId) && msgType !== 'group-invite' && msgType !== 'group-add-member' && msgType !== 'group-unban') {
+            return;
+        }
+
+        // group-unban: owner notified us that we were unbanned. Show a notification.
+        if (typeTag && typeTag[1] === 'group-unban') {
+            if (isOwn) return;
+            if (this.blockedUsers.has(senderPubkey)) return;
+            if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+            const actorName = this.getNymFromPubkey(senderPubkey);
+            this.showNotification(`Unbanned from ${groupName}`, `${actorName} unbanned you from "${groupName}". You may be re-invited.`, {
+                type: 'group',
+                groupId,
+                id: groupConvKey,
+                pubkey: senderPubkey
+            });
             return;
         }
 
@@ -658,6 +673,17 @@ Object.assign(NYM.prototype, {
                     this.switchChannel(this.currentChannel || 'nym', this.currentChannel || 'nym');
                     this.displaySystemMessage(`You were removed from "${groupName}" by ${removerName}.`);
                 }
+                // Always notify — the user might not have the group open.
+                const titleSelf = banTag ? `Banned from ${groupName}` : `Removed from ${groupName}`;
+                const bodySelf = banTag
+                    ? `${removerName} banned you. You can be re-invited only by the group owner.`
+                    : `${removerName} removed you from the group.`;
+                this.showNotification(titleSelf, bodySelf, {
+                    type: 'group',
+                    groupId,
+                    id: gck,
+                    pubkey: senderPubkey
+                });
             } else {
                 // Another member was kicked — update local state and show system notice
                 const grp = this.groupConversations.get(groupId);
@@ -696,13 +722,23 @@ Object.assign(NYM.prototype, {
             this.groupConversations.set(groupId, grp);
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
-            if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
+            if (!isOwn) {
                 if (!this.users.has(targetPubkey)) await this.fetchProfileDirect(targetPubkey);
                 if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
                 const targetName = this.getNymFromPubkey(targetPubkey);
                 const actorName = this.getNymFromPubkey(senderPubkey);
-                this.displaySystemMessage(`${targetName} was promoted to moderator by ${actorName}.`);
-                this.openGroup(groupId);
+                if (this.inPMMode && this.currentGroup === groupId) {
+                    this.displaySystemMessage(`${targetName} was promoted to moderator by ${actorName}.`);
+                    this.openGroup(groupId);
+                }
+                if (targetPubkey === this.pubkey) {
+                    this.showNotification(`Promoted in ${grp.name || groupName}`, `${actorName} made you a moderator.`, {
+                        type: 'group',
+                        groupId,
+                        id: groupConvKey,
+                        pubkey: senderPubkey
+                    });
+                }
             }
             return;
         }
@@ -720,13 +756,23 @@ Object.assign(NYM.prototype, {
             this.groupConversations.set(groupId, grp);
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
-            if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
+            if (!isOwn) {
                 if (!this.users.has(targetPubkey)) await this.fetchProfileDirect(targetPubkey);
                 if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
                 const targetName = this.getNymFromPubkey(targetPubkey);
                 const actorName = this.getNymFromPubkey(senderPubkey);
-                this.displaySystemMessage(`${targetName}'s moderator role was revoked by ${actorName}.`);
-                this.openGroup(groupId);
+                if (this.inPMMode && this.currentGroup === groupId) {
+                    this.displaySystemMessage(`${targetName}'s moderator role was revoked by ${actorName}.`);
+                    this.openGroup(groupId);
+                }
+                if (targetPubkey === this.pubkey) {
+                    this.showNotification(`Moderator removed in ${grp.name || groupName}`, `${actorName} revoked your moderator role.`, {
+                        type: 'group',
+                        groupId,
+                        id: groupConvKey,
+                        pubkey: senderPubkey
+                    });
+                }
             }
             return;
         }
@@ -745,13 +791,23 @@ Object.assign(NYM.prototype, {
             this.groupConversations.set(groupId, grp);
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
-            if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
+            if (!isOwn) {
                 if (!this.users.has(newOwner)) await this.fetchProfileDirect(newOwner);
                 if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
                 const targetName = this.getNymFromPubkey(newOwner);
                 const actorName = this.getNymFromPubkey(senderPubkey);
-                this.displaySystemMessage(`${actorName} transferred group ownership to ${targetName}.`);
-                this.openGroup(groupId);
+                if (this.inPMMode && this.currentGroup === groupId) {
+                    this.displaySystemMessage(`${actorName} transferred group ownership to ${targetName}.`);
+                    this.openGroup(groupId);
+                }
+                if (newOwner === this.pubkey) {
+                    this.showNotification(`Owner of ${grp.name || groupName}`, `${actorName} transferred group ownership to you.`, {
+                        type: 'group',
+                        groupId,
+                        id: groupConvKey,
+                        pubkey: senderPubkey
+                    });
+                }
             }
             return;
         }
@@ -883,8 +939,11 @@ Object.assign(NYM.prototype, {
                     // Always update sidebar unread count for all group messages
                     this.updateUnreadCount(groupConvKey);
                 }
-                // Notify for all group messages unless mentions-only is enabled
-                const shouldNotifyGroup = !this.groupNotifyMentionsOnly || this.isMentioned(messageContent);
+                // Notify for all group messages unless mentions-only is enabled.
+                // Suppress the chat-message notification for group-invite rumors —
+                // the invite handler above already fired a "Group invite" notification.
+                const isInviteRumor = msgType === 'group-invite';
+                const shouldNotifyGroup = !isInviteRumor && (!this.groupNotifyMentionsOnly || this.isMentioned(messageContent));
                 if (shouldNotifyGroup) {
                     if (!msg.isHistorical) {
                         this.showNotification(`${groupName}: ${msg.author}`, messageContent, {
@@ -1360,7 +1419,29 @@ Object.assign(NYM.prototype, {
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
-        this.displaySystemMessage(`@${this.getNymFromPubkey(pubkey)} was unbanned. They can be re-invited.`);
+        const targetName = this.getNymFromPubkey(pubkey);
+        const actorName = this.getNymFromPubkey(this.pubkey);
+        // Notify the unbanned user via a gift-wrapped rumor so they see a notification.
+        if (this._canSendGiftWraps()) {
+            const now = Math.floor(Date.now() / 1000);
+            const tags = [
+                ['p', pubkey],
+                ['g', groupId],
+                ['subject', group.name],
+                ['type', 'group-unban'],
+                ['unban', pubkey],
+                ['x', this.generateUUID()]
+            ];
+            const rumor = {
+                kind: 14,
+                created_at: now,
+                tags,
+                content: `${actorName} unbanned you from "${group.name}". You may be re-invited.`,
+                pubkey: this.pubkey
+            };
+            await this._sendGiftWrapsAsync([pubkey], rumor, null);
+        }
+        this.displaySystemMessage(`@${targetName} was unbanned. They can be re-invited.`);
     },
 
     // Owner-only: promote a member to moderator
@@ -1512,6 +1593,13 @@ Object.assign(NYM.prototype, {
         }
         if (!messageId) return;
 
+        // Resolve to the nymMessageId — that's the only id that's stable across
+        // recipients, since each one has a different gift-wrap event id.
+        const groupConvKey = this.getGroupConversationKey(groupId);
+        const list = this.pmMessages.get(groupConvKey) || [];
+        const msg = list.find(m => m.id === messageId || m.nymMessageId === messageId);
+        const sharedId = (msg && msg.nymMessageId) || messageId;
+
         const actorName = this.getNymFromPubkey(this.pubkey);
         const authorName = authorPubkey ? this.getNymFromPubkey(authorPubkey) : 'a member';
         const content = `${actorName} deleted a message from ${authorName}.`;
@@ -1521,7 +1609,7 @@ Object.assign(NYM.prototype, {
         tags.push(['g', groupId]);
         tags.push(['subject', group.name]);
         tags.push(['type', 'group-delete-message']);
-        tags.push(['e', messageId]);
+        tags.push(['e', sharedId]);
         if (authorPubkey) tags.push(['target_pubkey', authorPubkey]);
         tags.push(['x', this.generateUUID()]);
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
@@ -1529,31 +1617,43 @@ Object.assign(NYM.prototype, {
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
 
         // Apply locally
-        this._applyGroupMessageDeletion(groupId, messageId);
-        this._appendModLog(group, { type: 'delete-message', actor: this.pubkey, target: authorPubkey || null, messageId });
+        this._applyGroupMessageDeletion(groupId, sharedId);
+        this._appendModLog(group, { type: 'delete-message', actor: this.pubkey, target: authorPubkey || null, messageId: sharedId });
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.displaySystemMessage(content);
     },
 
     // Local-only: drop a message from group state and remove from DOM.
+    // The DOM bubble's data-message-id is the message's nymMessageId for group
+    // messages (see messages.js), but moderation rumors may carry the gift-wrap
+    // event id. Look up by either, then derive the actual DOM id from the
+    // stored message so the right node is removed.
     _applyGroupMessageDeletion(groupId, messageId) {
         if (!messageId) return;
-        if (this.deletedEventIds && this.deletedEventIds.add) {
-            this.deletedEventIds.add(messageId);
-            if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
-        }
         const groupConvKey = this.getGroupConversationKey(groupId);
         const list = this.pmMessages.get(groupConvKey);
+        let domId = messageId;
         if (list) {
             const idx = list.findIndex(m => m.id === messageId || m.nymMessageId === messageId);
             if (idx !== -1) {
+                const msg = list[idx];
+                domId = msg.nymMessageId || msg.id;
+                if (this.deletedEventIds && this.deletedEventIds.add) {
+                    if (msg.id) this.deletedEventIds.add(msg.id);
+                    if (msg.nymMessageId) this.deletedEventIds.add(msg.nymMessageId);
+                    if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+                }
                 list.splice(idx, 1);
                 this.channelDOMCache.delete(groupConvKey);
                 if (typeof this.persistPMMessages === 'function') this.persistPMMessages(groupConvKey);
+            } else if (this.deletedEventIds && this.deletedEventIds.add) {
+                // Not in our local list yet — remember so a late-arriving copy stays gone.
+                this.deletedEventIds.add(messageId);
+                if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
             }
         }
-        const el = document.querySelector(`[data-message-id="${messageId}"]`);
+        const el = document.querySelector(`[data-message-id="${domId}"]`);
         if (el) el.remove();
     },
 
