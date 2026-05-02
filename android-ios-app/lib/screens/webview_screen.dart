@@ -14,6 +14,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:app_links/app_links.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:gal/gal.dart';
 import 'package:nym_bar/services/notification_service.dart';
 import 'package:nym_bar/services/fips_ble_bridge.dart';
 
@@ -41,11 +44,16 @@ bool _hasTriedFallback = false;
 int _retryAttempts = 0;
 bool _mainPageStarted = false;
 final ImagePicker _imagePicker = ImagePicker();
+
 String? _localNostrPubkey;
 
-// Dynamic theme colors from PWA
+// Dynamic theme colors from PWA (will be updated based on system preference)
 Color _themeBackgroundColor = const Color(0xFF0A0A0F);
 bool _isLightMode = false;
+
+// Light/dark theme colors
+static const Color _darkBackgroundColor = Color(0xFF0A0A0F);
+static const Color _lightBackgroundColor = Color(0xFFF5F5F2);
 
 // ASCII logo loaded from asset file (protected from accidental modifications)
 String _asciiLogo = '';
@@ -58,6 +66,7 @@ int _notificationIdCounter = 0;
 @override
 void initState() {
 super.initState();
+_initializeTheme();
 _loadAsciiLogo();
 _requestLocationPermission();
 _requestCameraPermission();
@@ -67,6 +76,13 @@ _scheduleCacheClear();
 _initializeAppLinks();
 }
 _notificationSubscription = NotificationService().payloadStream.listen(_handleDeepLink);
+}
+
+void _initializeTheme() {
+// Detect initial system theme preference
+final brightness = WidgetsBinding.instance.platformDispatcher.platformBrightness;
+_isLightMode = brightness == Brightness.light;
+_themeBackgroundColor = _isLightMode ? _lightBackgroundColor : _darkBackgroundColor;
 }
 
 Future<void> _loadAsciiLogo() async {
@@ -245,14 +261,17 @@ _controller
 onPageStarted: (url) {
 debugPrint('[WebView] Page started: $url');
 // Track that main page navigation started successfully
+// If we reach onPageStarted for our domain, it means we got a 200 response
+// and the PWA will begin loading, so dismiss loading screen immediately
 if (url.contains('web.nymchat.app') || url.contains('spl0itable.github.io')) {
 _mainPageStarted = true;
 _retryAttempts = 0; // Reset retries on successful navigation start
+if (mounted && _isLoading) {
+setState(() => _isLoading = false);
 }
-setState(() => _isLoading = true);
+}
 },
 onPageFinished: (url) {
-setState(() => _isLoading = false);
 _webViewInitialized = true;
 _injectNotificationBridge();
 _pendingDeepLink = null;
@@ -388,21 +407,36 @@ _launchExternalBrowser(message.message);
 'FlutterImagePicker',
 onMessageReceived: (message) async {
 debugPrint('[NYM Bridge] FlutterImagePicker received: ${message.message}');
+try {
 await _handleiOSImagePicker(message.message);
+} catch (e, stack) {
+debugPrint('[NYM Bridge] FlutterImagePicker handler error: $e');
+debugPrint('[NYM Bridge] Stack trace: $stack');
+}
 },
 )
 ..addJavaScriptChannel(
 'FlutterFilePicker',
 onMessageReceived: (message) async {
 debugPrint('[NYM Bridge] FlutterFilePicker received: ${message.message}');
+try {
 await _handleFilePicker(message.message);
+} catch (e, stack) {
+debugPrint('[NYM Bridge] FlutterFilePicker handler error: $e');
+debugPrint('[NYM Bridge] Stack trace: $stack');
+}
 },
 )
 ..addJavaScriptChannel(
 'FlutterMediaPicker',
 onMessageReceived: (message) async {
 debugPrint('[NYM Bridge] FlutterMediaPicker received: ${message.message}');
+try {
 await _handleMediaPicker(message.message);
+} catch (e, stack) {
+debugPrint('[NYM Bridge] FlutterMediaPicker handler error: $e');
+debugPrint('[NYM Bridge] Stack trace: $stack');
+}
 },
 )
 ..addJavaScriptChannel(
@@ -484,6 +518,21 @@ debugPrint('[NYM Bridge] In-app notification error: $e');
 }
 },
 )
+..addJavaScriptChannel(
+'FlutterMediaDownload',
+onMessageReceived: (message) async {
+debugPrint('[NYM Bridge] FlutterMediaDownload received: ${message.message}');
+await _handleMediaDownload(message.message);
+},
+)
+..addJavaScriptChannel(
+'FlutterWalletCheck',
+onMessageReceived: (message) async {
+debugPrint('[NYM Bridge] FlutterWalletCheck received: ${message.message}');
+await _handleWalletCheck(message.message);
+},
+)
+
 ..setOnJavaScriptAlertDialog((request) async {
 await _showDialog(
 title: 'Alert',
@@ -547,12 +596,14 @@ required List<Widget> actions,
 return showDialog<T>(
 context: context,
 builder: (context) => AlertDialog(
-title: Text(title),
+backgroundColor: _isLightMode ? const Color(0xFFF5F5F2) : const Color(0xFF1A1A2E),
+shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+title: Text(title, style: TextStyle(color: _isLightMode ? const Color(0xFF333333) : Colors.white)),
 content: Column(
 mainAxisSize: MainAxisSize.min,
 crossAxisAlignment: CrossAxisAlignment.start,
 children: [
-Text(message),
+Text(message, style: TextStyle(color: _isLightMode ? const Color(0xFF555555) : const Color(0xFFCCCCCC))),
 if (content != null) ...[
 const SizedBox(height: 16),
 content,
@@ -1285,12 +1336,32 @@ const isMobile = /iPad|iPhone|iPod|Android/.test(navigator.userAgent);
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
 if (isMobile && (window.FlutterImagePicker || window.FlutterFilePicker)) {
-console.log('[NYM Bridge] Setting up mobile file input interceptor, isIOS:', isIOS);
+console.log('[NYM Bridge] Setting up mobile file input interceptor for data-action system, isIOS:', isIOS);
 
 // Track the active file input element that was clicked
 window.nymActiveFileInputId = null;
 // Flag to prevent double-triggering
 window._nymPickerTriggered = false;
+
+// Map of data-action names to their corresponding file input IDs
+const actionToInputMap = {
+'triggerSetupAvatarUpload': 'setupAvatarInput',
+'triggerSetupBannerUpload': 'setupBannerInput',
+'triggerNickEditAvatarUpload': 'nickEditAvatarInput',
+'triggerNickEditBannerUpload': 'nickEditBannerInput',
+'triggerWallpaperUpload': 'wallpaperFileInput',
+'selectImage': 'fileInput',
+'selectP2PFile': 'p2pFileInput'
+};
+
+// Map of button IDs to their corresponding file input IDs
+const buttonToInputMap = {
+'setupAvatarUploadBtn': 'setupAvatarInput',
+'setupBannerUploadBtn': 'setupBannerInput',
+'nickEditAvatarUploadBtn': 'nickEditAvatarInput',
+'nickEditBannerUploadBtn': 'nickEditBannerInput',
+'customWallpaperOption': 'wallpaperFileInput'
+};
 
 // Helper to determine if input is media (image/video) only
 const isMediaOnlyInput = (input) => {
@@ -1342,7 +1413,7 @@ return 'unknown';
 
 // Helper to trigger Flutter file picker for an input
 const triggerFlutterPicker = (input, source) => {
-// Prevent double-triggering within 300ms (reduced from 500ms for better responsiveness)
+// Prevent double-triggering within 300ms
 if (window._nymPickerTriggered) {
 console.log('[NYM Bridge] Picker already triggered, skipping duplicate from:', source);
 return;
@@ -1352,64 +1423,160 @@ setTimeout(() => { window._nymPickerTriggered = false; }, 300);
 
 const hasCapture = input.hasAttribute('capture');
 const imageOnly = isImageOnlyInput(input);
-const mediaOnly = isMediaOnlyInput(input);
 const hasVideo = acceptsVideo(input);
 const inputType = getInputType(input);
 
-console.log('[NYM Bridge] Triggering Flutter picker from:', source, 'input:', input.id, 'type:', inputType, 'imageOnly:', imageOnly, 'mediaOnly:', mediaOnly, 'hasVideo:', hasVideo, 'hasCapture:', hasCapture);
+console.log('[NYM Bridge] Triggering Flutter picker from:', source, 'input:', input.id, 'type:', inputType, 'imageOnly:', imageOnly, 'hasVideo:', hasVideo);
 
 if (imageOnly && window.FlutterImagePicker) {
-// Image-only input - use image picker
 if (hasCapture) {
-console.log('[NYM Bridge] Calling FlutterImagePicker.postMessage(camera)');
 window.FlutterImagePicker.postMessage('camera');
 } else {
-console.log('[NYM Bridge] Calling FlutterImagePicker.postMessage(choose)');
 window.FlutterImagePicker.postMessage('choose');
 }
 } else if (hasVideo && window.FlutterMediaPicker) {
-// Video or mixed media input - use media picker
 if (hasCapture) {
-console.log('[NYM Bridge] Calling FlutterMediaPicker.postMessage(camera)');
 window.FlutterMediaPicker.postMessage('camera');
 } else {
-console.log('[NYM Bridge] Calling FlutterMediaPicker.postMessage(choose)');
 window.FlutterMediaPicker.postMessage('choose');
 }
 } else if (window.FlutterFilePicker) {
-// General file input - use file picker
-console.log('[NYM Bridge] Calling FlutterFilePicker.postMessage');
 window.FlutterFilePicker.postMessage(input.accept || '*/*');
 } else if (window.FlutterImagePicker) {
-console.log('[NYM Bridge] Fallback: FlutterImagePicker.postMessage(choose)');
 window.FlutterImagePicker.postMessage('choose');
 } else {
 console.error('[NYM Bridge] No Flutter picker channel available!');
-// Reset trigger flag immediately on error so user can retry
 window._nymPickerTriggered = false;
 }
 };
 
-// Map of button IDs to their corresponding file input IDs
-const buttonToInputMap = {
-'setupAvatarUploadBtn': 'setupAvatarInput',
-'setupBannerUploadBtn': 'setupBannerInput',
-'nickEditAvatarUploadBtn': 'nickEditAvatarInput',
-'nickEditBannerUploadBtn': 'nickEditBannerInput',
-'customWallpaperOption': 'wallpaperFileInput'
+// Helper to trigger picker by input ID
+const triggerPickerForInputId = (inputId, source) => {
+const input = document.getElementById(inputId);
+if (input) {
+window.nymActiveFileInputId = inputId;
+triggerFlutterPicker(input, source);
+return true;
+}
+// Input might not exist yet - create a virtual input config
+console.log('[NYM Bridge] Input not found, using virtual config for:', inputId);
+window.nymActiveFileInputId = inputId;
+const isAvatarOrBanner = inputId.includes('Avatar') || inputId.includes('Banner') || inputId === 'wallpaperFileInput';
+if (isAvatarOrBanner && window.FlutterImagePicker) {
+window.FlutterImagePicker.postMessage('choose');
+return true;
+}
+return false;
 };
 
-// Map of onclick function names to input IDs
-const onclickToInputMap = {
-'triggerSetupAvatarUpload': 'setupAvatarInput',
-'triggerSetupBannerUpload': 'setupBannerInput',
-'triggerNickEditAvatarUpload': 'nickEditAvatarInput',
-'triggerNickEditBannerUpload': 'nickEditBannerInput',
-'triggerWallpaperUpload': 'wallpaperFileInput'
+// ═══════════════════════════════════════════════════════════════════════
+// CRITICAL: Override NYM_ACTIONS handlers for data-action system
+// The PWA uses inline-bindings.js which dispatches data-action clicks
+// to handlers in window.NYM_ACTIONS. We must intercept these.
+// ═══════════════════════════════════════════════════════════════════════
+
+const overrideNymActions = () => {
+if (!window.NYM_ACTIONS) {
+console.log('[NYM Bridge] NYM_ACTIONS not yet available, will retry...');
+return false;
+}
+
+if (window.NYM_ACTIONS._nymFlutterOverridden) {
+return true;
+}
+
+console.log('[NYM Bridge] Overriding NYM_ACTIONS for file upload handlers...');
+window.NYM_ACTIONS._nymFlutterOverridden = true;
+
+// Override file upload trigger actions
+const uploadActions = [
+'triggerSetupAvatarUpload',
+'triggerSetupBannerUpload',
+'triggerNickEditAvatarUpload',
+'triggerNickEditBannerUpload',
+'triggerWallpaperUpload',
+'selectImage',
+'selectP2PFile'
+];
+
+uploadActions.forEach(actionName => {
+const inputId = actionToInputMap[actionName];
+if (!inputId) return;
+
+window.NYM_ACTIONS[actionName] = function(e, node) {
+console.log('[NYM Bridge] NYM_ACTIONS.' + actionName + ' intercepted');
+if (e && e.preventDefault) e.preventDefault();
+if (e && e.stopPropagation) e.stopPropagation();
+triggerPickerForInputId(inputId, 'NYM_ACTIONS-' + actionName);
+};
+console.log('[NYM Bridge] Overrode NYM_ACTIONS.' + actionName);
+});
+
+// Also override file input change handlers to work with Flutter-injected files
+const changeActions = [
+'handleSetupAvatarSelect',
+'handleSetupBannerSelect',
+'handleNickEditAvatarSelect',
+'handleNickEditBannerSelect',
+'handleWallpaperUpload'
+];
+
+changeActions.forEach(actionName => {
+const original = window.NYM_ACTIONS[actionName];
+window.NYM_ACTIONS[actionName] = function(e, node) {
+console.log('[NYM Bridge] NYM_ACTIONS.' + actionName + ' called, event:', e ? e.type : 'none');
+// Just pass through to window function - Flutter will inject file via change event
+if (typeof window[actionName] === 'function') {
+window[actionName](e);
+} else if (original) {
+original(e, node);
+}
+};
+});
+
+// Override openInWallet for external wallet button with wallet detection
+const originalOpenInWallet = window.NYM_ACTIONS.openInWallet;
+window.NYM_ACTIONS.openInWallet = function(e, node) {
+console.log('[NYM Bridge] NYM_ACTIONS.openInWallet intercepted');
+// Use Flutter's wallet check before opening
+if (window.FlutterWalletCheck && window.FlutterWalletCheck.postMessage) {
+window.FlutterWalletCheck.postMessage('checkAndOpen');
+} else if (window.nym && typeof window.nym.openInWallet === 'function') {
+window.nym.openInWallet();
+} else if (originalOpenInWallet) {
+originalOpenInWallet(e, node);
+}
 };
 
-// CRITICAL: Override HTMLInputElement.prototype.click FIRST
+// Override downloadModalMedia for native media download
+window.NYM_ACTIONS.downloadModalMedia = function(e, node) {
+console.log('[NYM Bridge] NYM_ACTIONS.downloadModalMedia intercepted');
+if (e && e.stopPropagation) e.stopPropagation();
+
+// Use Flutter native download
+window.nymDownloadModalMedia();
+};
+console.log('[NYM Bridge] Overrode NYM_ACTIONS.downloadModalMedia');
+
+return true;
+};
+
+// Try to override immediately and poll until NYM_ACTIONS is available
+if (!overrideNymActions()) {
+const checkInterval = setInterval(function() {
+if (overrideNymActions()) {
+clearInterval(checkInterval);
+console.log('[NYM Bridge] Successfully overrode NYM_ACTIONS handlers');
+}
+}, 100);
+setTimeout(function() { clearInterval(checkInterval); }, 10000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// CRITICAL: Override HTMLInputElement.prototype.click
 // This catches ALL .click() calls on file inputs
+// ═══════════════════════════════════════════════════════════════════════
+
 const originalClick = HTMLInputElement.prototype.click;
 HTMLInputElement.prototype.click = function() {
 if (this.type === 'file') {
@@ -1417,133 +1584,87 @@ window.nymActiveFileInputId = this.id || null;
 const inputType = getInputType(this);
 console.log('[NYM Bridge] HTMLInputElement.click intercepted for file input, id:', this.id, 'type:', inputType);
 triggerFlutterPicker(this, 'prototype-click');
-return; // Don't call original - we're handling it
+return;
 }
 return originalClick.apply(this, arguments);
 };
 console.log('[NYM Bridge] HTMLInputElement.prototype.click override installed');
 
-// Override upload trigger functions using Object.defineProperty to make them non-writable
+// ═══════════════════════════════════════════════════════════════════════
+// Override window trigger functions as backup
+// ═══════════════════════════════════════════════════════════════════════
+
 const createFlutterUploadTrigger = (inputId, name) => {
 return function() {
-console.log('[NYM Bridge] ' + name + '() called via function override');
-window.nymActiveFileInputId = inputId;
-const input = document.getElementById(inputId);
-if (input) {
-triggerFlutterPicker(input, 'fn-' + name);
-} else {
-console.error('[NYM Bridge] ' + name + ': input element not found:', inputId);
-}
+console.log('[NYM Bridge] window.' + name + '() called');
+triggerPickerForInputId(inputId, 'window-fn-' + name);
 };
 };
 
-// Define trigger functions as non-configurable, non-writable properties
-// This prevents the PWA from overwriting them
-const defineUploadTrigger = (funcName, inputId, logName) => {
+const defineUploadTrigger = (funcName, inputId) => {
 try {
 Object.defineProperty(window, funcName, {
-value: createFlutterUploadTrigger(inputId, logName),
+value: createFlutterUploadTrigger(inputId, funcName),
 writable: false,
 configurable: false
 });
-console.log('[NYM Bridge] Defined non-writable', funcName);
 } catch (e) {
-// Property might already exist, try to overwrite
-window[funcName] = createFlutterUploadTrigger(inputId, logName);
-console.log('[NYM Bridge] Overwrote existing', funcName);
+window[funcName] = createFlutterUploadTrigger(inputId, funcName);
 }
 };
 
-defineUploadTrigger('triggerWallpaperUpload', 'wallpaperFileInput', 'wallpaper');
-defineUploadTrigger('triggerSetupAvatarUpload', 'setupAvatarInput', 'setup-avatar');
-defineUploadTrigger('triggerSetupBannerUpload', 'setupBannerInput', 'setup-banner');
-defineUploadTrigger('triggerNickEditAvatarUpload', 'nickEditAvatarInput', 'nick-avatar');
-defineUploadTrigger('triggerNickEditBannerUpload', 'nickEditBannerInput', 'nick-banner');
+defineUploadTrigger('triggerWallpaperUpload', 'wallpaperFileInput');
+defineUploadTrigger('triggerSetupAvatarUpload', 'setupAvatarInput');
+defineUploadTrigger('triggerSetupBannerUpload', 'setupBannerInput');
+defineUploadTrigger('triggerNickEditAvatarUpload', 'nickEditAvatarInput');
+defineUploadTrigger('triggerNickEditBannerUpload', 'nickEditBannerInput');
+defineUploadTrigger('selectImage', 'fileInput');
+defineUploadTrigger('selectP2PFile', 'p2pFileInput');
 
-// ALSO intercept buttons directly as a backup
-const interceptUploadButton = (btn) => {
-if (!btn || btn._nymIntercepted) return;
-btn._nymIntercepted = true;
+// ═══════════════════════════════════════════════════════════════════════
+// Document-level click interceptor for data-action buttons
+// This catches clicks on buttons with data-action attributes
+// ═══════════════════════════════════════════════════════════════════════
 
-// Determine input ID from button ID or onclick
-let inputId = buttonToInputMap[btn.id];
-if (!inputId) {
-const onclick = btn.getAttribute('onclick') || '';
-for (const [funcName, inpId] of Object.entries(onclickToInputMap)) {
-if (onclick.includes(funcName)) {
-inputId = inpId;
-break;
+// Flag to prevent ghost clicks after picker closes
+window._nymPickerActive = false;
+window._nymPickerCloseTime = 0;
+
+// Mark picker as active (called before opening picker)
+window._nymMarkPickerActive = function() {
+window._nymPickerActive = true;
+console.log('[NYM Bridge] Picker marked active');
+};
+
+// Mark picker as closed (called after file is processed or picker cancelled)
+window._nymMarkPickerClosed = function() {
+window._nymPickerActive = false;
+window._nymPickerCloseTime = Date.now();
+console.log('[NYM Bridge] Picker marked closed');
+};
+
+const documentClickHandler = function(e) {
+// Block ghost clicks for 500ms after picker closes
+if (window._nymPickerCloseTime && (Date.now() - window._nymPickerCloseTime) < 500) {
+const isUploadAction = (function() {
+let el = e.target;
+for (let i = 0; i < 5 && el; i++) {
+if (el.hasAttribute && el.hasAttribute('data-action')) {
+return !!actionToInputMap[el.getAttribute('data-action')];
 }
+el = el.parentElement;
 }
-}
-if (!inputId) return;
-
-// Store the mapping on the element for later retrieval
-btn._nymInputId = inputId;
-
-// For buttons, add a high-priority touch/click handler
-// Use touchend for mobile to fire before click
-const handleInteraction = function(e) {
-console.log('[NYM Bridge] Button interaction intercepted:', e.type, btn.id, '->', inputId);
+return false;
+})();
+if (!isUploadAction) {
+console.log('[NYM Bridge] Blocking potential ghost click after picker close');
 e.preventDefault();
 e.stopPropagation();
 e.stopImmediatePropagation();
-
-const input = document.getElementById(inputId);
-if (input) {
-window.nymActiveFileInputId = inputId;
-triggerFlutterPicker(input, 'button-' + e.type);
-} else {
-console.error('[NYM Bridge] Input not found for button:', inputId);
-}
 return false;
-};
-
-btn.addEventListener('touchend', handleInteraction, { capture: true, passive: false });
-btn.addEventListener('click', handleInteraction, { capture: true });
-
-console.log('[NYM Bridge] Intercepted button:', btn.id || btn.className, 'inputId:', inputId);
-};
-
-// Intercept all existing upload buttons
-const interceptAllUploadButtons = () => {
-// By ID
-Object.keys(buttonToInputMap).forEach(btnId => {
-const btn = document.getElementById(btnId);
-if (btn) interceptUploadButton(btn);
-});
-
-// By class (avatar-upload-btn)
-document.querySelectorAll('.avatar-upload-btn').forEach(btn => {
-interceptUploadButton(btn);
-});
-
-// By onclick attribute content
-document.querySelectorAll('[onclick*="Avatar"], [onclick*="Wallpaper"]').forEach(btn => {
-interceptUploadButton(btn);
-});
-};
-
-// Run immediately
-interceptAllUploadButtons();
-
-// Use MutationObserver to catch dynamically added buttons
-const observer = new MutationObserver((mutations) => {
-let shouldCheck = false;
-for (const mutation of mutations) {
-if (mutation.addedNodes.length > 0) {
-shouldCheck = true;
-break;
 }
 }
-if (shouldCheck) {
-setTimeout(interceptAllUploadButtons, 50); // Small delay for DOM to settle
-}
-});
-observer.observe(document.body, { childList: true, subtree: true });
 
-// ALSO intercept at document level as final fallback
-const documentClickHandler = function(e) {
 const target = e.target;
 
 // Direct click on file input
@@ -1552,86 +1673,88 @@ console.log('[NYM Bridge] Direct file input click intercepted:', target.id);
 e.preventDefault();
 e.stopPropagation();
 window.nymActiveFileInputId = target.id || null;
+window._nymMarkPickerActive();
 triggerFlutterPicker(target, 'direct-input-click');
 return false;
 }
 
-let buttonEl = target;
-let inputId = null;
-
-// Walk up DOM to find upload button
-for (let i = 0; i < 5 && buttonEl; i++) {
-if (buttonEl._nymInputId) {
-inputId = buttonEl._nymInputId;
-break;
-}
-if (buttonEl.id && buttonToInputMap[buttonEl.id]) {
-inputId = buttonToInputMap[buttonEl.id];
-break;
-}
-if (buttonEl.classList && buttonEl.classList.contains('avatar-upload-btn')) {
-const modal = buttonEl.closest('.modal');
-if (modal) {
-if (modal.id === 'setupModal') inputId = 'setupAvatarInput';
-else if (modal.id === 'nickEditModal') inputId = 'nickEditAvatarInput';
-}
-if (inputId) break;
-}
-const onclick = buttonEl.getAttribute && buttonEl.getAttribute('onclick');
-if (onclick) {
-for (const [funcName, inpId] of Object.entries(onclickToInputMap)) {
-if (onclick.includes(funcName)) {
-inputId = inpId;
-break;
-}
-}
-if (inputId) break;
-}
-buttonEl = buttonEl.parentElement;
-}
+// Walk up DOM looking for data-action attribute
+let el = target;
+for (let i = 0; i < 10 && el; i++) {
+if (el.hasAttribute && el.hasAttribute('data-action')) {
+const action = el.getAttribute('data-action');
+const inputId = actionToInputMap[action];
 
 if (inputId) {
-console.log('[NYM Bridge] Document click handler found upload button:', inputId);
+console.log('[NYM Bridge] data-action click intercepted:', action, '->', inputId);
 e.preventDefault();
 e.stopPropagation();
 e.stopImmediatePropagation();
-
-const input = document.getElementById(inputId);
-if (input) {
-window.nymActiveFileInputId = inputId;
-triggerFlutterPicker(input, 'doc-click');
-}
+window._nymMarkPickerActive();
+triggerPickerForInputId(inputId, 'data-action-' + action);
 return false;
+}
+}
+
+// Also check button IDs
+if (el.id && buttonToInputMap[el.id]) {
+const inputId = buttonToInputMap[el.id];
+console.log('[NYM Bridge] Button ID click intercepted:', el.id, '->', inputId);
+e.preventDefault();
+e.stopPropagation();
+e.stopImmediatePropagation();
+window._nymMarkPickerActive();
+triggerPickerForInputId(inputId, 'button-id-' + el.id);
+return false;
+}
+
+el = el.parentElement;
 }
 };
 
+// Use capture phase to intercept before inline-bindings.js
 document.addEventListener('click', documentClickHandler, true);
-document.addEventListener('touchend', documentClickHandler, { capture: true, passive: false });
+
+// Also intercept touchend for iOS ghost tap prevention
+document.addEventListener('touchend', function(e) {
+// Block touch events while picker is active or just closed
+if (window._nymPickerActive || (window._nymPickerCloseTime && (Date.now() - window._nymPickerCloseTime) < 500)) {
+const target = e.target;
+let el = target;
+let isUploadAction = false;
+for (let i = 0; i < 5 && el; i++) {
+if (el.hasAttribute && el.hasAttribute('data-action')) {
+const action = el.getAttribute('data-action');
+if (actionToInputMap[action]) {
+isUploadAction = true;
+break;
+}
+}
+el = el.parentElement;
+}
+// If not clicking on an upload action, prevent this touch
+if (!isUploadAction) {
+console.log('[NYM Bridge] Blocking touchend during/after picker');
+e.preventDefault();
+e.stopPropagation();
+return false;
+}
+}
+}, { capture: true, passive: false });
 
 // Log diagnostic info
 setTimeout(() => {
 const diag = {
 setupAvatarBtn: !!document.getElementById('setupAvatarUploadBtn'),
-nickEditAvatarBtn: !!document.getElementById('nickEditAvatarUploadBtn'),
-wallpaperBtn: !!document.getElementById('customWallpaperOption'),
 setupAvatarInput: !!document.getElementById('setupAvatarInput'),
-nickEditAvatarInput: !!document.getElementById('nickEditAvatarInput'),
-wallpaperInput: !!document.getElementById('wallpaperFileInput'),
-avatarBtnsByClass: document.querySelectorAll('.avatar-upload-btn').length,
-setupModal: !!document.getElementById('setupModal'),
-nickEditModal: !!document.getElementById('nickEditModal'),
-fnWallpaper: typeof window.triggerWallpaperUpload,
-fnSetupAvatar: typeof window.triggerSetupAvatarUpload,
-fnNickAvatar: typeof window.triggerNickEditAvatarUpload
+NYM_ACTIONS: !!window.NYM_ACTIONS,
+NYM_ACTIONS_overridden: !!(window.NYM_ACTIONS && window.NYM_ACTIONS._nymFlutterOverridden),
+fnSetupAvatar: typeof window.triggerSetupAvatarUpload
 };
-console.log('[NYM Bridge] Upload elements diagnostic:', JSON.stringify(diag));
-
-// Test if our function overrides are in place
-const testFn = window.triggerSetupAvatarUpload && window.triggerSetupAvatarUpload.toString();
-console.log('[NYM Bridge] triggerSetupAvatarUpload source check:', testFn ? (testFn.includes('NYM Bridge') ? 'FLUTTER' : 'PWA') : 'undefined');
+console.log('[NYM Bridge] Upload diagnostic:', JSON.stringify(diag));
 }, 2000);
 
-console.log('[NYM Bridge] Mobile file input interceptor installed with enhanced interception');
+console.log('[NYM Bridge] Mobile file input interceptor installed for data-action system');
 }
 
 // Periodic memory cleanup every 10 minutes
@@ -1886,6 +2009,142 @@ window.history.forward();
 
 console.log('[NYM Bridge] Navigation bridge ready');
 
+// ═══════════════════════════════════════════════════════════════════════
+// Media Download Bridge - Native download for images/videos from modal
+// ═══════════════════════════════════════════════════════════════════════
+
+console.log('[NYM Bridge] Setting up media download bridge...');
+
+// Global function to trigger native media download from modal
+window.nymDownloadModalMedia = function() {
+console.log('[NYM Bridge] nymDownloadModalMedia called');
+
+const modalImg = document.getElementById('modalImage');
+const modalVid = document.getElementById('modalVideo');
+let src = '';
+let filename = 'download';
+let mimeType = 'application/octet-stream';
+
+// Check if image is visible
+if (modalImg && modalImg.style.display !== 'none' && modalImg.src) {
+src = modalImg.src;
+const ext = src.split('.').pop().split('?')[0].toLowerCase();
+const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+const validExt = imageExts.includes(ext) ? ext : 'jpg';
+filename = 'image_' + Date.now() + '.' + validExt;
+mimeType = 'image/' + (validExt === 'jpg' ? 'jpeg' : validExt);
+console.log('[NYM Bridge] Image modal detected:', src.substring(0, 100));
+}
+// Check if video is visible
+else if (modalVid && modalVid.style.display !== 'none') {
+src = modalVid.src || (modalVid.querySelector('source') && modalVid.querySelector('source').src) || '';
+const ext = src.split('.').pop().split('?')[0].toLowerCase();
+const videoExts = ['mp4', 'webm', 'ogg', 'mov'];
+const validExt = videoExts.includes(ext) ? ext : 'mp4';
+filename = 'video_' + Date.now() + '.' + validExt;
+mimeType = 'video/' + validExt;
+console.log('[NYM Bridge] Video modal detected:', src.substring(0, 100));
+}
+
+if (!src) {
+console.warn('[NYM Bridge] No media source found in modal');
+if (window.nym && window.nym.displaySystemMessage) {
+window.nym.displaySystemMessage('No media to download');
+}
+return;
+}
+
+// Send to Flutter for native download
+if (window.FlutterMediaDownload && window.FlutterMediaDownload.postMessage) {
+const message = JSON.stringify({
+url: src,
+filename: filename,
+mimeType: mimeType
+});
+console.log('[NYM Bridge] Sending download request to Flutter:', message);
+window.FlutterMediaDownload.postMessage(message);
+} else {
+console.error('[NYM Bridge] FlutterMediaDownload channel not available');
+// Fallback to original PWA download method
+if (typeof downloadModalMedia === 'function') {
+const fakeEvent = { stopPropagation: function() {} };
+downloadModalMedia(fakeEvent);
+}
+}
+};
+
+// Override the original downloadModalMedia function
+const originalDownloadModalMedia = window.downloadModalMedia;
+window.downloadModalMedia = function(event) {
+console.log('[NYM Bridge] downloadModalMedia intercepted');
+if (event && event.stopPropagation) event.stopPropagation();
+
+// Check if Flutter download channel is available
+if (window.FlutterMediaDownload && window.FlutterMediaDownload.postMessage) {
+window.nymDownloadModalMedia();
+} else if (originalDownloadModalMedia) {
+// Fallback to original
+originalDownloadModalMedia(event);
+}
+};
+
+console.log('[NYM Bridge] Media download bridge ready');
+
+// ═══════════════════════════════════════════════════════════════════════
+// Wallet Check Bridge - Detect lightning wallet before opening
+// ═══════════════════════════════════════════════════════════════════════
+
+console.log('[NYM Bridge] Setting up wallet check bridge...');
+
+// Override nym.openInWallet to use Flutter wallet detection
+const overrideNymOpenInWallet = () => {
+if (window.nym && typeof window.nym.openInWallet === 'function' && !window.nym._openInWalletOverridden) {
+console.log('[NYM Bridge] Overriding nym.openInWallet for wallet detection');
+window.nym._openInWalletOverridden = true;
+window.nym._originalOpenInWallet = window.nym.openInWallet;
+
+window.nym.openInWallet = function() {
+console.log('[NYM Bridge] nym.openInWallet intercepted - checking for wallet');
+
+// If Flutter bridge is available, use it for wallet detection
+if (window.FlutterWalletCheck && window.FlutterWalletCheck.postMessage) {
+window.FlutterWalletCheck.postMessage('checkAndOpen');
+} else {
+// Fallback to original if no Flutter bridge
+console.log('[NYM Bridge] No FlutterWalletCheck, using original');
+if (window.nym._originalOpenInWallet) {
+window.nym._originalOpenInWallet();
+}
+}
+};
+return true;
+}
+return false;
+};
+
+// Try immediately and poll until nym object is available
+if (!overrideNymOpenInWallet()) {
+const walletCheckInterval = setInterval(function() {
+if (overrideNymOpenInWallet()) {
+clearInterval(walletCheckInterval);
+console.log('[NYM Bridge] Successfully overrode nym.openInWallet');
+}
+}, 200);
+// Stop polling after 30 seconds
+setTimeout(function() { clearInterval(walletCheckInterval); }, 30000);
+}
+
+// Also create a helper function that the original can call
+window.nymOpenInWalletWithCheck = function() {
+if (window.FlutterWalletCheck && window.FlutterWalletCheck.postMessage) {
+window.FlutterWalletCheck.postMessage('checkAndOpen');
+} else if (window.nym && window.nym._originalOpenInWallet) {
+window.nym._originalOpenInWallet();
+}
+};
+
+console.log('[NYM Bridge] Wallet check bridge ready');
+
 // Lightweight fetch logger for debugging Android upload issues
 try {
 const originalFetch = window.fetch;
@@ -2047,9 +2306,8 @@ debugPrint('[FIPS BLE] Error handling message: $e');
 }
 
 Future<void> _handleFilePicker(String acceptTypes) async {
+debugPrint('[File Picker] _handleFilePicker called with accept: $acceptTypes');
 try {
-debugPrint('[File Picker] Opening file picker with accept: $acceptTypes');
-
 // Use file_selector for general file picking
 final List<XTypeGroup> typeGroups = [];
 
@@ -2062,102 +2320,194 @@ final accepts = acceptTypes.split(',').map((e) => e.trim()).toList();
 typeGroups.add(XTypeGroup(label: 'Files', mimeTypes: accepts));
 }
 
+debugPrint('[File Picker] Opening file selector...');
 final XFile? selectedFile = await openFile(acceptedTypeGroups: typeGroups);
+debugPrint('[File Picker] File selector returned: ${selectedFile?.path}');
 
 if (selectedFile == null) {
 debugPrint('[File Picker] No file selected');
-await _controller.runJavaScript('window.nymActiveFileInputId = null;');
+await _controller.runJavaScript('''
+window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
+''');
 return;
 }
 
 // Read file and inject into WebView
+debugPrint('[File Picker] Reading file bytes...');
 final bytes = await selectedFile.readAsBytes();
+debugPrint('[File Picker] File bytes read: ${bytes.length}');
 final base64Data = base64Encode(bytes);
+debugPrint('[File Picker] Base64 encoded, length: ${base64Data.length}');
 final fileName = selectedFile.name;
 final mimeType = selectedFile.mimeType ?? 'application/octet-stream';
 
 debugPrint('[File Picker] Selected: $fileName, size: ${bytes.length}, mime: $mimeType');
 
-final dataUrl = 'data:$mimeType;base64,$base64Data';
 await _controller.runJavaScript('''
 (function() {
 try {
-// Find the correct input: use tracked ID if available, otherwise fall back to generic query
-let input = null;
 const activeId = window.nymActiveFileInputId;
+console.log('[NYM Bridge] Processing file for input:', activeId);
 
-if (activeId) {
-input = document.getElementById(activeId);
-console.log('[NYM Bridge] File picker targeting input by ID:', activeId, 'found:', !!input);
+// Log available handlers for debugging
+console.log('[NYM Bridge] Handler availability:', {
+nym: !!window.nym,
+nymUploadImage: !!(window.nym && window.nym.uploadImage),
+nymShareP2PFile: !!(window.nym && window.nym.shareP2PFile),
+handleSetupAvatarSelect: typeof window.handleSetupAvatarSelect,
+handleSetupBannerSelect: typeof window.handleSetupBannerSelect,
+handleNickEditAvatarSelect: typeof window.handleNickEditAvatarSelect,
+handleNickEditBannerSelect: typeof window.handleNickEditBannerSelect,
+handleWallpaperUpload: typeof window.handleWallpaperUpload
+});
+
+// Decode base64 directly without fetch (fetch doesn't work with data URLs in WebView)
+var base64Data = '$base64Data';
+var byteCharacters = atob(base64Data);
+var byteArrays = [];
+for (var offset = 0; offset < byteCharacters.length; offset += 512) {
+var slice = byteCharacters.slice(offset, offset + 512);
+var byteNumbers = new Array(slice.length);
+for (var i = 0; i < slice.length; i++) {
+byteNumbers[i] = slice.charCodeAt(i);
 }
-
-// Fallback to first file input if ID lookup failed
-if (!input) {
-input = document.querySelector('input[type="file"]');
-console.log('[NYM Bridge] File picker fallback to first input, found:', !!input);
+var byteArray = new Uint8Array(byteNumbers);
+byteArrays.push(byteArray);
 }
-
-if (!input) {
-console.error('[NYM Bridge] No file input found');
-window.nymActiveFileInputId = null;
-return;
-}
-
-fetch('$dataUrl')
-.then(res => res.blob())
-.then(blob => {
+var blob = new Blob(byteArrays, {type: '$mimeType'});
 const file = new File([blob], '$fileName', { type: '$mimeType' });
-const dataTransfer = new DataTransfer();
+console.log('[NYM Bridge] File created:', file.name, file.size, file.type);
+
+// Create synthetic event that matches what PWA handlers expect
+var syntheticEvent = {
+target: { files: [file], value: '' },
+preventDefault: function() {},
+stopPropagation: function() {}
+};
+
+// Directly call the appropriate handler based on input ID
+// CRITICAL: Call handlers FIRST before trying to set input.files (which may fail on iOS)
+var handlerCalled = false;
+
+try {
+if (activeId === 'setupAvatarInput') {
+if (typeof window.handleSetupAvatarSelect === 'function') {
+console.log('[NYM Bridge] Calling handleSetupAvatarSelect directly');
+window.handleSetupAvatarSelect(syntheticEvent);
+handlerCalled = true;
+} else {
+console.error('[NYM Bridge] handleSetupAvatarSelect not found!');
+}
+} else if (activeId === 'setupBannerInput') {
+if (typeof window.handleSetupBannerSelect === 'function') {
+console.log('[NYM Bridge] Calling handleSetupBannerSelect directly');
+window.handleSetupBannerSelect(syntheticEvent);
+handlerCalled = true;
+} else {
+console.error('[NYM Bridge] handleSetupBannerSelect not found!');
+}
+} else if (activeId === 'nickEditAvatarInput') {
+if (typeof window.handleNickEditAvatarSelect === 'function') {
+console.log('[NYM Bridge] Calling handleNickEditAvatarSelect directly');
+window.handleNickEditAvatarSelect(syntheticEvent);
+handlerCalled = true;
+} else {
+console.error('[NYM Bridge] handleNickEditAvatarSelect not found!');
+}
+} else if (activeId === 'nickEditBannerInput') {
+if (typeof window.handleNickEditBannerSelect === 'function') {
+console.log('[NYM Bridge] Calling handleNickEditBannerSelect directly');
+window.handleNickEditBannerSelect(syntheticEvent);
+handlerCalled = true;
+} else {
+console.error('[NYM Bridge] handleNickEditBannerSelect not found!');
+}
+} else if (activeId === 'wallpaperFileInput') {
+if (typeof window.handleWallpaperUpload === 'function') {
+console.log('[NYM Bridge] Calling handleWallpaperUpload directly');
+window.handleWallpaperUpload(syntheticEvent);
+handlerCalled = true;
+} else {
+console.error('[NYM Bridge] handleWallpaperUpload not found!');
+}
+} else if (activeId === 'fileInput') {
+// For channel image/video upload, call nym.uploadImage directly
+if (window.nym && typeof window.nym.uploadImage === 'function') {
+console.log('[NYM Bridge] Calling nym.uploadImage directly');
+window.nym.uploadImage(file);
+handlerCalled = true;
+} else {
+console.error('[NYM Bridge] nym.uploadImage not found! nym:', !!window.nym);
+}
+} else if (activeId === 'p2pFileInput') {
+// For P2P file sharing
+if (window.nym) {
+const isTorrent = file.name.endsWith('.torrent') || file.type === 'application/x-bittorrent';
+if (isTorrent && typeof window.nym.shareP2PFileTorrent === 'function') {
+console.log('[NYM Bridge] Calling nym.shareP2PFileTorrent directly');
+window.nym.shareP2PFileTorrent(file);
+handlerCalled = true;
+} else if (typeof window.nym.shareP2PFile === 'function') {
+console.log('[NYM Bridge] Calling nym.shareP2PFile directly');
+window.nym.shareP2PFile(file);
+handlerCalled = true;
+} else {
+console.error('[NYM Bridge] nym.shareP2PFile not found!');
+}
+} else {
+console.error('[NYM Bridge] window.nym not found for P2P!');
+}
+}
+} catch (handlerError) {
+console.error('[NYM Bridge] Handler call failed:', handlerError);
+}
+
+// As a fallback, also try to inject file into input and dispatch change event
+// This may work on some platforms and provides a safety net
+if (!handlerCalled) {
+console.log('[NYM Bridge] No direct handler called, trying change event fallback');
+var input = activeId ? document.getElementById(activeId) : document.querySelector('input[type="file"]');
+if (input) {
+try {
+var dataTransfer = new DataTransfer();
 dataTransfer.items.add(file);
 input.files = dataTransfer.files;
-
-const event = new Event('change', { bubbles: true });
+var event = new Event('change', { bubbles: true });
 input.dispatchEvent(event);
-
-console.log('[NYM Bridge] File injected successfully into:', input.id || 'unnamed input', 'file:', file.name, file.size);
-
-// Direct handler call with File object as fallback for avatar/banner inputs
-// where change event may not work in WebView environments.
-// The handler accepts File directly via instanceof check.
-if (activeId === 'setupAvatarInput' && typeof handleSetupAvatarSelect === 'function') {
-console.log('[NYM Bridge] Direct call: handleSetupAvatarSelect with File');
-handleSetupAvatarSelect(file);
-} else if (activeId === 'setupBannerInput' && typeof handleSetupBannerSelect === 'function') {
-console.log('[NYM Bridge] Direct call: handleSetupBannerSelect with File');
-handleSetupBannerSelect(file);
-} else if (activeId === 'nickEditAvatarInput' && typeof handleNickEditAvatarSelect === 'function') {
-console.log('[NYM Bridge] Direct call: handleNickEditAvatarSelect with File');
-handleNickEditAvatarSelect(file);
-} else if (activeId === 'nickEditBannerInput' && typeof handleNickEditBannerSelect === 'function') {
-console.log('[NYM Bridge] Direct call: handleNickEditBannerSelect with File');
-handleNickEditBannerSelect(file);
+console.log('[NYM Bridge] Change event dispatched to:', input.id);
+} catch (injectError) {
+console.error('[NYM Bridge] File injection fallback failed:', injectError);
+}
+}
 }
 
-// Clear the active input reference
+console.log('[NYM Bridge] File processing complete, handler called:', handlerCalled);
 window.nymActiveFileInputId = null;
-})
-.catch(err => {
-console.error('[NYM Bridge] File injection failed:', err);
-window.nymActiveFileInputId = null;
-});
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
 } catch (e) {
 console.error('[NYM Bridge] File injection error:', e);
 window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
 }
 })();
 ''');
+debugPrint('[File Picker] JavaScript injection completed');
 } catch (e) {
 debugPrint('[File Picker] Error: $e');
 }
 }
 
 Future<void> _handleiOSImagePicker(String action) async {
+debugPrint('[iOS Upload] _handleiOSImagePicker called with action: $action');
 try {
 XFile? pickedFile;
 
 if (action == 'camera') {
+debugPrint('[iOS Upload] Camera action - requesting permission');
 // Request camera permission first
 final cameraStatus = await Permission.camera.request();
+debugPrint('[iOS Upload] Camera permission status: $cameraStatus');
 if (!cameraStatus.isGranted) {
 debugPrint('[iOS Upload] Camera permission denied');
 // If permanently denied, prompt user to open settings
@@ -2185,36 +2535,48 @@ await openAppSettings();
 }
 return;
 }
+debugPrint('[iOS Upload] Opening camera picker');
 pickedFile = await _imagePicker.pickImage(
 source: ImageSource.camera,
 imageQuality: 85,
 );
+debugPrint('[iOS Upload] Camera picker returned: ${pickedFile?.path}');
 } else if (action == 'gallery') {
+debugPrint('[iOS Upload] Gallery action - opening gallery picker');
 pickedFile = await _imagePicker.pickImage(
 source: ImageSource.gallery,
 imageQuality: 85,
 );
+debugPrint('[iOS Upload] Gallery picker returned: ${pickedFile?.path}');
 } else {
 // Show action sheet to choose between camera and gallery
-if (!mounted) return;
+debugPrint('[iOS Upload] Choose action - showing bottom sheet');
+if (!mounted) {
+debugPrint('[iOS Upload] Widget not mounted, returning');
+return;
+}
 final choice = await showModalBottomSheet<String>(
 context: context,
+backgroundColor: _isLightMode ? const Color(0xFFF5F5F2) : const Color(0xFF1A1A2E),
+shape: const RoundedRectangleBorder(
+borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+),
 builder: (context) => SafeArea(
 child: Wrap(
 children: [
 ListTile(
-leading: const Icon(Icons.camera_alt),
-title: const Text('Take Photo'),
+leading: Icon(Icons.camera_alt, color: _isLightMode ? const Color(0xFF006666) : const Color(0xFF00AAFF)),
+title: Text('Take Photo', style: TextStyle(color: _isLightMode ? const Color(0xFF333333) : Colors.white)),
 onTap: () => Navigator.pop(context, 'camera'),
 ),
 ListTile(
-leading: const Icon(Icons.photo_library),
-title: const Text('Choose from Gallery'),
+leading: Icon(Icons.photo_library, color: _isLightMode ? const Color(0xFF006666) : const Color(0xFF00AAFF)),
+title: Text('Choose from Gallery', style: TextStyle(color: _isLightMode ? const Color(0xFF333333) : Colors.white)),
 onTap: () => Navigator.pop(context, 'gallery'),
 ),
 ListTile(
-leading: const Icon(Icons.close),
-title: const Text('Cancel'),
+leading: Icon(Icons.close, color: _isLightMode ? const Color(0xFF666666) : const Color(0xFF888888)),
+title: Text('Cancel', style: TextStyle(color: _isLightMode ? const Color(0xFF666666) : const Color(0xFF888888))),
 onTap: () => Navigator.pop(context, null),
 ),
 ],
@@ -2222,17 +2584,23 @@ onTap: () => Navigator.pop(context, null),
 ),
 );
 
+debugPrint('[iOS Upload] Bottom sheet choice: $choice');
+
 if (choice == null) {
+debugPrint('[iOS Upload] User cancelled from bottom sheet');
 // User cancelled - notify JS and clear active input
 await _controller.runJavaScript('''
 window.nymImagePickerCancelled && window.nymImagePickerCancelled();
 window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
 ''');
 return;
 }
 
 if (choice == 'camera') {
+debugPrint('[iOS Upload] User chose camera - requesting permission');
 final cameraStatus = await Permission.camera.request();
+debugPrint('[iOS Upload] Camera permission status: $cameraStatus');
 if (!cameraStatus.isGranted) {
 debugPrint('[iOS Upload] Camera permission denied');
 // If permanently denied, prompt user to open settings
@@ -2260,15 +2628,23 @@ await openAppSettings();
 }
 return;
 }
+debugPrint('[iOS Upload] Opening camera picker (from choice)');
 pickedFile = await _imagePicker.pickImage(
 source: ImageSource.camera,
 imageQuality: 85,
 );
+debugPrint('[iOS Upload] Camera picker returned (from choice): ${pickedFile?.path}');
 } else {
+debugPrint('[iOS Upload] User chose gallery - opening picker');
+try {
 pickedFile = await _imagePicker.pickImage(
 source: ImageSource.gallery,
 imageQuality: 85,
 );
+debugPrint('[iOS Upload] Gallery picker returned (from choice): ${pickedFile?.path}');
+} catch (pickError) {
+debugPrint('[iOS Upload] Gallery picker error: $pickError');
+}
 }
 }
 
@@ -2277,98 +2653,154 @@ debugPrint('[iOS Upload] No image selected');
 await _controller.runJavaScript('''
 window.nymImagePickerCancelled && window.nymImagePickerCancelled();
 window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
 ''');
 return;
 }
 
 // Read file and inject into WebView
+debugPrint('[iOS Upload] Reading file bytes...');
 final bytes = await pickedFile.readAsBytes();
+debugPrint('[iOS Upload] File bytes read: ${bytes.length}');
 final base64Data = base64Encode(bytes);
+debugPrint('[iOS Upload] Base64 encoded, length: ${base64Data.length}');
 final fileName = pickedFile.name;
 final mimeType = pickedFile.mimeType ?? 'image/jpeg';
 
 debugPrint('[iOS Upload] Selected: $fileName, size: ${bytes.length}, mime: $mimeType');
 
-final dataUrl = 'data:$mimeType;base64,$base64Data';
+debugPrint('[iOS Upload] Running JavaScript to inject file...');
+try {
 await _controller.runJavaScript('''
 (function() {
 try {
-// Find the correct input: use tracked ID if available, otherwise fall back to generic query
-let input = null;
 const activeId = window.nymActiveFileInputId;
+console.log('[NYM Bridge iOS] Processing image for input:', activeId);
 
-if (activeId) {
-input = document.getElementById(activeId);
-console.log('[NYM Bridge] iOS image picker targeting input by ID:', activeId, 'found:', !!input);
+// Decode base64 directly without fetch (fetch doesn't work with data URLs in WebView)
+var base64Data = '$base64Data';
+var byteCharacters = atob(base64Data);
+var byteArrays = [];
+for (var offset = 0; offset < byteCharacters.length; offset += 512) {
+var slice = byteCharacters.slice(offset, offset + 512);
+var byteNumbers = new Array(slice.length);
+for (var i = 0; i < slice.length; i++) {
+byteNumbers[i] = slice.charCodeAt(i);
 }
-
-// Fallback to first file input if ID lookup failed
-if (!input) {
-input = document.querySelector('input[type="file"]');
-console.log('[NYM Bridge] iOS image picker fallback to first input, found:', !!input);
+var byteArray = new Uint8Array(byteNumbers);
+byteArrays.push(byteArray);
 }
-
-if (!input) {
-console.error('[NYM Bridge] No file input found');
-window.nymActiveFileInputId = null;
-return;
-}
-
-fetch('$dataUrl')
-.then(res => res.blob())
-.then(blob => {
+var blob = new Blob(byteArrays, {type: '$mimeType'});
 const file = new File([blob], '$fileName', { type: '$mimeType' });
-const dataTransfer = new DataTransfer();
+console.log('[NYM Bridge iOS] File created:', file.name, file.size, file.type);
+
+var syntheticEvent = {
+target: { files: [file], value: '' },
+preventDefault: function() {},
+stopPropagation: function() {}
+};
+
+var handlerCalled = false;
+
+try {
+if (activeId === 'setupAvatarInput') {
+if (typeof window.handleSetupAvatarSelect === 'function') {
+console.log('[NYM Bridge iOS] Calling handleSetupAvatarSelect');
+window.handleSetupAvatarSelect(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'setupBannerInput') {
+if (typeof window.handleSetupBannerSelect === 'function') {
+console.log('[NYM Bridge iOS] Calling handleSetupBannerSelect');
+window.handleSetupBannerSelect(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'nickEditAvatarInput') {
+if (typeof window.handleNickEditAvatarSelect === 'function') {
+console.log('[NYM Bridge iOS] Calling handleNickEditAvatarSelect');
+window.handleNickEditAvatarSelect(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'nickEditBannerInput') {
+if (typeof window.handleNickEditBannerSelect === 'function') {
+console.log('[NYM Bridge iOS] Calling handleNickEditBannerSelect');
+window.handleNickEditBannerSelect(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'wallpaperFileInput') {
+if (typeof window.handleWallpaperUpload === 'function') {
+console.log('[NYM Bridge iOS] Calling handleWallpaperUpload');
+window.handleWallpaperUpload(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'fileInput') {
+if (window.nym && typeof window.nym.uploadImage === 'function') {
+console.log('[NYM Bridge iOS] Calling nym.uploadImage');
+window.nym.uploadImage(file);
+handlerCalled = true;
+}
+} else if (activeId === 'p2pFileInput') {
+if (window.nym) {
+const isTorrent = file.name.endsWith('.torrent') || file.type === 'application/x-bittorrent';
+if (isTorrent && typeof window.nym.shareP2PFileTorrent === 'function') {
+console.log('[NYM Bridge iOS] Calling nym.shareP2PFileTorrent');
+window.nym.shareP2PFileTorrent(file);
+handlerCalled = true;
+} else if (typeof window.nym.shareP2PFile === 'function') {
+console.log('[NYM Bridge iOS] Calling nym.shareP2PFile');
+window.nym.shareP2PFile(file);
+handlerCalled = true;
+}
+}
+}
+} catch (handlerError) {
+console.error('[NYM Bridge iOS] Handler error:', handlerError);
+}
+
+if (!handlerCalled) {
+console.log('[NYM Bridge iOS] Fallback: dispatching change event');
+var input = activeId ? document.getElementById(activeId) : null;
+if (input) {
+try {
+var dataTransfer = new DataTransfer();
 dataTransfer.items.add(file);
 input.files = dataTransfer.files;
-
-const event = new Event('change', { bubbles: true });
-input.dispatchEvent(event);
-
-console.log('[NYM Bridge] iOS file injected successfully into:', input.id || 'unnamed input', 'file:', file.name, file.size);
-
-// Direct handler call with File object as fallback for avatar/banner inputs
-// where change event may not work in WebView environments.
-// The handler accepts File directly via instanceof check.
-if (activeId === 'setupAvatarInput' && typeof handleSetupAvatarSelect === 'function') {
-console.log('[NYM Bridge] Direct call: handleSetupAvatarSelect with File');
-handleSetupAvatarSelect(file);
-} else if (activeId === 'setupBannerInput' && typeof handleSetupBannerSelect === 'function') {
-console.log('[NYM Bridge] Direct call: handleSetupBannerSelect with File');
-handleSetupBannerSelect(file);
-} else if (activeId === 'nickEditAvatarInput' && typeof handleNickEditAvatarSelect === 'function') {
-console.log('[NYM Bridge] Direct call: handleNickEditAvatarSelect with File');
-handleNickEditAvatarSelect(file);
-} else if (activeId === 'nickEditBannerInput' && typeof handleNickEditBannerSelect === 'function') {
-console.log('[NYM Bridge] Direct call: handleNickEditBannerSelect with File');
-handleNickEditBannerSelect(file);
+input.dispatchEvent(new Event('change', { bubbles: true }));
+} catch (e) {
+console.error('[NYM Bridge iOS] Change event fallback failed:', e);
+}
+}
 }
 
-// Clear the active input reference
+console.log('[NYM Bridge iOS] Complete, handler called:', handlerCalled);
 window.nymActiveFileInputId = null;
-})
-.catch(err => {
-console.error('[NYM Bridge] iOS file injection failed:', err);
-window.nymActiveFileInputId = null;
-});
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
 } catch (e) {
-console.error('[NYM Bridge] iOS file injection error:', e);
+console.error('[NYM Bridge iOS] Error:', e);
 window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
 }
 })();
 ''');
+debugPrint('[iOS Upload] JavaScript injection completed');
+} catch (jsError) {
+debugPrint('[iOS Upload] JavaScript injection error: $jsError');
+}
 } catch (e) {
 debugPrint('[iOS Upload] Error: $e');
 }
 }
 
 Future<void> _handleMediaPicker(String action) async {
+debugPrint('[Media Picker] _handleMediaPicker called with action: $action');
 try {
 XFile? pickedFile;
 
 if (action == 'camera') {
+debugPrint('[Media Picker] Camera action - requesting permission');
 // Request camera permission first
 final cameraStatus = await Permission.camera.request();
+debugPrint('[Media Picker] Camera permission status: $cameraStatus');
 if (!cameraStatus.isGranted) {
 debugPrint('[Media Picker] Camera permission denied');
 if (cameraStatus.isPermanentlyDenied && mounted) {
@@ -2400,22 +2832,26 @@ return;
 if (!mounted) return;
 final recordChoice = await showModalBottomSheet<String>(
 context: context,
+backgroundColor: _isLightMode ? const Color(0xFFF5F5F2) : const Color(0xFF1A1A2E),
+shape: const RoundedRectangleBorder(
+borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+),
 builder: (context) => SafeArea(
 child: Wrap(
 children: [
 ListTile(
-leading: const Icon(Icons.camera_alt),
-title: const Text('Take Photo'),
+leading: Icon(Icons.camera_alt, color: _isLightMode ? const Color(0xFF006666) : const Color(0xFF00AAFF)),
+title: Text('Take Photo', style: TextStyle(color: _isLightMode ? const Color(0xFF333333) : Colors.white)),
 onTap: () => Navigator.pop(context, 'photo'),
 ),
 ListTile(
-leading: const Icon(Icons.videocam),
-title: const Text('Record Video'),
+leading: Icon(Icons.videocam, color: _isLightMode ? const Color(0xFF006666) : const Color(0xFF00AAFF)),
+title: Text('Record Video', style: TextStyle(color: _isLightMode ? const Color(0xFF333333) : Colors.white)),
 onTap: () => Navigator.pop(context, 'video'),
 ),
 ListTile(
-leading: const Icon(Icons.close),
-title: const Text('Cancel'),
+leading: Icon(Icons.close, color: _isLightMode ? const Color(0xFF666666) : const Color(0xFF888888)),
+title: Text('Cancel', style: TextStyle(color: _isLightMode ? const Color(0xFF666666) : const Color(0xFF888888))),
 onTap: () => Navigator.pop(context, null),
 ),
 ],
@@ -2424,7 +2860,10 @@ onTap: () => Navigator.pop(context, null),
 );
 
 if (recordChoice == null) {
-await _controller.runJavaScript('window.nymActiveFileInputId = null;');
+await _controller.runJavaScript('''
+window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
+''');
 return;
 }
 
@@ -2446,35 +2885,43 @@ maxDuration: const Duration(minutes: 10),
 }
 } else {
 // Show action sheet to choose between camera and gallery
-if (!mounted) return;
+debugPrint('[Media Picker] Showing media picker bottom sheet');
+if (!mounted) {
+debugPrint('[Media Picker] Widget not mounted, returning');
+return;
+}
 final choice = await showModalBottomSheet<String>(
 context: context,
+backgroundColor: _isLightMode ? const Color(0xFFF5F5F2) : const Color(0xFF1A1A2E),
+shape: const RoundedRectangleBorder(
+borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+),
 builder: (context) => SafeArea(
 child: Wrap(
 children: [
 ListTile(
-leading: const Icon(Icons.camera_alt),
-title: const Text('Take Photo'),
+leading: Icon(Icons.camera_alt, color: _isLightMode ? const Color(0xFF006666) : const Color(0xFF00AAFF)),
+title: Text('Take Photo', style: TextStyle(color: _isLightMode ? const Color(0xFF333333) : Colors.white)),
 onTap: () => Navigator.pop(context, 'camera_photo'),
 ),
 ListTile(
-leading: const Icon(Icons.videocam),
-title: const Text('Record Video'),
+leading: Icon(Icons.videocam, color: _isLightMode ? const Color(0xFF006666) : const Color(0xFF00AAFF)),
+title: Text('Record Video', style: TextStyle(color: _isLightMode ? const Color(0xFF333333) : Colors.white)),
 onTap: () => Navigator.pop(context, 'camera_video'),
 ),
 ListTile(
-leading: const Icon(Icons.photo_library),
-title: const Text('Choose Photo from Gallery'),
+leading: Icon(Icons.photo_library, color: _isLightMode ? const Color(0xFF006666) : const Color(0xFF00AAFF)),
+title: Text('Choose Photo from Gallery', style: TextStyle(color: _isLightMode ? const Color(0xFF333333) : Colors.white)),
 onTap: () => Navigator.pop(context, 'gallery_photo'),
 ),
 ListTile(
-leading: const Icon(Icons.video_library),
-title: const Text('Choose Video from Gallery'),
+leading: Icon(Icons.video_library, color: _isLightMode ? const Color(0xFF006666) : const Color(0xFF00AAFF)),
+title: Text('Choose Video from Gallery', style: TextStyle(color: _isLightMode ? const Color(0xFF333333) : Colors.white)),
 onTap: () => Navigator.pop(context, 'gallery_video'),
 ),
 ListTile(
-leading: const Icon(Icons.close),
-title: const Text('Cancel'),
+leading: Icon(Icons.close, color: _isLightMode ? const Color(0xFF666666) : const Color(0xFF888888)),
+title: Text('Cancel', style: TextStyle(color: _isLightMode ? const Color(0xFF666666) : const Color(0xFF888888))),
 onTap: () => Navigator.pop(context, null),
 ),
 ],
@@ -2482,12 +2929,19 @@ onTap: () => Navigator.pop(context, null),
 ),
 );
 
+debugPrint('[Media Picker] Bottom sheet choice: $choice');
+
 if (choice == null) {
-await _controller.runJavaScript('window.nymActiveFileInputId = null;');
+debugPrint('[Media Picker] User cancelled from bottom sheet');
+await _controller.runJavaScript('''
+window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
+''');
 return;
 }
 
 if (choice == 'camera_photo') {
+debugPrint('[Media Picker] User chose camera photo');
 final cameraStatus = await Permission.camera.request();
 if (!cameraStatus.isGranted) {
 debugPrint('[Media Picker] Camera permission denied');
@@ -2497,7 +2951,9 @@ pickedFile = await _imagePicker.pickImage(
 source: ImageSource.camera,
 imageQuality: 85,
 );
+debugPrint('[Media Picker] Camera photo picker returned: ${pickedFile?.path}');
 } else if (choice == 'camera_video') {
+debugPrint('[Media Picker] User chose camera video');
 final cameraStatus = await Permission.camera.request();
 if (!cameraStatus.isGranted) {
 debugPrint('[Media Picker] Camera permission denied');
@@ -2512,27 +2968,38 @@ pickedFile = await _imagePicker.pickVideo(
 source: ImageSource.camera,
 maxDuration: const Duration(minutes: 10),
 );
+debugPrint('[Media Picker] Camera video picker returned: ${pickedFile?.path}');
 } else if (choice == 'gallery_photo') {
+debugPrint('[Media Picker] User chose gallery photo');
 pickedFile = await _imagePicker.pickImage(
 source: ImageSource.gallery,
 imageQuality: 85,
 );
+debugPrint('[Media Picker] Gallery photo picker returned: ${pickedFile?.path}');
 } else if (choice == 'gallery_video') {
+debugPrint('[Media Picker] User chose gallery video');
 pickedFile = await _imagePicker.pickVideo(
 source: ImageSource.gallery,
 );
+debugPrint('[Media Picker] Gallery video picker returned: ${pickedFile?.path}');
 }
 }
 
 if (pickedFile == null) {
 debugPrint('[Media Picker] No media selected');
-await _controller.runJavaScript('window.nymActiveFileInputId = null;');
+await _controller.runJavaScript('''
+window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
+''');
 return;
 }
 
 // Read file and inject into WebView
+debugPrint('[Media Picker] Reading file bytes...');
 final bytes = await pickedFile.readAsBytes();
+debugPrint('[Media Picker] File bytes read: ${bytes.length}');
 final base64Data = base64Encode(bytes);
+debugPrint('[Media Picker] Base64 encoded, length: ${base64Data.length}');
 final fileName = pickedFile.name;
 
 // Determine MIME type - check file extension for videos
@@ -2559,55 +3026,423 @@ mimeType = 'image/heic';
 debugPrint('[Media Picker] Selected: $fileName, size: ${bytes.length}, mime: $mimeType');
 
 final dataUrl = 'data:$mimeType;base64,$base64Data';
+debugPrint('[Media Picker] Running JavaScript to inject file...');
+try {
 await _controller.runJavaScript('''
 (function() {
 try {
-let input = null;
 const activeId = window.nymActiveFileInputId;
+console.log('[NYM Bridge Media] Processing media for input:', activeId);
 
-if (activeId) {
-input = document.getElementById(activeId);
-console.log('[NYM Bridge] Media picker targeting input by ID:', activeId, 'found:', !!input);
+// Decode base64 directly without fetch (fetch doesn't work with data URLs in WebView)
+var base64Data = '$base64Data';
+var byteCharacters = atob(base64Data);
+var byteArrays = [];
+for (var offset = 0; offset < byteCharacters.length; offset += 512) {
+  var slice = byteCharacters.slice(offset, offset + 512);
+  var byteNumbers = new Array(slice.length);
+  for (var i = 0; i < slice.length; i++) {
+    byteNumbers[i] = slice.charCodeAt(i);
+  }
+  var byteArray = new Uint8Array(byteNumbers);
+  byteArrays.push(byteArray);
+}
+var blob = new Blob(byteArrays, {type: '$mimeType'});
+const file = new File([blob], '$fileName', { type: '$mimeType' });console.log('[NYM Bridge Media] File created:', file.name, file.size, file.type);
+
+var syntheticEvent = {
+target: { files: [file], value: '' },
+preventDefault: function() {},
+stopPropagation: function() {}
+};
+
+var handlerCalled = false;
+
+try {
+if (activeId === 'setupAvatarInput') {
+if (typeof window.handleSetupAvatarSelect === 'function') {
+console.log('[NYM Bridge Media] Calling handleSetupAvatarSelect');
+window.handleSetupAvatarSelect(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'setupBannerInput') {
+if (typeof window.handleSetupBannerSelect === 'function') {
+console.log('[NYM Bridge Media] Calling handleSetupBannerSelect');
+window.handleSetupBannerSelect(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'nickEditAvatarInput') {
+if (typeof window.handleNickEditAvatarSelect === 'function') {
+console.log('[NYM Bridge Media] Calling handleNickEditAvatarSelect');
+window.handleNickEditAvatarSelect(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'nickEditBannerInput') {
+if (typeof window.handleNickEditBannerSelect === 'function') {
+console.log('[NYM Bridge Media] Calling handleNickEditBannerSelect');
+window.handleNickEditBannerSelect(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'wallpaperFileInput') {
+if (typeof window.handleWallpaperUpload === 'function') {
+console.log('[NYM Bridge Media] Calling handleWallpaperUpload');
+window.handleWallpaperUpload(syntheticEvent);
+handlerCalled = true;
+}
+} else if (activeId === 'fileInput') {
+if (window.nym && typeof window.nym.uploadImage === 'function') {
+console.log('[NYM Bridge Media] Calling nym.uploadImage');
+window.nym.uploadImage(file);
+handlerCalled = true;
+}
+} else if (activeId === 'p2pFileInput') {
+if (window.nym) {
+const isTorrent = file.name.endsWith('.torrent') || file.type === 'application/x-bittorrent';
+if (isTorrent && typeof window.nym.shareP2PFileTorrent === 'function') {
+console.log('[NYM Bridge Media] Calling nym.shareP2PFileTorrent');
+window.nym.shareP2PFileTorrent(file);
+handlerCalled = true;
+} else if (typeof window.nym.shareP2PFile === 'function') {
+console.log('[NYM Bridge Media] Calling nym.shareP2PFile');
+window.nym.shareP2PFile(file);
+handlerCalled = true;
+}
+}
+}
+} catch (handlerError) {
+console.error('[NYM Bridge Media] Handler error:', handlerError);
 }
 
-if (!input) {
-input = document.querySelector('input[type="file"]');
-console.log('[NYM Bridge] Media picker fallback to first input, found:', !!input);
-}
-
-if (!input) {
-console.error('[NYM Bridge] No file input found for media');
-window.nymActiveFileInputId = null;
-return;
-}
-
-fetch('$dataUrl')
-.then(res => res.blob())
-.then(blob => {
-const file = new File([blob], '$fileName', { type: '$mimeType' });
-const dataTransfer = new DataTransfer();
+if (!handlerCalled) {
+console.log('[NYM Bridge Media] Fallback: dispatching change event');
+var input = activeId ? document.getElementById(activeId) : null;
+if (input) {
+try {
+var dataTransfer = new DataTransfer();
 dataTransfer.items.add(file);
 input.files = dataTransfer.files;
-
-const event = new Event('change', { bubbles: true });
-input.dispatchEvent(event);
-
-console.log('[NYM Bridge] Media injected successfully:', input.id || 'unnamed input', 'file:', file.name, file.size, file.type);
-window.nymActiveFileInputId = null;
-})
-.catch(err => {
-console.error('[NYM Bridge] Media injection failed:', err);
-window.nymActiveFileInputId = null;
-});
+input.dispatchEvent(new Event('change', { bubbles: true }));
 } catch (e) {
-console.error('[NYM Bridge] Media injection error:', e);
+console.error('[NYM Bridge Media] Change event fallback failed:', e);
+}
+}
+}
+
+console.log('[NYM Bridge Media] Complete, handler called:', handlerCalled);
 window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
+} catch (e) {
+console.error('[NYM Bridge Media] Error:', e);
+window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
 }
 })();
 ''');
+debugPrint('[Media Picker] JavaScript injection completed');
+} catch (jsError) {
+debugPrint('[Media Picker] JavaScript injection error: $jsError');
+}
 } catch (e) {
 debugPrint('[Media Picker] Error: $e');
 }
+}
+
+/// Handle media download requests from the PWA
+/// Downloads images/videos and saves them to the device gallery
+Future<void> _handleMediaDownload(String message) async {
+try {
+final data = jsonDecode(message) as Map<String, dynamic>;
+final url = data['url'] as String?;
+final filename = data['filename'] as String? ?? 'download';
+final mimeType = data['mimeType'] as String? ?? 'application/octet-stream';
+
+if (url == null || url.isEmpty) {
+debugPrint('[Media Download] No URL provided');
+_notifyDownloadResult(false, 'No media URL provided');
+return;
+}
+
+debugPrint('[Media Download] Starting download: $url');
+debugPrint('[Media Download] Filename: $filename, MIME: $mimeType');
+
+// Show a loading indicator via JS
+_controller.runJavaScript('''
+if (window.nym && window.nym.displaySystemMessage) {
+window.nym.displaySystemMessage('Downloading media...');
+}
+''');
+
+// Download the file
+final response = await http.get(Uri.parse(url));
+
+if (response.statusCode != 200) {
+debugPrint('[Media Download] HTTP error: ${response.statusCode}');
+_notifyDownloadResult(false, 'Download failed: HTTP ${response.statusCode}');
+return;
+}
+
+final bytes = response.bodyBytes;
+debugPrint('[Media Download] Downloaded ${bytes.length} bytes');
+
+// Determine if it's an image or video based on MIME type or filename
+final isImage = mimeType.startsWith('image/') ||
+filename.toLowerCase().endsWith('.jpg') ||
+filename.toLowerCase().endsWith('.jpeg') ||
+filename.toLowerCase().endsWith('.png') ||
+filename.toLowerCase().endsWith('.gif') ||
+filename.toLowerCase().endsWith('.webp');
+
+final isVideo = mimeType.startsWith('video/') ||
+filename.toLowerCase().endsWith('.mp4') ||
+filename.toLowerCase().endsWith('.mov') ||
+filename.toLowerCase().endsWith('.webm') ||
+filename.toLowerCase().endsWith('.avi');
+
+// Get temp directory and save file
+final tempDir = await getTemporaryDirectory();
+final tempPath = '${tempDir.path}/$filename';
+final file = io.File(tempPath);
+await file.writeAsBytes(bytes);
+
+debugPrint('[Media Download] Saved to temp: $tempPath');
+
+// Request storage/photos permission on Android
+if (!kIsWeb && io.Platform.isAndroid) {
+final status = await Permission.photos.status;
+if (status.isDenied) {
+await Permission.photos.request();
+}
+// Also try storage permission for older Android
+if (await Permission.storage.status.isDenied) {
+await Permission.storage.request();
+}
+}
+
+// Save to gallery using Gal
+try {
+if (isVideo) {
+await Gal.putVideo(tempPath, album: 'Nymchat');
+debugPrint('[Media Download] Video saved to gallery');
+} else if (isImage) {
+await Gal.putImage(tempPath, album: 'Nymchat');
+debugPrint('[Media Download] Image saved to gallery');
+} else {
+// For other files, try as image first
+await Gal.putImage(tempPath, album: 'Nymchat');
+debugPrint('[Media Download] File saved to gallery as image');
+}
+
+// Clean up temp file
+await file.delete();
+
+_notifyDownloadResult(true, 'Saved to Photos');
+
+// Show success snackbar
+if (mounted) {
+ScaffoldMessenger.of(context).showSnackBar(
+SnackBar(
+content: Text(isVideo ? 'Video saved to Photos' : 'Image saved to Photos'),
+backgroundColor: const Color(0xFF00AA88),
+duration: const Duration(seconds: 2),
+behavior: SnackBarBehavior.floating,
+margin: EdgeInsets.only(
+bottom: MediaQuery.of(context).size.height - 150,
+left: 16,
+right: 16,
+),
+),
+);
+}
+} catch (e) {
+debugPrint('[Media Download] Gallery save failed: $e');
+
+// Fallback: try to share the file instead
+_notifyDownloadResult(false, 'Could not save to gallery: $e');
+
+// Clean up temp file on failure
+if (await file.exists()) {
+await file.delete();
+}
+}
+} catch (e) {
+debugPrint('[Media Download] Error: $e');
+_notifyDownloadResult(false, 'Download error: $e');
+}
+}
+
+/// Check if a lightning wallet is available and handle accordingly
+Future<void> _handleWalletCheck(String action) async {
+try {
+debugPrint('[Wallet Check] Checking for lightning wallet...');
+
+// Test if any app can handle lightning: URIs
+// Use a dummy invoice format to test scheme handling
+final testUri = Uri.parse('lightning:lnbc1');
+final canLaunch = await canLaunchUrl(testUri);
+
+debugPrint('[Wallet Check] Can launch lightning URI: $canLaunch');
+
+if (canLaunch) {
+// Wallet is available, proceed with opening
+debugPrint('[Wallet Check] Wallet detected, calling nym.openInWallet()');
+await _controller.runJavaScript('''
+if (window.nym && typeof window.nym.openInWallet === 'function') {
+window.nym.openInWallet();
+} else {
+console.warn('[NYM Bridge] nym.openInWallet not available');
+}
+''');
+} else {
+// No wallet detected, show warning dialog
+debugPrint('[Wallet Check] No wallet detected, showing warning');
+if (mounted) {
+await _showNoWalletWarning();
+}
+}
+} catch (e) {
+debugPrint('[Wallet Check] Error: $e');
+// On error, try to open anyway (let the system handle it)
+await _controller.runJavaScript('''
+if (window.nym && typeof window.nym.openInWallet === 'function') {
+window.nym.openInWallet();
+}
+''');
+}
+}
+
+/// Show a warning dialog when no lightning wallet is detected
+Future<void> _showNoWalletWarning() async {
+final result = await showDialog<String>(
+context: context,
+builder: (context) => AlertDialog(
+backgroundColor: _isLightMode ? const Color(0xFFF5F5F2) : const Color(0xFF1A1A2E),
+shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+title: Row(
+children: [
+Icon(
+Icons.warning_amber_rounded,
+color: const Color(0xFFFFAA00),
+size: 28,
+),
+const SizedBox(width: 12),
+Expanded(
+child: Text(
+'No Lightning Wallet',
+style: TextStyle(
+color: _isLightMode ? const Color(0xFF333333) : Colors.white,
+fontSize: 18,
+fontWeight: FontWeight.bold,
+),
+),
+),
+],
+),
+content: Column(
+mainAxisSize: MainAxisSize.min,
+crossAxisAlignment: CrossAxisAlignment.start,
+children: [
+Text(
+'No Bitcoin Lightning wallet was detected on your device.',
+style: TextStyle(
+color: _isLightMode ? const Color(0xFF555555) : const Color(0xFFCCCCCC),
+fontSize: 15,
+),
+),
+const SizedBox(height: 16),
+Text(
+'To send and receive Bitcoin via Lightning, please install a compatible wallet app such as:',
+style: TextStyle(
+color: _isLightMode ? const Color(0xFF555555) : const Color(0xFFCCCCCC),
+fontSize: 14,
+),
+),
+const SizedBox(height: 12),
+_buildWalletSuggestion('Phoenix', 'Simple & non-custodial'),
+_buildWalletSuggestion('Mutiny', 'Privacy-focused'),
+_buildWalletSuggestion('Zeus', 'Full node control'),
+_buildWalletSuggestion('Wallet of Satoshi', 'Beginner-friendly'),
+],
+),
+actions: [
+TextButton(
+onPressed: () => Navigator.pop(context, 'cancel'),
+child: Text(
+'Cancel',
+style: TextStyle(
+color: _isLightMode ? const Color(0xFF666666) : const Color(0xFF888888),
+),
+),
+),
+TextButton(
+onPressed: () => Navigator.pop(context, 'appstore'),
+child: Text(
+'Find Wallets',
+style: TextStyle(
+color: const Color(0xFF00AAFF),
+fontWeight: FontWeight.bold,
+),
+),
+),
+],
+),
+);
+
+if (result == 'appstore') {
+// Open app store search for lightning wallets
+final storeUrl = !kIsWeb && io.Platform.isIOS
+? 'https://apps.apple.com/search?term=bitcoin+lightning+wallet'
+: 'https://play.google.com/store/search?q=bitcoin%20lightning%20wallet&c=apps';
+await _launchExternalBrowser(storeUrl);
+}
+}
+
+Widget _buildWalletSuggestion(String name, String description) {
+return Padding(
+padding: const EdgeInsets.symmetric(vertical: 4),
+child: Row(
+children: [
+Icon(
+Icons.bolt,
+color: const Color(0xFFFFAA00),
+size: 16,
+),
+const SizedBox(width: 8),
+Text(
+name,
+style: TextStyle(
+color: _isLightMode ? const Color(0xFF333333) : Colors.white,
+fontWeight: FontWeight.w600,
+fontSize: 14,
+),
+),
+const SizedBox(width: 8),
+Expanded(
+child: Text(
+'- $description',
+style: TextStyle(
+color: _isLightMode ? const Color(0xFF777777) : const Color(0xFF999999),
+fontSize: 13,
+),
+overflow: TextOverflow.ellipsis,
+),
+),
+],
+),
+);
+}
+
+/// Notify the PWA of download result
+void _notifyDownloadResult(bool success, String message) {
+final escapedMessage = message.replaceAll("'", "\\'");
+_controller.runJavaScript('''
+if (window._nymDownloadCallback) {
+window._nymDownloadCallback($success, '$escapedMessage');
+}
+if (window.nym && window.nym.displaySystemMessage) {
+window.nym.displaySystemMessage('${success ? '✓' : '✗'} $escapedMessage');
+}
+console.log('[NYM Bridge] Download result:', $success, '$escapedMessage');
+''');
 }
 
 void _handleDeepLink(String payload) {
@@ -3030,11 +3865,11 @@ end: Alignment.bottomCenter,
 colors: _isLightMode
 ? [
 appBgColor,
-const Color(0xFFE5E5E2).withValues(alpha: 0.8),
+const Color(0xFFE5E5E2),
 ]
 : [
 appBgColor,
-const Color(0xFF1A1A1A).withValues(alpha: 0.8),
+const Color(0xFF1A1A1A),
 ],
 ),
 ),
@@ -3042,18 +3877,23 @@ child: Center(
 child: Column(
 mainAxisAlignment: MainAxisAlignment.center,
 children: [
+// ASCII logo from nymchat_logo.txt
 Text(
 _asciiLogo,
-style: const TextStyle(
+style: TextStyle(
 fontFamily: 'Courier New',
 fontSize: 4.0,
 fontWeight: FontWeight.w600,
-color: Color(0xFF00FF00),
+color: _isLightMode
+? const Color(0xFF006600)
+: const Color(0xFF00FF00),
 letterSpacing: 0,
 height: 1.0,
 shadows: [
 Shadow(
-color: Color(0xFF00FF00),
+color: _isLightMode
+? const Color(0xFF006600)
+: const Color(0xFF00FF00),
 blurRadius: 10,
 ),
 ],
@@ -3064,7 +3904,9 @@ SizedBox(
 width: 40,
 height: 40,
 child: CircularProgressIndicator(
-color: Theme.of(context).colorScheme.primary,
+color: _isLightMode
+? const Color(0xFF006600)
+: const Color(0xFF00FF00),
 strokeWidth: 3,
 ),
 ),
