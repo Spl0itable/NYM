@@ -1568,7 +1568,15 @@
                         style="width: 100%; color: var(--danger); border-color: var(--danger);">
                         Clear Local Storage Cache
                     </button>
-                    <div class="form-hint">Clears settings, pinned/hidden/blocked channels, preferences, and the on-device app cache (channel history, PMs, group chats, profiles, reactions). Preserves your login and flair purchases.</div>
+                    <div class="form-hint">Clears the on-device app cache (channel history, PMs, group chats, profiles, reactions). Preserves your login, settings, group memberships, and flair purchases.</div>
+                </div>
+
+                <div class="form-group" style="margin-top: 12px;">
+                    <button class="icon-btn" id="resetSettingsBtn" data-action="resetSettings"
+                        style="width: 100%; color: var(--danger); border-color: var(--danger);">
+                        Reset Settings to Defaults
+                    </button>
+                    <div class="form-hint">Resets preferences (theme, layout, wallpaper, sound, pinned/hidden/blocked channels, blocked users, blocked keywords) to defaults. Preserves your login, group memberships, PM history, and flair purchases.</div>
                 </div>
             </div>
             <div class="modal-actions">

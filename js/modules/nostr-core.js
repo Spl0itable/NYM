@@ -1938,6 +1938,10 @@ Object.assign(NYM.prototype, {
             // Ensure geo relays for this channel also receive the event
             this.ensureGeoRelayDelivery(signedEvent, geohash);
 
+            // Bump our own presence so status stays "online" and other clients
+            // see us as recently active.
+            this.recordOwnActivity();
+
             // Schedule deletion if redacted cosmetic is active
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                 const eventIdToDelete = signedEvent.id;
@@ -2087,9 +2091,48 @@ Object.assign(NYM.prototype, {
 
             const signedEvent = await this.signEvent(event);
             this.sendToRelay(["EVENT", signedEvent]);
+            this._lastPresenceBroadcast = Date.now();
         } catch (error) {
             // Silently fail - presence is best-effort
         }
+    },
+
+    // Record local user activity so own status indicator stays "online" and
+    // other clients see us as recently active. Called on every outgoing
+    // channel/PM/group/reaction send. Throttles relay broadcasts.
+    recordOwnActivity() {
+        if (!this.pubkey) return;
+
+        // Update own entry in users map so getEffectiveUserStatus / userlist
+        // treat us as recently seen.
+        const now = Date.now();
+        const existing = this.users.get(this.pubkey);
+        if (existing) {
+            existing.lastSeen = now;
+            // If we were marked away locally, leave away alone — only /back clears it.
+            if (existing.status !== 'away' && !(this.awayMessages && this.awayMessages.has(this.pubkey))) {
+                existing.status = 'online';
+            }
+        } else {
+            this.users.set(this.pubkey, {
+                nym: this.nym,
+                pubkey: this.pubkey,
+                lastSeen: now,
+                status: (this.awayMessages && this.awayMessages.has(this.pubkey)) ? 'away' : 'online',
+                channels: new Set()
+            });
+        }
+
+        // Refresh user list UI (debounced via RAF inside updateUserList).
+        if (typeof this.updateUserList === 'function') this.updateUserList();
+
+        // Throttle presence broadcasts to once every 60s; skip while away
+        // (cmdAway/cmdBack handle those transitions explicitly).
+        const PRESENCE_BROADCAST_THROTTLE_MS = 60000;
+        const lastBroadcast = this._lastPresenceBroadcast || 0;
+        if (now - lastBroadcast < PRESENCE_BROADCAST_THROTTLE_MS) return;
+        if (this.awayMessages && this.awayMessages.has(this.pubkey)) return;
+        this.publishPresence('online');
     },
 
     // Broadcast whether this user wants their status indicator hidden from

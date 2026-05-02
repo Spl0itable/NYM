@@ -1166,6 +1166,7 @@ Object.assign(NYM.prototype, {
             if (!content || !content.trim()) return false;
 
             const wrapped = await this.sendNIP17PM(content, recipientPubkey);
+            this.recordOwnActivity();
             return !!wrapped;
         } catch (error) {
             // Store the failed message in pmMessages so it persists across navigation

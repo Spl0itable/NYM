@@ -415,7 +415,7 @@ Object.assign(NYM.prototype, {
             ctxAvatarNym.innerHTML = nymHtml;
         }
 
-        // Populate status row (online / away / not online)
+        // Populate status row (online / away / offline)
         const ctxStatusRow = document.getElementById('ctxStatusRow');
         if (ctxStatusRow) {
             ctxStatusRow.textContent = '';
@@ -427,7 +427,7 @@ Object.assign(NYM.prototype, {
                 const label = document.createElement('span');
                 label.textContent = status === 'online' ? 'Online'
                     : status === 'away' ? 'Away'
-                        : 'Not online';
+                        : 'Offline';
                 ctxStatusRow.appendChild(dot);
                 ctxStatusRow.appendChild(label);
                 ctxStatusRow.style.display = '';
@@ -1479,11 +1479,14 @@ Object.assign(NYM.prototype, {
     displayGifs(gifs) {
         const resultsDiv = document.getElementById('gifResults');
 
+        // Render thumbnails through the Cloudflare media proxy
         resultsDiv.innerHTML = gifs.map(gif => {
-            const url = this.escapeHtml(gif.images.fixed_height.url);
+            const originalUrl = gif.images.fixed_height.url;
+            const safeOriginal = this.escapeHtml(originalUrl);
+            const safeProxied = this.escapeHtml(this.getProxiedMediaUrl(originalUrl));
             return `
-    <div class="gif-item" data-gif-url="${url}">
-        <img src="${url}" alt="${this.escapeHtml(gif.title || '')}">
+    <div class="gif-item" data-gif-url="${safeOriginal}">
+        <img src="${safeProxied}" alt="${this.escapeHtml(gif.title || '')}" loading="lazy">
     </div>
 `;
         }).join('');

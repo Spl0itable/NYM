@@ -179,6 +179,7 @@
         'addBlockedKeyword':          function () { nym().addBlockedKeyword(); },
         'executeSettingsTransfer':    function () { nym().executeSettingsTransfer(); },
         'clearLocalStorageCache':     function () { window.clearLocalStorageCache(); },
+        'resetSettings':              function () { window.resetSettings(); },
         'saveSettings':               function () { window.saveSettings(); },
         'onRandomKeypairChange':      function (_e, t) {
             var w = byId('hardcoreKeypairWarning');

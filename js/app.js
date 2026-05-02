@@ -2974,8 +2974,9 @@ async function saveSettings() {
     closeModal('settingsModal');
 }
 
+// Clears the on-device app cache only
 async function clearLocalStorageCache() {
-    if (!confirm('Clear all cached settings, preferences, and on-device app cache? This will not log you out.')) {
+    if (!confirm('Clear cached channel history, PMs, group chats, profiles, and reactions? This will not log you out or change your settings.')) {
         return;
     }
 
@@ -2986,47 +2987,79 @@ async function clearLocalStorageCache() {
         }
     } catch (_) { }
 
-    // Preserve session identity and shop purchase keys
-    const preserveKeys = {};
-    for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && (
-            key === 'nym_auto_ephemeral' ||
-            key === 'nym_auto_ephemeral_nick' ||
-            key === 'nym_auto_ephemeral_channel' ||
-            key === 'nym_session_nsec' ||
-            key === 'nym_random_keypair_per_session' ||
-            key === 'nym_dev_nsec' ||
-            key === 'nym_translate_language' ||
-            key === 'nym_active_style' ||
-            key === 'nym_active_flair' ||
-            key === 'nym_shop_active_cache' ||
-            key === 'nym_purchases_cache' ||
-            key.startsWith('nym_shop_recovery_') ||
-            key.startsWith('nym_nostr_login_')
-        )) {
-            preserveKeys[key] = localStorage.getItem(key);
-        }
+    // Mirror the wipe in-memory so the UI immediately reflects the cleared
+    // state instead of showing stale data until the next reload.
+    try {
+        if (nym.messages && typeof nym.messages.clear === 'function') nym.messages.clear();
+        if (nym.pmMessages && typeof nym.pmMessages.clear === 'function') nym.pmMessages.clear();
+        if (nym.reactions && typeof nym.reactions.clear === 'function') nym.reactions.clear();
+        if (nym.userBios && typeof nym.userBios.clear === 'function') nym.userBios.clear();
+        if (nym.channelDOMCache && typeof nym.channelDOMCache.clear === 'function') nym.channelDOMCache.clear();
+        if (nym.processedPMEventIds && typeof nym.processedPMEventIds.clear === 'function') nym.processedPMEventIds.clear();
+        if (nym.deletedEventIds && typeof nym.deletedEventIds.clear === 'function') nym.deletedEventIds.clear();
+    } catch (_) { }
+
+    // Force the currently-rendered conversation to re-render from the now-empty
+    // in-memory store so the user sees the cache cleared.
+    try {
+        const messagesEl = document.getElementById('messages');
+        if (messagesEl) messagesEl.innerHTML = '';
+    } catch (_) { }
+
+    nym.displaySystemMessage('Local storage cache cleared. Settings, group memberships, and login preserved.');
+    closeModal('settingsModal');
+}
+
+// Resets user preferences/settings to defaults. Preserves identity (login
+// keys, nicknames), group memberships, PM history, ephemeral keys, and the
+// app cache. Useful when the user wants to start over visually without
+// nuking conversations.
+async function resetSettings() {
+    if (!confirm('Reset all settings and preferences to defaults? This will reset theme, layout, wallpaper, sound, pinned/hidden/blocked channels, blocked users, and blocked keywords. Your login, group memberships, and PMs will be preserved.')) {
+        return;
     }
 
-    // Remove all nym_ keys
+    // Settings keys that should be wiped on a settings reset. Anything not
+    // in this list (identity, login, group metadata, ephemeral keys, PMs,
+    // shop purchases, nicknames, profile fields, etc.) is preserved.
+    const SETTINGS_KEY_EXACT = new Set([
+        'nym_theme', 'nym_color_mode',
+        'nym_chat_layout',
+        'nym_wallpaper_type', 'nym_wallpaper_custom_url',
+        'nym_text_size', 'nym_nick_style', 'nym_show_status',
+        'nym_autoscroll', 'nym_timestamps', 'nym_time_format',
+        'nym_sound', 'nym_notifications_enabled', 'nym_notify_friends_only',
+        'nym_sort_proximity',
+        'nym_dm_fwdsec_enabled', 'nym_dm_ttl_seconds',
+        'nym_read_receipts_enabled', 'nym_typing_indicators_enabled',
+        'nym_accept_pms', 'nym_cache_pms', 'nym_sync_mls_history',
+        'nym_groupchat_pm_only_mode', 'nym_low_data_mode',
+        'nym_pow_difficulty',
+        'nym_pinned_channels', 'nym_pinned_landing_channel',
+        'nym_hidden_channels', 'nym_hide_non_pinned',
+        'nym_blocked', 'nym_blocked_channels', 'nym_blocked_keywords',
+        'nym_image_blur',
+        'nym_group_notify_mentions_only',
+        'nym_recent_emojis',
+        'nym_user_channels', 'nym_user_joined_channels',
+        'nym_relay_url',
+        'nym_nav',
+        'nym_tutorial_seen',
+        'nym_notification_history', 'nym_notification_last_read'
+    ]);
+    const SETTINGS_KEY_PREFIXES = ['nym_image_blur_'];
+
     const keysToRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith('nym_')) {
+        if (!key) continue;
+        if (SETTINGS_KEY_EXACT.has(key) || SETTINGS_KEY_PREFIXES.some(p => key.startsWith(p))) {
             keysToRemove.push(key);
         }
     }
     keysToRemove.forEach(key => localStorage.removeItem(key));
 
-    // Restore preserved keys
-    for (const [key, value] of Object.entries(preserveKeys)) {
-        if (value !== null) {
-            localStorage.setItem(key, value);
-        }
-    }
-
-    // Reset in-memory state to defaults
+    // Reset in-memory settings state to defaults
     nym.pinnedChannels = new Set();
     nym.hiddenChannels = new Set();
     nym.hideNonPinned = false;
@@ -3042,7 +3075,7 @@ async function clearLocalStorageCache() {
     nym.updateChannelPins();
     nym.applyHiddenChannels();
 
-    nym.displaySystemMessage('Local storage cache cleared. Settings reset to defaults.');
+    nym.displaySystemMessage('Settings reset to defaults. Cache, group memberships, and login preserved.');
     closeModal('settingsModal');
 }
 
@@ -3143,7 +3176,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.60.308 ═══<br/>
+═══ Nymchat v3.60.309 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>

@@ -782,6 +782,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             // Update UI immediately
             this.updateMessageReactions(messageId);
 
+            // Bump our own presence so status stays "online".
+            this.recordOwnActivity();
+
             // Infer original kind from message context
             let originalKind = '20000'; // default to geohash channel
             if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
@@ -891,6 +894,9 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
 
             // Update UI immediately
             this.updateMessageReactions(messageId);
+
+            // Bump our own presence so status stays "online".
+            this.recordOwnActivity();
 
             // Infer original kind from message context
             let originalKind = '20000';

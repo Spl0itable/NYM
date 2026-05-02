@@ -1245,6 +1245,9 @@ Object.assign(NYM.prototype, {
         // Refresh relay subscriptions so we receive messages to our new ephemeral key
         this._refreshEphemeralSubscriptions();
 
+        // Bump our own presence so status stays "online".
+        this.recordOwnActivity();
+
         return true;
     },
 
