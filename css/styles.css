@@ -7170,6 +7170,19 @@ body.light-mode .context-menu-copy-pubkey:hover {
     color: #f7931a;
 }
 
+.quick-context-item.danger {
+    color: var(--danger);
+}
+
+.quick-context-item.danger svg {
+    color: var(--danger);
+}
+
+.quick-context-item.danger:hover {
+    background: rgba(255, 68, 68, 0.12);
+    color: var(--danger);
+}
+
 body.light-mode .quick-context-menu {
     background: rgba(255, 255, 255, 0.96);
     border-color: rgba(0, 0, 0, 0.1);
@@ -8788,7 +8801,11 @@ body.solid-ui .geohash-info-panel,
 body.solid-ui .geohash-control-btn,
 body.solid-ui .geohash-legend,
 body.solid-ui .tutorial-card,
-body.solid-ui .pubkey-slideout {
+body.solid-ui .pubkey-slideout,
+body.solid-ui .quick-react-popup,
+body.solid-ui .quick-react-translate,
+body.solid-ui .quick-context-menu,
+body.solid-ui .gif-picker {
     background: var(--glass-bg);
 }
 
@@ -8804,7 +8821,11 @@ body.solid-ui.light-mode .geohash-info-panel,
 body.solid-ui.light-mode .geohash-control-btn,
 body.solid-ui.light-mode .geohash-legend,
 body.solid-ui.light-mode .tutorial-card,
-body.solid-ui.light-mode .pubkey-slideout {
+body.solid-ui.light-mode .pubkey-slideout,
+body.solid-ui.light-mode .quick-react-popup,
+body.solid-ui.light-mode .quick-react-translate,
+body.solid-ui.light-mode .quick-context-menu,
+body.solid-ui.light-mode .gif-picker {
     background: var(--glass-bg);
 }
 
