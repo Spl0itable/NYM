@@ -609,7 +609,7 @@ class NYM {
         if (this.settings.textSize && this.settings.textSize !== 15) {
             document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
         }
-        applyTransparency(this.settings.transparencyEnabled !== false);
+        applyTransparency(this.settings.transparencyEnabled === true);
         this.performanceMode = false;
         this._deviceCapabilities = this._detectDeviceCapabilities();
         this._applyPerformanceMode();
@@ -1570,6 +1570,9 @@ function onTransparencyChange(value) {
     nym.settings.transparencyEnabled = enabled;
     localStorage.setItem('nym_transparency_enabled', String(enabled));
     applyTransparency(enabled);
+    // Block stale settings echoes from older relay-cached events from
+    // overriding the user's new choice and causing the UI to flicker.
+    nym._lastSettingsSyncTs = Math.floor(Date.now() / 1000);
     nostrSettingsSave();
 }
 
@@ -2631,7 +2634,7 @@ async function showSettings() {
     // Initialize transparency toggle
     const transparencySel = document.getElementById('transparencySelect');
     if (transparencySel) {
-        transparencySel.value = nym.settings.transparencyEnabled !== false ? 'true' : 'false';
+        transparencySel.value = nym.settings.transparencyEnabled === true ? 'true' : 'false';
     }
 
     // Initialize text size slider
@@ -3200,7 +3203,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.61.310 ═══<br/>
+═══ Nymchat v3.61.311 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>

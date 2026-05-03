@@ -8844,12 +8844,11 @@ body.solid-ui.chat-bubbles .message.pm .message-content {
 }
 
 body.solid-ui.chat-bubbles .message.self .message-content {
-    background: rgb(from var(--primary) r g b / 0.85);
-    color: #000;
+    background: color-mix(in srgb, var(--primary) 22%, #2a2a3a);
 }
 
 body.solid-ui.chat-bubbles .message.mentioned .message-content {
-    background: rgb(from var(--secondary) r g b / 0.5);
+    background: color-mix(in srgb, var(--secondary) 28%, #2a2a3a);
     box-shadow: inset 0 0 0 1px var(--secondary);
 }
 
@@ -8859,12 +8858,11 @@ body.solid-ui.light-mode.chat-bubbles .message.pm .message-content {
 }
 
 body.solid-ui.light-mode.chat-bubbles .message.self .message-content {
-    background: rgb(from var(--primary) r g b / 0.85);
-    color: #fff;
+    background: color-mix(in srgb, var(--primary) 22%, #e6e6e0);
 }
 
 body.solid-ui.light-mode.chat-bubbles .message.mentioned .message-content {
-    background: rgb(from var(--secondary) r g b / 0.4);
+    background: color-mix(in srgb, var(--secondary) 22%, #e6e6e0);
     box-shadow: inset 0 0 0 1px var(--secondary);
 }
 
@@ -8882,4 +8880,156 @@ body.solid-ui.theme-ghost.light-mode.chat-bubbles .message-content {
 
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self .message-content {
     background: #bbbbbb;
+}
+
+body.solid-ui.chat-bubbles .message.style-fire .message-content,
+body.solid-ui.chat-bubbles .message.style-ice .message-content,
+body.solid-ui.chat-bubbles .message.style-rainbow .message-content,
+body.solid-ui.chat-bubbles .message.style-aurora .message-content {
+    background: #2a2a3a !important;
+}
+
+body.solid-ui.chat-bubbles .message.self.style-fire .message-content,
+body.solid-ui.chat-bubbles .message.self.style-ice .message-content,
+body.solid-ui.chat-bubbles .message.self.style-rainbow .message-content,
+body.solid-ui.chat-bubbles .message.self.style-aurora .message-content {
+    background: color-mix(in srgb, var(--primary) 22%, #2a2a3a) !important;
+}
+
+body.solid-ui.chat-bubbles .message.style-satoshi .message-content {
+    background: #4a3a1f !important;
+}
+
+body.solid-ui.chat-bubbles .message.supporter-style .message-content {
+    background: #3d3520 !important;
+}
+
+body.solid-ui.chat-bubbles .message.cosmetic-aura-gold .message-content {
+    background: #38311e !important;
+}
+
+body.solid-ui.light-mode.chat-bubbles .message.style-fire .message-content,
+body.solid-ui.light-mode.chat-bubbles .message.style-ice .message-content,
+body.solid-ui.light-mode.chat-bubbles .message.style-rainbow .message-content,
+body.solid-ui.light-mode.chat-bubbles .message.style-aurora .message-content {
+    background: #e6e6e0 !important;
+}
+
+body.solid-ui.light-mode.chat-bubbles .message.self.style-fire .message-content,
+body.solid-ui.light-mode.chat-bubbles .message.self.style-ice .message-content,
+body.solid-ui.light-mode.chat-bubbles .message.self.style-rainbow .message-content,
+body.solid-ui.light-mode.chat-bubbles .message.self.style-aurora .message-content {
+    background: color-mix(in srgb, var(--primary) 22%, #e6e6e0) !important;
+}
+
+body.solid-ui.light-mode.chat-bubbles .message.style-satoshi .message-content {
+    background: #f3dcb4 !important;
+}
+
+body.solid-ui.light-mode.chat-bubbles .message.supporter-style .message-content {
+    background: #efe2a8 !important;
+}
+
+body.solid-ui.light-mode.chat-bubbles .message.cosmetic-aura-gold .message-content {
+    background: #f0e3ad !important;
+}
+
+body.solid-ui:not(.chat-bubbles) .message.style-satoshi .message-content {
+    background-color: #4a3a1f;
+}
+
+body.solid-ui:not(.chat-bubbles) .message.supporter-style {
+    background: #2a2418;
+    border-left: 3px solid #ffd700;
+}
+
+body.solid-ui:not(.chat-bubbles) .message.cosmetic-aura-gold {
+    background: #2a2418;
+    border-left: 3px solid #ffd700;
+}
+
+body.solid-ui.light-mode:not(.chat-bubbles) .message.style-satoshi .message-content {
+    background-color: #f3dcb4;
+}
+
+body.solid-ui.light-mode:not(.chat-bubbles) .message.supporter-style {
+    background: #f4ead0;
+    border-left: 3px solid #b8960a;
+}
+
+body.solid-ui.light-mode:not(.chat-bubbles) .message.cosmetic-aura-gold {
+    background: #f4ead0;
+    border-left: 3px solid #b8960a;
+}
+
+body.solid-ui.theme-ghost.chat-bubbles .message.style-fire .message-content,
+body.solid-ui.theme-ghost.chat-bubbles .message.style-ice .message-content,
+body.solid-ui.theme-ghost.chat-bubbles .message.style-rainbow .message-content,
+body.solid-ui.theme-ghost.chat-bubbles .message.style-aurora .message-content,
+body.solid-ui.theme-ghost.chat-bubbles .message.style-satoshi .message-content,
+body.solid-ui.theme-ghost.chat-bubbles .message.supporter-style .message-content,
+body.solid-ui.theme-ghost.chat-bubbles .message.cosmetic-aura-gold .message-content {
+    background: #2a2a2a !important;
+}
+
+body.solid-ui.theme-ghost.chat-bubbles .message.self.style-fire .message-content,
+body.solid-ui.theme-ghost.chat-bubbles .message.self.style-ice .message-content,
+body.solid-ui.theme-ghost.chat-bubbles .message.self.style-rainbow .message-content,
+body.solid-ui.theme-ghost.chat-bubbles .message.self.style-aurora .message-content {
+    background: #444444 !important;
+}
+
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-fire .message-content,
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-ice .message-content,
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-rainbow .message-content,
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-aurora .message-content,
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-satoshi .message-content,
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.supporter-style .message-content,
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.cosmetic-aura-gold .message-content {
+    background: #dddddd !important;
+}
+
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self.style-fire .message-content,
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self.style-ice .message-content,
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self.style-rainbow .message-content,
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self.style-aurora .message-content {
+    background: #bbbbbb !important;
+}
+
+body.solid-ui .message-content blockquote {
+    background: #1c1c2c;
+    border-left-color: var(--primary);
+}
+
+body.solid-ui.light-mode .message-content blockquote {
+    background: #ececea;
+    border-left-color: var(--primary);
+}
+
+body.solid-ui.theme-ghost .message-content blockquote {
+    background: #1f1f1f;
+    border-left-color: #888888;
+}
+
+body.solid-ui.theme-ghost.light-mode .message-content blockquote {
+    background: #d5d5d5;
+    border-left-color: #555555;
+}
+
+body.solid-ui.chat-bubbles .message.self .message-content blockquote {
+    background: color-mix(in srgb, #000 25%, transparent);
+}
+
+body.solid-ui.light-mode.chat-bubbles .message.self .message-content blockquote {
+    background: color-mix(in srgb, #fff 35%, transparent);
+}
+
+body.solid-ui .quote-preview,
+body.solid-ui .edit-preview {
+    background: #1c1c2c;
+}
+
+body.solid-ui.light-mode .quote-preview,
+body.solid-ui.light-mode .edit-preview {
+    background: #ececea;
 }

@@ -1094,12 +1094,12 @@ Object.assign(NYM.prototype, {
 
         const userListTitle = document.querySelector('#userList .nav-title-text');
         if (userListTitle) {
-            userListTitle.textContent = `Nyms (${this.abbreviateNumber(activeCount)} active)`;
+            userListTitle.textContent = `Nyms (${this.abbreviateNumber(activeCount)} online)`;
         }
 
         if (!this.inPMMode) {
             const meta = document.getElementById('channelMeta');
-            if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} active nyms`;
+            if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} online nyms`;
         }
 
         this.refreshAutocompleteIfOpen();
