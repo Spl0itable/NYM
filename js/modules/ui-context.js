@@ -1145,7 +1145,7 @@ Object.assign(NYM.prototype, {
             }
 
             // Remove any existing quick react popup
-            document.querySelectorAll('.quick-react-popup, .quick-react-translate, .quick-context-menu').forEach(el => el.remove());
+            document.querySelectorAll('.quick-react-popup, .quick-context-menu').forEach(el => el.remove());
 
             // Highlight the long-pressed message and dim the others
             messagesEl.classList.add('has-long-press-highlight');
@@ -1164,14 +1164,6 @@ Object.assign(NYM.prototype, {
                     </svg>
                 </button>`;
 
-            // Create separate translate button
-            const translateBubble = document.createElement('button');
-            translateBubble.className = 'quick-react-translate';
-            translateBubble.title = 'Translate';
-            translateBubble.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
-            </svg>`;
-
             // Position near the long-press point
             const msgRect = msgEl.getBoundingClientRect();
             popup.style.position = 'fixed';
@@ -1179,9 +1171,6 @@ Object.assign(NYM.prototype, {
             // Position above the message, centered on press point
             const clientX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : msgRect.left + msgRect.width / 2);
             const clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : msgRect.top);
-
-            const translateGap = 8;
-            const translateBtnWidth = 42;
 
             // Append popup offscreen first to measure its actual rendered size
             popup.style.position = 'fixed';
@@ -1191,22 +1180,13 @@ Object.assign(NYM.prototype, {
             const actualPopupHeight = popup.offsetHeight;
             popup.style.visibility = '';
 
-            const totalWidth = actualPopupWidth + translateGap + translateBtnWidth;
             let left = clientX - actualPopupWidth / 2;
-            left = Math.max(10, Math.min(left, window.innerWidth - totalWidth - 10));
+            left = Math.max(10, Math.min(left, window.innerWidth - actualPopupWidth - 10));
             let top = clientY - 55;
             top = Math.max(10, top);
 
             popup.style.left = left + 'px';
             popup.style.top = top + 'px';
-
-            // Position translate bubble to the right of the popup
-            translateBubble.style.position = 'fixed';
-            translateBubble.style.left = (left + actualPopupWidth + translateGap) + 'px';
-            translateBubble.style.top = top + 'px';
-            translateBubble.style.height = actualPopupHeight + 'px';
-
-            document.body.appendChild(translateBubble);
 
             // Build the quick context menu (Private Message, Slap, Hug, Zap, Quote, Copy)
             const baseAuthor = this.parseNymFromDisplay(msgEl.dataset.author || 'anon');
@@ -1290,6 +1270,14 @@ Object.assign(NYM.prototype, {
                         }
                     }
                 });
+                ctxItems.push({
+                    id: 'qctxTranslate',
+                    label: 'Translate Message',
+                    svg: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg>',
+                    action: () => {
+                        this.translateMessage(messageContent, messageId);
+                    }
+                });
             }
             if (isSelf && messageId && messageContent) {
                 ctxItems.push({
@@ -1345,7 +1333,6 @@ Object.assign(NYM.prototype, {
             // Trigger animation
             requestAnimationFrame(() => {
                 popup.classList.add('active');
-                translateBubble.classList.add('active');
                 if (quickCtxMenu) quickCtxMenu.classList.add('active');
             });
 
@@ -1356,7 +1343,6 @@ Object.assign(NYM.prototype, {
 
             const closeAll = () => {
                 popup.remove();
-                translateBubble.remove();
                 if (quickCtxMenu) quickCtxMenu.remove();
                 cleanupHighlight();
             };
@@ -1410,21 +1396,6 @@ Object.assign(NYM.prototype, {
             expandBtn.addEventListener('click', openFullPicker);
             expandBtn.addEventListener('touchend', openFullPicker);
 
-            // Handle translate button
-            const doTranslate = (ev) => {
-                ev.preventDefault();
-                ev.stopPropagation();
-                closeAll();
-                removeCloseListeners();
-                const contentEl = msgEl.querySelector('.message-content');
-                if (!contentEl) return;
-                // Extract only the non-quoted text (skip blockquote content)
-                const content = this._extractNonQuotedText(contentEl);
-                if (content) this.translateMessage(content, messageId);
-            };
-            translateBubble.addEventListener('click', doTranslate);
-            translateBubble.addEventListener('touchend', doTranslate);
-
             // Handle emoji clicks via both click and touchend for reliability
             popup.addEventListener('click', async (ev) => {
                 ev.stopPropagation();
@@ -1455,7 +1426,7 @@ Object.assign(NYM.prototype, {
             // gesture (mouseup + click, or touchend) that triggered the popup.
             const openedAt = Date.now();
             const closePopup = (ev) => {
-                if (popup.contains(ev.target) || translateBubble.contains(ev.target)) return;
+                if (popup.contains(ev.target)) return;
                 if (quickCtxMenu && quickCtxMenu.contains(ev.target)) return;
                 if (Date.now() - openedAt < 400) return;
                 closeAll();
