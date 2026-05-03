@@ -1986,6 +1986,10 @@ body.light-mode.chat-bubbles .read-more-btn {
     font-style: italic;
 }
 
+.system-message.me-message {
+    font-style: italic;
+}
+
 .input-container {
     padding: 12px 16px;
     border-top: 1px solid var(--glass-border);
@@ -7107,6 +7111,96 @@ body.light-mode .context-menu-copy-pubkey:hover {
     background: rgba(0, 0, 0, 0.06);
 }
 
+.quick-context-menu {
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    padding: 4px;
+    background: rgba(20, 20, 35, 0.92);
+    backdrop-filter: blur(20px) saturate(1.5);
+    -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
+    border-radius: 14px;
+    z-index: 10001;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    transform: scale(0.9) translateY(-6px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.quick-context-menu.active {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+}
+
+.quick-context-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.quick-context-item svg {
+    flex-shrink: 0;
+    color: var(--text-dim);
+}
+
+.quick-context-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.quick-context-item:active {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.quick-context-item.lightning {
+    color: #f7931a;
+}
+
+.quick-context-item.lightning svg {
+    color: #f7931a;
+}
+
+body.light-mode .quick-context-menu {
+    background: rgba(255, 255, 255, 0.96);
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .quick-context-item:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .quick-context-item:active {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.messages-container.has-long-press-highlight .message,
+.messages-container.has-long-press-highlight .system-message,
+.messages-container.has-long-press-highlight .action-message {
+    transition: opacity 0.15s ease, filter 0.15s ease;
+    opacity: 0.35;
+    filter: blur(0.5px);
+}
+
+.messages-container.has-long-press-highlight .message.long-press-highlight,
+.messages-container.has-long-press-highlight .system-message.long-press-highlight,
+.messages-container.has-long-press-highlight .action-message.long-press-highlight {
+    opacity: 1;
+    filter: none;
+    position: relative;
+    z-index: 1;
+}
+
 .avatar-upload-section {
     display: flex;
     align-items: center;
@@ -8653,4 +8747,139 @@ body.performance-mode .message.flooded {
     .reactors-modal {
         animation: none;
     }
+}
+
+body.solid-ui {
+    --glass-bg: #14141e;
+    --bg-secondary: #14141e;
+    --bg-tertiary: #1c1c2c;
+}
+
+body.solid-ui.light-mode {
+    --glass-bg: #ffffff;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #f0f0ed;
+}
+
+body.solid-ui *,
+body.solid-ui *::before,
+body.solid-ui *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+body.solid-ui .messages-container {
+    background-color: rgba(0, 0, 0, 0.15);
+}
+
+body.solid-ui.light-mode .messages-container {
+    background-color: rgba(255, 255, 255, 0.3);
+}
+
+body.solid-ui .sidebar,
+body.solid-ui .chat-header,
+body.solid-ui .context-menu,
+body.solid-ui .channel-context-menu,
+body.solid-ui .modal-content,
+body.solid-ui .shop-content,
+body.solid-ui .scroll-to-bottom-btn,
+body.solid-ui .emoji-picker,
+body.solid-ui .geohash-info-panel,
+body.solid-ui .geohash-control-btn,
+body.solid-ui .geohash-legend,
+body.solid-ui .tutorial-card,
+body.solid-ui .pubkey-slideout {
+    background: var(--glass-bg);
+}
+
+body.solid-ui.light-mode .sidebar,
+body.solid-ui.light-mode .chat-header,
+body.solid-ui.light-mode .context-menu,
+body.solid-ui.light-mode .channel-context-menu,
+body.solid-ui.light-mode .modal-content,
+body.solid-ui.light-mode .shop-content,
+body.solid-ui.light-mode .scroll-to-bottom-btn,
+body.solid-ui.light-mode .emoji-picker,
+body.solid-ui.light-mode .geohash-info-panel,
+body.solid-ui.light-mode .geohash-control-btn,
+body.solid-ui.light-mode .geohash-legend,
+body.solid-ui.light-mode .tutorial-card,
+body.solid-ui.light-mode .pubkey-slideout {
+    background: var(--glass-bg);
+}
+
+body.solid-ui .modal {
+    background: rgba(0, 0, 0, 0.75);
+}
+
+body.solid-ui.light-mode .modal {
+    background: rgba(0, 0, 0, 0.45);
+}
+
+body.solid-ui .mobile-overlay,
+body.solid-ui .context-menu-overlay {
+    background: rgba(0, 0, 0, 0.6);
+}
+
+body.solid-ui.light-mode .mobile-overlay,
+body.solid-ui.light-mode .context-menu-overlay {
+    background: rgba(0, 0, 0, 0.35);
+}
+
+body.solid-ui .image-modal,
+body.solid-ui .geohash-explorer-modal,
+body.solid-ui .shop-modal {
+    background: rgba(0, 0, 0, 0.85);
+}
+
+body.solid-ui.light-mode .image-modal,
+body.solid-ui.light-mode .geohash-explorer-modal,
+body.solid-ui.light-mode .shop-modal {
+    background: rgba(0, 0, 0, 0.55);
+}
+
+body.solid-ui.chat-bubbles .message-content,
+body.solid-ui.chat-bubbles .message.pm .message-content {
+    background: #2a2a3a;
+}
+
+body.solid-ui.chat-bubbles .message.self .message-content {
+    background: rgb(from var(--primary) r g b / 0.85);
+    color: #000;
+}
+
+body.solid-ui.chat-bubbles .message.mentioned .message-content {
+    background: rgb(from var(--secondary) r g b / 0.5);
+    box-shadow: inset 0 0 0 1px var(--secondary);
+}
+
+body.solid-ui.light-mode.chat-bubbles .message-content,
+body.solid-ui.light-mode.chat-bubbles .message.pm .message-content {
+    background: #e6e6e0;
+}
+
+body.solid-ui.light-mode.chat-bubbles .message.self .message-content {
+    background: rgb(from var(--primary) r g b / 0.85);
+    color: #fff;
+}
+
+body.solid-ui.light-mode.chat-bubbles .message.mentioned .message-content {
+    background: rgb(from var(--secondary) r g b / 0.4);
+    box-shadow: inset 0 0 0 1px var(--secondary);
+}
+
+body.solid-ui.theme-ghost.chat-bubbles .message-content {
+    background: #2a2a2a;
+}
+
+body.solid-ui.theme-ghost.chat-bubbles .message.self .message-content {
+    background: #444444;
+}
+
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message-content {
+    background: #dddddd;
+}
+
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self .message-content {
+    background: #bbbbbb;
 }

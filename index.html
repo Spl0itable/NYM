@@ -1220,6 +1220,15 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Visual Transparency</label>
+                    <select class="form-select" id="transparencySelect" data-on-change="onTransparencyChange">
+                        <option value="true">Enabled (Glass)</option>
+                        <option value="false">Disabled (Solid)</option>
+                    </select>
+                    <div class="form-hint">When disabled, messages, modals, sidebars, and other surfaces are rendered with solid backgrounds instead of the translucent "Glass" look.</div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Text Size</label>
                     <div style="display: flex; align-items: center; gap: 12px;">
                         <span style="font-size: 11px; color: var(--text-dim);">A</span>

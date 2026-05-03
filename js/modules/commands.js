@@ -897,11 +897,35 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
+    _checkActionCommandRateLimit() {
+        const now = Date.now();
+        const windowMs = 30000; // 30s window
+        const maxActions = 3;   // up to 3 action commands per window
+        const tracker = this.actionCommandTracker || (this.actionCommandTracker = { timestamps: [], cooldownUntil: 0 });
+
+        if (now < tracker.cooldownUntil) {
+            const remaining = Math.ceil((tracker.cooldownUntil - now) / 1000);
+            this.displaySystemMessage(`Slow down! You can use /me, /slap, or /hug again in ${remaining}s`);
+            return false;
+        }
+
+        tracker.timestamps = tracker.timestamps.filter(ts => now - ts < windowMs);
+        if (tracker.timestamps.length >= maxActions) {
+            tracker.cooldownUntil = now + 60000; // 1 minute cooldown
+            this.displaySystemMessage('Too many action commands. Try again in 60s');
+            return false;
+        }
+
+        tracker.timestamps.push(now);
+        return true;
+    },
+
     async cmdSlap(args) {
         if (!args) {
             this.displaySystemMessage('Usage: /slap nym, /slap nym#xxxx, or /slap [pubkey]');
             return;
         }
+        if (!this._checkActionCommandRateLimit()) return;
 
         const targetInput = args.trim().replace(/^@/, '');
         let targetNym = '';
@@ -977,6 +1001,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Usage: /hug nym, /hug nym#xxxx, or /hug [pubkey]');
             return;
         }
+        if (!this._checkActionCommandRateLimit()) return;
 
         const targetInput = args.trim().replace(/^@/, '');
         let targetNym = '';
@@ -1045,6 +1070,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Usage: /me action');
             return;
         }
+        if (!this._checkActionCommandRateLimit()) return;
 
         const content = `/me ${args}`;
 

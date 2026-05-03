@@ -331,7 +331,7 @@ Object.assign(NYM.prototype, {
 
         // Check for action messages
         if (message.content.startsWith('/me ')) {
-            messageEl.className = 'action-message';
+            messageEl.className = 'system-message me-message';
             messageEl.dataset.messageId = message.id;
             messageEl.dataset.timestamp = displayTimestamp.getTime();
             messageEl.dataset.createdAt = message.created_at || 0;

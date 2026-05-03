@@ -609,6 +609,7 @@ class NYM {
         if (this.settings.textSize && this.settings.textSize !== 15) {
             document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
         }
+        applyTransparency(this.settings.transparencyEnabled !== false);
         this.performanceMode = false;
         this._deviceCapabilities = this._detectDeviceCapabilities();
         this._applyPerformanceMode();
@@ -655,6 +656,7 @@ class NYM {
         this.reactions = new Map();
         this.reactionLastAction = new Map();
         this.reactionToggleTracker = new Map();
+        this.actionCommandTracker = { timestamps: [], cooldownUntil: 0 };
         this.failedRelays = new Map();
         this.relayRetryDelay = 2 * 60 * 1000;
         this.previouslyConnectedRelays = new Set();
@@ -1552,6 +1554,22 @@ function resetTextSize() {
     document.documentElement.style.setProperty('--user-text-size', '15px');
     nym.settings.textSize = 15;
     localStorage.setItem('nym_text_size', '15');
+    nostrSettingsSave();
+}
+
+function applyTransparency(enabled) {
+    if (enabled) {
+        document.body.classList.remove('solid-ui');
+    } else {
+        document.body.classList.add('solid-ui');
+    }
+}
+
+function onTransparencyChange(value) {
+    const enabled = value === 'true' || value === true;
+    nym.settings.transparencyEnabled = enabled;
+    localStorage.setItem('nym_transparency_enabled', String(enabled));
+    applyTransparency(enabled);
     nostrSettingsSave();
 }
 
@@ -2610,6 +2628,12 @@ async function showSettings() {
         opt.classList.toggle('selected', opt.dataset.layout === currentLayout);
     });
 
+    // Initialize transparency toggle
+    const transparencySel = document.getElementById('transparencySelect');
+    if (transparencySel) {
+        transparencySel.value = nym.settings.transparencyEnabled !== false ? 'true' : 'false';
+    }
+
     // Initialize text size slider
     const textSizeSlider = document.getElementById('textSizeSlider');
     const textSizeValue = document.getElementById('textSizeValue');
@@ -3026,7 +3050,7 @@ async function resetSettings() {
         'nym_theme', 'nym_color_mode',
         'nym_chat_layout',
         'nym_wallpaper_type', 'nym_wallpaper_custom_url',
-        'nym_text_size', 'nym_nick_style', 'nym_show_status',
+        'nym_text_size', 'nym_transparency_enabled', 'nym_nick_style', 'nym_show_status',
         'nym_autoscroll', 'nym_timestamps', 'nym_time_format',
         'nym_sound', 'nym_notifications_enabled', 'nym_notify_friends_only',
         'nym_sort_proximity',
@@ -3176,7 +3200,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.60.310 ═══<br/>
+═══ Nymchat v3.61.310 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4973,6 +4997,13 @@ async function applyNostrSettings(s) {
         nym.settings.textSize = s.textSize;
         localStorage.setItem('nym_text_size', String(s.textSize));
         document.documentElement.style.setProperty('--user-text-size', s.textSize + 'px');
+    }
+
+    // Visual transparency
+    if (typeof s.transparencyEnabled === 'boolean') {
+        nym.settings.transparencyEnabled = s.transparencyEnabled;
+        localStorage.setItem('nym_transparency_enabled', String(s.transparencyEnabled));
+        applyTransparency(s.transparencyEnabled);
     }
 
     // Low data mode

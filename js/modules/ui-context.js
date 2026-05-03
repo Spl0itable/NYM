@@ -1145,7 +1145,12 @@ Object.assign(NYM.prototype, {
             }
 
             // Remove any existing quick react popup
-            document.querySelectorAll('.quick-react-popup, .quick-react-translate').forEach(el => el.remove());
+            document.querySelectorAll('.quick-react-popup, .quick-react-translate, .quick-context-menu').forEach(el => el.remove());
+
+            // Highlight the long-pressed message and dim the others
+            messagesEl.classList.add('has-long-press-highlight');
+            messagesEl.querySelectorAll('.message.long-press-highlight').forEach(el => el.classList.remove('long-press-highlight'));
+            msgEl.classList.add('long-press-highlight');
 
             const popup = document.createElement('div');
             popup.className = 'quick-react-popup';
@@ -1203,26 +1208,173 @@ Object.assign(NYM.prototype, {
 
             document.body.appendChild(translateBubble);
 
+            // Build the quick context menu (Private Message, Slap, Hug, Zap, Quote, Copy)
+            const baseAuthor = this.parseNymFromDisplay(msgEl.dataset.author || 'anon');
+            const targetPubkey = msgEl.dataset.pubkey || '';
+            const targetBaseNym = this.stripPubkeySuffix(baseAuthor);
+            const contentEl = msgEl.querySelector('.message-content');
+            const messageContent = msgEl.dataset.rawContent
+                || (contentEl ? this._extractNonQuotedText(contentEl) : '');
+            const isSelf = targetPubkey === this.pubkey;
+            const isBot = this.isVerifiedBot && this.isVerifiedBot(targetPubkey);
+
+            const ctxItems = [];
+            if (!isSelf && !isBot && targetPubkey) {
+                ctxItems.push({
+                    id: 'qctxPM',
+                    label: 'Private Message',
+                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="1" /><path d="M 2 5 L 8 9 L 14 5" stroke-linecap="round" stroke-linejoin="round" /></svg>',
+                    action: () => {
+                        const suffix = this.getPubkeySuffix(targetPubkey);
+                        const fullNym = `${targetBaseNym}#${suffix}`;
+                        this.openUserPM(fullNym, targetPubkey);
+                    }
+                });
+            }
+            if (!isSelf && targetPubkey) {
+                ctxItems.push({
+                    id: 'qctxSlap',
+                    label: 'Slap with Trout',
+                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M 1 8 Q 3 4 8 4 Q 11 4 13 6 L 15 4.5 L 15 11.5 L 13 10 Q 11 12 8 12 Q 3 12 1 8 Z" /><circle cx="5" cy="7.5" r="0.7" fill="currentColor" stroke="none" /><path d="M 9 6.5 Q 10 8 9 9.5" stroke-linecap="round" /></svg>',
+                    action: () => { this.cmdSlap(targetPubkey); }
+                });
+                ctxItems.push({
+                    id: 'qctxHug',
+                    label: 'Give warm Hug',
+                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="5" r="2" /><circle cx="10" cy="5" r="2" /><path d="M 2 14 C 2 10 4 9 6 9 C 7 9 7.5 9.5 8 10 C 8.5 9.5 9 9 10 9 C 12 9 14 10 14 14" stroke-linecap="round" stroke-linejoin="round" /><path d="M 4 11.5 Q 8 9 12 11.5" stroke-linecap="round" /></svg>',
+                    action: () => { this.cmdHug(targetPubkey); }
+                });
+            }
+            if (!isSelf && messageId && targetPubkey) {
+                ctxItems.push({
+                    id: 'qctxZap',
+                    label: 'Zap Bitcoin',
+                    cls: 'lightning',
+                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M 9 2 L 4 9 H 7 L 7 14 L 12 7 H 9 Z" /></svg>',
+                    action: async () => {
+                        this.displaySystemMessage(`Checking if @${targetBaseNym} can receive zaps...`);
+                        try {
+                            const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
+                            if (lnAddress) {
+                                this.showZapModal(messageId, targetPubkey, targetBaseNym);
+                            } else {
+                                this.displaySystemMessage(`@${targetBaseNym} cannot receive zaps (no lightning address set)`);
+                            }
+                        } catch (error) {
+                            this.displaySystemMessage(`Failed to check if @${targetBaseNym} can receive zaps`);
+                        }
+                    }
+                });
+            }
+            if (messageContent) {
+                ctxItems.push({
+                    id: 'qctxQuote',
+                    label: 'Quote Message',
+                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M 3 6 C 3 4.5 4 3 6 3 C 6 4.5 5 5 4 5.5 C 3.5 5.8 3 6.3 3 7 L 3 9 L 6 9 L 6 6 Z" /><path d="M 9 6 C 9 4.5 10 3 12 3 C 12 4.5 11 5 10 5.5 C 9.5 5.8 9 6.3 9 7 L 9 9 L 12 9 L 12 6 Z" /></svg>',
+                    action: () => {
+                        const suffix = this.getPubkeySuffix(targetPubkey);
+                        const fullNym = `${targetBaseNym}#${suffix}`;
+                        this.setQuoteReply(fullNym, messageContent);
+                    }
+                });
+                ctxItems.push({
+                    id: 'qctxCopy',
+                    label: 'Copy Message',
+                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="8" height="9" rx="1" /><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round" /></svg>',
+                    action: async () => {
+                        try {
+                            await navigator.clipboard.writeText(messageContent);
+                            this.displaySystemMessage('Message copied to clipboard');
+                        } catch (err) {
+                            this.displaySystemMessage('Failed to copy message');
+                        }
+                    }
+                });
+            }
+
+            let quickCtxMenu = null;
+            if (ctxItems.length > 0) {
+                quickCtxMenu = document.createElement('div');
+                quickCtxMenu.className = 'quick-context-menu';
+                quickCtxMenu.innerHTML = ctxItems.map(item =>
+                    `<button class="quick-context-item${item.cls ? ' ' + item.cls : ''}" data-qctx-id="${item.id}">${item.svg}<span>${item.label}</span></button>`
+                ).join('');
+
+                quickCtxMenu.style.position = 'fixed';
+                quickCtxMenu.style.visibility = 'hidden';
+                document.body.appendChild(quickCtxMenu);
+                const ctxMenuWidth = quickCtxMenu.offsetWidth;
+                const ctxMenuHeight = quickCtxMenu.offsetHeight;
+                quickCtxMenu.style.visibility = '';
+
+                let ctxLeft = clientX - ctxMenuWidth / 2;
+                ctxLeft = Math.max(10, Math.min(ctxLeft, window.innerWidth - ctxMenuWidth - 10));
+                let ctxTop = top + actualPopupHeight + 8;
+                if (ctxTop + ctxMenuHeight > window.innerHeight - 10) {
+                    ctxTop = Math.max(10, top - ctxMenuHeight - 8);
+                }
+                quickCtxMenu.style.left = ctxLeft + 'px';
+                quickCtxMenu.style.top = ctxTop + 'px';
+            }
+
             // Trigger animation
             requestAnimationFrame(() => {
                 popup.classList.add('active');
                 translateBubble.classList.add('active');
+                if (quickCtxMenu) quickCtxMenu.classList.add('active');
             });
+
+            const cleanupHighlight = () => {
+                messagesEl.classList.remove('has-long-press-highlight');
+                msgEl.classList.remove('long-press-highlight');
+            };
+
+            const closeAll = () => {
+                popup.remove();
+                translateBubble.remove();
+                if (quickCtxMenu) quickCtxMenu.remove();
+                cleanupHighlight();
+            };
+
+            if (quickCtxMenu) {
+                quickCtxMenu.addEventListener('click', (ev) => {
+                    ev.stopPropagation();
+                    const btn = ev.target.closest('.quick-context-item');
+                    if (!btn) return;
+                    const item = ctxItems.find(i => i.id === btn.dataset.qctxId);
+                    if (!item) return;
+                    closeAll();
+                    removeCloseListeners();
+                    item.action();
+                });
+                quickCtxMenu.querySelectorAll('.quick-context-item').forEach(btn => {
+                    btn.addEventListener('touchend', (ev) => {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        const item = ctxItems.find(i => i.id === btn.dataset.qctxId);
+                        if (!item) return;
+                        closeAll();
+                        removeCloseListeners();
+                        item.action();
+                    });
+                });
+            }
 
             // Handle expand button to open full reaction picker
             const expandBtn = popup.querySelector('.quick-react-expand');
             const openFullPicker = (ev) => {
                 ev.preventDefault();
                 ev.stopPropagation();
-                popup.remove();
-                translateBubble.remove();
+                const popupLeft = popup.style.left;
+                const popupTop = popup.style.top;
+                closeAll();
                 removeCloseListeners();
 
                 // Create a temporary button for positioning the full picker
                 const tempButton = document.createElement('button');
                 tempButton.style.position = 'fixed';
-                tempButton.style.left = popup.style.left;
-                tempButton.style.top = popup.style.top;
+                tempButton.style.left = popupLeft;
+                tempButton.style.top = popupTop;
                 tempButton.style.opacity = '0';
                 tempButton.style.pointerEvents = 'none';
                 document.body.appendChild(tempButton);
@@ -1237,8 +1389,7 @@ Object.assign(NYM.prototype, {
             const doTranslate = (ev) => {
                 ev.preventDefault();
                 ev.stopPropagation();
-                popup.remove();
-                translateBubble.remove();
+                closeAll();
                 removeCloseListeners();
                 const contentEl = msgEl.querySelector('.message-content');
                 if (!contentEl) return;
@@ -1255,8 +1406,7 @@ Object.assign(NYM.prototype, {
                 const btn = ev.target.closest('.quick-react-emoji');
                 if (!btn) return;
                 const emoji = btn.dataset.emoji;
-                popup.remove();
-                translateBubble.remove();
+                closeAll();
                 removeCloseListeners();
                 await this.sendReaction(messageId, emoji);
                 this.addToRecentEmojis(emoji);
@@ -1268,8 +1418,7 @@ Object.assign(NYM.prototype, {
                     ev.preventDefault();
                     ev.stopPropagation();
                     const emoji = btn.dataset.emoji;
-                    popup.remove();
-                    translateBubble.remove();
+                    closeAll();
                     removeCloseListeners();
                     await this.sendReaction(messageId, emoji);
                     this.addToRecentEmojis(emoji);
@@ -1282,9 +1431,9 @@ Object.assign(NYM.prototype, {
             const openedAt = Date.now();
             const closePopup = (ev) => {
                 if (popup.contains(ev.target) || translateBubble.contains(ev.target)) return;
+                if (quickCtxMenu && quickCtxMenu.contains(ev.target)) return;
                 if (Date.now() - openedAt < 400) return;
-                popup.remove();
-                translateBubble.remove();
+                closeAll();
                 removeCloseListeners();
             };
             const removeCloseListeners = () => {
