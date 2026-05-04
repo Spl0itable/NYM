@@ -129,17 +129,6 @@ Object.assign(NYM.prototype, {
         // Strip trailing timestamp (e.g. "12:34 PM", "3:05 AM", "23:59")
         plainText = plainText.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
 
-        // Protect emoji from being stripped by the translation API
-        const { text: shieldedText, emojis: savedEmojis } = this._shieldEmojis(plainText);
-
-        // Protect @mentions from being mangled by the translation API
-        const mentions = [];
-        const mentionShielded = shieldedText.replace(/@[^\s@]+(?:#[0-9a-f]{4})?/gi, (match) => {
-            const idx = mentions.length;
-            mentions.push(match);
-            return `MNT${idx}MNT`;
-        });
-
         // Find the message element to append translation
         const msgEl = messageId ? document.querySelector(`[data-message-id="${messageId}"]`) : null;
 
@@ -156,38 +145,12 @@ Object.assign(NYM.prototype, {
         }
 
         try {
-            let translatedText, detectedLang;
+            const { translatedText, detectedLanguage: detectedLang } =
+                await this._translatePreservingMentions(plainText, targetLang);
 
-            const base = this._getProxyBaseUrl();
-            if (base) {
-                try {
-                    // Proxied path (CF-hosted): translate via our worker
-                    const resp = await fetch(`${base}?action=translate`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text: mentionShielded, source: 'auto', target: targetLang }),
-                    });
-                    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-                    if (!contentType.includes('application/json')) {
-                        throw new Error(`Proxy returned non-JSON response (${resp.status})`);
-                    }
-                    const data = await resp.json();
-                    if (data.error) throw new Error(data.error);
-                    translatedText = this._restoreMentions(this._restoreEmojis(data.translatedText, savedEmojis), mentions);
-                    detectedLang = data.detectedLanguage || 'auto';
-                } catch (proxyErr) {
-                    // Proxy failed — fall back to direct translation
-                    if (!this._isCloudflareHost) this._fallbackToLocal();
-                    const result = await this._translateDirect(mentionShielded, targetLang);
-                    translatedText = this._restoreMentions(this._restoreEmojis(result.translatedText, savedEmojis), mentions);
-                    detectedLang = result.detectedLanguage || 'auto';
-                }
-            } else {
-                // Direct path: call Google Translate directly
-                const result = await this._translateDirect(mentionShielded, targetLang);
-                translatedText = this._restoreMentions(this._restoreEmojis(result.translatedText, savedEmojis), mentions);
-                detectedLang = result.detectedLanguage || 'auto';
-            }
+            // Google returns the input unchanged (or empty) when the detected
+            // language already matches the target.
+            const isNoop = !translatedText || !translatedText.trim() || translatedText.trim() === plainText.trim();
 
             if (msgEl) {
                 let translationEl = msgEl.querySelector('.message-translation');
@@ -197,9 +160,15 @@ Object.assign(NYM.prototype, {
                     const contentEl = msgEl.querySelector('.message-content') || msgEl;
                     contentEl.after(translationEl);
                 }
-                const langLabel = detectedLang !== 'auto' && detectedLang !== targetLang
-                    ? `<span class="translation-lang">${detectedLang} → ${targetLang}</span>` : '';
-                translationEl.innerHTML = `<span class="translation-icon">🌐</span> ${this.escapeHtml(translatedText).replace(/\n/g, '<br>')} ${langLabel}`;
+                if (isNoop) {
+                    translationEl.innerHTML = `<span class="translation-icon">🌐</span> <span class="translation-error">Already in ${this.escapeHtml(targetLang)} (nothing to translate)</span>`;
+                } else {
+                    const langLabel = detectedLang !== 'auto' && detectedLang !== targetLang
+                        ? `<span class="translation-lang">${detectedLang} → ${targetLang}</span>` : '';
+                    translationEl.innerHTML = `<span class="translation-icon">🌐</span> ${this.escapeHtml(translatedText).replace(/\n/g, '<br>')} ${langLabel}`;
+                }
+            } else if (isNoop) {
+                this.displaySystemMessage(`Nothing to translate (already in ${targetLang}).`);
             } else {
                 this.displaySystemMessage(`Translation: ${translatedText}`);
             }
@@ -231,8 +200,71 @@ Object.assign(NYM.prototype, {
         return text.replace(/EMJ(\d+)EMJ/g, (_, idx) => emojis[parseInt(idx)] || '');
     },
 
-    _restoreMentions(text, mentions) {
-        return text.replace(/MNT(\d+)MNT/g, (_, idx) => mentions[parseInt(idx)] || '');
+    // Translate text while keeping @mentions intact in their original positions
+    async _translatePreservingMentions(text, targetLang) {
+        const { text: emojiShielded, emojis: savedEmojis } = this._shieldEmojis(text);
+
+        // split() with a capturing group keeps the matches in the array.
+        // Even indices are non-mention text, odd indices are mentions.
+        const parts = emojiShielded.split(/(@[^\s@]+)/);
+
+        // Capture leading/trailing whitespace per chunk so we can restore it
+        // after translation — Google Translate strips edge whitespace.
+        const translatable = [];
+        parts.forEach((part, index) => {
+            if (index % 2 !== 0 || !part.trim()) return;
+            const m = part.match(/^(\s*)([\s\S]*?)(\s*)$/);
+            translatable.push({ index, lead: m[1], content: m[2], trail: m[3] });
+        });
+
+        if (translatable.length === 0) {
+            return { translatedText: text, detectedLanguage: 'auto' };
+        }
+
+        const results = await Promise.all(
+            translatable.map(({ content }) => this._doTranslate(content, targetLang))
+        );
+
+        let detectedLanguage = 'auto';
+        results.forEach((res, i) => {
+            const { index, lead, trail } = translatable[i];
+            parts[index] = lead + (res.translatedText || '') + trail;
+            if (detectedLanguage === 'auto' && res.detectedLanguage && res.detectedLanguage !== 'auto') {
+                detectedLanguage = res.detectedLanguage;
+            }
+        });
+
+        const translatedText = this._restoreEmojis(parts.join(''), savedEmojis);
+        return { translatedText, detectedLanguage };
+    },
+
+    // Single translation call that picks the proxy when available and falls
+    // back to a direct Google Translate request on proxy failure.
+    async _doTranslate(text, targetLang) {
+        const base = this._getProxyBaseUrl();
+        if (base) {
+            try {
+                const resp = await fetch(`${base}?action=translate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, source: 'auto', target: targetLang }),
+                });
+                const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+                if (!contentType.includes('application/json')) {
+                    throw new Error(`Proxy returned non-JSON response (${resp.status})`);
+                }
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                return {
+                    translatedText: data.translatedText || '',
+                    detectedLanguage: data.detectedLanguage || 'auto',
+                };
+            } catch (proxyErr) {
+                if (!this._isCloudflareHost) this._fallbackToLocal();
+                return this._translateDirect(text, targetLang);
+            }
+        }
+        return this._translateDirect(text, targetLang);
     },
 
     translateHoverMessage(btn) {
@@ -296,37 +328,16 @@ Object.assign(NYM.prototype, {
         const text = input.value.trim();
         if (!text) return;
 
-        // Protect emoji from being stripped by the translation API
-        const { text: shieldedText, emojis: savedEmojis } = this._shieldEmojis(text);
-
         const btn = document.getElementById('translateInputBtn');
         if (btn) btn.classList.add('translating');
 
         try {
-            let translatedText;
-            const base = this._getProxyBaseUrl();
-            if (base) {
-                try {
-                    const resp = await fetch(`${base}?action=translate`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text: shieldedText, source: 'auto', target: targetLang }),
-                    });
-                    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-                    if (!contentType.includes('application/json')) {
-                        throw new Error(`Proxy returned non-JSON response (${resp.status})`);
-                    }
-                    const data = await resp.json();
-                    if (data.error) throw new Error(data.error);
-                    translatedText = this._restoreEmojis(data.translatedText, savedEmojis);
-                } catch (proxyErr) {
-                    if (!this._isCloudflareHost) this._fallbackToLocal();
-                    const result = await this._translateDirect(shieldedText, targetLang);
-                    translatedText = this._restoreEmojis(result.translatedText, savedEmojis);
-                }
-            } else {
-                const result = await this._translateDirect(shieldedText, targetLang);
-                translatedText = this._restoreEmojis(result.translatedText, savedEmojis);
+            const { translatedText } = await this._translatePreservingMentions(text, targetLang);
+            // Don't clobber the input if Google returned nothing or echoed the
+            // original (e.g. detected language already matches the target).
+            if (!translatedText || !translatedText.trim() || translatedText.trim() === text.trim()) {
+                this.displaySystemMessage('Nothing to translate (text may already be in the target language).');
+                return;
             }
             input.value = translatedText;
             this.autoResizeTextarea(input);
