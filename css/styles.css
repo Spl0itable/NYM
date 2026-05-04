@@ -366,6 +366,7 @@ body.nymchat-app .logo-ascii {
     padding: 2px 4px;
     display: none;
     transition: color 0.2s;
+    z-index: 2;
 }
 
 .search-clear:hover {
@@ -5171,6 +5172,7 @@ body.light-mode .color-mode-btn.active {
     cursor: pointer;
     transition: all var(--transition);
     font-size: 16px;
+    z-index: 10;
 }
 
 .shop-close:hover {
