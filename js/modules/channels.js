@@ -621,7 +621,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (geohash) {
             this.addChannel(geohash, geohash);
         } else {
-            this.addChannel(channel, '');
+            this.addChannel(channel, channel);
         }
 
         // Update view more button after adding
@@ -754,7 +754,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.ensureDefaultRelaysConnected();
 
         // Load channel messages from relays (immediate, uses whatever relays are connected)
-        const channelType = (geohash && this.isValidGeohash(geohash)) ? 'geohash' : 'ephemeral';
+        const channelType = (geohash && this.isValidGeohash(geohash)) ? 'geohash' : 'non-geohash';
         const channelKey = geohash || channel;
         this.loadChannelFromRelays(channelKey, channelType);
 
@@ -793,12 +793,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // No location info available, just add label
                 fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span>`;
             }
-        } else if (geohash) {
-            // Non-geohash channel (g tag with non-geohash name)
-            fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Non-Geohash)</span>`;
         } else {
-            // Standard ephemeral channel
-            fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Ephemeral)</span>`;
+            // Non-geohash channel (g tag with non-geohash name, or legacy entry
+            // without a geohash). Only Geohash and Non-Geohash channel types
+            // are supported — the old "(Ephemeral)" label is removed.
+            fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Non-Geohash)</span>`;
         }
 
         document.getElementById('currentChannel').innerHTML = fullTitle;

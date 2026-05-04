@@ -335,13 +335,15 @@
         _populateSidebarFromHydration() {
             try {
                 if (typeof this.addChannel === 'function') {
-                    for (const storageKey of this.messages.keys()) {
+                    for (const storageKey of [...this.messages.keys()]) {
                         if (!storageKey) continue;
                         if (storageKey.startsWith('#')) {
                             const geohash = storageKey.slice(1);
                             this.addChannel(geohash, geohash);
+                        } else if (storageKey === 'unknown') {
+                            this.messages.delete(storageKey);
                         } else {
-                            this.addChannel(storageKey, '');
+                            this.addChannel(storageKey, storageKey);
                         }
                     }
                 }

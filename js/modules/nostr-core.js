@@ -201,6 +201,11 @@ Object.assign(NYM.prototype, {
             const nym = rawNym || this.getNymFromPubkey(event.pubkey);
             const geohash = geohashTag ? this.sanitizeChannelName(geohashTag[1]) : '';
 
+            // Drop kind 20000 events that aren't legitimate channel messages
+            if (!geohash) {
+                return;
+            }
+
             // Block impersonation: drop events using reserved nym "nymbot"
             // unless they come from the verified bot pubkey
             if (nym.toLowerCase() === 'nymbot' && !this.isVerifiedBot(event.pubkey)) {
@@ -324,7 +329,7 @@ Object.assign(NYM.prototype, {
                 _originalCreatedAt: eventCreatedAt,
                 _seq: ++this._msgSeq,
                 timestamp: new Date(correctedCreatedAt * 1000),
-                channel: geohash ? geohash : 'unknown',
+                channel: geohash,
                 geohash: geohash,
                 isOwn: event.pubkey === this.pubkey,
                 isHistorical: isHistorical,

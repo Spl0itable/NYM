@@ -1083,7 +1083,7 @@ Object.assign(NYM.prototype, {
                     // Set initial channel label
                     if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
                         const channelLabel = `#${this.escapeHtml(this.currentChannel)}`;
-                        const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
+                        const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Non-Geohash)';
                         document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
                     }
 
@@ -1221,7 +1221,7 @@ Object.assign(NYM.prototype, {
             // Set initial channel label
             if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
                 const channelLabel = `#${this.escapeHtml(this.currentChannel)}`;
-                const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Ephemeral)';
+                const channelType = this.isValidGeohash(this.currentChannel) ? '(Geohash)' : '(Non-Geohash)';
                 document.getElementById('currentChannel').innerHTML = `${channelLabel} <span style="font-size: 12px; color: var(--text-dim);">${channelType}</span>`;
             }
 
