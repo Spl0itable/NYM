@@ -1,11 +1,17 @@
 // inline-bindings.js - Single delegated dispatcher that replaces inline event handlers
 
 // Short haptic pulse used to confirm a long-press fired on mobile.
-// No-op on desktop and on browsers without the Vibration API (e.g. iOS Safari).
+// Tries the Web Vibration API first (works on Android browsers and Android
+// WebView). On iOS WKWebView the API is unavailable, so we fall back to a
+// `Haptics` JavaScriptChannel posted by the Flutter host, which can call
+// HapticFeedback on the native side. No-op when neither is available.
 window.nymHapticTap = function (ms) {
     try {
         if (navigator && typeof navigator.vibrate === 'function') {
-            navigator.vibrate(ms || 30);
+            if (navigator.vibrate(ms || 30)) return;
+        }
+        if (window.Haptics && typeof window.Haptics.postMessage === 'function') {
+            window.Haptics.postMessage('tap');
         }
     } catch (_) { /* ignore */ }
 };
