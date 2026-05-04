@@ -330,6 +330,7 @@ Object.assign(NYM.prototype, {
                 longPressTimer = setTimeout(() => {
                     didLongPress = true;
                     e.preventDefault();
+                    window.nymHapticTap && window.nymHapticTap();
                     this.showReactorsModal(messageId, emoji, badge);
                 }, 500);
             };

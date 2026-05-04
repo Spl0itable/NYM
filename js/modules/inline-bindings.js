@@ -1,5 +1,15 @@
 // inline-bindings.js - Single delegated dispatcher that replaces inline event handlers
 
+// Short haptic pulse used to confirm a long-press fired on mobile.
+// No-op on desktop and on browsers without the Vibration API (e.g. iOS Safari).
+window.nymHapticTap = function (ms) {
+    try {
+        if (navigator && typeof navigator.vibrate === 'function') {
+            navigator.vibrate(ms || 30);
+        }
+    } catch (_) { /* ignore */ }
+};
+
 (function () {
     'use strict';
 

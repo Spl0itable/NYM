@@ -1863,6 +1863,7 @@ Object.assign(NYM.prototype, {
             e.stopPropagation();
             timer = setTimeout(() => {
                 timer = null;
+                window.nymHapticTap && window.nymHapticTap();
                 this.showReadersModal(nymMessageId, el);
             }, 500);
         };

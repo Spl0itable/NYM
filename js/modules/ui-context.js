@@ -1071,6 +1071,7 @@ Object.assign(NYM.prototype, {
             sendLongPressTimer = setTimeout(() => {
                 if (this.nostrLoginMethod) {
                     sendLongPressFired = true;
+                    window.nymHapticTap && window.nymHapticTap();
                     sendBtn.style.boxShadow = '0 0 15px rgb(from var(--primary) r g b / 0.4)';
                     sendBtn.textContent = 'ANON';
                     this.sendMessageAnonymous();
@@ -1125,6 +1126,7 @@ Object.assign(NYM.prototype, {
             msgLongPressFired = true;
             const messageId = msgEl.dataset.messageId;
             if (!messageId) return;
+            window.nymHapticTap && window.nymHapticTap();
 
             // Build the 6 emojis to show: recently used + defaults
             const defaultEmojis = ['👍', '❤️', '😂', '🔥', '👎', '😮'];
