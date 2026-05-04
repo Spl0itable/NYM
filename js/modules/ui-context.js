@@ -1443,11 +1443,19 @@ Object.assign(NYM.prototype, {
             document.addEventListener('touchstart', closePopup);
         };
 
+        let msgLongPressStartX = 0;
+        let msgLongPressStartY = 0;
+        const MSG_LONG_PRESS_MOVE_THRESHOLD = 5;
+
         messagesEl.addEventListener('mousedown', (e) => {
+            // Only trigger on primary (left) mouse button; ignore right/middle clicks
+            if (e.button !== 0) return;
             if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
             msgLongPressFired = false;
+            msgLongPressStartX = e.clientX;
+            msgLongPressStartY = e.clientY;
             msgLongPressTimer = setTimeout(() => {
                 showQuickReactPopup(msgEl, e);
             }, 500);
@@ -1458,6 +1466,11 @@ Object.assign(NYM.prototype, {
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
             msgLongPressFired = false;
+            const t = e.touches && e.touches[0];
+            if (t) {
+                msgLongPressStartX = t.clientX;
+                msgLongPressStartY = t.clientY;
+            }
             msgLongPressTimer = setTimeout(() => {
                 showQuickReactPopup(msgEl, e);
             }, 500);
@@ -1470,6 +1483,15 @@ Object.assign(NYM.prototype, {
             }
         };
 
+        // Cancel long-press react if the pointer moves (e.g. text selection drag)
+        messagesEl.addEventListener('mousemove', (e) => {
+            if (!msgLongPressTimer) return;
+            const dx = e.clientX - msgLongPressStartX;
+            const dy = e.clientY - msgLongPressStartY;
+            if (dx * dx + dy * dy > MSG_LONG_PRESS_MOVE_THRESHOLD * MSG_LONG_PRESS_MOVE_THRESHOLD) {
+                cancelMsgLongPress();
+            }
+        });
         // Cancel long-press react if a swipe gesture is detected
         messagesEl.addEventListener('touchmove', cancelMsgLongPress, { passive: true });
         messagesEl.addEventListener('mouseup', cancelMsgLongPress);
