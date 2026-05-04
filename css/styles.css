@@ -913,6 +913,24 @@ body.light-mode .channel-context-menu {
     letter-spacing: 0.3px;
 }
 
+.channel-type-label {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-weight: 400;
+}
+
+.channel-location {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-shadow: none;
+    margin-top: 2px;
+}
+
+.channel-location a {
+    color: var(--text-dim);
+    text-shadow: none;
+}
+
 .channel-meta {
     font-size: 11px;
     color: var(--text-dim);

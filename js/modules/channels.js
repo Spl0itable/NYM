@@ -685,6 +685,60 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.updateHiddenChannelsList();
     },
 
+    // Render the current channel title
+    _renderChannelTitle(channel, geohash) {
+        const titleEl = document.getElementById('currentChannel');
+        if (!titleEl) return;
+
+        const safeChannel = this.sanitizeChannelName(channel);
+        const safeGeohash = this.sanitizeChannelName(geohash);
+        const isGeo = !!safeGeohash && this.isValidGeohash(safeGeohash);
+        const displayName = safeGeohash ? `#${safeGeohash}` : `#${safeChannel}`;
+        if (!safeChannel && !safeGeohash) {
+            titleEl.replaceChildren();
+            return;
+        }
+
+        const nameNode = document.createTextNode(displayName + ' ');
+
+        const typeLabel = document.createElement('span');
+        typeLabel.className = 'channel-type-label';
+        typeLabel.textContent = isGeo ? '(Geohash)' : '(Non-Geohash)';
+
+        const nodes = [nameNode, typeLabel];
+
+        if (isGeo) {
+            const location = this.getGeohashLocation(safeGeohash);
+            if (location) {
+                const locWrap = document.createElement('div');
+                locWrap.className = 'channel-location';
+
+                const link = document.createElement('a');
+                const encodedLocation = encodeURIComponent(location);
+                link.setAttribute('href', `https://www.openstreetmap.org/search?query=${encodedLocation}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63`);
+                link.setAttribute('target', '_blank');
+                link.setAttribute('rel', 'noopener');
+                link.textContent = location;
+                locWrap.appendChild(link);
+
+                if (this.userLocation && this.settings.sortByProximity) {
+                    try {
+                        const coords = this.decodeGeohash(safeGeohash);
+                        const distance = this.calculateDistance(
+                            this.userLocation.lat, this.userLocation.lng,
+                            coords.lat, coords.lng
+                        );
+                        locWrap.appendChild(document.createTextNode(` (${distance.toFixed(1)}km)`));
+                    } catch (e) { }
+                }
+
+                nodes.push(locWrap);
+            }
+        }
+
+        titleEl.replaceChildren(...nodes);
+    },
+
     switchChannel(channel, geohash = '') {
         // Store previous state
         const previousChannel = this.currentChannel;
@@ -764,43 +818,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             shareBtn.style.display = 'block';
         }
 
-        const isGeo = geohash && this.isValidGeohash(geohash);
-        const displayName = geohash ? `#${this.escapeHtml(geohash)}` : `#${this.escapeHtml(channel)}`;
-        let fullTitle = displayName;
+        const displayName = geohash ? `#${geohash}` : `#${channel}`;
 
-        // Add channel type label
-        if (isGeo) {
-            // Valid geohash channel - add location info and label
-            const location = this.getGeohashLocation(geohash);
-
-            if (location) {
-                const safeLocation = this.escapeHtml(location);
-                const encodedLocation = encodeURIComponent(location);
-                fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${encodedLocation}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${safeLocation}</a></font>`;
-
-                if (this.userLocation && this.settings.sortByProximity) {
-                    try {
-                        const coords = this.decodeGeohash(geohash);
-                        const distance = this.calculateDistance(
-                            this.userLocation.lat, this.userLocation.lng,
-                            coords.lat, coords.lng
-                        );
-                        fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span><br/><font size="2" style="color: var(--text-dim);text-shadow:none;"><a style="color: var(--text-dim);text-shadow:none;" href="https://www.openstreetmap.org/search?query=${encodedLocation}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63" target="_blank" rel="noopener">${safeLocation}</a> (${distance.toFixed(1)}km)</font>`;
-                    } catch (e) {
-                    }
-                }
-            } else {
-                // No location info available, just add label
-                fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Geohash)</span>`;
-            }
-        } else {
-            // Non-geohash channel (g tag with non-geohash name, or legacy entry
-            // without a geohash). Only Geohash and Non-Geohash channel types
-            // are supported — the old "(Ephemeral)" label is removed.
-            fullTitle = `${displayName} <span style="font-size: 12px; color: var(--text-dim);">(Non-Geohash)</span>`;
-        }
-
-        document.getElementById('currentChannel').innerHTML = fullTitle;
+        this._renderChannelTitle(channel, geohash);
 
         // Ensure channel exists in sidebar before updating active state
         if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]`)) {
