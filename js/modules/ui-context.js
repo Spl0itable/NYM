@@ -1590,10 +1590,7 @@ Object.assign(NYM.prototype, {
         resultsDiv.innerHTML = '<div class="gif-loading">Loading trending GIFs...</div>';
 
         try {
-            const response = await fetch(
-                `https://api.giphy.com/v1/gifs/trending?api_key=${this.giphyApiKey}&limit=20&rating=g`
-            );
-            const data = await response.json();
+            const data = await this.fetchGiphy({ trending: true, apiKey: this.giphyApiKey });
 
             this.displayGifs(data.data);
         } catch (error) {
@@ -1606,10 +1603,7 @@ Object.assign(NYM.prototype, {
         resultsDiv.innerHTML = '<div class="gif-loading">Searching GIFs...</div>';
 
         try {
-            const response = await fetch(
-                `https://api.giphy.com/v1/gifs/search?api_key=${this.giphyApiKey}&q=${encodeURIComponent(query)}&limit=20&rating=g`
-            );
-            const data = await response.json();
+            const data = await this.fetchGiphy({ query, apiKey: this.giphyApiKey });
 
             if (data.data.length === 0) {
                 resultsDiv.innerHTML = '<div class="gif-error">No GIFs found</div>';

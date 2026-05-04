@@ -7,46 +7,65 @@ Object.assign(NYM.prototype, {
     // Returns a promise so connectToGeoRelays can await the fresh data
     // before selecting relays, ensuring we match bitchat's relay set.
     fetchGeoRelays() {
-        const url = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
-        return fetch(url, { cache: 'no-cache' })
-            .then(res => {
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                return res.text();
-            })
-            .then(csv => {
-                const parsed = [];
-                const lines = csv.split('\n');
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i].trim();
-                    if (!line) continue;
-                    if (i === 0 && line.toLowerCase().includes('relay url')) continue;
-                    const parts = line.split(',');
-                    if (parts.length < 3) continue;
-                    let host = parts[0].trim()
-                        .replace('https://', '').replace('http://', '')
-                        .replace('wss://', '').replace('ws://', '')
-                        .replace(/\/+$/, '');
-                    const lat = parseFloat(parts[1]);
-                    const lng = parseFloat(parts[2]);
-                    if (!host || isNaN(lat) || isNaN(lng)) continue;
-                    parsed.push({ url: `wss://${host}`, lat, lng });
+        const directCsvUrl = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
+        const base = this._getProxyBaseUrl();
+
+        const tryProxyJson = async () => {
+            if (!base) return null;
+            try {
+                const res = await fetch(`${base}?action=geo-relays`);
+                if (!res.ok) return null;
+                const data = await res.json();
+                if (!data || !Array.isArray(data.relays)) return null;
+                return data.relays.filter(r => r && r.url && Number.isFinite(r.lat) && Number.isFinite(r.lng));
+            } catch {
+                return null;
+            }
+        };
+
+        const fetchAndParseCsvLocally = async () => {
+            const res = await fetch(directCsvUrl, { cache: 'no-cache' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const csv = await res.text();
+            return this._parseGeoRelaysCsv(csv);
+        };
+
+        return (async () => {
+            let relays = await tryProxyJson();
+            if (!relays || relays.length === 0) {
+                relays = await fetchAndParseCsvLocally();
+            }
+            if (relays && relays.length > 0) {
+                this.geoRelays = relays;
+                for (const r of relays) this.allRelayUrls.add(r.url);
+                if (this.useRelayProxy && this._isAnyPoolOpen()) {
+                    this._poolSendRelayConfig();
                 }
-                if (parsed.length > 0) {
-                    this.geoRelays = parsed;
-                    // Add all CSV relay URLs to the unified relay set
-                    for (const r of parsed) {
-                        this.allRelayUrls.add(r.url);
-                    }
-                    // If the relay pool proxy is already connected, update
-                    // its config so it connects to the full CSV relay set
-                    if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                        this._poolSendRelayConfig();
-                    }
-                }
-            })
-            .catch((err) => {
-                console.warn(`[GeoRelays] CSV fetch failed (${this.geoRelays.length} geo relays):`, err.message);
-            });
+            }
+        })().catch((err) => {
+            console.warn(`[GeoRelays] CSV fetch failed (${this.geoRelays.length} geo relays):`, err.message);
+        });
+    },
+
+    _parseGeoRelaysCsv(csv) {
+        const parsed = [];
+        const lines = csv.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            if (i === 0 && line.toLowerCase().includes('relay url')) continue;
+            const parts = line.split(',');
+            if (parts.length < 3) continue;
+            const host = parts[0].trim()
+                .replace('https://', '').replace('http://', '')
+                .replace('wss://', '').replace('ws://', '')
+                .replace(/\/+$/, '');
+            const lat = parseFloat(parts[1]);
+            const lng = parseFloat(parts[2]);
+            if (!host || isNaN(lat) || isNaN(lng)) continue;
+            parsed.push({ url: `wss://${host}`, lat, lng });
+        }
+        return parsed;
     },
 
     // Find the N closest relays to a geohash location
@@ -524,6 +543,7 @@ Object.assign(NYM.prototype, {
                     if (this.useRelayProxy) {
                         if (this._isAnyPoolOpen()) {
                             this._poolSubscribe();
+                            this._ensureAllShardsConnected();
                         }
                         // If no pool sockets are open and nothing is reconnecting, kick it off
                         if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
@@ -570,6 +590,7 @@ Object.assign(NYM.prototype, {
                 if (this.useRelayProxy) {
                     if (this._isAnyPoolOpen()) {
                         this._poolSubscribe();
+                        this._ensureAllShardsConnected();
                     }
                     if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
                         this._schedulePoolReconnect();
@@ -599,6 +620,7 @@ Object.assign(NYM.prototype, {
                     if (this.useRelayProxy) {
                         if (this._isAnyPoolOpen()) {
                             this._poolSubscribe();
+                            this._ensureAllShardsConnected();
                         }
                         if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
                             this._schedulePoolReconnect();
@@ -1050,6 +1072,7 @@ Object.assign(NYM.prototype, {
                 if (this.useRelayProxy && poolConnected) {
                     this.connected = true;
                     this._startPoolKeepalive();
+                    this._startPoolShardHealthCheck();
                     document.getElementById('messageInput').disabled = false;
                     document.getElementById('sendBtn').disabled = false;
                     this.updateConnectionStatus();
@@ -1661,6 +1684,8 @@ Object.assign(NYM.prototype, {
     _fallbackToDirectConnections() {
         if (!this.useRelayProxy) return; // Already in direct mode
 
+        this._stopPoolShardHealthCheck();
+
         // Close all pool sockets
         for (const p of this.poolSockets) {
             p._closing = true;
@@ -1711,6 +1736,7 @@ Object.assign(NYM.prototype, {
                     this._bgPoolReconnectTimer = null;
                     console.log('[NYM] Pool mode restored');
                     this._startPoolKeepalive();
+                    this._startPoolShardHealthCheck();
                     this._poolSubscribe();
                     // Close direct relay connections (pool handles them now)
                     this.relayPool.forEach((relay, url) => {
@@ -1859,6 +1885,7 @@ Object.assign(NYM.prototype, {
                         this._poolReconnecting = false;
                         this._poolReconnectRetries = 0;
                         this._startPoolKeepalive();
+                        this._startPoolShardHealthCheck();
                         this._poolSubscribe();
                         this.retryPendingDMsOnReconnect();
                     })
@@ -1880,32 +1907,37 @@ Object.assign(NYM.prototype, {
         attempt(this._poolReconnectRetries || 0);
     },
 
-    // Reconnect a single failed pool worker shard
+    // Reconnect a single failed pool worker shard.
+    // Retries until the shard reconnects or is no longer needed; the periodic
+    // health check (_ensureAllShardsConnected) acts as a final safety net.
     _reconnectPoolShard(shard) {
         if (!this.useRelayProxy) return;
         const shardId = shard.id;
 
-        // Prevent concurrent reconnect attempts for the same shard
         if (!this._shardReconnecting) this._shardReconnecting = new Set();
         if (this._shardReconnecting.has(shardId)) return;
         this._shardReconnecting.add(shardId);
 
         const attempt = (retries) => {
-            // Check if this shard already reconnected
             const existing = this.poolSockets.find(p => p.id === shardId);
             if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
                 this._shardReconnecting.delete(shardId);
                 return;
             }
-            if (!navigator.onLine) {
+            if (!this.useRelayProxy || !navigator.onLine) {
                 this._shardReconnecting.delete(shardId);
                 return;
             }
 
-            const delay = Math.min(3000 * Math.pow(2, retries), 30000);
+            const baseDelay = Math.min(3000 * Math.pow(1.7, retries), 60000);
+            const delay = Math.floor(baseDelay * (0.7 + Math.random() * 0.3));
             setTimeout(() => {
                 const stillDown = this.poolSockets.find(p => p.id === shardId);
                 if (stillDown && stillDown.ws && stillDown.ws.readyState === WebSocket.OPEN) {
+                    this._shardReconnecting.delete(shardId);
+                    return;
+                }
+                if (!this.useRelayProxy || !navigator.onLine) {
                     this._shardReconnecting.delete(shardId);
                     return;
                 }
@@ -1915,22 +1947,62 @@ Object.assign(NYM.prototype, {
                         this._shardReconnecting.delete(shardId);
                         this._startPoolKeepalive();
                         this._poolSubscribeOnWorker(shard.id);
-                        // Re-send channel-targeted subscriptions to the reconnected shard
                         this._resubscribeChannels();
                     })
                     .catch(() => {
-                        const isCritical = shardId.startsWith('critical');
-                        const maxRetries = isCritical ? 6 : 3;
-                        if (retries < maxRetries) {
-                            attempt(retries + 1);
-                        } else {
-                            this._shardReconnecting.delete(shardId);
-                        }
+                        // Keep retrying — every shard matters for full relay coverage.
+                        // The health check will stop us if the shard is no longer expected.
+                        attempt(retries + 1);
                     });
             }, delay);
         };
 
         attempt(0);
+    },
+
+    // Compute the current expected shard set from configured relays.
+    _computeExpectedShards() {
+        let geoRelayUrls = [];
+        if (this.settings && this.settings.lowDataMode) {
+            geoRelayUrls = [...this.currentGeoRelays];
+        } else {
+            geoRelayUrls = (this.geoRelays || []).map(r => r.url || r).filter(Boolean);
+            for (const url of this.currentGeoRelays) {
+                if (!geoRelayUrls.includes(url)) geoRelayUrls.unshift(url);
+            }
+        }
+        return this._shardRelaysByRole([...this.allRelayUrls], geoRelayUrls, this.bitchatDMRelays);
+    },
+
+    // Reconnect any expected shard that's missing or not in OPEN state.
+    _ensureAllShardsConnected() {
+        if (!this.useRelayProxy) return;
+        if (!navigator.onLine) return;
+        if (!this._isAnyPoolOpen()) return;
+
+        const expectedShards = this._computeExpectedShards();
+        for (const shard of expectedShards) {
+            const existing = this.poolSockets.find(p => p.id === shard.id);
+            const isOpen = existing && existing.ws && existing.ws.readyState === WebSocket.OPEN;
+            if (!isOpen) {
+                this._reconnectPoolShard(shard);
+            }
+        }
+    },
+
+    _startPoolShardHealthCheck() {
+        if (this._poolShardHealthTimer) clearInterval(this._poolShardHealthTimer);
+        this._poolShardHealthTimer = setInterval(() => {
+            if (document.hidden) return;
+            this._ensureAllShardsConnected();
+        }, 15000);
+    },
+
+    _stopPoolShardHealthCheck() {
+        if (this._poolShardHealthTimer) {
+            clearInterval(this._poolShardHealthTimer);
+            this._poolShardHealthTimer = null;
+        }
     },
 
     _connectToRelayPool() {
@@ -2807,6 +2879,56 @@ Object.assign(NYM.prototype, {
         const host = this._getApiHost();
         if (!host) return null;
         return `https://${host}/api/proxy`;
+    },
+
+    // Fetch a JSON resource through the Cloudflare proxy when available.
+    // Falls back to a direct fetch only if the proxy is unreachable.
+    async proxiedJsonFetch(targetUrl, opts = {}) {
+        const base = this._getProxyBaseUrl();
+        if (!base) return fetch(targetUrl, opts);
+        const proxyUrl = `${base}?action=json&url=${encodeURIComponent(targetUrl)}`;
+        try {
+            return await fetch(proxyUrl, opts);
+        } catch (_) {
+            return fetch(targetUrl, opts);
+        }
+    },
+
+    // Reverse-geocode via the edge-cached proxy endpoint, with a direct
+    // Nominatim fallback if the worker is unreachable or returns an error.
+    async fetchGeocode(lat, lng, zoom = 10) {
+        const base = this._getProxyBaseUrl();
+        const direct = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=${zoom}`;
+        if (base) {
+            try {
+                const res = await fetch(`${base}?action=geocode&lat=${lat}&lng=${lng}&zoom=${zoom}`);
+                if (res.ok) return await res.json();
+            } catch (_) { /* fall through */ }
+        }
+        const res = await fetch(direct);
+        if (!res.ok) throw new Error(`Geocode failed: ${res.status}`);
+        return res.json();
+    },
+
+    // Fetch trending or search Giphy results via the edge-cached proxy
+    // endpoint, with a direct Giphy fallback if the worker is unreachable.
+    async fetchGiphy({ trending = false, query = '', apiKey }) {
+        const base = this._getProxyBaseUrl();
+        const directUrl = trending
+            ? `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(apiKey)}&limit=20&rating=g`
+            : `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}&limit=20&rating=g`;
+        if (base) {
+            try {
+                const params = trending
+                    ? `trending=1&api_key=${encodeURIComponent(apiKey)}`
+                    : `q=${encodeURIComponent(query)}&api_key=${encodeURIComponent(apiKey)}`;
+                const res = await fetch(`${base}?action=giphy&${params}`);
+                if (res.ok) return await res.json();
+            } catch (_) { /* fall through */ }
+        }
+        const res = await fetch(directUrl);
+        if (!res.ok) throw new Error(`Giphy failed: ${res.status}`);
+        return res.json();
     },
 
     sendToRelay(message) {

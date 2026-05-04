@@ -61,8 +61,8 @@ Object.assign(NYM.prototype, {
                 throw new Error('Invalid lightning address format');
             }
 
-            // Fetch LNURL endpoint
-            const lnurlResponse = await fetch(`https://${domain}/.well-known/lnurlp/${username}`);
+            // Fetch LNURL endpoint via Cloudflare proxy
+            const lnurlResponse = await this.proxiedJsonFetch(`https://${domain}/.well-known/lnurlp/${username}`);
             if (!lnurlResponse.ok) {
                 throw new Error('Failed to fetch LNURL endpoint');
             }
@@ -95,8 +95,8 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Fetch invoice
-            const invoiceResponse = await fetch(callbackUrl.toString());
+            // Fetch invoice via Cloudflare proxy
+            const invoiceResponse = await this.proxiedJsonFetch(callbackUrl.toString());
             if (!invoiceResponse.ok) {
                 throw new Error('Failed to fetch invoice');
             }
@@ -477,7 +477,7 @@ Object.assign(NYM.prototype, {
             checkCount++;
 
             try {
-                const response = await fetch(invoice.verify);
+                const response = await this.proxiedJsonFetch(invoice.verify);
                 const data = await response.json();
 
                 if (data.settled || data.paid) {

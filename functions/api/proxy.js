@@ -7,6 +7,8 @@
 //   POST /api/proxy?action=translate             — Translate text
 //   GET  /api/proxy?action=unfurl&url=<url>      — Fetch Open Graph metadata for URL preview
 //   PUT  /api/proxy?action=upload                — Upload a blob to blossom.band (Nostr auth header)
+//   GET  /api/proxy?action=geo-relays            — Fetch bitchat geo-relay CSV (edge-cached)
+//   GET/POST /api/proxy?action=json&url=<url>    — Proxy a JSON request (LNURL, Nominatim, etc.)
 
 const ALLOWED_MEDIA_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
@@ -19,6 +21,12 @@ const ALLOWED_MEDIA_TYPES = new Set([
 
 // Max size for unfurl HTML fetch (512 KB)
 const MAX_UNFURL_SIZE = 512 * 1024;
+
+// Max size for JSON proxy responses (512 KB)
+const MAX_JSON_SIZE = 512 * 1024;
+
+const GEO_RELAYS_URL = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
+const GEO_RELAYS_CACHE_TTL = 300;
 
 // Translate endpoint
 const GOOGLE_TRANSLATE_URL = 'https://translate.googleapis.com/translate_a/single';
@@ -48,15 +56,157 @@ export async function onRequest(context) {
     if (action === 'translate') {
       return await handleTranslate(request);
     } else if (action === 'unfurl') {
-      return await handleUnfurl(url.searchParams.get('url'));
+      return await handleUnfurl(url.searchParams.get('url'), context);
     } else if (action === 'upload') {
       return await handleBlossomUpload(request);
+    } else if (action === 'geo-relays') {
+      return await handleGeoRelays(context);
+    } else if (action === 'geocode') {
+      return await handleGeocode(url.searchParams, context);
+    } else if (action === 'giphy') {
+      return await handleGiphy(url.searchParams, context);
+    } else if (action === 'json') {
+      return await handleJsonProxy(url.searchParams.get('url'), request);
     } else {
       return await handleMediaProxy(url.searchParams.get('url'), request);
     }
   } catch (err) {
     return jsonResponse({ error: err.message || 'Internal error' }, 500);
   }
+}
+
+const CACHE_HOST = 'https://nymchat-edge-cache.invalid';
+
+async function readEdgeCache(path) {
+  const cached = await caches.default.match(new Request(`${CACHE_HOST}${path}`, { method: 'GET' }));
+  if (!cached) return null;
+  const headers = new Headers(cached.headers);
+  for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
+  headers.set('X-Edge-Cache', 'HIT');
+  return new Response(cached.body, { status: cached.status, headers });
+}
+
+function writeEdgeCache(context, path, body, contentType, ttl) {
+  const headers = new Headers(CORS_HEADERS);
+  headers.set('Content-Type', contentType);
+  headers.set('Cache-Control', `public, max-age=${ttl}, s-maxage=${ttl}`);
+  headers.set('X-Edge-Cache', 'MISS');
+  const resp = new Response(body, { status: 200, headers });
+  const op = caches.default.put(new Request(`${CACHE_HOST}${path}`, { method: 'GET' }), resp.clone());
+  if (context && context.waitUntil) context.waitUntil(op);
+  return resp;
+}
+
+// Geo-relay CSV proxy with Cloudflare edge cache.
+// Parses the bitchat CSV server-side and returns JSON so the client doesn't
+// have to do the work and the cached payload stays compact.
+async function handleGeoRelays(context) {
+  const cacheKey = new Request(GEO_RELAYS_URL + '#json', { method: 'GET' });
+  const cache = caches.default;
+
+  let cached = await cache.match(cacheKey);
+  if (cached) {
+    const headers = new Headers(cached.headers);
+    for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
+    headers.set('X-Edge-Cache', 'HIT');
+    return new Response(cached.body, { status: cached.status, headers });
+  }
+
+  const upstream = await fetch(GEO_RELAYS_URL, {
+    headers: { 'User-Agent': 'NymchatProxy/1.0', 'Accept': 'text/csv, text/plain' },
+  });
+  if (!upstream.ok) {
+    return jsonResponse({ error: `Upstream returned ${upstream.status}` }, 502);
+  }
+
+  const csv = await upstream.text();
+  const relays = parseGeoRelaysCsv(csv);
+
+  const headers = new Headers(CORS_HEADERS);
+  headers.set('Content-Type', 'application/json');
+  headers.set('Cache-Control', `public, max-age=${GEO_RELAYS_CACHE_TTL}, s-maxage=${GEO_RELAYS_CACHE_TTL}`);
+  headers.set('X-Edge-Cache', 'MISS');
+
+  const resp = new Response(JSON.stringify({ relays }), { status: 200, headers });
+  if (context && context.waitUntil) {
+    context.waitUntil(cache.put(cacheKey, resp.clone()));
+  } else {
+    await cache.put(cacheKey, resp.clone());
+  }
+  return resp;
+}
+
+function parseGeoRelaysCsv(csv) {
+  const parsed = [];
+  const lines = csv.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (i === 0 && line.toLowerCase().includes('relay url')) continue;
+    const parts = line.split(',');
+    if (parts.length < 3) continue;
+    const host = parts[0].trim()
+      .replace('https://', '').replace('http://', '')
+      .replace('wss://', '').replace('ws://', '')
+      .replace(/\/+$/, '');
+    const lat = parseFloat(parts[1]);
+    const lng = parseFloat(parts[2]);
+    if (!host || isNaN(lat) || isNaN(lng)) continue;
+    parsed.push({ url: `wss://${host}`, lat, lng });
+  }
+  return parsed;
+}
+
+// Generic JSON proxy for external HTTP APIs (LNURL, Nominatim, Giphy, NIP-11, etc.)
+async function handleJsonProxy(targetUrl, request) {
+  if (!targetUrl) {
+    return jsonResponse({ error: 'Missing url parameter' }, 400);
+  }
+
+  try {
+    new URL(targetUrl);
+  } catch {
+    return jsonResponse({ error: 'Invalid URL' }, 400);
+  }
+
+  if (isPrivateUrl(targetUrl)) {
+    return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
+  }
+
+  const method = request.method === 'POST' ? 'POST' : 'GET';
+  const upstreamHeaders = new Headers({
+    'User-Agent': 'NymchatProxy/1.0',
+    'Accept': 'application/json, text/plain, */*',
+  });
+
+  let body;
+  if (method === 'POST') {
+    const ct = request.headers.get('Content-Type');
+    if (ct) upstreamHeaders.set('Content-Type', ct);
+    body = await request.text();
+  }
+
+  const resp = await fetch(targetUrl, {
+    method,
+    headers: upstreamHeaders,
+    body,
+    redirect: 'follow',
+  });
+
+  const ct = (resp.headers.get('content-type') || '').toLowerCase();
+  const allowed = ct.includes('json') || ct.includes('text/plain') || ct === '';
+  if (!allowed) {
+    return jsonResponse({ error: 'Upstream content-type not allowed: ' + ct }, 415);
+  }
+
+  const text = await resp.text();
+  if (text.length > MAX_JSON_SIZE) {
+    return jsonResponse({ error: 'Upstream response too large' }, 502);
+  }
+
+  const headers = new Headers(CORS_HEADERS);
+  headers.set('Content-Type', resp.headers.get('content-type') || 'application/json');
+  return new Response(text, { status: resp.status, headers });
 }
 
 const BLOSSOM_UPLOAD_URL = 'https://blossom.band/upload';
@@ -129,10 +279,17 @@ async function handleMediaProxy(targetUrl, request) {
     upstreamHeaders['Range'] = rangeHeader;
   }
 
-  const resp = await fetch(targetUrl, {
+  // Cache full-body fetches on Cloudflare's edge so the same avatar/banner/
+  // upload is served cross-user without re-hitting the origin. Skip caching
+  // for Range requests since partial responses cache poorly and need streaming.
+  const fetchInit = {
     headers: upstreamHeaders,
     redirect: 'follow',
-  });
+  };
+  if (!rangeHeader) {
+    fetchInit.cf = { cacheTtl: 604800, cacheEverything: true };
+  }
+  const resp = await fetch(targetUrl, fetchInit);
 
   if (!resp.ok && resp.status !== 206) {
     return jsonResponse({ error: `Upstream returned ${resp.status}` }, 502);
@@ -228,8 +385,8 @@ async function handleTranslate(request) {
   }
 }
 
-// URL Unfurling (Open Graph)
-async function handleUnfurl(targetUrl) {
+// URL Unfurling (Open Graph), edge-cached for 1 hour
+async function handleUnfurl(targetUrl, context) {
   if (!targetUrl) {
     return jsonResponse({ error: 'Missing url parameter' }, 400);
   }
@@ -243,6 +400,10 @@ async function handleUnfurl(targetUrl) {
   if (isPrivateUrl(targetUrl)) {
     return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
   }
+
+  const cachePath = `/unfurl?url=${encodeURIComponent(targetUrl)}`;
+  const cached = await readEdgeCache(cachePath);
+  if (cached) return cached;
 
   const resp = await fetch(targetUrl, {
     headers: {
@@ -261,7 +422,6 @@ async function handleUnfurl(targetUrl) {
     return jsonResponse({ error: 'Not an HTML page' }, 422);
   }
 
-  // Read limited HTML
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let html = '';
@@ -272,13 +432,68 @@ async function handleUnfurl(targetUrl) {
     if (done) break;
     bytesRead += value.length;
     html += decoder.decode(value, { stream: true });
-    // Stop early once we have </head> — OG tags are always in <head>
     if (html.includes('</head>')) break;
   }
   reader.cancel();
 
   const meta = extractOpenGraph(html, targetUrl);
-  return jsonResponse(meta);
+  return writeEdgeCache(context, cachePath, JSON.stringify(meta), 'application/json', 3600);
+}
+
+// Reverse-geocode lat/lng via Nominatim, edge-cached for 1 day
+async function handleGeocode(searchParams, context) {
+  const lat = parseFloat(searchParams.get('lat'));
+  const lng = parseFloat(searchParams.get('lng'));
+  const zoomRaw = parseInt(searchParams.get('zoom') || '10', 10);
+  const zoom = Number.isFinite(zoomRaw) ? Math.min(18, Math.max(0, zoomRaw)) : 10;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return jsonResponse({ error: 'Invalid lat/lng' }, 400);
+  }
+
+  const latKey = lat.toFixed(4);
+  const lngKey = lng.toFixed(4);
+  const cachePath = `/geocode?lat=${latKey}&lng=${lngKey}&zoom=${zoom}`;
+  const cached = await readEdgeCache(cachePath);
+  if (cached) return cached;
+
+  const upstream = await fetch(
+    `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latKey}&lon=${lngKey}&zoom=${zoom}`,
+    { headers: { 'User-Agent': 'NymchatProxy/1.0', 'Accept': 'application/json' } }
+  );
+  if (!upstream.ok) {
+    return jsonResponse({ error: `Upstream returned ${upstream.status}` }, 502);
+  }
+  const text = await upstream.text();
+  return writeEdgeCache(context, cachePath, text, 'application/json', 86400);
+}
+
+// Giphy trending/search proxy, edge-cached for 60s
+async function handleGiphy(searchParams, context) {
+  const apiKey = searchParams.get('api_key');
+  const q = searchParams.get('q') || '';
+  const trending = searchParams.get('trending') === '1';
+  if (!apiKey) {
+    return jsonResponse({ error: 'Missing api_key' }, 400);
+  }
+
+  const cachePath = trending
+    ? '/giphy?trending=1'
+    : `/giphy?q=${encodeURIComponent(q.toLowerCase().trim())}`;
+  const cached = await readEdgeCache(cachePath);
+  if (cached) return cached;
+
+  const upstreamUrl = trending
+    ? `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(apiKey)}&limit=20&rating=g`
+    : `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(q)}&limit=20&rating=g`;
+
+  const upstream = await fetch(upstreamUrl, {
+    headers: { 'User-Agent': 'NymchatProxy/1.0', 'Accept': 'application/json' },
+  });
+  if (!upstream.ok) {
+    return jsonResponse({ error: `Upstream returned ${upstream.status}` }, 502);
+  }
+  const text = await upstream.text();
+  return writeEdgeCache(context, cachePath, text, 'application/json', 60);
 }
 
 // Extract Open Graph and fallback meta tags from HTML head

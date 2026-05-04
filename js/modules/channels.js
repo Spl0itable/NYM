@@ -136,8 +136,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Fetch city and country asynchronously
         try {
-            const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${channel.lat}&lon=${channel.lng}&zoom=10`);
-            const data = await response.json();
+            const data = await this.fetchGeocode(channel.lat, channel.lng, 10);
 
             const city = data.address.city || data.address.town || data.address.village || data.address.county || '';
             const country = data.address.country || '';
