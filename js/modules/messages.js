@@ -348,7 +348,7 @@ Object.assign(NYM.prototype, {
             const actionContent = message.content.substring(4);
 
             // Format the action content but preserve any HTML in mentioned users
-            const formattedAction = this.formatMessage(actionContent);
+            const formattedAction = this._enrichActionMentions(this.formatMessage(actionContent));
 
             messageEl.innerHTML = `* ${authorWithFlair} ${formattedAction} *`;
         } else {
@@ -705,6 +705,12 @@ Object.assign(NYM.prototype, {
                 });
             }
         }
+        // Always blur images that appear inside a quote when blur is enabled —
+        // we don't know the original author of quoted content, so be conservative.
+        if (this.blurOthersImages === true || this.blurOthersImages === 'friends') {
+            const quotedImages = messageEl.querySelectorAll('blockquote img');
+            quotedImages.forEach(img => img.classList.add('blurred'));
+        }
 
         // Always insert messages in correct created_at order to prevent out-of-order display.
         // Uses raw created_at (integer seconds) consistent with the in-memory sort;
@@ -952,6 +958,42 @@ Object.assign(NYM.prototype, {
         }
 
         return html;
+    },
+
+    _enrichActionMentions(html) {
+        if (!html || typeof html !== 'string') return html;
+        if (!this._suffixIndex) this._suffixIndex = new Map();
+        // Rebuild the suffix index lazily — we want it fresh enough but not
+        // every call. The Map size approximates user count; rebuild when it
+        // disagrees materially with the live users map.
+        const usersSize = this.users ? this.users.size : 0;
+        if (this._suffixIndex.size === 0 || Math.abs(this._suffixIndex.size - usersSize) > 8) {
+            this._suffixIndex.clear();
+            this.users.forEach((_, pubkey) => {
+                if (typeof pubkey === 'string' && pubkey.length >= 4) {
+                    const sfx = pubkey.slice(-4).toLowerCase();
+                    if (!this._suffixIndex.has(sfx)) this._suffixIndex.set(sfx, pubkey);
+                }
+            });
+        }
+        const escapeHtml = (s) => this.escapeHtml(s);
+        // Match the mention HTML produced by formatMessage:
+        //   <span style="color: var(--secondary)">@name<span class="nym-suffix">#abcd</span></span>
+        return html.replace(
+            /<span style="color: var\(--secondary\)">(@[^<]*?)<span class="nym-suffix">(#[0-9a-f]{4})<\/span><\/span>/gi,
+            (match, namePart, suffixPart) => {
+                const sfx = suffixPart.slice(1).toLowerCase();
+                const pubkey = this._suffixIndex.get(sfx);
+                if (!pubkey) return match; // No known user — keep plain rendering
+                const safePk = this._safePubkey(pubkey) || '';
+                const avatarSrc = this.getAvatarUrl(pubkey);
+                const flairHtml = this.getFlairForUser(pubkey) || '';
+                return `<span class="action-mention" style="color: var(--secondary)">`
+                    + `<img src="${escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">`
+                    + `${namePart}<span class="nym-suffix">${suffixPart}</span>${flairHtml}`
+                    + `</span>`;
+            }
+        );
     },
 
     formatMessage(content) {
@@ -1440,6 +1482,7 @@ Object.assign(NYM.prototype, {
         let currentEl = null;
         let isSwiping = false;
         let swipeDistance = 0;
+        let thresholdHapticFired = false;
         const SWIPE_THRESHOLD = 60;
 
         container.addEventListener('touchstart', (e) => {
@@ -1451,6 +1494,7 @@ Object.assign(NYM.prototype, {
             currentEl = msgEl;
             isSwiping = false;
             swipeDistance = 0;
+            thresholdHapticFired = false;
         }, { passive: true });
 
         container.addEventListener('touchmove', (e) => {
@@ -1480,7 +1524,14 @@ Object.assign(NYM.prototype, {
                 indicator.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="9 14 4 9 9 4"></polyline><path d="M20 20v-7a4 4 0 0 0-4-4H4"></path></svg>';
                 currentEl.appendChild(indicator);
             }
-            indicator.classList.toggle('visible', swipeDistance >= SWIPE_THRESHOLD);
+            const pastThreshold = swipeDistance >= SWIPE_THRESHOLD;
+            indicator.classList.toggle('visible', pastThreshold);
+            if (pastThreshold && !thresholdHapticFired) {
+                thresholdHapticFired = true;
+                window.nymHapticTap && window.nymHapticTap();
+            } else if (!pastThreshold) {
+                thresholdHapticFired = false;
+            }
         }, { passive: false });
 
         const handleTouchEnd = () => {

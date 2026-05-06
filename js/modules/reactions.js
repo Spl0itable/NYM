@@ -324,35 +324,48 @@ Object.assign(NYM.prototype, {
             // Long-press to show reactors modal
             let longPressTimer = null;
             let didLongPress = false;
+            let touchActive = false;
+            let suppressClickUntil = 0;
 
             const startLongPress = (e) => {
+                // Ignore synthetic mouse events that follow a touch sequence
+                if (e.type === 'mousedown' && touchActive) return;
                 didLongPress = false;
                 longPressTimer = setTimeout(() => {
                     didLongPress = true;
-                    e.preventDefault();
+                    suppressClickUntil = Date.now() + 800;
                     window.nymHapticTap && window.nymHapticTap();
                     this.showReactorsModal(messageId, emoji, badge);
                 }, 500);
             };
 
-            const cancelLongPress = () => {
+            const cancelLongPress = (e) => {
                 if (longPressTimer) {
                     clearTimeout(longPressTimer);
                     longPressTimer = null;
                 }
+                // If the long press fired, swallow the synthetic click that
+                // touchend produces so we don't toggle the user's reaction.
+                if (didLongPress && e && e.cancelable) {
+                    try { e.preventDefault(); } catch { }
+                }
             };
 
             badge.addEventListener('mousedown', startLongPress);
-            badge.addEventListener('touchstart', startLongPress, { passive: false });
+            badge.addEventListener('touchstart', (e) => { touchActive = true; startLongPress(e); }, { passive: false });
             badge.addEventListener('mouseup', cancelLongPress);
             badge.addEventListener('mouseleave', cancelLongPress);
-            badge.addEventListener('touchend', cancelLongPress);
+            badge.addEventListener('touchend', (e) => { cancelLongPress(e); setTimeout(() => { touchActive = false; }, 600); });
+            badge.addEventListener('touchcancel', (e) => { cancelLongPress(e); touchActive = false; });
             badge.addEventListener('touchmove', cancelLongPress);
 
             // Click handler - only fire if not a long press
             badge.onclick = async (e) => {
                 e.stopPropagation();
-                if (didLongPress) return;
+                if (didLongPress || Date.now() < suppressClickUntil) {
+                    e.preventDefault();
+                    return;
+                }
                 if (!hasReacted) {
                     await this.sendReaction(messageId, emoji);
                 } else {
@@ -775,6 +788,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             if (messageReactions.get(emoji).has(this.pubkey)) {
                 return; // Already reacted with this emoji
             }
+
+            window.nymHapticTap && window.nymHapticTap();
 
             // Add reaction immediately to local state
             messageReactions.get(emoji).set(this.pubkey, this.nym);

@@ -102,6 +102,7 @@ Object.assign(NYM.prototype, {
             this.loadPinnedChannels();
             this.loadHiddenChannels();
             this.loadWallpaper();
+            if (typeof this._hydrateUnreadCounts === 'function') this._hydrateUnreadCounts();
             applyMessageLayout(this.settings.chatLayout);
             document.body.classList.toggle('status-hidden', this.settings.showStatus === false);
 

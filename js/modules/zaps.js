@@ -536,6 +536,8 @@ Object.assign(NYM.prototype, {
     handleZapPaymentSuccess(amount) {
         if (!this.currentZapTarget) return;
 
+        window.nymHapticTap && window.nymHapticTap();
+
         // Clear check interval
         if (this.zapCheckInterval) {
             clearInterval(this.zapCheckInterval);

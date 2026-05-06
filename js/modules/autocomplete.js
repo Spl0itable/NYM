@@ -139,9 +139,17 @@ Object.assign(NYM.prototype, {
             const emoji = selected.dataset.emoji;
             const input = document.getElementById('messageInput');
             const value = input.value;
-            const colonIndex = value.lastIndexOf(':');
-
-            input.value = value.substring(0, colonIndex) + emoji + ' ';
+            const cursor = (typeof input.selectionStart === 'number')
+                ? input.selectionStart
+                : value.length;
+            const before = value.substring(0, cursor);
+            const after = value.substring(cursor);
+            // Find the start of the :shortcode token at end of `before`
+            const m = before.match(/:([a-z0-9_+-]*)$/i);
+            const colonIndex = m ? before.length - m[0].length : before.lastIndexOf(':');
+            const replaced = before.substring(0, colonIndex) + emoji + ' ';
+            input.value = replaced + after;
+            input.selectionStart = input.selectionEnd = replaced.length;
             input.focus();
             this.hideEmojiAutocomplete();
             this.addToRecentEmojis(emoji);

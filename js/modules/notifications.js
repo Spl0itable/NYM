@@ -42,6 +42,11 @@ Object.assign(NYM.prototype, {
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
         this._updateNotificationBadge();
+        // Push the updated history to the self-addressed settings giftwrap so
+        // other signed-in devices can render this notification too.
+        if (typeof this._debouncedNostrSettingsSave === 'function') {
+            this._debouncedNostrSettingsSave(8000);
+        }
 
         // Sound
         if (this.settings.sound !== 'none') {

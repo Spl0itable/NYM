@@ -929,10 +929,11 @@ Object.assign(NYM.prototype, {
 
         const targetInput = args.trim().replace(/^@/, '');
         let targetNym = '';
+        let targetPubkey = null;
 
         // Check if input is a pubkey (64 hex characters)
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
-            const targetPubkey = targetInput.toLowerCase();
+            targetPubkey = targetInput.toLowerCase();
             const user = this.users.get(targetPubkey);
             if (user) {
                 // Get the base nym without HTML tags and flair
@@ -975,22 +976,24 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Use the target nym for the action (without HTML tags)
-            targetNym = matches.length > 0 ? matches[0].nym : searchNym;
+            if (matches.length > 0) {
+                targetNym = matches[0].nym;
+                targetPubkey = matches[0].pubkey;
+            } else {
+                targetNym = searchNym;
+            }
         }
 
-        // Create the slap message content  
-        const slapContent = `/me slaps ${targetNym} around a bit with a large trout 🐟`;
+        // Use a full @nym#suffix mention so the message renderer attaches the
+        // target's avatar, suffix, and flair next to their name.
+        const targetMention = targetPubkey
+            ? `@${targetNym}#${this.getPubkeySuffix(targetPubkey)}`
+            : `@${targetNym}`;
+        const slapContent = `/me slaps ${targetMention} around a bit with a large trout 🐟`;
 
         // Send the message using the appropriate method based on current context
         try {
-            if (this.inPMMode && this.currentPM) {
-                // Send as PM
-                await this.sendPM(slapContent, this.currentPM);
-            } else if (this.currentGeohash) {
-                // Send to geohash channel
-                await this.publishMessage(slapContent, this.currentGeohash, this.currentGeohash);
-            }
+            await this._sendToCurrentTarget(slapContent);
         } catch (error) {
             this.displaySystemMessage('Failed to send slap: ' + error.message);
         }
@@ -1005,10 +1008,11 @@ Object.assign(NYM.prototype, {
 
         const targetInput = args.trim().replace(/^@/, '');
         let targetNym = '';
+        let targetPubkey = null;
 
         // Check if input is a pubkey (64 hex characters)
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
-            const targetPubkey = targetInput.toLowerCase();
+            targetPubkey = targetInput.toLowerCase();
             const user = this.users.get(targetPubkey);
             if (user) {
                 targetNym = this.parseNymFromDisplay(user.nym);
@@ -1049,17 +1053,21 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            targetNym = matches.length > 0 ? matches[0].nym : searchNym;
+            if (matches.length > 0) {
+                targetNym = matches[0].nym;
+                targetPubkey = matches[0].pubkey;
+            } else {
+                targetNym = searchNym;
+            }
         }
 
-        const hugContent = `/me gives ${targetNym} a warm hug 🫂`;
+        const targetMention = targetPubkey
+            ? `@${targetNym}#${this.getPubkeySuffix(targetPubkey)}`
+            : `@${targetNym}`;
+        const hugContent = `/me gives ${targetMention} a warm hug 🫂`;
 
         try {
-            if (this.inPMMode && this.currentPM) {
-                await this.sendPM(hugContent, this.currentPM);
-            } else if (this.currentGeohash) {
-                await this.publishMessage(hugContent, this.currentGeohash, this.currentGeohash);
-            }
+            await this._sendToCurrentTarget(hugContent);
         } catch (error) {
             this.displaySystemMessage('Failed to send hug: ' + error.message);
         }
@@ -1075,125 +1083,65 @@ Object.assign(NYM.prototype, {
         const content = `/me ${args}`;
 
         try {
-            if (this.inPMMode && this.currentPM) {
-                // Send as PM
-                await this.sendPM(content, this.currentPM);
-            } else if (this.currentGeohash) {
-                // Send to geohash channel
-                await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            }
+            await this._sendToCurrentTarget(content);
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }
     },
 
     async cmdShrug() {
-        const content = '¯\\_(ツ)_/¯';
-
         try {
-            if (this.inPMMode && this.currentPM) {
-                await this.sendPM(content, this.currentPM);
-            } else if (this.currentGeohash) {
-                await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            }
+            await this._sendToCurrentTarget('¯\\_(ツ)_/¯');
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }
+    },
+
+    // Send content to whichever conversation surface is currently active
+    async _sendToCurrentTarget(content) {
+        if (this.inPMMode && this.currentGroup) {
+            return this.sendGroupMessage(content, this.currentGroup);
+        }
+        if (this.inPMMode && this.currentPM) {
+            return this.sendPM(content, this.currentPM);
+        }
+        if (this.currentGeohash) {
+            return this.publishMessage(content, this.currentGeohash, this.currentGeohash);
+        }
+        if (this.currentChannel) {
+            return this.publishMessage(content, this.currentChannel, this.currentChannel);
+        }
+        throw new Error('No active conversation to send to');
     },
 
     async cmdBold(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /bold text');
-            return;
-        }
-
-        const content = `**${args}**`;
-
-        try {
-            if (this.inPMMode && this.currentPM) {
-                await this.sendPM(content, this.currentPM);
-            } else if (this.currentGeohash) {
-                await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            }
-        } catch (error) {
-            this.displaySystemMessage('Failed to send message: ' + error.message);
-        }
+        if (!args) { this.displaySystemMessage('Usage: /bold text'); return; }
+        try { await this._sendToCurrentTarget(`**${args}**`); }
+        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
     },
 
     async cmdItalic(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /italic text');
-            return;
-        }
-
-        const content = `*${args}*`;
-
-        try {
-            if (this.inPMMode && this.currentPM) {
-                await this.sendPM(content, this.currentPM);
-            } else if (this.currentGeohash) {
-                await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            }
-        } catch (error) {
-            this.displaySystemMessage('Failed to send message: ' + error.message);
-        }
+        if (!args) { this.displaySystemMessage('Usage: /italic text'); return; }
+        try { await this._sendToCurrentTarget(`*${args}*`); }
+        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
     },
 
     async cmdStrike(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /strike text');
-            return;
-        }
-
-        const content = `~~${args}~~`;
-
-        try {
-            if (this.inPMMode && this.currentPM) {
-                await this.sendPM(content, this.currentPM);
-            } else if (this.currentGeohash) {
-                await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            }
-        } catch (error) {
-            this.displaySystemMessage('Failed to send message: ' + error.message);
-        }
+        if (!args) { this.displaySystemMessage('Usage: /strike text'); return; }
+        try { await this._sendToCurrentTarget(`~~${args}~~`); }
+        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
     },
 
     async cmdCode(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /code text');
-            return;
-        }
-
-        const content = `\`\`\`\n${args}\n\`\`\``;
-
-        try {
-            if (this.inPMMode && this.currentPM) {
-                await this.sendPM(content, this.currentPM);
-            } else if (this.currentGeohash) {
-                await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            }
-        } catch (error) {
-            this.displaySystemMessage('Failed to send message: ' + error.message);
-        }
+        if (!args) { this.displaySystemMessage('Usage: /code text'); return; }
+        try { await this._sendToCurrentTarget(`\`\`\`\n${args}\n\`\`\``); }
+        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
     },
 
     async cmdQuote(args) {
-        if (!args) {
-            this.displaySystemMessage('Usage: /quote text');
-            return;
-        }
-
-        const content = `> ${args}`;
-
-        try {
-            if (this.inPMMode && this.currentPM) {
-                await this.sendPM(content, this.currentPM);
-            } else if (this.currentGeohash) {
-                await this.publishMessage(content, this.currentGeohash, this.currentGeohash);
-            }
-        } catch (error) {
-            this.displaySystemMessage('Failed to send message: ' + error.message);
-        }
+        if (!args) { this.displaySystemMessage('Usage: /quote text'); return; }
+        try { await this._sendToCurrentTarget(`> ${args}`); }
+        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
     },
 
     async cmdBRB(args) {

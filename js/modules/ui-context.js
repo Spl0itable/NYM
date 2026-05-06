@@ -415,6 +415,18 @@ Object.assign(NYM.prototype, {
             ctxAvatarNym.innerHTML = nymHtml;
         }
 
+        // Populate the full pubkey block
+        const ctxFullPubkey = document.getElementById('ctxFullPubkey');
+        if (ctxFullPubkey) {
+            if (pubkey) {
+                ctxFullPubkey.textContent = pubkey;
+                ctxFullPubkey.style.display = '';
+            } else {
+                ctxFullPubkey.textContent = '';
+                ctxFullPubkey.style.display = 'none';
+            }
+        }
+
         // Populate status row (online / away / offline)
         const ctxStatusRow = document.getElementById('ctxStatusRow');
         if (ctxStatusRow) {
@@ -1190,7 +1202,7 @@ Object.assign(NYM.prototype, {
             popup.style.left = left + 'px';
             popup.style.top = top + 'px';
 
-            // Build the quick context menu (Private Message, Slap, Hug, Zap, Quote, Copy)
+            // Build the quick context menu (Slap, Hug, Zap, Quote, Copy)
             const baseAuthor = this.parseNymFromDisplay(msgEl.dataset.author || 'anon');
             const targetPubkey = msgEl.dataset.pubkey || '';
             const targetBaseNym = this.stripPubkeySuffix(baseAuthor);
@@ -1198,21 +1210,8 @@ Object.assign(NYM.prototype, {
             const messageContent = msgEl.dataset.rawContent
                 || (contentEl ? this._extractNonQuotedText(contentEl) : '');
             const isSelf = targetPubkey === this.pubkey;
-            const isBot = this.isVerifiedBot && this.isVerifiedBot(targetPubkey);
 
             const ctxItems = [];
-            if (!isSelf && !isBot && targetPubkey) {
-                ctxItems.push({
-                    id: 'qctxPM',
-                    label: 'Private Message',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="1" /><path d="M 2 5 L 8 9 L 14 5" stroke-linecap="round" stroke-linejoin="round" /></svg>',
-                    action: () => {
-                        const suffix = this.getPubkeySuffix(targetPubkey);
-                        const fullNym = `${targetBaseNym}#${suffix}`;
-                        this.openUserPM(fullNym, targetPubkey);
-                    }
-                });
-            }
             if (!isSelf && targetPubkey) {
                 ctxItems.push({
                     id: 'qctxSlap',
@@ -1510,17 +1509,23 @@ Object.assign(NYM.prototype, {
     },
 
     handleInputChange(value) {
-        // Check for @ mentions first
-        const lastAtIndex = value.lastIndexOf('@');
-        const isMentionActive = lastAtIndex !== -1 && (lastAtIndex === value.length - 1 ||
-            value.substring(lastAtIndex).match(/^@[^\s]*$/));
+        // Use cursor position so autocomplete works mid-sentence
+        const inputEl = document.getElementById('messageInput');
+        const cursor = (inputEl && typeof inputEl.selectionStart === 'number')
+            ? inputEl.selectionStart
+            : value.length;
+        const before = value.substring(0, cursor);
+
+        // Check for @ mentions first (token immediately to the left of cursor)
+        const mentionMatch = before.match(/(?:^|\s)@([^\s]*)$/);
+        const isMentionActive = mentionMatch !== null;
 
         // Check for # channel references (# at start or after whitespace, followed by non-space chars)
-        const hashMatch = value.match(/(?:^|[\s])#([^\s]*)$/);
+        const hashMatch = before.match(/(?:^|\s)#([^\s]*)$/);
         const isChannelActive = hashMatch !== null;
 
         if (isMentionActive) {
-            const search = value.substring(lastAtIndex + 1);
+            const search = mentionMatch[1];
             this.showAutocomplete(search);
             // Hide emoji autocomplete and channel autocomplete
             this.hideEmojiAutocomplete();
@@ -1534,12 +1539,12 @@ Object.assign(NYM.prototype, {
             this.hideAutocomplete();
             this.hideChannelAutocomplete();
 
-            // Only check for emoji autocomplete when not in a mention context
-            const colonIndex = value.lastIndexOf(':');
-            if (colonIndex !== -1 && colonIndex === value.length - 1 ||
-                (colonIndex !== -1 && value.substring(colonIndex).match(/^:[a-z0-9_+-]*$/))) {
-                const search = value.substring(colonIndex + 1);
-                this.showEmojiAutocomplete(search);
+            // Only check for emoji autocomplete when not in a mention context.
+            // Match a :shortcode token immediately to the left of the cursor
+            // so it works mid-sentence (e.g., "hello :thum| world").
+            const emojiMatch = before.match(/(?:^|\s):([a-z0-9_+-]*)$/i);
+            if (emojiMatch) {
+                this.showEmojiAutocomplete(emojiMatch[1]);
             } else {
                 this.hideEmojiAutocomplete();
             }
@@ -1605,8 +1610,44 @@ Object.assign(NYM.prototype, {
             }
         });
 
+        // Resize the picker to sit above the on-screen keyboard on mobile.
+        // Uses visualViewport which shrinks when the keyboard opens.
+        this._setupGifPickerKeyboardResize();
+
         // Focus search
         searchInput.focus();
+    },
+
+    _setupGifPickerKeyboardResize() {
+        const gifPicker = document.getElementById('gifPicker');
+        if (!gifPicker || !window.visualViewport) return;
+
+        const apply = () => {
+            if (!gifPicker.classList.contains('active')) return;
+            const vv = window.visualViewport;
+            // Only adjust on narrow viewports (mobile) where the picker is fixed
+            if (window.innerWidth > 600) {
+                gifPicker.style.bottom = '';
+                gifPicker.style.maxHeight = '';
+                return;
+            }
+            const keyboardOffset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+            // Sit above the keyboard with a small gap, and cap the height so the
+            // search field stays visible.
+            const reservedTop = 80;
+            const available = Math.max(180, vv.height - reservedTop);
+            gifPicker.style.bottom = (keyboardOffset + 12) + 'px';
+            gifPicker.style.maxHeight = available + 'px';
+        };
+
+        if (this._gifViewportHandler) {
+            window.visualViewport.removeEventListener('resize', this._gifViewportHandler);
+            window.visualViewport.removeEventListener('scroll', this._gifViewportHandler);
+        }
+        this._gifViewportHandler = apply;
+        window.visualViewport.addEventListener('resize', apply);
+        window.visualViewport.addEventListener('scroll', apply);
+        apply();
     },
 
     async loadTrendingGifs() {
@@ -1686,6 +1727,13 @@ Object.assign(NYM.prototype, {
         const gifPicker = document.getElementById('gifPicker');
         gifPicker.classList.remove('active');
         gifPicker.innerHTML = '';
+        gifPicker.style.bottom = '';
+        gifPicker.style.maxHeight = '';
+        if (this._gifViewportHandler && window.visualViewport) {
+            window.visualViewport.removeEventListener('resize', this._gifViewportHandler);
+            window.visualViewport.removeEventListener('scroll', this._gifViewportHandler);
+            this._gifViewportHandler = null;
+        }
     },
 
     toggleSidebar() {

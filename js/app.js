@@ -699,6 +699,7 @@ class NYM {
         this._typingStopTimer = null;
         this.notificationHistory = this._loadNotificationHistory();
         this.notificationLastReadTime = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
+        this._lastSettingsSyncTs = parseInt(localStorage.getItem('nym_last_settings_sync_ts') || '0', 10) || 0;
         this.notificationsEnabled = localStorage.getItem('nym_notifications_enabled') !== 'false';
         this.groupNotifyMentionsOnly = localStorage.getItem('nym_group_notify_mentions_only') === 'true';
         this.notifyFriendsOnly = localStorage.getItem('nym_notify_friends_only') === 'true';
@@ -1573,6 +1574,7 @@ function onTransparencyChange(value) {
     // Block stale settings echoes from older relay-cached events from
     // overriding the user's new choice and causing the UI to flicker.
     nym._lastSettingsSyncTs = Math.floor(Date.now() / 1000);
+    try { localStorage.setItem('nym_last_settings_sync_ts', String(nym._lastSettingsSyncTs)); } catch (_) { }
     nostrSettingsSave();
 }
 
@@ -3203,7 +3205,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.61.321 ═══<br/>
+═══ Nymchat v3.61.322 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4682,17 +4684,22 @@ function nostrSettingsLoad() {
         limit: 8
     };
 
+    // Buffer settings events during the initial REQ
+    nym._settingsLoadBuffer = nym._settingsLoadBuffer || new Map();
+    nym._settingsLoadBuffer.set(subId, { newestSettings: null, newestTs: 0 });
+
     // Pool mode: send REQ through the multiplexed pool workers
     if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
         const handler = (evt) => {
             try {
                 const msg = JSON.parse(evt.data);
                 if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
-                    nym.handleGiftWrapDM(msg[2]).catch(() => { });
+                    nym.handleGiftWrapDM(msg[2], { settingsLoadSubId: subId }).catch(() => { });
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
                     nym._poolRemoveMessageListener(handler);
                     try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
+                    nym._flushSettingsLoadBuffer(subId);
                 }
             } catch (_) { }
         };
@@ -4703,6 +4710,7 @@ function nostrSettingsLoad() {
         setTimeout(() => {
             nym._poolRemoveMessageListener(handler);
             try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
+            nym._flushSettingsLoadBuffer(subId);
         }, 10000);
         return;
     }
@@ -4715,11 +4723,12 @@ function nostrSettingsLoad() {
             try {
                 const msg = JSON.parse(evt.data);
                 if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
-                    nym.handleGiftWrapDM(msg[2]).catch(() => { });
+                    nym.handleGiftWrapDM(msg[2], { settingsLoadSubId: subId }).catch(() => { });
                 }
                 if (msg[0] === 'EOSE' && msg[1] === subId) {
                     relay.ws.removeEventListener('message', handler);
                     try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) { }
+                    nym._flushSettingsLoadBuffer(subId);
                 }
             } catch (_) { }
         };
@@ -4730,6 +4739,7 @@ function nostrSettingsLoad() {
         setTimeout(() => {
             relay.ws.removeEventListener('message', handler);
             try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) { }
+            nym._flushSettingsLoadBuffer(subId);
         }, 10000);
     });
 }
@@ -4737,7 +4747,56 @@ function nostrSettingsLoad() {
 async function applyNostrSettingsAdditive(s) {
     if (!s || typeof s !== 'object') return;
 
-    // Group conversations — additive for new groups, merge role data for existing.
+    // Notification read-state
+    if (typeof s.notificationLastReadTime === 'number'
+        && s.notificationLastReadTime > (nym.notificationLastReadTime || 0)) {
+        nym.notificationLastReadTime = s.notificationLastReadTime;
+        try { localStorage.setItem('nym_notification_last_read', String(s.notificationLastReadTime)); } catch (_) { }
+        if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
+    }
+
+    // Cross-device notification sync
+    if (Array.isArray(s.notificationHistory) && s.notificationHistory.length > 0) {
+        try {
+            const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+            const seen = new Set();
+            for (const n of nym.notificationHistory) {
+                if (!n) continue;
+                const id = n.channelInfo?.id || `${n.senderPubkey || ''}|${n.timestamp}|${(n.body || '').slice(0, 60)}`;
+                seen.add(id);
+            }
+            let added = 0;
+            for (const n of s.notificationHistory) {
+                if (!n || typeof n.timestamp !== 'number') continue;
+                if (n.timestamp <= cutoff) continue;
+                const id = n.channelInfo?.id || `${n.senderPubkey || ''}|${n.timestamp}|${(n.body || '').slice(0, 60)}`;
+                if (seen.has(id)) continue;
+                // Skip notifications from blocked users / nyms on this device.
+                const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
+                if (pk && nym.blockedUsers && nym.blockedUsers.has(pk)) continue;
+                if (n.senderNym && typeof nym.isNymBlocked === 'function' && nym.isNymBlocked(n.senderNym)) continue;
+                nym.notificationHistory.push({
+                    title: n.title || '',
+                    body: n.body || '',
+                    channelInfo: n.channelInfo || null,
+                    timestamp: n.timestamp,
+                    senderNym: n.senderNym || '',
+                    senderPubkey: pk
+                });
+                seen.add(id);
+                added++;
+            }
+            if (added > 0) {
+                nym.notificationHistory = nym.notificationHistory
+                    .filter(n => n && n.timestamp > cutoff)
+                    .sort((a, b) => a.timestamp - b.timestamp);
+                if (typeof nym._saveNotificationHistory === 'function') nym._saveNotificationHistory();
+                if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
+            }
+        } catch (_) { }
+    }
+
+    // Group conversations
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
             if (!nym.groupConversations.has(groupId)) {
@@ -5077,6 +5136,7 @@ async function applyNostrSettings(s) {
     if (Array.isArray(s.friends)) {
         nym.friends = new Set(s.friends);
         localStorage.setItem('nym_friends', JSON.stringify(s.friends));
+        if (typeof nym.reapplyImageBlur === 'function') nym.reapplyImageBlur();
     }
 
     // Accept PMs setting

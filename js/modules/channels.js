@@ -1200,6 +1200,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const count = (this.unreadCounts.get(channel) || 0) + 1;
         this.unreadCounts.set(channel, count);
         this.channelLastActivity.set(channel, Date.now());
+        this._persistUnreadCounts();
 
         // Handle PM unread counts using conversation key
         if (channel.startsWith('pm-')) {
@@ -1346,6 +1347,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     clearUnreadCount(channel) {
         this.unreadCounts.set(channel, 0);
+        this._persistUnreadCounts();
 
         // Handle PM unread counts using conversation key
         if (channel.startsWith('pm-')) {
@@ -1396,6 +1398,48 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         this.autoResizeTextarea(input);
+    },
+
+    // Persist unread counts and last-activity timestamps so the sidebar
+    // sort order and badges survive a page reload.
+    _persistUnreadCounts() {
+        if (this._persistUnreadTimer) return;
+        this._persistUnreadTimer = setTimeout(() => {
+            this._persistUnreadTimer = null;
+            try {
+                const unread = {};
+                for (const [k, v] of this.unreadCounts) {
+                    if (v > 0) unread[k] = v;
+                }
+                const activity = {};
+                for (const [k, v] of this.channelLastActivity) {
+                    if (v > 0) activity[k] = v;
+                }
+                localStorage.setItem('nym_unread_counts', JSON.stringify(unread));
+                localStorage.setItem('nym_channel_activity', JSON.stringify(activity));
+            } catch (_) { }
+        }, 1000);
+    },
+
+    _hydrateUnreadCounts() {
+        try {
+            const u = localStorage.getItem('nym_unread_counts');
+            if (u) {
+                const parsed = JSON.parse(u);
+                for (const [k, v] of Object.entries(parsed || {})) {
+                    if (typeof v === 'number' && v > 0) this.unreadCounts.set(k, v);
+                }
+            }
+            const a = localStorage.getItem('nym_channel_activity');
+            if (a) {
+                const parsed = JSON.parse(a);
+                for (const [k, v] of Object.entries(parsed || {})) {
+                    if (typeof v === 'number' && v > 0 && !this.channelLastActivity.has(k)) {
+                        this.channelLastActivity.set(k, v);
+                    }
+                }
+            }
+        } catch (_) { }
     },
 
 });

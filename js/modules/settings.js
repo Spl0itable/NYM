@@ -61,10 +61,29 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _serialiseNotificationsForSync() {
+        try {
+            if (!Array.isArray(this.notificationHistory) || this.notificationHistory.length === 0) return [];
+            const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+            return this.notificationHistory
+                .filter(n => n && n.timestamp > cutoff)
+                .slice(-100)
+                .map(n => ({
+                    title: n.title,
+                    body: typeof n.body === 'string' ? n.body.slice(0, 240) : '',
+                    timestamp: n.timestamp,
+                    senderNym: n.senderNym,
+                    senderPubkey: n.senderPubkey,
+                    channelInfo: n.channelInfo || null
+                }));
+        } catch (_) { return []; }
+    },
+
     // Build the settings payload object shared by both save paths
     _buildSettingsPayload() {
         return {
             v: 2,
+            notificationHistory: this._serialiseNotificationsForSync(),
             theme: this.settings.theme,
             sound: this.settings.sound,
             autoscroll: this.settings.autoscroll,
@@ -121,6 +140,21 @@ Object.assign(NYM.prototype, {
         }, delayMs);
     },
 
+    // Apply only the newest buffered settings event from an initial REQ
+    _flushSettingsLoadBuffer(subId) {
+        if (!this._settingsLoadBuffer || !subId) return;
+        const buf = this._settingsLoadBuffer.get(subId);
+        if (!buf) return;
+        this._settingsLoadBuffer.delete(subId);
+        if (!buf.newestSettings || !buf.newestTs) return;
+        if (buf.newestTs <= (this._lastSettingsSyncTs || 0)) return;
+        this._lastSettingsSyncTs = buf.newestTs;
+        try { localStorage.setItem('nym_last_settings_sync_ts', String(buf.newestTs)); } catch (_) { }
+        if (typeof applyNostrSettings === 'function') {
+            Promise.resolve(applyNostrSettings(buf.newestSettings)).catch(() => { });
+        }
+    },
+
     // Publishes group ephemeral keys to a dedicated nymchat-keys self-addressed encrypted giftwrap
     async _publishEncryptedSettings(settingsData) {
         const now = Math.floor(Date.now() / 1000);
@@ -149,6 +183,12 @@ Object.assign(NYM.prototype, {
         }
 
         await this._publishWrappedNostrEvent(settingsData, 'nymchat-settings', now);
+
+        // Bump our own settings-sync timestamp
+        if (now > (this._lastSettingsSyncTs || 0)) {
+            this._lastSettingsSyncTs = now;
+            try { localStorage.setItem('nym_last_settings_sync_ts', String(now)); } catch (_) { }
+        }
     },
 
     // Wrap an arbitrary settings payload as a NIP-59 self-addressed gift wrap
@@ -357,8 +397,28 @@ Object.assign(NYM.prototype, {
                 const cssVar = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
                 document.body.style.setProperty(cssVar, value);
             });
+            // Derive RGB components from the primary color so the built-in
+            // wallpaper patterns can tint themselves to match the active theme.
+            const rgb = this._hexToRgb(selectedTheme.primary);
+            if (rgb) {
+                document.body.style.setProperty('--wp-r', rgb.r);
+                document.body.style.setProperty('--wp-g', rgb.g);
+                document.body.style.setProperty('--wp-b', rgb.b);
+            }
         }
         this.refreshMessages();
+    },
+
+    _hexToRgb(hex) {
+        if (typeof hex !== 'string') return null;
+        let h = hex.trim().replace(/^#/, '');
+        if (h.length === 3) h = h.split('').map(c => c + c).join('');
+        if (!/^[0-9a-f]{6}$/i.test(h)) return null;
+        return {
+            r: parseInt(h.slice(0, 2), 16),
+            g: parseInt(h.slice(2, 4), 16),
+            b: parseInt(h.slice(4, 6), 16)
+        };
     },
 
     getColorMode() {
@@ -467,10 +527,19 @@ Object.assign(NYM.prototype, {
     },
 
     reapplyImageBlur() {
+        const blurOn = this.blurOthersImages === true || this.blurOthersImages === 'friends';
         document.querySelectorAll('.message img').forEach(img => {
             const messageEl = img.closest('.message');
-            if (messageEl && !messageEl.classList.contains('self')) {
-                const pubkey = messageEl.dataset.pubkey;
+            if (!messageEl) return;
+            const inQuote = !!img.closest('blockquote');
+            const isSelfMessage = messageEl.classList.contains('self');
+            const pubkey = messageEl.dataset.pubkey;
+            // Always blur quoted images when blur is enabled at all
+            if (inQuote && blurOn) {
+                img.classList.add('blurred');
+                return;
+            }
+            if (!isSelfMessage) {
                 const shouldBlur = this.blurOthersImages === true ||
                     (this.blurOthersImages === 'friends' && !this.isFriend(pubkey));
                 if (shouldBlur) {
@@ -478,6 +547,8 @@ Object.assign(NYM.prototype, {
                 } else {
                     img.classList.remove('blurred');
                 }
+            } else if (!inQuote) {
+                img.classList.remove('blurred');
             }
         });
     },

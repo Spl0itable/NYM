@@ -464,7 +464,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Receive NIP-17 (GiftWrap 1059): unwrap, verify, store
-    async handleGiftWrapDM(event) {
+    async handleGiftWrapDM(event, opts) {
         try {
             const NT = window.NostrTools;
 
@@ -760,9 +760,19 @@ Object.assign(NYM.prototype, {
                         const rumorTs = rumor.created_at || 0;
                         const isKeysOnly = dTag === 'nymchat-keys';
                         await applyNostrSettingsAdditive(s);
-                        if (!isKeysOnly && rumorTs > (this._lastSettingsSyncTs || 0)) {
-                            this._lastSettingsSyncTs = rumorTs;
-                            await applyNostrSettings(s);
+                        if (!isKeysOnly) {
+                            const subId = opts && opts.settingsLoadSubId;
+                            const buf = subId && this._settingsLoadBuffer && this._settingsLoadBuffer.get(subId);
+                            if (buf) {
+                                if (rumorTs > buf.newestTs) {
+                                    buf.newestTs = rumorTs;
+                                    buf.newestSettings = s;
+                                }
+                            } else if (rumorTs > (this._lastSettingsSyncTs || 0)) {
+                                this._lastSettingsSyncTs = rumorTs;
+                                try { localStorage.setItem('nym_last_settings_sync_ts', String(rumorTs)); } catch (_) { }
+                                await applyNostrSettings(s);
+                            }
                         }
                     } catch (_) { }
                 }
@@ -1309,7 +1319,8 @@ Object.assign(NYM.prototype, {
         // Update PM header title if currently viewing this user's PM
         if (this.inPMMode && this.currentPM === pubkey) {
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
-            const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>`;
+            const flairHtml = this.getFlairForUser(pubkey);
+            const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
             const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
             const channelEl = document.getElementById('currentChannel');
             if (channelEl) channelEl.innerHTML = pmHeaderHtml;
@@ -1487,7 +1498,8 @@ Object.assign(NYM.prototype, {
         const suffix = this.getPubkeySuffix(pubkey);
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const safePk = this._safePubkey(pubkey);
-        const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+        const flairHtml = this.getFlairForUser(pubkey);
+        const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
         const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
 
         // Update UI with formatted nym

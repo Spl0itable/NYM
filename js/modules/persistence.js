@@ -2,8 +2,8 @@
 
 (function () {
     const DB_NAME = 'nym-cache';
-    const DB_VERSION = 1;
-    const STORES = ['meta', 'profiles', 'channels', 'pms', 'reactions'];
+    const DB_VERSION = 2;
+    const STORES = ['meta', 'profiles', 'channels', 'pms', 'reactions', 'avatars', 'banners'];
 
     const PERSIST_DEBOUNCE_MS = 1500;
 
@@ -11,7 +11,9 @@
         profiles: 2000,
         channels: 50,
         pms: 100,
-        reactions: 5000
+        reactions: 5000,
+        avatars: 500,
+        banners: 200
     };
 
     // Debounce for the dedup-set persistence
@@ -44,6 +46,8 @@
                     if (!db.objectStoreNames.contains('channels')) db.createObjectStore('channels', { keyPath: 'key' });
                     if (!db.objectStoreNames.contains('pms')) db.createObjectStore('pms', { keyPath: 'key' });
                     if (!db.objectStoreNames.contains('reactions')) db.createObjectStore('reactions', { keyPath: 'messageId' });
+                    if (!db.objectStoreNames.contains('avatars')) db.createObjectStore('avatars', { keyPath: 'pubkey' });
+                    if (!db.objectStoreNames.contains('banners')) db.createObjectStore('banners', { keyPath: 'pubkey' });
                 };
                 req.onsuccess = () => resolve(req.result);
                 req.onerror = () => reject(req.error);
@@ -204,6 +208,8 @@
 
             const keyForRecord = (r) => {
                 if (storeName === 'profiles') return r.pubkey;
+                if (storeName === 'avatars') return r.pubkey;
+                if (storeName === 'banners') return r.pubkey;
                 if (storeName === 'reactions') return r.messageId;
                 return r.key; // channels, pms, meta
             };
@@ -269,11 +275,13 @@
             if (this._cacheDisabled) return;
             const cachePMsAllowed = this.settings && this.settings.cachePMs !== false;
             try {
-                const [profiles, channels, pms, reactions] = await Promise.all([
+                const [profiles, channels, pms, reactions, avatars, banners] = await Promise.all([
                     this._cacheGetAll('profiles'),
                     this._cacheGetAll('channels'),
                     cachePMsAllowed ? this._cacheGetAll('pms') : Promise.resolve([]),
-                    this._cacheGetAll('reactions')
+                    this._cacheGetAll('reactions'),
+                    this._cacheGetAll('avatars'),
+                    this._cacheGetAll('banners')
                 ]);
 
                 // Profiles
@@ -284,6 +292,55 @@
                     if (!this.users.has(p.pubkey)) {
                         this.users.set(p.pubkey, p.profile || p);
                     }
+                    // Restore the kind 0 source URL into the userAvatars/banners maps
+                    // so getAvatarUrl can return it before the blob hydrates.
+                    if (p.profile) {
+                        if (typeof p.profile.kind0Ts === 'number') {
+                            if (!this._kind0Ts) this._kind0Ts = new Map();
+                            this._kind0Ts.set(p.pubkey, p.profile.kind0Ts);
+                        }
+                        if (p.profile.pictureUrl && !this.userAvatars.has(p.pubkey)) {
+                            this.userAvatars.set(p.pubkey, p.profile.pictureUrl);
+                        }
+                        if (p.profile.bannerUrl && !this.userBanners.has(p.pubkey)) {
+                            this.userBanners.set(p.pubkey, p.profile.bannerUrl);
+                        }
+                        if (p.profile.bio && !this.userBios.has(p.pubkey)) {
+                            this.userBios.set(p.pubkey, p.profile.bio);
+                        }
+                        if (p.profile.lnAddress && !this.userLightningAddresses.has(p.pubkey)) {
+                            this.userLightningAddresses.set(p.pubkey, p.profile.lnAddress);
+                        }
+                    }
+                }
+
+                // Avatars: rehydrate blobs as object URLs
+                for (const a of avatars) {
+                    if (!a || !a.pubkey || !a.blob) continue;
+                    try {
+                        // Skip if the cached blob doesn't match the current source URL
+                        const currentSource = this.userAvatars.get(a.pubkey);
+                        if (currentSource && a.sourceUrl && currentSource !== a.sourceUrl) {
+                            this._cacheDelete('avatars', a.pubkey);
+                            continue;
+                        }
+                        const objectUrl = URL.createObjectURL(a.blob);
+                        this.avatarBlobCache.set(a.pubkey, objectUrl);
+                    } catch (_) { }
+                }
+
+                // Banners: rehydrate blobs as object URLs
+                for (const b of banners) {
+                    if (!b || !b.pubkey || !b.blob) continue;
+                    try {
+                        const currentSource = this.userBanners.get(b.pubkey);
+                        if (currentSource && b.sourceUrl && currentSource !== b.sourceUrl) {
+                            this._cacheDelete('banners', b.pubkey);
+                            continue;
+                        }
+                        const objectUrl = URL.createObjectURL(b.blob);
+                        this.bannerBlobCache.set(b.pubkey, objectUrl);
+                    } catch (_) { }
                 }
 
                 // Channel messages
@@ -459,9 +516,46 @@
             this._schedulePersist('pr', pubkey, () => {
                 const profile = this.users.get(pubkey);
                 if (!profile) return;
-                this._cachePut('profiles', { pubkey, profile });
+                // Snapshot enriched profile fields alongside the user record so
+                // we can rehydrate them without a kind 0 round-trip.
+                const enriched = {
+                    ...profile,
+                    pictureUrl: this.userAvatars && this.userAvatars.get(pubkey) || null,
+                    bannerUrl: this.userBanners && this.userBanners.get(pubkey) || null,
+                    bio: this.userBios && this.userBios.get(pubkey) || null,
+                    lnAddress: this.userLightningAddresses && this.userLightningAddresses.get(pubkey) || null,
+                    kind0Ts: this._kind0Ts && this._kind0Ts.get(pubkey) || profile.kind0Ts || null
+                };
+                this._cachePut('profiles', { pubkey, profile: enriched });
                 this._scheduleTrim();
             });
+        },
+
+        // Persist an avatar blob keyed by pubkey
+        persistAvatarBlob(pubkey, blob, sourceUrl, kind0Ts) {
+            if (!pubkey || !blob || this._cacheDisabled) return;
+            this._schedulePersist('av', pubkey, () => {
+                this._cachePut('avatars', { pubkey, blob, sourceUrl: sourceUrl || null, kind0Ts: kind0Ts || null });
+                this._scheduleTrim();
+            });
+        },
+
+        persistBannerBlob(pubkey, blob, sourceUrl, kind0Ts) {
+            if (!pubkey || !blob || this._cacheDisabled) return;
+            this._schedulePersist('bn', pubkey, () => {
+                this._cachePut('banners', { pubkey, blob, sourceUrl: sourceUrl || null, kind0Ts: kind0Ts || null });
+                this._scheduleTrim();
+            });
+        },
+
+        deleteCachedAvatar(pubkey) {
+            if (!pubkey || this._cacheDisabled) return;
+            this._cacheDelete('avatars', pubkey);
+        },
+
+        deleteCachedBanner(pubkey) {
+            if (!pubkey || this._cacheDisabled) return;
+            this._cacheDelete('banners', pubkey);
         },
 
         persistReactions(messageId) {

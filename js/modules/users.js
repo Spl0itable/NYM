@@ -407,6 +407,11 @@ Object.assign(NYM.prototype, {
                 this.avatarBlobCache.set(pubkey, objectUrl);
                 this._evictAvatarBlobIfFull();
                 this.updateRenderedAvatars(pubkey, objectUrl);
+                // Persist to IndexedDB so we can render it immediately on next load
+                if (typeof this.persistAvatarBlob === 'function') {
+                    const ts = (this._kind0Ts && this._kind0Ts.get(pubkey)) || null;
+                    this.persistAvatarBlob(pubkey, blob, url, ts);
+                }
             })
             .catch(() => {
                 // Blob fetch failed (CORS, network, etc.) — fall back to raw URL
@@ -433,6 +438,10 @@ Object.assign(NYM.prototype, {
                 const ctxBanner = document.getElementById('ctxBannerImg');
                 if (ctxBanner && this.contextMenuData?.pubkey === pubkey) {
                     ctxBanner.src = objectUrl;
+                }
+                if (typeof this.persistBannerBlob === 'function') {
+                    const ts = (this._kind0Ts && this._kind0Ts.get(pubkey)) || null;
+                    this.persistBannerBlob(pubkey, blob, url, ts);
                 }
             })
             .catch(() => { })
@@ -555,6 +564,7 @@ Object.assign(NYM.prototype, {
         const oldBlob = this.avatarBlobCache.get(this.pubkey);
         if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(this.pubkey); }
         this.userAvatars.delete(this.pubkey);
+        if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(this.pubkey);
         localStorage.removeItem('nym_avatar_url');
         this.updateSidebarAvatar();
         this.updateRenderedAvatars(this.pubkey, this.getAvatarUrl(this.pubkey));
@@ -890,6 +900,7 @@ Object.assign(NYM.prototype, {
             const oldBlob = this.avatarBlobCache.get(pubkey);
             if (oldBlob) URL.revokeObjectURL(oldBlob);
             this.avatarBlobCache.delete(pubkey);
+            if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(pubkey);
 
             if (newAvatarUrl) {
                 this.userAvatars.set(pubkey, newAvatarUrl);
@@ -1039,7 +1050,8 @@ Object.assign(NYM.prototype, {
             }
 
             const sortKey = this.parseNymFromDisplay(user.nym).toLowerCase();
-            const statusHidden = this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey);
+            const localStatusOff = this.settings && this.settings.showStatus === false;
+            const statusHidden = localStatusOff || (this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey));
             candidates.push({ user, pubkey, effectiveStatus, sortKey, statusHidden });
         });
 
@@ -1574,6 +1586,7 @@ Object.assign(NYM.prototype, {
         }
 
         this.updateFriendsList();
+        if (typeof this.reapplyImageBlur === 'function') this.reapplyImageBlur();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
@@ -1584,6 +1597,7 @@ Object.assign(NYM.prototype, {
         const nym = this.getNymFromPubkey(pubkey);
         this.displaySystemMessage(`Removed ${nym} from friends`);
         this.updateFriendsList();
+        if (typeof this.reapplyImageBlur === 'function') this.reapplyImageBlur();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 

@@ -656,12 +656,22 @@ Object.assign(NYM.prototype, {
                 const profile = JSON.parse(event.content);
                 const pubkey = event.pubkey;
 
+                // Skip stale kind 0 events
+                const eventTs = (typeof event.created_at === 'number') ? event.created_at : 0;
+                if (!this._kind0Ts) this._kind0Ts = new Map();
+                const lastTs = this._kind0Ts.get(pubkey) || 0;
+                if (eventTs && lastTs && eventTs < lastTs) {
+                    this._resolveProfileCallbacks(pubkey);
+                    return;
+                }
+                if (eventTs > lastTs) this._kind0Ts.set(pubkey, eventTs);
+
                 // Cache the full kind 0 profile for own user so saveToNostrProfile
                 // can merge changes without losing fields the app doesn't manage
                 if (pubkey === this.pubkey) {
                     this._cachedKind0Profile = profile;
-                    if (typeof event.created_at === 'number' && event.created_at > (this._lastKind0Ts || 0)) {
-                        this._lastKind0Ts = event.created_at;
+                    if (eventTs > (this._lastKind0Ts || 0)) {
+                        this._lastKind0Ts = eventTs;
                     }
                 }
 
@@ -673,17 +683,29 @@ Object.assign(NYM.prototype, {
                 }
 
                 // Extract avatar from profile picture field
-                if (profile.picture) {
+                const pickPictureUrl = (p) => {
+                    const candidates = [p && p.picture, p && p.image, p && p.avatar];
+                    for (const c of candidates) {
+                        if (typeof c !== 'string') continue;
+                        const trimmed = c.trim().replace(/^['"]|['"]$/g, '');
+                        if (!trimmed) continue;
+                        if (/^(https?:|data:image\/)/i.test(trimmed)) return trimmed;
+                    }
+                    return null;
+                };
+                const pictureUrl = pickPictureUrl(profile);
+                if (pictureUrl) {
                     const prevUrl = this.userAvatars.get(pubkey);
-                    if (prevUrl !== profile.picture) {
+                    if (prevUrl !== pictureUrl) {
                         const oldBlob = this.avatarBlobCache.get(pubkey);
                         if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
-                        this.userAvatars.set(pubkey, profile.picture);
-                        this.cacheAvatarImage(pubkey, profile.picture);
-                        this.updateRenderedAvatars(pubkey, profile.picture);
+                        if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(pubkey);
+                        this.userAvatars.set(pubkey, pictureUrl);
+                        this.cacheAvatarImage(pubkey, pictureUrl);
+                        this.updateRenderedAvatars(pubkey, pictureUrl);
                     } else if (!this.avatarBlobCache.has(pubkey)) {
-                        this.userAvatars.set(pubkey, profile.picture);
-                        this.cacheAvatarImage(pubkey, profile.picture);
+                        this.userAvatars.set(pubkey, pictureUrl);
+                        this.cacheAvatarImage(pubkey, pictureUrl);
                     }
                 }
 
@@ -693,6 +715,7 @@ Object.assign(NYM.prototype, {
                     if (prevBanner !== profile.banner) {
                         const oldBlob = this.bannerBlobCache.get(pubkey);
                         if (oldBlob) { URL.revokeObjectURL(oldBlob); this.bannerBlobCache.delete(pubkey); }
+                        if (typeof this.deleteCachedBanner === 'function') this.deleteCachedBanner(pubkey);
                         this.userBanners.set(pubkey, profile.banner);
                         this.cacheBannerImage(pubkey, profile.banner);
                     } else if (!this.bannerBlobCache.has(pubkey)) {
@@ -1780,6 +1803,15 @@ Object.assign(NYM.prototype, {
                     try {
                         const profile = JSON.parse(event.content);
 
+                        // Skip stale kind 0 events relative to what we've already applied
+                        const eventTs = (typeof event.created_at === 'number') ? event.created_at : 0;
+                        if (!this._kind0Ts) this._kind0Ts = new Map();
+                        const lastTs = this._kind0Ts.get(event.pubkey) || 0;
+                        if (eventTs && lastTs && eventTs < lastTs) {
+                            this._resolveProfileCallbacks(event.pubkey);
+                            return;
+                        }
+                        if (eventTs > lastTs) this._kind0Ts.set(event.pubkey, eventTs);
 
                         // Get name for own profile
                         if (event.pubkey === this.pubkey && (profile.name || profile.username || profile.display_name)) {
@@ -1789,18 +1821,31 @@ Object.assign(NYM.prototype, {
                             this.updateSidebarAvatar();
                         }
 
-                        // Extract avatar from profile picture field
-                        if (profile.picture) {
+                        // Extract avatar from profile picture field, accepting
+                        // common alternate keys and trimming whitespace.
+                        const _pickPic = (p) => {
+                            const candidates = [p && p.picture, p && p.image, p && p.avatar];
+                            for (const c of candidates) {
+                                if (typeof c !== 'string') continue;
+                                const trimmed = c.trim().replace(/^['"]|['"]$/g, '');
+                                if (!trimmed) continue;
+                                if (/^(https?:|data:image\/)/i.test(trimmed)) return trimmed;
+                            }
+                            return null;
+                        };
+                        const pictureUrl = _pickPic(profile);
+                        if (pictureUrl) {
                             const prevUrl = this.userAvatars.get(event.pubkey);
-                            if (prevUrl !== profile.picture) {
+                            if (prevUrl !== pictureUrl) {
                                 const oldBlob = this.avatarBlobCache.get(event.pubkey);
                                 if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(event.pubkey); }
-                                this.userAvatars.set(event.pubkey, profile.picture);
-                                this.cacheAvatarImage(event.pubkey, profile.picture);
-                                this.updateRenderedAvatars(event.pubkey, profile.picture);
+                                if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(event.pubkey);
+                                this.userAvatars.set(event.pubkey, pictureUrl);
+                                this.cacheAvatarImage(event.pubkey, pictureUrl);
+                                this.updateRenderedAvatars(event.pubkey, pictureUrl);
                             } else if (!this.avatarBlobCache.has(event.pubkey)) {
-                                this.userAvatars.set(event.pubkey, profile.picture);
-                                this.cacheAvatarImage(event.pubkey, profile.picture);
+                                this.userAvatars.set(event.pubkey, pictureUrl);
+                                this.cacheAvatarImage(event.pubkey, pictureUrl);
                             }
                         }
 
