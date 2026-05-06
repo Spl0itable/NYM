@@ -28,7 +28,7 @@ const WebViewScreen({super.key});
 State<WebViewScreen> createState() => _WebViewScreenState();
 }
 
-class _WebViewScreenState extends State<WebViewScreen> {
+class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserver {
 static final Uri _baseUri = Uri.parse('https://web.nymchat.app');
 static final Uri _fallbackUri = Uri.parse('https://spl0itable.github.io/NYM/');
 static const String _userAgentToken = 'NymchatApp/1.0';
@@ -48,12 +48,12 @@ final ImagePicker _imagePicker = ImagePicker();
 String? _localNostrPubkey;
 
 // Dynamic theme colors from PWA (will be updated based on system preference)
-Color _themeBackgroundColor = const Color(0xFF0A0A0F);
+Color _themeBackgroundColor = const Color(0xFF14141E);
 bool _isLightMode = false;
 
-// Light/dark theme colors
-static const Color _darkBackgroundColor = Color(0xFF0A0A0F);
-static const Color _lightBackgroundColor = Color(0xFFF5F5F2);
+// Light/dark theme colors - must match theme.dart
+static const Color _darkBackgroundColor = Color(0xFF14141E);
+static const Color _lightBackgroundColor = Color(0xFFFFFFFF);
 
 // ASCII logo loaded from asset file (protected from accidental modifications)
 String _asciiLogo = '';
@@ -66,7 +66,9 @@ int _notificationIdCounter = 0;
 @override
 void initState() {
 super.initState();
+WidgetsBinding.instance.addObserver(this);
 _initializeTheme();
+_updateSystemUIStyle(_themeBackgroundColor, _isLightMode);
 _loadAsciiLogo();
 _requestLocationPermission();
 _requestCameraPermission();
@@ -362,7 +364,7 @@ initialUri,
 headers: {'Cache-Control': 'max-age=14400'},
 );
 
-_controller.setBackgroundColor(const Color(0xFF0A0A0F));
+_controller.setBackgroundColor(_themeBackgroundColor);
 
 _controller
 ..addJavaScriptChannel(
@@ -530,6 +532,21 @@ await _handleMediaDownload(message.message);
 onMessageReceived: (message) async {
 debugPrint('[NYM Bridge] FlutterWalletCheck received: ${message.message}');
 await _handleWalletCheck(message.message);
+},
+)
+..addJavaScriptChannel(
+'Haptics',
+onMessageReceived: (message) {
+debugPrint('[NYM Bridge] Haptics received: ${message.message}');
+if (message.message == 'tap') {
+HapticFeedback.lightImpact();
+} else if (message.message == 'selection') {
+HapticFeedback.selectionClick();
+} else if (message.message == 'medium') {
+HapticFeedback.mediumImpact();
+} else if (message.message == 'heavy') {
+HapticFeedback.heavyImpact();
+}
 },
 )
 
@@ -2234,39 +2251,32 @@ await launchUrl(uri, mode: LaunchMode.externalApplication);
 }
 
 void _handleThemeChange(String message) {
-try {
-final data = jsonDecode(message) as Map<String, dynamic>;
-final bgColor = data['backgroundColor'] as String?;
-final isLight = data['isLightMode'] as bool? ?? false;
-
-if (bgColor != null && bgColor.startsWith('#')) {
-// Parse hex color (e.g., #0a0a0f or #f5f5f2)
-final hexColor = bgColor.replaceFirst('#', '');
-final colorValue = int.tryParse(hexColor, radix: 16);
-
-if (colorValue != null) {
-final newColor = Color(0xFF000000 | colorValue);
-
-if (_themeBackgroundColor != newColor || _isLightMode != isLight) {
-setState(() {
-_themeBackgroundColor = newColor;
-_isLightMode = isLight;
-});
-
-// Update system UI overlay style
-_updateSystemUIStyle(newColor, isLight);
-
-// Update WebView background color
-_controller.setBackgroundColor(newColor);
-
-debugPrint('[Theme] Updated to: $bgColor, isLight: $isLight');
-}
-}
-}
-} catch (e) {
-debugPrint('[Theme] Error parsing theme message: $e');
-}
-}
+    try {
+      final data = jsonDecode(message) as Map<String, dynamic>;
+      final isLight = data['isLightMode'] as bool? ?? false;
+      
+      // ALWAYS use our predefined colors for consistency - ignore PWA's colors
+      // This ensures the top/bottom bars match our theme.dart colors
+      final newColor = isLight ? _lightBackgroundColor : _darkBackgroundColor;
+      
+      if (_themeBackgroundColor != newColor || _isLightMode != isLight) {
+        setState(() {
+          _themeBackgroundColor = newColor;
+          _isLightMode = isLight;
+        });
+        
+        // Update system UI overlay style
+        _updateSystemUIStyle(newColor, isLight);
+        
+        // Update WebView background color
+        _controller.setBackgroundColor(newColor);
+        
+        debugPrint('[Theme] Updated to: "){isLight ? "#FFFFFF" : "#14141E"}, isLight: $isLight');
+      }
+    } catch (e) {
+      debugPrint('[Theme] Error parsing theme message: $e');
+    }
+  }
 
 void _updateSystemUIStyle(Color bgColor, bool isLight) {
 final brightness = isLight ? Brightness.dark : Brightness.light;
@@ -3039,13 +3049,13 @@ var base64Data = '$base64Data';
 var byteCharacters = atob(base64Data);
 var byteArrays = [];
 for (var offset = 0; offset < byteCharacters.length; offset += 512) {
-  var slice = byteCharacters.slice(offset, offset + 512);
-  var byteNumbers = new Array(slice.length);
-  for (var i = 0; i < slice.length; i++) {
-    byteNumbers[i] = slice.charCodeAt(i);
-  }
-  var byteArray = new Uint8Array(byteNumbers);
-  byteArrays.push(byteArray);
+var slice = byteCharacters.slice(offset, offset + 512);
+var byteNumbers = new Array(slice.length);
+for (var i = 0; i < slice.length; i++) {
+byteNumbers[i] = slice.charCodeAt(i);
+}
+var byteArray = new Uint8Array(byteNumbers);
+byteArrays.push(byteArray);
 }
 var blob = new Blob(byteArrays, {type: '$mimeType'});
 const file = new File([blob], '$fileName', { type: '$mimeType' });console.log('[NYM Bridge Media] File created:', file.name, file.size, file.type);
@@ -3779,10 +3789,30 @@ return 'Mozilla/5.0 ($platformFragment) AppleWebKit/537.36 (KHTML, like Gecko) C
 
 @override
 void dispose() {
+WidgetsBinding.instance.removeObserver(this);
 _notificationSubscription?.cancel();
 _appLinksSubscription?.cancel();
 disposeFIPSBLE();
 super.dispose();
+}
+
+@override
+void didChangePlatformBrightness() {
+super.didChangePlatformBrightness();
+// System theme changed - update our colors
+final brightness = WidgetsBinding.instance.platformDispatcher.platformBrightness;
+final isLight = brightness == Brightness.light;
+final newColor = isLight ? _lightBackgroundColor : _darkBackgroundColor;
+
+if (_isLightMode != isLight) {
+  setState(() {
+    _isLightMode = isLight;
+    _themeBackgroundColor = newColor;
+  });
+  _updateSystemUIStyle(newColor, isLight);
+  _controller.setBackgroundColor(newColor);
+  debugPrint('[Theme] Platform brightness changed to: ${isLight ? "light" : "dark"}');
+}
 }
 
 /// Handle Android back button - navigate in webview history before closing app

@@ -5,9 +5,9 @@ import 'package:nym_bar/screens/webview_screen.dart';
 import 'package:nym_bar/services/notification_service.dart';
 import 'package:nym_bar/utils/webview_platform_initializer.dart';
 
-// App theme colors
-const Color kDarkBackgroundColor = Color(0xFF0A0A0F);
-const Color kLightBackgroundColor = Color(0xFFF5F5F2);
+// App theme colors - must match theme.dart
+const Color kDarkBackgroundColor = Color(0xFF14141E);
+const Color kLightBackgroundColor = Color(0xFFFFFFFF);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

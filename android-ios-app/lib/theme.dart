@@ -18,7 +18,9 @@ class LightModeColors {
   static const lightShadow = Color(0xFF000000);
   static const lightSurface = Color(0xFFF5F5F5);
   static const lightOnSurface = Color(0xFF0D0D0D);
-  static const lightAppBarBackground = Color(0xFF1A1A1A);
+  static const lightAppBarBackground = Color(0xFFFFFFFF);
+  static const lightNavigationBackground = Color(0xFFFFFFFF);
+  static const lightMenuBackground = Color(0xFFFFFFFF);
 }
 
 class DarkModeColors {
@@ -38,7 +40,9 @@ class DarkModeColors {
   static const darkShadow = Color(0xFF000000);
   static const darkSurface = Color(0xFF0D0D0D);
   static const darkOnSurface = Color(0xFF00FF41);
-  static const darkAppBarBackground = Color(0xFF000000);
+  static const darkAppBarBackground = Color(0xFF14141E);
+  static const darkNavigationBackground = Color(0xFF14141E);
+  static const darkMenuBackground = Color(0xFF14141E);
 }
 
 class FontSizes {
@@ -82,8 +86,26 @@ ThemeData get lightTheme => ThemeData(
   brightness: Brightness.light,
   appBarTheme: AppBarTheme(
     backgroundColor: LightModeColors.lightAppBarBackground,
-    foregroundColor: LightModeColors.lightOnPrimaryContainer,
+    foregroundColor: LightModeColors.lightOnSurface,
     elevation: 0,
+  ),
+  bottomNavigationBarTheme: BottomNavigationBarThemeData(
+    backgroundColor: LightModeColors.lightNavigationBackground,
+    selectedItemColor: LightModeColors.lightPrimary,
+    unselectedItemColor: LightModeColors.lightOnSurface.withValues(alpha: 0.6),
+  ),
+  navigationBarTheme: NavigationBarThemeData(
+    backgroundColor: LightModeColors.lightNavigationBackground,
+    indicatorColor: LightModeColors.lightPrimary.withValues(alpha: 0.2),
+  ),
+  popupMenuTheme: PopupMenuThemeData(
+    color: LightModeColors.lightMenuBackground,
+  ),
+  drawerTheme: DrawerThemeData(
+    backgroundColor: LightModeColors.lightMenuBackground,
+  ),
+  bottomSheetTheme: BottomSheetThemeData(
+    backgroundColor: LightModeColors.lightMenuBackground,
   ),
   textTheme: TextTheme(
     displayLarge: GoogleFonts.orbitron(
@@ -174,6 +196,24 @@ ThemeData get darkTheme => ThemeData(
     backgroundColor: DarkModeColors.darkAppBarBackground,
     foregroundColor: DarkModeColors.darkOnPrimaryContainer,
     elevation: 0,
+  ),
+  bottomNavigationBarTheme: BottomNavigationBarThemeData(
+    backgroundColor: DarkModeColors.darkNavigationBackground,
+    selectedItemColor: DarkModeColors.darkPrimary,
+    unselectedItemColor: DarkModeColors.darkOnSurface.withValues(alpha: 0.6),
+  ),
+  navigationBarTheme: NavigationBarThemeData(
+    backgroundColor: DarkModeColors.darkNavigationBackground,
+    indicatorColor: DarkModeColors.darkPrimary.withValues(alpha: 0.2),
+  ),
+  popupMenuTheme: PopupMenuThemeData(
+    color: DarkModeColors.darkMenuBackground,
+  ),
+  drawerTheme: DrawerThemeData(
+    backgroundColor: DarkModeColors.darkMenuBackground,
+  ),
+  bottomSheetTheme: BottomSheetThemeData(
+    backgroundColor: DarkModeColors.darkMenuBackground,
   ),
   textTheme: TextTheme(
     displayLarge: GoogleFonts.orbitron(
