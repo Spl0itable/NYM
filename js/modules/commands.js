@@ -244,6 +244,7 @@ Object.assign(NYM.prototype, {
             '?top': { desc: 'Show top chatters' },
             '?last': { desc: 'Show last message from a user' },
             '?seen': { desc: 'When was a user last seen' },
+            '?changelog': { desc: 'Latest Nymchat release notes (?changelog <version> for a specific release)' },
             '?help': { desc: 'Show all Nymbot commands' },
         };
         this.commands = {

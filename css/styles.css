@@ -8816,6 +8816,7 @@ body.solid-ui .modal-content,
 body.solid-ui .shop-content,
 body.solid-ui .scroll-to-bottom-btn,
 body.solid-ui .emoji-picker,
+body.solid-ui .emoji-picker-search,
 body.solid-ui .geohash-info-panel,
 body.solid-ui .geohash-control-btn,
 body.solid-ui .geohash-legend,
@@ -8823,7 +8824,13 @@ body.solid-ui .tutorial-card,
 body.solid-ui .pubkey-slideout,
 body.solid-ui .quick-react-popup,
 body.solid-ui .quick-context-menu,
-body.solid-ui .gif-picker {
+body.solid-ui .gif-picker,
+body.solid-ui .autocomplete-dropdown,
+body.solid-ui .emoji-autocomplete,
+body.solid-ui .command-palette,
+body.solid-ui .reaction-picker,
+body.solid-ui .enhanced-emoji-modal,
+body.solid-ui .upload-progress {
     background: var(--glass-bg);
 }
 
@@ -8835,6 +8842,7 @@ body.solid-ui.light-mode .modal-content,
 body.solid-ui.light-mode .shop-content,
 body.solid-ui.light-mode .scroll-to-bottom-btn,
 body.solid-ui.light-mode .emoji-picker,
+body.solid-ui.light-mode .emoji-picker-search,
 body.solid-ui.light-mode .geohash-info-panel,
 body.solid-ui.light-mode .geohash-control-btn,
 body.solid-ui.light-mode .geohash-legend,
@@ -8842,7 +8850,13 @@ body.solid-ui.light-mode .tutorial-card,
 body.solid-ui.light-mode .pubkey-slideout,
 body.solid-ui.light-mode .quick-react-popup,
 body.solid-ui.light-mode .quick-context-menu,
-body.solid-ui.light-mode .gif-picker {
+body.solid-ui.light-mode .gif-picker,
+body.solid-ui.light-mode .autocomplete-dropdown,
+body.solid-ui.light-mode .emoji-autocomplete,
+body.solid-ui.light-mode .command-palette,
+body.solid-ui.light-mode .reaction-picker,
+body.solid-ui.light-mode .enhanced-emoji-modal,
+body.solid-ui.light-mode .upload-progress {
     background: var(--glass-bg);
 }
 
