@@ -450,6 +450,14 @@ body.nymchat-app .logo-ascii {
     border-color: rgba(255, 215, 0, 0.15);
 }
 
+.channel-item.has-unread {
+    order: -2;
+}
+
+.channel-item[data-geohash="nym"] {
+    order: -3;
+}
+
 .channel-item:hover,
 .pm-item:hover {
     background: rgba(255, 255, 255, 0.06);

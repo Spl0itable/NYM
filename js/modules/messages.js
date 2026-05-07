@@ -216,12 +216,10 @@ Object.assign(NYM.prototype, {
                 const prevActivity = this.channelLastActivity.get(storageKey) || 0;
                 if (msgTime > prevActivity) {
                     this.channelLastActivity.set(storageKey, msgTime);
-                    // Debounced sort so discovered/historical channels order by activity
-                    if (this._sortDebounceTimer) clearTimeout(this._sortDebounceTimer);
-                    this._sortDebounceTimer = setTimeout(() => {
-                        this._sortDebounceTimer = null;
-                        this.sortChannelsByActivity();
-                    }, 300);
+                    // Throttled sort so discovered/historical channels order by activity
+                    if (typeof this._scheduleChannelSort === 'function') {
+                        this._scheduleChannelSort();
+                    }
                 }
 
                 // Add message and sort by raw created_at (integer seconds) for

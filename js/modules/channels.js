@@ -1212,6 +1212,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (badge) {
                     badge.textContent = count > 99 ? '99+' : count;
                     badge.style.display = count > 0 ? 'block' : 'none';
+                    const item = badge.closest('.pm-item, .channel-item');
+                    if (item) item.classList.toggle('has-unread', count > 0);
                 }
             }
         } else if (channel.startsWith('group-')) {
@@ -1221,6 +1223,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (badge) {
                 badge.textContent = count > 99 ? '99+' : count;
                 badge.style.display = count > 0 ? 'block' : 'none';
+                const item = badge.closest('.pm-item, .channel-item');
+                if (item) item.classList.toggle('has-unread', count > 0);
             }
         } else {
             // Regular channel unread counts
@@ -1236,16 +1240,38 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (badge) {
                 badge.textContent = count > 99 ? '99+' : count;
                 badge.style.display = count > 0 ? 'block' : 'none';
+                const item = badge.closest('.channel-item');
+                if (item) item.classList.toggle('has-unread', count > 0);
             }
         }
 
-        // Re-sort channels by activity (debounced to prevent DOM thrashing
-        // that makes channel links unclickable during rapid message bursts)
-        if (this._sortDebounceTimer) clearTimeout(this._sortDebounceTimer);
+        // Re-sort channels by activity
+        this._scheduleChannelSort();
+    },
+
+    // Throttle the sidebar sort so it fires immediately on the first call
+    _scheduleChannelSort() {
+        const SORT_THROTTLE_MS = 300;
+        const now = Date.now();
+        const last = this._lastChannelSortAt || 0;
+        const elapsed = now - last;
+
+        if (elapsed >= SORT_THROTTLE_MS) {
+            if (this._sortDebounceTimer) {
+                clearTimeout(this._sortDebounceTimer);
+                this._sortDebounceTimer = null;
+            }
+            this._lastChannelSortAt = now;
+            this.sortChannelsByActivity();
+            return;
+        }
+
+        if (this._sortDebounceTimer) return;
         this._sortDebounceTimer = setTimeout(() => {
             this._sortDebounceTimer = null;
+            this._lastChannelSortAt = Date.now();
             this.sortChannelsByActivity();
-        }, 300);
+        }, SORT_THROTTLE_MS - elapsed);
     },
 
     sortChannelsByActivity() {
@@ -1358,6 +1384,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const badge = document.querySelector(`[data-pubkey="${otherPubkey}"] .unread-badge`);
                 if (badge) {
                     badge.style.display = 'none';
+                    const item = badge.closest('.pm-item, .channel-item');
+                    if (item) item.classList.remove('has-unread');
                 }
             }
         } else if (channel.startsWith('group-')) {
@@ -1366,6 +1394,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const badge = document.querySelector(`[data-group-id="${groupId}"] .unread-badge`);
             if (badge) {
                 badge.style.display = 'none';
+                const item = badge.closest('.pm-item, .channel-item');
+                if (item) item.classList.remove('has-unread');
             }
         } else {
             // Regular channel unread counts — match updateUnreadCount selector logic
@@ -1379,6 +1409,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const badge = document.querySelector(`${selector} .unread-badge`);
             if (badge) {
                 badge.style.display = 'none';
+                const item = badge.closest('.channel-item');
+                if (item) item.classList.remove('has-unread');
             }
         }
     },
