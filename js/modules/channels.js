@@ -473,6 +473,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.savePinnedChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.updateChannelPins();
+        this.sortChannelsByActivity();
     },
 
     updateChannelPins() {
@@ -508,7 +509,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             } catch (_) {
                 this.pinnedChannels = new Set();
             }
-            this._scheduleIdle(() => this.updateChannelPins());
+            this._scheduleIdle(() => {
+                this.updateChannelPins();
+                this.sortChannelsByActivity();
+            });
         }
     },
 
@@ -858,6 +862,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Clear unread count
         const unreadKey = geohash ? `#${geohash}` : channel;
         this.clearUnreadCount(unreadKey);
+
+        // Re-sort sidebar so the active channel moves to the top while we're
+        // viewing it (and the previous channel falls back to its activity slot)
+        this.sortChannelsByActivity();
 
         // Load channel messages - loadChannelMessages has its own dedup check
         // via container.dataset.lastChannel, so always call it to handle

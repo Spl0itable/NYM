@@ -9,6 +9,22 @@
     const ADMIN1_ZOOM_THRESHOLD = 2.5;
     const CITY_ZOOM_THRESHOLD = 2.5;
     const ACTIVE_WINDOW_REFRESH_MS = 30000;
+    const DAYNIGHT_REFRESH_MS = 60000;
+
+    function solarPosition(date) {
+        const rad = Math.PI / 180;
+        const n = (date.getTime() / 86400000) - 10957.5;
+        const L = ((280.46 + 0.9856474 * n) % 360 + 360) % 360;
+        const g = (((357.528 + 0.9856003 * n) % 360 + 360) % 360) * rad;
+        const lambda = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * rad;
+        const epsilon = 23.4397 * rad;
+        const RA = Math.atan2(Math.cos(epsilon) * Math.sin(lambda), Math.cos(lambda));
+        const decl = Math.asin(Math.sin(epsilon) * Math.sin(lambda));
+        const gmst = (((18.697374558 + 24.06570982441908 * n) % 24) + 24) % 24;
+        let lng = (RA / rad) - gmst * 15;
+        lng = ((lng % 360) + 540) % 360 - 180;
+        return { lat: decl / rad, lng };
+    }
 
     function decodeTopoJson(topo, objectName) {
         const tx = topo.transform || { scale: [1, 1], translate: [0, 0] };
@@ -264,10 +280,15 @@ Object.assign(NYM.prototype, {
 </div>
 
 <div class="geohash-controls">
-    <button class="geohash-control-btn geohash-heatmap-btn" id="geohashHeatmapBtn" data-action="toggleHeatmap">Heatmap</button>
-    <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapIn" aria-label="Zoom in">+</button>
-    <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapOut" aria-label="Zoom out">&minus;</button>
-    <button class="geohash-control-btn" data-action="resetGlobeView">Reset View</button>
+    <div class="geohash-controls-row">
+        <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapIn" aria-label="Zoom in">+</button>
+        <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapOut" aria-label="Zoom out">&minus;</button>
+        <button class="geohash-control-btn" data-action="resetGlobeView">Reset View</button>
+    </div>
+    <div class="geohash-controls-row">
+        <button class="geohash-control-btn geohash-heatmap-btn" id="geohashHeatmapBtn" data-action="toggleHeatmap">Heatmap</button>
+        <button class="geohash-control-btn geohash-daynight-btn" id="geohashDaynightBtn" data-action="toggleDaynight">Day/Night</button>
+    </div>
 </div>
 
 <div class="geohash-legend">
@@ -346,6 +367,7 @@ Object.assign(NYM.prototype, {
         let citiesLoaded = false;
         let drawScheduled = false;
         let heatmapMode = !!this._heatmapPreference;
+        let daynightMode = !!this._daynightPreference;
         const styles = getMapStyles();
 
         const ensureSubregions = () => {
@@ -386,6 +408,12 @@ Object.assign(NYM.prototype, {
         };
         updateHeatmapButton();
 
+        const updateDaynightButton = () => {
+            const btn = document.getElementById('geohashDaynightBtn');
+            if (btn) btn.classList.toggle('active', daynightMode);
+        };
+        updateDaynightButton();
+
         const drawWorld = () => {
             ctx.fillStyle = styles.land;
             ctx.strokeStyle = styles.border;
@@ -398,11 +426,19 @@ Object.assign(NYM.prototype, {
                 for (const poly of polys) {
                     for (const ring of poly) {
                         if (ring.length < 2) continue;
-                        const first = project(ring[0][0], ring[0][1]);
+                        let prevLng = ring[0][0];
+                        const first = project(prevLng, ring[0][1]);
                         ctx.moveTo(first.x, first.y);
                         for (let i = 1; i < ring.length; i++) {
-                            const p = project(ring[i][0], ring[i][1]);
-                            ctx.lineTo(p.x, p.y);
+                            const lng = ring[i][0];
+                            const p = project(lng, ring[i][1]);
+                            if (Math.abs(lng - prevLng) > 180) {
+                                ctx.closePath();
+                                ctx.moveTo(p.x, p.y);
+                            } else {
+                                ctx.lineTo(p.x, p.y);
+                            }
+                            prevLng = lng;
                         }
                         ctx.closePath();
                     }
@@ -487,11 +523,18 @@ Object.assign(NYM.prototype, {
                 for (const poly of polys) {
                     for (const ring of poly) {
                         if (ring.length < 2) continue;
-                        const first = project(ring[0][0], ring[0][1]);
+                        let prevLng = ring[0][0];
+                        const first = project(prevLng, ring[0][1]);
                         ctx.moveTo(first.x, first.y);
                         for (let i = 1; i < ring.length; i++) {
-                            const p = project(ring[i][0], ring[i][1]);
-                            ctx.lineTo(p.x, p.y);
+                            const lng = ring[i][0];
+                            const p = project(lng, ring[i][1]);
+                            if (Math.abs(lng - prevLng) > 180) {
+                                ctx.moveTo(p.x, p.y);
+                            } else {
+                                ctx.lineTo(p.x, p.y);
+                            }
+                            prevLng = lng;
                         }
                     }
                 }
@@ -566,6 +609,51 @@ Object.assign(NYM.prototype, {
                     ctx.fillText(city.name, p.x + 4, p.y);
                 }
             }
+        };
+
+        const drawDaynight = () => {
+            const sun = solarPosition(new Date());
+            const declRad = sun.lat * Math.PI / 180;
+            let tanDecl = Math.tan(declRad);
+            if (Math.abs(tanDecl) < 1e-4) tanDecl = (declRad >= 0 ? 1 : -1) * 1e-4;
+
+            const step = 2;
+            const points = [];
+            for (let lng = -180; lng <= 180; lng += step) {
+                const dLng = (lng - sun.lng) * Math.PI / 180;
+                const lat = Math.atan(-Math.cos(dLng) / tanDecl) * 180 / Math.PI;
+                points.push(project(lng, lat));
+            }
+
+            const closeBottom = sun.lat >= 0;
+            const yEdge = closeBottom ? cssHeight + 4 : -4;
+
+            ctx.save();
+            ctx.fillStyle = document.body.classList.contains('light-mode')
+                ? 'rgba(20, 30, 55, 0.28)'
+                : 'rgba(2, 6, 16, 0.5)';
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+            const last = points[points.length - 1];
+            ctx.lineTo(last.x, yEdge);
+            ctx.lineTo(points[0].x, yEdge);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+            ctx.strokeStyle = document.body.classList.contains('light-mode')
+                ? 'rgba(40, 60, 100, 0.45)'
+                : 'rgba(180, 200, 230, 0.35)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.restore();
         };
 
         const drawHeatmap = () => {
@@ -701,6 +789,7 @@ Object.assign(NYM.prototype, {
                 drawCities();
                 drawChannels();
             }
+            if (daynightMode) drawDaynight();
             drawUserLocation();
         };
 
@@ -866,6 +955,11 @@ Object.assign(NYM.prototype, {
             requestDraw();
         }, ACTIVE_WINDOW_REFRESH_MS);
 
+        const daynightTimer = setInterval(() => {
+            if (!this.geohashMap || !daynightMode) return;
+            requestDraw();
+        }, DAYNIGHT_REFRESH_MS);
+
         this._geomapCleanup = () => {
             canvas.removeEventListener('pointerdown', onPointerDown);
             canvas.removeEventListener('pointermove', onPointerMove);
@@ -879,6 +973,7 @@ Object.assign(NYM.prototype, {
             window.removeEventListener('resize', onResize);
             if (resizeTimer) clearTimeout(resizeTimer);
             clearInterval(activeWindowTimer);
+            clearInterval(daynightTimer);
         };
 
         this.geohashMap = {
@@ -893,6 +988,11 @@ Object.assign(NYM.prototype, {
                     heatmapMode = false;
                     this._heatmapPreference = false;
                     updateHeatmapButton();
+                }
+                if (daynightMode) {
+                    daynightMode = false;
+                    this._daynightPreference = false;
+                    updateDaynightButton();
                 }
                 clampView();
                 requestDraw();
@@ -913,7 +1013,14 @@ Object.assign(NYM.prototype, {
                 updateHeatmapButton();
                 requestDraw();
             },
-            isHeatmap: () => heatmapMode
+            isHeatmap: () => heatmapMode,
+            toggleDaynight: () => {
+                daynightMode = !daynightMode;
+                this._daynightPreference = daynightMode;
+                updateDaynightButton();
+                requestDraw();
+            },
+            isDaynight: () => daynightMode
         };
 
         clampView();
@@ -935,6 +1042,10 @@ Object.assign(NYM.prototype, {
 
     toggleHeatmap() {
         if (this.geohashMap) this.geohashMap.toggleHeatmap();
+    },
+
+    toggleDaynight() {
+        if (this.geohashMap) this.geohashMap.toggleDaynight();
     },
 
     _scheduleGeohashMapUpdate() {
@@ -978,6 +1089,9 @@ Object.assign(NYM.prototype, {
         if (this.geohashMap) this.geohashMap.resetView();
         const infoPanel = document.getElementById('geohashInfoPanel');
         if (infoPanel) infoPanel.style.display = 'none';
+        if (this._geohashActiveWindowHours !== 24) {
+            this.setGeohashActiveWindow(24);
+        }
     },
 
     decodeGeohash(geohash) {

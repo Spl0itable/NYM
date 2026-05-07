@@ -444,18 +444,14 @@ body.nymchat-app .logo-ascii {
     font-size: var(--user-text-size);
 }
 
-.channel-item.pinned {
+.channel-item.has-unread {
     order: -1;
+}
+
+.channel-item.pinned {
+    order: -2;
     background: rgba(255, 215, 0, 0.04);
     border-color: rgba(255, 215, 0, 0.15);
-}
-
-.channel-item.has-unread {
-    order: -2;
-}
-
-.channel-item[data-geohash="nym"] {
-    order: -3;
 }
 
 .channel-item:hover,
@@ -469,6 +465,14 @@ body.nymchat-app .logo-ascii {
     background: rgb(from var(--primary) r g b / 0.1);
     border-color: rgb(from var(--primary) r g b / 0.2);
     box-shadow: 0 0 12px rgb(from var(--primary) r g b / 0.05);
+}
+
+.channel-item.active {
+    order: -3;
+}
+
+.channel-item[data-geohash="nym"] {
+    order: -4;
 }
 
 .channel-item.active::before,
@@ -3608,6 +3612,13 @@ body.light-mode .verified-badge::before {
     position: absolute;
     bottom: 20px;
     left: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.geohash-controls-row {
     display: flex;
     gap: 10px;
 }
