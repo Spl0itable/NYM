@@ -244,7 +244,7 @@ Object.assign(NYM.prototype, {
             '?top': { desc: 'Show top chatters' },
             '?last': { desc: 'Show last message from a user' },
             '?seen': { desc: 'When was a user last seen' },
-            '?changelog': { desc: 'Latest Nymchat release notes (?changelog <version> for a specific release)' },
+            '?changelog': { desc: 'Latest Nymchat release notes' },
             '?help': { desc: 'Show all Nymbot commands' },
         };
         this.commands = {
@@ -275,8 +275,8 @@ Object.assign(NYM.prototype, {
             '/brb': { desc: 'Set away message', fn: (args) => this.cmdBRB(args) },
             '/back': { desc: 'Clear away message', fn: () => this.cmdBack() },
             '/zap': { desc: 'Zap a user profile', fn: (args) => this.cmdZap(args) },
-            '/invite': { desc: 'Invite a user to channel, or add to group when in a group chat', fn: (args) => this.cmdInvite(args) },
-            '/group': { desc: 'Create a private group: /group @user1 @user2 [GroupName]', fn: (args) => this.cmdGroup(args) },
+            '/invite': { desc: 'Invite a user to channel or group chat', fn: (args) => this.cmdInvite(args) },
+            '/group': { desc: 'Create a private group', fn: (args) => this.cmdGroup(args) },
             '/addmember': { desc: 'Add a member to the current group chat', fn: (args) => this.cmdAddMember(args) },
             '/kick': { desc: 'Remove a member from the current group (owner/mod)', fn: (args) => this.cmdKick(args) },
             '/ban': { desc: 'Remove and banlist a member from the current group (owner/mod)', fn: (args) => this.cmdBanFromGroup(args) },
