@@ -1136,7 +1136,8 @@ Object.assign(NYM.prototype, {
             const isDev = this.isVerifiedDeveloper(pubkey);
             const isBot = !isDev && this.verifiedBotPubkeys.has(pubkey);
             const flairKey = this._userFlairKey ? this._userFlairKey(pubkey) : '';
-            const fp = `${effectiveStatus}|${baseNym}|${userColorClass}|${avatarSrc}|${isDev?1:0}${isBot?1:0}|${flairKey}|${statusHidden?'h':'v'}`;
+            const isFriend = this.isFriend(pubkey) ? 1 : 0;
+            const fp = `${effectiveStatus}|${baseNym}|${userColorClass}|${avatarSrc}|${isDev?1:0}${isBot?1:0}|${flairKey}|${statusHidden?'h':'v'}|f${isFriend}`;
 
             let el = existing.get(safePk);
             if (el) {
@@ -1281,6 +1282,13 @@ Object.assign(NYM.prototype, {
             badge.title = isDev ? this.verifiedDeveloper.title : 'Nymchat Bot';
             badge.textContent = '✓';
             label.appendChild(badge);
+        }
+
+        const friendHtml = this.getFriendBadgeHtml(pubkey);
+        if (friendHtml) {
+            const tmpl = document.createElement('template');
+            tmpl.innerHTML = friendHtml;
+            label.appendChild(tmpl.content);
         }
     },
 
@@ -1563,6 +1571,11 @@ Object.assign(NYM.prototype, {
         return this.friends.has(pubkey);
     },
 
+    getFriendBadgeHtml(pubkey) {
+        if (!pubkey || pubkey === this.pubkey || !this.isFriend(pubkey)) return '';
+        return '<span class="friend-badge" title="Friend"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle; margin-left: 3px; opacity: 0.7;"><circle cx="6" cy="5" r="2.5" /><path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" /><line x1="13" y1="6" x2="13" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /><line x1="11" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg></span>';
+    },
+
     async toggleFriend(target) {
         let targetPubkey;
         if (/^[0-9a-f]{64}$/i.test(target)) {
@@ -1586,6 +1599,7 @@ Object.assign(NYM.prototype, {
         }
 
         this.updateFriendsList();
+        this._refreshFriendBadgesFor(targetPubkey);
         if (typeof this.reapplyImageBlur === 'function') this.reapplyImageBlur();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
@@ -1597,8 +1611,37 @@ Object.assign(NYM.prototype, {
         const nym = this.getNymFromPubkey(pubkey);
         this.displaySystemMessage(`Removed ${nym} from friends`);
         this.updateFriendsList();
+        this._refreshFriendBadgesFor(pubkey);
         if (typeof this.reapplyImageBlur === 'function') this.reapplyImageBlur();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    },
+
+    _refreshFriendBadgesFor(pubkey) {
+        if (!pubkey) return;
+
+        this._userListSig = '';
+        if (typeof this.updateUserList === 'function') this.updateUserList();
+
+        if (typeof this.updatePMNicknameFromProfile === 'function') {
+            const known = this.users.get(pubkey);
+            const profileName = known && known.nym ? this.parseNymFromDisplay(known.nym) : null;
+            if (profileName) this.updatePMNicknameFromProfile(pubkey, profileName);
+        }
+
+        if (this.inPMMode && this.currentPM === pubkey) {
+            const channelEl = document.getElementById('currentChannel');
+            if (channelEl) {
+                const known = this.users.get(pubkey);
+                const baseNym = known ? this.parseNymFromDisplay(known.nym) : this.getNymFromPubkey(pubkey);
+                const suffix = this.getPubkeySuffix(pubkey);
+                const safePk = this._safePubkey(pubkey);
+                const pmAvatarSrc = this.getAvatarUrl(pubkey);
+                const flairHtml = this.getFlairForUser(pubkey);
+                const friendBadge = this.getFriendBadgeHtml(pubkey);
+                const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${friendBadge}`;
+                channelEl.innerHTML = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+            }
+        }
     },
 
     updateFriendsList() {

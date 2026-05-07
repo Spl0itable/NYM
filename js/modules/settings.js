@@ -162,6 +162,12 @@ Object.assign(NYM.prototype, {
 
         delete settingsData.groupEphemeralKeys;
 
+        // Bump the sync timestamp before publishing
+        if (now > (this._lastSettingsSyncTs || 0)) {
+            this._lastSettingsSyncTs = now;
+            try { localStorage.setItem('nym_last_settings_sync_ts', String(now)); } catch (_) { }
+        }
+
         if (this.groupEphemeralKeys && this.groupEphemeralKeys.size > 0) {
             try {
                 const ekData = {};
@@ -183,12 +189,6 @@ Object.assign(NYM.prototype, {
         }
 
         await this._publishWrappedNostrEvent(settingsData, 'nymchat-settings', now);
-
-        // Bump our own settings-sync timestamp
-        if (now > (this._lastSettingsSyncTs || 0)) {
-            this._lastSettingsSyncTs = now;
-            try { localStorage.setItem('nym_last_settings_sync_ts', String(now)); } catch (_) { }
-        }
     },
 
     // Wrap an arbitrary settings payload as a NIP-59 self-addressed gift wrap

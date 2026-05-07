@@ -3205,7 +3205,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.61.324 ═══<br/>
+═══ Nymchat v3.61.325 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -5137,6 +5137,9 @@ async function applyNostrSettings(s) {
         nym.friends = new Set(s.friends);
         localStorage.setItem('nym_friends', JSON.stringify(s.friends));
         if (typeof nym.reapplyImageBlur === 'function') nym.reapplyImageBlur();
+        if (typeof nym.updateFriendsList === 'function') nym.updateFriendsList();
+        nym._userListSig = '';
+        if (typeof nym.updateUserList === 'function') nym.updateUserList();
     }
 
     // Accept PMs setting

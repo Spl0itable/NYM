@@ -1269,9 +1269,11 @@ Object.assign(NYM.prototype, {
             const verifiedBadge = this.isVerifiedDeveloper(pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
                 : '';
+            const sidebarFlair = this.getFlairForUser(pubkey);
+            const sidebarFriendBadge = this.getFriendBadgeHtml(pubkey);
             const pmNameEl = item.querySelector('.pm-name');
             if (pmNameEl) {
-                pmNameEl.innerHTML = `@${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span> ${verifiedBadge}`;
+                pmNameEl.innerHTML = `@${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${sidebarFlair} ${verifiedBadge}${sidebarFriendBadge}`;
             }
         }
 
@@ -1320,7 +1322,8 @@ Object.assign(NYM.prototype, {
         if (this.inPMMode && this.currentPM === pubkey) {
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
             const flairHtml = this.getFlairForUser(pubkey);
-            const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+            const friendBadge = this.getFriendBadgeHtml(pubkey);
+            const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${friendBadge}`;
             const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
             const channelEl = document.getElementById('currentChannel');
             if (channelEl) channelEl.innerHTML = pmHeaderHtml;
@@ -1366,6 +1369,7 @@ Object.assign(NYM.prototype, {
             // Get user's shop items for flair
             const userShopItems = this.getUserShopItems(pubkey);
             const flairHtml = this.getFlairForUser(pubkey);
+            const friendBadge = this.getFriendBadgeHtml(pubkey);
 
             // Clean the base nym of any HTML for display
             const cleanBaseNym = this.parseNymFromDisplay(baseNym);
@@ -1374,7 +1378,7 @@ Object.assign(NYM.prototype, {
             const safePk = this._safePubkey(pubkey);
             item.innerHTML = `
 <img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy">
-<span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}</span>
+<span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
 <span class="delete-pm" data-action="deletePMStop" data-pubkey="${safePk}">✕</span>
 <span class="unread-badge" style="display:none">0</span>
@@ -1499,7 +1503,8 @@ Object.assign(NYM.prototype, {
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const safePk = this._safePubkey(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
-        const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+        const friendBadge = this.getFriendBadgeHtml(pubkey);
+        const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${friendBadge}`;
         const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
 
         // Update UI with formatted nym
