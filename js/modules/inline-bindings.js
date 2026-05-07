@@ -99,6 +99,10 @@ window.nymHapticTap = function (ms) {
         'showGeohashExplorer':        function () { nym().showGeohashExplorer(); },
         'closeGeohashExplorer':       function () { nym().closeGeohashExplorer(); },
         'resetGlobeView':             function () { nym().resetGlobeView(); },
+        'zoomMapIn':                  function () { nym().zoomMapIn(); },
+        'zoomMapOut':                 function () { nym().zoomMapOut(); },
+        'toggleHeatmap':              function () { nym().toggleHeatmap(); },
+        'closeGeohashInfo':           function () { nym().closeGeohashInfo(); },
 
         // Image / context-menu avatar/banner
         'expandImageFromSrcStop':     function (e, t) {

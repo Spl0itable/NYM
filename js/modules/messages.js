@@ -244,6 +244,10 @@ Object.assign(NYM.prototype, {
 
                 // Schedule zap receipt subscription update with new event IDs
                 this._scheduleZapResubscribe();
+
+                if (this.geohashMap && message.geohash && this.isValidGeohash && this.isValidGeohash(message.geohash)) {
+                    this._scheduleGeohashMapUpdate();
+                }
             }
 
             // Now check if we should actually render this message

@@ -2488,7 +2488,7 @@ function signEvent(evt, privkeyHex) {
   return evt;
 }
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.61.325";
+var NYMCHAT_VERSION = "3.62.325";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2875,7 +2875,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "A: /who shows nyms your client has seen in real-time via WebSocket. ?who queries relays for recent activity — since ephemeral events may not be stored by all relays, results can differ.",
   "",
   "Q: What are geohash channels?",
-  "A: Location-based channels named with geohash codes (e.g. #9q8yyk). Shorter codes = larger geographic areas. There's a 3D globe explorer (click globe icon) to browse them visually.",
+  "A: Location-based channels named with geohash codes (e.g. #9q8yyk). Shorter codes = larger geographic areas. There's a world map explorer (click globe icon) to browse them visually.",
   "",
   "=== UI NAVIGATION ===",
   "The app has a sidebar on the left and the main chat area on the right.",
@@ -2926,7 +2926,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Notify Friends Only: only receive notifications from friends",
   "- Blocked Keywords/Phrases, Hide Non-Pinned Channels, Hidden/Blocked Channels, Blocked Users",
   "- Low Data Mode: reduces relay connections",
-  "- Performance Mode: auto/enabled/disabled — reduces visual effects (disables blur, simplifies animations, lowers 3D globe quality) for better performance on older or low-end devices. Auto mode detects device capabilities and activates automatically on weaker hardware",
+  "- Performance Mode: auto/enabled/disabled — reduces visual effects (disables blur, simplifies animations, lowers world map quality) for better performance on older or low-end devices. Auto mode detects device capabilities and activates automatically on weaker hardware",
   "- Transfer Settings to Another User, Pending Transfers",
   "- Clear Local Storage Cache: resets settings to defaults",
   "",
@@ -2937,7 +2937,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Users can also create custom (non-geohash) channels.",
   "The sidebar shows channels sorted by proximity (if enabled in Settings > Channel Settings) or alphabetically.",
   "Pin a landing channel in Settings > Channel Settings so the app opens to that channel.",
-  "There's a 3D globe explorer (click the globe icon in the chat header) to visually browse geohash channels.",
+  "There's a world map explorer (click the globe icon in the chat header) to visually browse geohash channels.",
   "",
   "=== IDENTITY & PRIVACY ===",
   "Each session creates a fresh Nostr keypair. Your nym is random and anonymous by default.",
@@ -3079,7 +3079,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.61.325 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.62.325 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3767,7 +3767,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.61.325")
+  // Prefix match (e.g. "3.61" matches "3.62.325")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -3822,7 +3822,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.61.325", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.62.325", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

@@ -519,16 +519,8 @@ Object.assign(NYM.prototype, {
         // Track when app becomes visible/hidden
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
-                // Resume globe animation if it was paused by backgrounding
-                if (this._globeWasActive && this.globe && this.globe.animate) {
-                    this._globeWasActive = false;
-                    this.globeAnimationActive = true;
-                    requestAnimationFrame(this.globe.animate);
-                }
-
                 const delay = this.isFlutterWebView ? 200 : 500;
                 setTimeout(() => {
-                    // Clear failed relays and blacklist to allow immediate reconnection
                     this.clearRelayBlocksForReconnection();
 
                     this.checkConnectionHealth();
@@ -537,34 +529,21 @@ Object.assign(NYM.prototype, {
                         this.attemptReconnection();
                     }
 
-                    // Pool mode: only resubscribe if sockets are healthy;
-                    // if sockets were closed by checkConnectionHealth, the onclose
-                    // handlers will schedule reconnection + resubscription automatically.
                     if (this.useRelayProxy) {
                         if (this._isAnyPoolOpen()) {
                             this._poolSubscribe();
                             this._ensureAllShardsConnected();
                         }
-                        // If no pool sockets are open and nothing is reconnecting, kick it off
                         if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
                             this._schedulePoolReconnect();
                         }
                     } else {
-                        // Always refresh subscriptions when we come back to foreground
                         setTimeout(() => this.resubscribeAllRelays(), 250);
                     }
                 }, delay);
             } else {
-                // Record when app went to background so we can measure staleness
                 this._backgroundedAt = Date.now();
 
-                // Pause globe animation when backgrounded to save GPU/CPU
-                if (this.globeAnimationActive) {
-                    this._globeWasActive = true;
-                    this.globeAnimationActive = false;
-                }
-
-                // Stop monitoring when app goes to background
                 if (this.reconnectionInterval) {
                     clearInterval(this.reconnectionInterval);
                     this.reconnectionInterval = null;

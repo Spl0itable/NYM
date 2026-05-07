@@ -3509,16 +3509,8 @@ body.light-mode .verified-badge::before {
     width: 100%;
     height: 100%;
     position: relative;
-    background: #000000;
+    background: #0a131e;
     overflow: hidden;
-}
-
-#globeViz {
-    width: 100%;
-    height: 100%;
-    position: absolute;
-    top: 0;
-    left: 0;
 }
 
 .geohash-controls,
@@ -3528,14 +3520,29 @@ body.light-mode .verified-badge::before {
     z-index: 10;
 }
 
-.geohash-globe-canvas {
+.geohash-map-canvas {
     width: 100%;
     height: 100%;
     display: block;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
-.geohash-globe-canvas:active {
-    cursor: grabbing;
+.geohash-zoom-btn {
+    width: 34px;
+    padding: 8px 0;
+    text-align: center;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.geohash-control-btn.active {
+    background: rgb(from var(--primary) r g b / 0.18);
+    border-color: rgb(from var(--primary) r g b / 0.5);
+    color: var(--primary);
+    box-shadow: 0 0 12px rgb(from var(--primary) r g b / 0.25);
 }
 
 .geohash-info-panel {
@@ -3548,10 +3555,34 @@ body.light-mode .verified-badge::before {
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 16px;
+    padding-right: 36px;
     max-width: 300px;
     font-size: 12px;
     color: var(--text);
     box-shadow: var(--shadow-lg);
+}
+
+.geohash-info-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    line-height: 1;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-xs);
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.geohash-info-close:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    border-color: var(--glass-border);
 }
 
 .geohash-info-title {

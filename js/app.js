@@ -53,7 +53,7 @@
             },
             {
                 title: 'Explore Geohash',
-                body: 'Tap the globe to explore geohash-only channels on a 3D globe.',
+                body: 'Tap the globe to explore geohash-only channels on a world map.',
                 selector: '.discover-icon',
                 onBefore: ensureSidebarOpenOnMobile
             },
@@ -467,7 +467,7 @@ class NYM {
      *   p2p                  Peer-to-peer file sharing: WebRTC data channels, WebTorrent, transfers UI
      *   translate            Message and input translation (auto-detect, language selection)
      *   polls                Poll creation, voting, display, channel poll list
-     *   geohash-globe        Geohash channels and 3D globe explorer
+     *   geohash-globe        Geohash channels and world map explorer
      *   notifications        Notification history, badges, sounds, settings
      *   settings             User settings: load/save, sync to Nostr, theme/color mode, image blur
      *   ui-context           Context menus, modals, gestures, sidebar, GIF picker, link previews, zap modals, event listeners
@@ -3205,7 +3205,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.61.325 ═══<br/>
+═══ Nymchat v3.62.325 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>

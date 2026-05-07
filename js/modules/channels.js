@@ -37,11 +37,9 @@ Object.assign(NYM.prototype, {
     },
 
     addGeohashChannelToGlobe(geohash) {
-        // Only add valid geohashes to the globe
         if (!this.isValidGeohash(geohash)) return;
-        // If globe is active, update it
-        if (this.globe && this.globeAnimationActive) {
-            this.globe.updatePoints();
+        if (this.geohashMap) {
+            this.geohashMap.updatePoints();
         }
     },
 
@@ -68,13 +66,14 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Convert to array with coordinates
+        // Convert to array with coordinates - active channels only (>=1 message)
         allGeohashes.forEach(geohash => {
             try {
-                const coords = this.decodeGeohash(geohash);
                 const messageCount = (this.messages.get(`#${geohash}`) || []).length;
+                if (messageCount < 1) return;
+                const coords = this.decodeGeohash(geohash);
                 this.geohashChannels.push({
-                    geohash: geohash.toLowerCase(), // Ensure lowercase
+                    geohash: geohash.toLowerCase(),
                     lat: coords.lat,
                     lng: coords.lng,
                     messages: messageCount,
@@ -87,12 +86,6 @@ Object.assign(NYM.prototype, {
 
     async selectGeohashChannel(channel) {
         this.selectedGeohash = channel.geohash.toLowerCase();
-
-        // Stop auto-rotation when selecting a channel
-        if (this.globe && this.globe.controls) {
-            this.globe.controls.autoRotate = false;
-            this.globe.autoRotate = false;
-        }
 
         const infoPanel = document.getElementById('geohashInfoPanel');
         const infoTitle = document.getElementById('geohashInfoTitle');
