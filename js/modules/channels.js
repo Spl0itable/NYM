@@ -1199,7 +1199,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     updateUnreadCount(channel) {
         const count = (this.unreadCounts.get(channel) || 0) + 1;
         this.unreadCounts.set(channel, count);
-        this.channelLastActivity.set(channel, Date.now());
         this._persistUnreadCounts();
 
         // Handle PM unread counts using conversation key
@@ -1373,7 +1372,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     clearUnreadCount(channel) {
         this.unreadCounts.set(channel, 0);
-        this._persistUnreadCounts();
+        // Persist immediately so a fast reload doesn't lose the cleared state.
+        this._persistUnreadCounts(true);
 
         // Handle PM unread counts using conversation key
         if (channel.startsWith('pm-')) {
@@ -1434,23 +1434,47 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Persist unread counts and last-activity timestamps so the sidebar
     // sort order and badges survive a page reload.
-    _persistUnreadCounts() {
+    _persistUnreadCounts(immediate = false) {
+        if (immediate) {
+            if (this._persistUnreadTimer) {
+                clearTimeout(this._persistUnreadTimer);
+                this._persistUnreadTimer = null;
+            }
+            this._writeUnreadCountsToLocalStorage();
+            return;
+        }
         if (this._persistUnreadTimer) return;
         this._persistUnreadTimer = setTimeout(() => {
             this._persistUnreadTimer = null;
-            try {
-                const unread = {};
-                for (const [k, v] of this.unreadCounts) {
-                    if (v > 0) unread[k] = v;
-                }
-                const activity = {};
-                for (const [k, v] of this.channelLastActivity) {
-                    if (v > 0) activity[k] = v;
-                }
-                localStorage.setItem('nym_unread_counts', JSON.stringify(unread));
-                localStorage.setItem('nym_channel_activity', JSON.stringify(activity));
-            } catch (_) { }
+            this._writeUnreadCountsToLocalStorage();
         }, 1000);
+
+        // Flush pending writes on unload so debounced state isn't lost.
+        if (!this._unreadUnloadHooked && typeof window !== 'undefined') {
+            this._unreadUnloadHooked = true;
+            const flush = () => this._persistUnreadCounts(true);
+            window.addEventListener('pagehide', flush);
+            window.addEventListener('beforeunload', flush);
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) flush();
+            });
+            window.addEventListener('freeze', flush);
+        }
+    },
+
+    _writeUnreadCountsToLocalStorage() {
+        try {
+            const unread = {};
+            for (const [k, v] of this.unreadCounts) {
+                if (v > 0) unread[k] = v;
+            }
+            const activity = {};
+            for (const [k, v] of this.channelLastActivity) {
+                if (v > 0) activity[k] = v;
+            }
+            localStorage.setItem('nym_unread_counts', JSON.stringify(unread));
+            localStorage.setItem('nym_channel_activity', JSON.stringify(activity));
+        } catch (_) { }
     },
 
     _hydrateUnreadCounts() {
