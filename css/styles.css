@@ -3466,9 +3466,9 @@ body.light-mode .verified-badge::before {
     padding: 16px 24px;
     border-bottom: 1px solid var(--glass-border);
     display: flex;
-    justify-content: space-between;
     align-items: center;
     background: rgba(0, 0, 0, 0.15);
+    padding-right: 56px;
 }
 
 .geohash-explorer-title {
@@ -3477,26 +3477,6 @@ body.light-mode .verified-badge::before {
     text-transform: uppercase;
     letter-spacing: 1.5px;
     font-weight: 700;
-}
-
-.geohash-explorer-close {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--glass-border);
-    border-radius: var(--radius-xs);
-    color: var(--text);
-    padding: 6px 16px;
-    cursor: pointer;
-    font-family: var(--font-sans);
-    font-size: 12px;
-    font-weight: 500;
-    transition: all var(--transition);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
-.geohash-explorer-close:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.2);
 }
 
 .geohash-explorer-body {
@@ -3659,7 +3639,7 @@ body.light-mode .verified-badge::before {
     backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm);
-    padding: 10px;
+    padding: 0px 14px;
     font-size: 10px;
 }
 
@@ -3674,6 +3654,55 @@ body.light-mode .verified-badge::before {
     width: 10px;
     height: 10px;
     border-radius: 50%;
+}
+
+.geohash-window-group {
+    display: inline-flex;
+    margin-left: 4px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xs);
+    overflow: hidden;
+}
+
+.geohash-window-btn {
+    background: transparent;
+    border: 0;
+    border-left: 1px solid var(--glass-border);
+    color: var(--text-dim);
+    padding: 3px 6px;
+    cursor: pointer;
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1;
+    transition: background var(--transition), color var(--transition);
+}
+
+.geohash-window-btn:first-child {
+    border-left: 0;
+}
+
+.geohash-window-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+}
+
+.geohash-window-btn.active {
+    background: rgb(from var(--primary) r g b / 0.18);
+    color: var(--primary);
+}
+
+.geohash-window-select {
+    display: none;
+    margin-left: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xs);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 11px;
+    padding: 2px 6px;
+    cursor: pointer;
 }
 
 .tutorial-overlay {
@@ -3850,7 +3879,15 @@ body.light-mode .verified-badge::before {
         bottom: 10px;
         right: 10px;
         font-size: 9px;
-        padding: 8px;
+        padding: 0px 14px;
+    }
+
+    .geohash-window-group {
+        display: none;
+    }
+
+    .geohash-window-select {
+        display: inline-block;
     }
 
     pre {
@@ -4879,7 +4916,6 @@ body.light-mode .geohash-explorer-content {
     backdrop-filter: blur(40px) saturate(1.5);
 }
 
-body.light-mode .geohash-explorer-close:hover,
 body.light-mode .geohash-join-btn:hover,
 body.light-mode .geohash-control-btn:hover {
     box-shadow: none;

@@ -3,6 +3,12 @@
 (function () {
 
     const WORLD_TOPO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+    const ADMIN1_GEOJSON_URL = 'https://cdn.jsdelivr.net/gh/martynafford/natural-earth-geojson@master/50m/cultural/ne_50m_admin_1_states_provinces_lakes.json';
+    const CITIES_GEOJSON_URL = 'https://cdn.jsdelivr.net/gh/martynafford/natural-earth-geojson@master/50m/cultural/ne_50m_populated_places_simple.json';
+
+    const ADMIN1_ZOOM_THRESHOLD = 2.5;
+    const CITY_ZOOM_THRESHOLD = 2.5;
+    const ACTIVE_WINDOW_REFRESH_MS = 30000;
 
     function decodeTopoJson(topo, objectName) {
         const tx = topo.transform || { scale: [1, 1], translate: [0, 0] };
@@ -107,6 +113,60 @@
         return worldFeaturesPromise;
     }
 
+    let admin1FeaturesPromise = null;
+    function loadAdmin1Features() {
+        if (admin1FeaturesPromise) return admin1FeaturesPromise;
+        admin1FeaturesPromise = fetch(ADMIN1_GEOJSON_URL, { cache: 'force-cache' })
+            .then(r => r.ok ? r.json() : null)
+            .then(geo => {
+                if (!geo || !Array.isArray(geo.features)) return [];
+                const feats = [];
+                for (const f of geo.features) {
+                    if (!f || !f.geometry) continue;
+                    const props = f.properties || {};
+                    const name = props.name || props.name_en || '';
+                    const type = f.geometry.type;
+                    if (type !== 'Polygon' && type !== 'MultiPolygon') continue;
+                    const feat = { type, name, coordinates: f.geometry.coordinates };
+                    annotateFeature(feat);
+                    feats.push(feat);
+                }
+                feats.sort((a, b) => b.area - a.area);
+                return feats;
+            })
+            .catch(() => []);
+        return admin1FeaturesPromise;
+    }
+
+    let cityFeaturesPromise = null;
+    function loadCityFeatures() {
+        if (cityFeaturesPromise) return cityFeaturesPromise;
+        cityFeaturesPromise = fetch(CITIES_GEOJSON_URL, { cache: 'force-cache' })
+            .then(r => r.ok ? r.json() : null)
+            .then(geo => {
+                if (!geo || !Array.isArray(geo.features)) return [];
+                const out = [];
+                for (const f of geo.features) {
+                    const coords = f && f.geometry && f.geometry.coordinates;
+                    if (!coords || coords.length < 2) continue;
+                    const props = f.properties || {};
+                    const rank = typeof props.scalerank === 'number' ? props.scalerank
+                        : (typeof props.SCALERANK === 'number' ? props.SCALERANK : 10);
+                    out.push({
+                        name: props.name || props.NAME || '',
+                        lng: coords[0],
+                        lat: coords[1],
+                        rank,
+                        pop: props.pop_max || props.POP_MAX || props.pop_min || 0
+                    });
+                }
+                out.sort((a, b) => a.rank - b.rank);
+                return out;
+            })
+            .catch(() => []);
+        return cityFeaturesPromise;
+    }
+
     let heatPalette = null;
     function getHeatPalette() {
         if (heatPalette) return heatPalette;
@@ -137,8 +197,12 @@
             ocean: isLight ? '#d6e8f1' : '#0a131e',
             land: isLight ? '#eef2f4' : '#1c2a39',
             border: isLight ? '#9aaeba' : '#2c4357',
+            adminBorder: isLight ? 'rgba(120,140,160,0.55)' : 'rgba(180,200,220,0.22)',
             graticule: isLight ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.04)',
             label: isLight ? 'rgba(30,40,55,0.85)' : 'rgba(220,232,245,0.85)',
+            adminLabel: isLight ? 'rgba(70,80,95,0.75)' : 'rgba(190,205,220,0.65)',
+            cityDot: isLight ? 'rgba(60,70,85,0.85)' : 'rgba(220,232,245,0.9)',
+            cityLabel: isLight ? 'rgba(50,60,75,0.85)' : 'rgba(220,232,245,0.85)',
             labelStroke: isLight ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.65)',
             haloAlpha: isLight ? 0.18 : 0.32
         };
@@ -176,6 +240,19 @@ Object.assign(NYM.prototype, {
 
         const showYourLocation = this.settings && this.settings.sortByProximity && this.userLocation;
 
+        if (typeof this._geohashActiveWindowHours !== 'number'
+            || this._geohashActiveWindowHours < 1
+            || this._geohashActiveWindowHours > 24) {
+            this._geohashActiveWindowHours = 24;
+        }
+        const activeHours = this._geohashActiveWindowHours;
+        const windowOptions = [1, 3, 6, 12, 24];
+        const windowButtons = windowOptions.map(h => `
+        <button class="geohash-window-btn${h === activeHours ? ' active' : ''}"
+                data-action="setActiveWindow" data-hours="${h}" type="button">${h}h</button>`).join('');
+        const windowOptionTags = windowOptions.map(h =>
+            `<option value="${h}"${h === activeHours ? ' selected' : ''}>${h}h</option>`).join('');
+
         container.insertAdjacentHTML('beforeend', `
 <canvas id="geohashMapCanvas" class="geohash-map-canvas"></canvas>
 
@@ -187,16 +264,19 @@ Object.assign(NYM.prototype, {
 </div>
 
 <div class="geohash-controls">
-    <button class="geohash-control-btn" data-action="resetGlobeView">Reset View</button>
     <button class="geohash-control-btn geohash-heatmap-btn" id="geohashHeatmapBtn" data-action="toggleHeatmap">Heatmap</button>
     <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapIn" aria-label="Zoom in">+</button>
     <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapOut" aria-label="Zoom out">&minus;</button>
+    <button class="geohash-control-btn" data-action="resetGlobeView">Reset View</button>
 </div>
 
 <div class="geohash-legend">
     <div class="geohash-legend-item">
         <div class="geohash-legend-dot" style="background: var(--primary); box-shadow: 0 0 5px var(--primary);"></div>
-        <span>Active Channels</span>
+        <span>Active</span>
+        <div class="geohash-window-group" role="group" aria-label="Active window">${windowButtons}</div>
+        <select class="geohash-window-select" aria-label="Active window"
+                data-on-change="setActiveWindowFromSelect">${windowOptionTags}</select>
     </div>
     ${showYourLocation ? `
     <div class="geohash-legend-item">
@@ -260,9 +340,30 @@ Object.assign(NYM.prototype, {
         };
 
         let features = [];
+        let admin1Features = [];
+        let cityFeatures = [];
+        let admin1Loaded = false;
+        let citiesLoaded = false;
         let drawScheduled = false;
         let heatmapMode = !!this._heatmapPreference;
         const styles = getMapStyles();
+
+        const ensureSubregions = () => {
+            if (view.zoom >= ADMIN1_ZOOM_THRESHOLD && !admin1Loaded) {
+                admin1Loaded = true;
+                loadAdmin1Features().then(feats => {
+                    admin1Features = feats;
+                    requestDraw();
+                });
+            }
+            if (view.zoom >= CITY_ZOOM_THRESHOLD && !citiesLoaded) {
+                citiesLoaded = true;
+                loadCityFeatures().then(feats => {
+                    cityFeatures = feats;
+                    requestDraw();
+                });
+            }
+        };
 
         const HEAT_SCALE = 0.5;
         let heatCanvas = null, heatCtx = null;
@@ -360,6 +461,110 @@ Object.assign(NYM.prototype, {
                 ctx.strokeText(text, p.x, p.y);
                 ctx.fillStyle = styles.label;
                 ctx.fillText(text, p.x, p.y);
+            }
+        };
+
+        const drawAdmin1 = () => {
+            if (view.zoom < ADMIN1_ZOOM_THRESHOLD || !admin1Features.length) return;
+            const fadeStart = ADMIN1_ZOOM_THRESHOLD;
+            const fadeEnd = fadeStart + 1.5;
+            const t = Math.min(1, Math.max(0, (view.zoom - fadeStart) / (fadeEnd - fadeStart)));
+            if (t <= 0) return;
+
+            ctx.strokeStyle = styles.adminBorder;
+            ctx.lineWidth = isPerf ? 0.4 : 0.5;
+            ctx.globalAlpha = t;
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            for (const feat of admin1Features) {
+                const bb = feat.bounds;
+                if (bb) {
+                    const a = project(bb[0], bb[3]);
+                    const b = project(bb[2], bb[1]);
+                    if (b.x < -10 || a.x > cssWidth + 10 || b.y < -10 || a.y > cssHeight + 10) continue;
+                }
+                const polys = feat.type === 'Polygon' ? [feat.coordinates] : feat.coordinates;
+                for (const poly of polys) {
+                    for (const ring of poly) {
+                        if (ring.length < 2) continue;
+                        const first = project(ring[0][0], ring[0][1]);
+                        ctx.moveTo(first.x, first.y);
+                        for (let i = 1; i < ring.length; i++) {
+                            const p = project(ring[i][0], ring[i][1]);
+                            ctx.lineTo(p.x, p.y);
+                        }
+                    }
+                }
+            }
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        };
+
+        const drawAdmin1Labels = () => {
+            if (view.zoom < 4 || !admin1Features.length) return;
+            const fontSize = isPerf ? 9 : 10;
+            ctx.font = `500 ${fontSize}px var(--font-sans, system-ui, sans-serif)`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.lineJoin = 'round';
+
+            for (const feat of admin1Features) {
+                if (!feat.name) continue;
+                const bb = feat.bounds;
+                const a = project(bb[0], bb[3]);
+                const b = project(bb[2], bb[1]);
+                const span = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+                const text = feat.name;
+                const minSpan = Math.max(40, text.length * 5.5);
+                if (span < minSpan) continue;
+
+                const c = feat.centroid;
+                const p = project(c[0], c[1]);
+                if (!inView(p, 30)) continue;
+
+                ctx.lineWidth = 2.5;
+                ctx.strokeStyle = styles.labelStroke;
+                ctx.strokeText(text, p.x, p.y);
+                ctx.fillStyle = styles.adminLabel;
+                ctx.fillText(text, p.x, p.y);
+            }
+        };
+
+        const drawCities = () => {
+            if (view.zoom < CITY_ZOOM_THRESHOLD || !cityFeatures.length) return;
+
+            // scalerank: 0 = world's largest. Higher zoom -> show smaller cities.
+            const rankCutoff = view.zoom < 3 ? 2
+                : view.zoom < 4 ? 4
+                : view.zoom < 6 ? 6
+                : view.zoom < 8 ? 8 : 10;
+
+            const fontSize = isPerf ? 9 : 10;
+            ctx.font = `500 ${fontSize}px var(--font-sans, system-ui, sans-serif)`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.lineJoin = 'round';
+
+            const dotR = isPerf ? 1.5 : 2;
+            const showLabels = view.zoom >= 3;
+
+            for (const city of cityFeatures) {
+                if (city.rank > rankCutoff) continue;
+                const p = project(city.lng, city.lat);
+                if (!inView(p, 80)) continue;
+
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
+                ctx.fillStyle = styles.cityDot;
+                ctx.fill();
+
+                if (showLabels && city.name) {
+                    ctx.lineWidth = 2.5;
+                    ctx.strokeStyle = styles.labelStroke;
+                    ctx.strokeText(city.name, p.x + 4, p.y);
+                    ctx.fillStyle = styles.cityLabel;
+                    ctx.fillText(city.name, p.x + 4, p.y);
+                }
             }
         };
 
@@ -487,9 +692,15 @@ Object.assign(NYM.prototype, {
 
             drawGraticule();
             drawWorld();
+            drawAdmin1();
             drawLabels();
-            if (heatmapMode) drawHeatmap();
-            else drawChannels();
+            drawAdmin1Labels();
+            if (heatmapMode) {
+                drawHeatmap();
+            } else {
+                drawCities();
+                drawChannels();
+            }
             drawUserLocation();
         };
 
@@ -583,6 +794,7 @@ Object.assign(NYM.prototype, {
             view.cx += (before.lng - after.lng);
             view.cy += (before.lat - after.lat);
             clampView();
+            ensureSubregions();
             requestDraw();
         };
 
@@ -616,6 +828,7 @@ Object.assign(NYM.prototype, {
                 view.cx += (before.lng - after.lng);
                 view.cy += (before.lat - after.lat);
                 clampView();
+                ensureSubregions();
                 requestDraw();
             }
         };
@@ -647,6 +860,12 @@ Object.assign(NYM.prototype, {
         };
         window.addEventListener('resize', onResize, { passive: true });
 
+        const activeWindowTimer = setInterval(() => {
+            if (!this.geohashMap) return;
+            this.updateGeohashChannels();
+            requestDraw();
+        }, ACTIVE_WINDOW_REFRESH_MS);
+
         this._geomapCleanup = () => {
             canvas.removeEventListener('pointerdown', onPointerDown);
             canvas.removeEventListener('pointermove', onPointerMove);
@@ -659,6 +878,7 @@ Object.assign(NYM.prototype, {
             canvas.removeEventListener('touchcancel', onTouchEnd);
             window.removeEventListener('resize', onResize);
             if (resizeTimer) clearTimeout(resizeTimer);
+            clearInterval(activeWindowTimer);
         };
 
         this.geohashMap = {
@@ -684,6 +904,7 @@ Object.assign(NYM.prototype, {
                 view.cx += (before.lng - after.lng);
                 view.cy += (before.lat - after.lat);
                 clampView();
+                ensureSubregions();
                 requestDraw();
             },
             toggleHeatmap: () => {

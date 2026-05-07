@@ -37,35 +37,16 @@ Object.assign(NYM.prototype, {
     },
 
     _detectDeviceCapabilities() {
-        const caps = { tier: 'high', cores: 4, memory: 8, mobile: false, weakGPU: false };
+        const caps = { tier: 'high', cores: 4, memory: 8, mobile: false };
         try {
             caps.cores = navigator.hardwareConcurrency || 2;
             caps.memory = navigator.deviceMemory || 4;
             caps.mobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
                 || (navigator.maxTouchPoints > 1 && window.innerWidth <= 1024);
 
-            // Check for weak GPU via canvas test
-            try {
-                const canvas = document.createElement('canvas');
-                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-                if (gl) {
-                    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-                    if (debugInfo) {
-                        const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL).toLowerCase();
-                        caps.weakGPU = /swiftshader|llvmpipe|softpipe|mesa|intel.*hd(?!.*[6-9]\d{2,})/.test(renderer);
-                    }
-                    const ext = gl.getExtension('WEBGL_lose_context');
-                    if (ext) ext.loseContext();
-                }
-                canvas.remove();
-            } catch (e) {
-                caps.weakGPU = true;
-            }
-
-            // Determine tier
             if (caps.cores <= 2 || caps.memory <= 2 || (caps.mobile && caps.cores <= 4 && caps.memory <= 4)) {
                 caps.tier = 'low';
-            } else if (caps.cores <= 4 || caps.memory <= 4 || caps.weakGPU) {
+            } else if (caps.cores <= 4 || caps.memory <= 4) {
                 caps.tier = 'mid';
             }
         } catch (e) { /* fallback to defaults */ }

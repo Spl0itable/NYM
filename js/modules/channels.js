@@ -66,22 +66,46 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Convert to array with coordinates - active channels only (>=1 message)
+        const windowHours = (typeof this._geohashActiveWindowHours === 'number' && this._geohashActiveWindowHours > 0)
+            ? Math.min(24, this._geohashActiveWindowHours) : 24;
+        const cutoffSec = Math.floor(Date.now() / 1000) - windowHours * 3600;
+
+        // Convert to array with coordinates - only channels with messages inside the active window
         allGeohashes.forEach(geohash => {
             try {
-                const messageCount = (this.messages.get(`#${geohash}`) || []).length;
-                if (messageCount < 1) return;
+                const allMsgs = this.messages.get(`#${geohash}`) || [];
+                let recentCount = 0;
+                for (const m of allMsgs) {
+                    if ((m.created_at || 0) >= cutoffSec) recentCount++;
+                }
+                if (recentCount < 1) return;
                 const coords = this.decodeGeohash(geohash);
                 this.geohashChannels.push({
                     geohash: geohash.toLowerCase(),
                     lat: coords.lat,
                     lng: coords.lng,
-                    messages: messageCount,
+                    messages: recentCount,
                     isJoined: this.channels.has(geohash)
                 });
             } catch (e) {
             }
         });
+    },
+
+    setGeohashActiveWindow(hours) {
+        let h = parseInt(hours, 10);
+        if (!Number.isFinite(h) || h < 1) h = 1;
+        if (h > 24) h = 24;
+        this._geohashActiveWindowHours = h;
+        document.querySelectorAll('.geohash-window-btn').forEach(b => {
+            b.classList.toggle('active', parseInt(b.dataset.hours, 10) === h);
+        });
+        document.querySelectorAll('.geohash-window-select').forEach(s => {
+            if (parseInt(s.value, 10) !== h) s.value = String(h);
+        });
+        if (this.geohashMap) {
+            this.geohashMap.updatePoints();
+        }
     },
 
     async selectGeohashChannel(channel) {

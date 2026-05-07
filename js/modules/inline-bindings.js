@@ -102,6 +102,8 @@ window.nymHapticTap = function (ms) {
         'zoomMapIn':                  function () { nym().zoomMapIn(); },
         'zoomMapOut':                 function () { nym().zoomMapOut(); },
         'toggleHeatmap':              function () { nym().toggleHeatmap(); },
+        'setActiveWindow':            function (_e, t) { nym().setGeohashActiveWindow(t.dataset.hours); },
+        'setActiveWindowFromSelect':  function (_e, t) { nym().setGeohashActiveWindow(t.value); },
         'closeGeohashInfo':           function () { nym().closeGeohashInfo(); },
 
         // Image / context-menu avatar/banner
