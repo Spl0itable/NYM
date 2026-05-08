@@ -8137,6 +8137,10 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
         display: flex !important;
         margin-right: 0;
     }
+
+    body.chat-bubbles .message.bubble-grouped > .message-author {
+        display: none !important;
+    }
 }
 
 .relay-stats-content {
