@@ -286,8 +286,8 @@ Object.assign(NYM.prototype, {
         <button class="geohash-control-btn" data-action="resetGlobeView">Reset View</button>
     </div>
     <div class="geohash-controls-row">
-        <button class="geohash-control-btn geohash-heatmap-btn" id="geohashHeatmapBtn" data-action="toggleHeatmap">Heatmap</button>
-        <button class="geohash-control-btn geohash-daynight-btn" id="geohashDaynightBtn" data-action="toggleDaynight">Day/Night</button>
+        <button class="geohash-control-btn geohash-heatmap-btn" id="geohashHeatmapBtn" data-action="toggleHeatmap">Heat map</button>
+        <button class="geohash-control-btn geohash-daynight-btn" id="geohashDaynightBtn" data-action="toggleDaynight">Day / Night</button>
     </div>
 </div>
 

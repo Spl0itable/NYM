@@ -3205,7 +3205,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.62.327 ═══<br/>
+═══ Nymchat v3.62.328 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4759,18 +4759,28 @@ async function applyNostrSettingsAdditive(s) {
     if (Array.isArray(s.notificationHistory) && s.notificationHistory.length > 0) {
         try {
             const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-            const seen = new Set();
+            const notifId = (n) => n.channelInfo?.id
+                || `${n.senderPubkey || ''}|${n.timestamp}|${(n.body || '').slice(0, 60)}`;
+            const localById = new Map();
             for (const n of nym.notificationHistory) {
                 if (!n) continue;
-                const id = n.channelInfo?.id || `${n.senderPubkey || ''}|${n.timestamp}|${(n.body || '').slice(0, 60)}`;
-                seen.add(id);
+                localById.set(notifId(n), n);
             }
-            let added = 0;
+            let changed = false;
             for (const n of s.notificationHistory) {
                 if (!n || typeof n.timestamp !== 'number') continue;
                 if (n.timestamp <= cutoff) continue;
-                const id = n.channelInfo?.id || `${n.senderPubkey || ''}|${n.timestamp}|${(n.body || '').slice(0, 60)}`;
-                if (seen.has(id)) continue;
+                const id = notifId(n);
+                const existing = localById.get(id);
+                if (existing) {
+                    // Merge viewed flag — once any device viewed the
+                    // notification, all devices should reflect that.
+                    if (n.viewed && !existing.viewed) {
+                        existing.viewed = true;
+                        changed = true;
+                    }
+                    continue;
+                }
                 // Skip notifications from blocked users / nyms on this device.
                 const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
                 if (pk && nym.blockedUsers && nym.blockedUsers.has(pk)) continue;
@@ -4781,12 +4791,13 @@ async function applyNostrSettingsAdditive(s) {
                     channelInfo: n.channelInfo || null,
                     timestamp: n.timestamp,
                     senderNym: n.senderNym || '',
-                    senderPubkey: pk
+                    senderPubkey: pk,
+                    viewed: !!n.viewed
                 });
-                seen.add(id);
-                added++;
+                localById.set(id, nym.notificationHistory[nym.notificationHistory.length - 1]);
+                changed = true;
             }
-            if (added > 0) {
+            if (changed) {
                 nym.notificationHistory = nym.notificationHistory
                     .filter(n => n && n.timestamp > cutoff)
                     .sort((a, b) => a.timestamp - b.timestamp);

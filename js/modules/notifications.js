@@ -35,7 +35,8 @@ Object.assign(NYM.prototype, {
             channelInfo: channelInfo,
             timestamp: Date.now(),
             senderNym: baseTitle,
-            senderPubkey: channelInfo?.pubkey || ''
+            senderPubkey: channelInfo?.pubkey || '',
+            viewed: false
         });
         // Prune notifications older than 24 hours and persist
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
@@ -136,7 +137,8 @@ Object.assign(NYM.prototype, {
             channelInfo: channelInfo,
             timestamp: ts,
             senderNym: baseTitle,
-            senderPubkey: channelInfo?.pubkey || ''
+            senderPubkey: channelInfo?.pubkey || '',
+            viewed: ts <= (this.notificationLastReadTime || 0)
         });
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
@@ -188,7 +190,11 @@ Object.assign(NYM.prototype, {
 
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         const unreadCount = this.notificationHistory.filter(n => {
-            if (n.timestamp <= cutoff24h || n.timestamp <= this.notificationLastReadTime) return false;
+            if (n.timestamp <= cutoff24h) return false;
+            // Treat as read if either the per-item viewed flag is set or the
+            // legacy bulk read marker covers it (kept for backwards compat).
+            if (n.viewed) return false;
+            if (n.timestamp <= (this.notificationLastReadTime || 0)) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
             if (n.senderNym && this.isNymBlocked(n.senderNym)) return false;
@@ -207,9 +213,19 @@ Object.assign(NYM.prototype, {
     },
 
     openNotificationsModal() {
-        // Mark all as read and broadcast so other devices stay in sync
+        // Mark all as read and broadcast so other devices stay in sync.
+        // Also flip each individual notification's viewed flag so the read
+        // state is preserved per-item across device sync, not just by the
+        // bulk-timestamp heuristic.
         this.notificationLastReadTime = Date.now();
         try { localStorage.setItem('nym_notification_last_read', String(this.notificationLastReadTime)); } catch { }
+        let viewedChanged = false;
+        for (const n of this.notificationHistory) {
+            if (n && !n.viewed) { n.viewed = true; viewedChanged = true; }
+        }
+        if (viewedChanged && typeof this._saveNotificationHistory === 'function') {
+            this._saveNotificationHistory();
+        }
         this._updateNotificationBadge();
         if (typeof this._debouncedNostrSettingsSave === 'function') {
             this._debouncedNostrSettingsSave(2000);
@@ -227,7 +243,10 @@ Object.assign(NYM.prototype, {
         const friendsOnlyCheckbox = document.getElementById('notifyFriendsOnlyCheckbox');
         if (friendsOnlyCheckbox) friendsOnlyCheckbox.checked = this.notifyFriendsOnly;
 
-        // Filter to last 24 hours and exclude blocked users
+        // Filter to last 24 hours and exclude blocked users, then sort by
+        // timestamp ascending so the descending-iteration below renders
+        // newest first regardless of insertion order (historical replay,
+        // remote sync merges, etc. can leave the array out of order).
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         const recent = this.notificationHistory.filter(n => {
             if (n.timestamp <= cutoff24h) return false;
@@ -235,7 +254,7 @@ Object.assign(NYM.prototype, {
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
             if (n.senderNym && this.isNymBlocked(n.senderNym)) return false;
             return true;
-        });
+        }).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
         if (recent.length === 0) {
             body.innerHTML = '<div class="notifications-empty">No notifications in the last 24 hours</div>';

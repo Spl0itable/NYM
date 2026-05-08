@@ -74,7 +74,8 @@ Object.assign(NYM.prototype, {
                     timestamp: n.timestamp,
                     senderNym: n.senderNym,
                     senderPubkey: n.senderPubkey,
-                    channelInfo: n.channelInfo || null
+                    channelInfo: n.channelInfo || null,
+                    viewed: !!n.viewed
                 }));
         } catch (_) { return []; }
     },

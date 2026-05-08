@@ -119,8 +119,16 @@ Object.assign(NYM.prototype, {
             if (!targetLang) return; // user cancelled
         }
 
-        // Strip HTML tags for translation (send plain text)
-        let plainText = content.replace(/<[^>]+>/g, '').trim();
+        // Strip HTML blockquote tags entirely (with their contents) so the
+        // quoted reply doesn't pollute language detection. The quote may be in
+        // the user's own language while the new reply is in another, and Google
+        // would otherwise detect the dominant language and skip the reply.
+        let plainText = content.replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, ' ');
+        // Strip remaining HTML tags
+        plainText = plainText.replace(/<[^>]+>/g, '');
+        // Strip plain-text quote lines ("> ..." style) for the same reason
+        plainText = plainText.split('\n').filter(line => !line.trim().startsWith('>')).join('\n').trim();
+
         if (!plainText) {
             this.displaySystemMessage('No text to translate.');
             return;

@@ -745,6 +745,8 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        this._updateBubbleGrouping(messageEl);
+
         // Bind long-press on group-readers span so users can see all viewers
         if (message.isOwn && message.isGroup && message.nymMessageId) {
             const readersEl = messageEl.querySelector('.group-readers');
@@ -773,6 +775,9 @@ Object.assign(NYM.prototype, {
                 if (this.userScrolledUp && removedHeight > 0) {
                     container.scrollTop = Math.max(0, container.scrollTop - removedHeight);
                 }
+                // The new first message lost its previous sibling — recompute its grouping.
+                const firstAfterPrune = container.querySelector('[data-message-id]');
+                if (firstAfterPrune) this._updateBubbleGrouping(firstAfterPrune);
             }
         }
 
@@ -1270,6 +1275,30 @@ Object.assign(NYM.prototype, {
             if (!container) return;
             container.scrollTop = container.scrollHeight;
         });
+    },
+
+    // For bubble layout: tag a message as `bubble-grouped` when it follows
+    // another message from the same author in close succession, so CSS can hide
+    // the avatar/nym header. IRC layout ignores the class. Also re-evaluates
+    // the next sibling since insertion may sit between two same-author messages.
+    _updateBubbleGrouping(messageEl) {
+        if (!messageEl) return;
+        const groupWindowMs = 5 * 60 * 1000;
+        const apply = (el) => {
+            if (!el || !el.classList || !el.dataset || !el.dataset.pubkey) return;
+            const prev = el.previousElementSibling;
+            const samePrev = prev
+                && prev.dataset
+                && prev.dataset.pubkey === el.dataset.pubkey
+                && !!el.dataset.messageId
+                && !!prev.dataset.messageId;
+            const ts = parseInt(el.dataset.timestamp) || 0;
+            const prevTs = prev ? (parseInt(prev.dataset.timestamp) || 0) : 0;
+            const inWindow = samePrev && ts && prevTs && Math.abs(ts - prevTs) <= groupWindowMs;
+            el.classList.toggle('bubble-grouped', !!inWindow);
+        };
+        apply(messageEl);
+        apply(messageEl.nextElementSibling);
     },
 
     setQuoteReply(author, text) {

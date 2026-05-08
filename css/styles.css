@@ -7903,6 +7903,21 @@ body.chat-bubbles .message {
     border-radius: 0;
 }
 
+body.chat-bubbles .message.bubble-grouped > .message-author {
+    display: none;
+}
+body.chat-bubbles .message.bubble-grouped {
+    margin-top: -4px;
+    margin-bottom: 2px;
+}
+body.chat-bubbles .message.bubble-grouped .message-content {
+    border-top-left-radius: 16px;
+}
+body.chat-bubbles .message.bubble-grouped.self .message-content {
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+}
+
 body.chat-bubbles .message::before {
     display: none !important;
 }
