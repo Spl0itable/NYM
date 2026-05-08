@@ -1279,26 +1279,40 @@ Object.assign(NYM.prototype, {
 
     // For bubble layout: tag a message as `bubble-grouped` when it follows
     // another message from the same author in close succession, so CSS can hide
-    // the avatar/nym header. IRC layout ignores the class. Also re-evaluates
-    // the next sibling since insertion may sit between two same-author messages.
+    // the avatar/nym header. IRC layout ignores the class.
+    _applyBubbleGroupingTo(el) {
+        if (!el || !el.classList || !el.dataset || !el.dataset.pubkey) return;
+        const groupWindowMs = 5 * 60 * 1000;
+        const prev = el.previousElementSibling;
+        const samePrev = prev
+            && prev.dataset
+            && prev.dataset.pubkey === el.dataset.pubkey
+            && !!el.dataset.messageId
+            && !!prev.dataset.messageId;
+        const ts = parseInt(el.dataset.timestamp) || 0;
+        const prevTs = prev ? (parseInt(prev.dataset.timestamp) || 0) : 0;
+        const inWindow = samePrev && ts && prevTs && Math.abs(ts - prevTs) <= groupWindowMs;
+        el.classList.toggle('bubble-grouped', !!inWindow);
+    },
+
+    // Re-evaluate just the inserted message and its next sibling — used after a
+    // single-message append/insert since the insertion may sit between two
+    // same-author messages.
     _updateBubbleGrouping(messageEl) {
         if (!messageEl) return;
-        const groupWindowMs = 5 * 60 * 1000;
-        const apply = (el) => {
-            if (!el || !el.classList || !el.dataset || !el.dataset.pubkey) return;
-            const prev = el.previousElementSibling;
-            const samePrev = prev
-                && prev.dataset
-                && prev.dataset.pubkey === el.dataset.pubkey
-                && !!el.dataset.messageId
-                && !!prev.dataset.messageId;
-            const ts = parseInt(el.dataset.timestamp) || 0;
-            const prevTs = prev ? (parseInt(prev.dataset.timestamp) || 0) : 0;
-            const inWindow = samePrev && ts && prevTs && Math.abs(ts - prevTs) <= groupWindowMs;
-            el.classList.toggle('bubble-grouped', !!inWindow);
-        };
-        apply(messageEl);
-        apply(messageEl.nextElementSibling);
+        this._applyBubbleGroupingTo(messageEl);
+        this._applyBubbleGroupingTo(messageEl.nextElementSibling);
+    },
+
+    // Re-evaluate grouping for every message in a container. Used after bulk
+    // renders (historical hydration, cached-fragment restore) and when the
+    // bubbles layout is toggled on after messages already exist in the DOM.
+    _recomputeAllBubbleGrouping(container) {
+        if (!container) return;
+        const messages = container.querySelectorAll('[data-message-id]');
+        for (let i = 0; i < messages.length; i++) {
+            this._applyBubbleGroupingTo(messages[i]);
+        }
     },
 
     setQuoteReply(author, text) {
@@ -2012,6 +2026,11 @@ Object.assign(NYM.prototype, {
             this.virtualScroll.suppressAutoScroll = false;
         }
 
+        // The cached fragment was built when bubbles may have been off, or
+        // when grouping ran against a different sibling chain. Recompute now
+        // that the fragment is back in the live container.
+        this._recomputeAllBubbleGrouping(container);
+
         if (this.settings.autoscroll) {
             requestAnimationFrame(() => {
                 container.scrollTop = container.scrollHeight;
@@ -2094,6 +2113,13 @@ Object.assign(NYM.prototype, {
 
         this._suppressSound = false;
         this.virtualScroll.suppressAutoScroll = false;
+
+        // Per-message grouping during a bulk render is evaluated against the
+        // siblings that exist at the moment of insertion, which is fragile if
+        // any message slips in out of order or if `body.chat-bubbles` is set
+        // after this render finishes (settings sync arriving later). Final pass
+        // guarantees grouping is consistent for the whole batch.
+        this._recomputeAllBubbleGrouping(container);
 
         // Scroll to bottom if requested
         if (scrollToBottom && this.settings.autoscroll) {

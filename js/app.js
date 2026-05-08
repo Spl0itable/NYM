@@ -3121,6 +3121,13 @@ function selectMessageLayout(layout) {
 
 function applyMessageLayout(layout) {
     document.body.classList.toggle('chat-bubbles', layout === 'bubbles');
+    // If the layout flipped after messages already rendered (e.g. nostr
+    // settings sync arrived post-hydration), re-tag groupings on the live
+    // container so historical messages collapse their headers immediately.
+    if (layout === 'bubbles' && typeof nym !== 'undefined' && typeof nym._recomputeAllBubbleGrouping === 'function') {
+        const container = document.getElementById('messagesContainer');
+        if (container) nym._recomputeAllBubbleGrouping(container);
+    }
 }
 
 // Wallpaper Functions
@@ -3205,7 +3212,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.62.328 ═══<br/>
+═══ Nymchat v3.62.329 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
