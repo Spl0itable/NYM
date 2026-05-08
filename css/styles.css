@@ -7910,6 +7910,9 @@ body.chat-bubbles .message.bubble-grouped {
     margin-top: -4px;
     margin-bottom: 2px;
 }
+body.chat-bubbles .message:not(.bubble-grouped) + .message.bubble-grouped {
+    margin-top: -8px;
+}
 body.chat-bubbles .message.bubble-grouped .message-content {
     border-top-left-radius: 16px;
 }
