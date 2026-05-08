@@ -2110,13 +2110,16 @@ Object.assign(NYM.prototype, {
 
         this.virtualScroll.suppressAutoScroll = true;
         this._suppressSound = true;
+        this._suppressBubbleRewrap = true;
 
         for (let i = 0; i < renderMessages.length; i++) {
             this.displayMessage(renderMessages[i]);
         }
 
         this._suppressSound = false;
+        this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
+        this._recomputeAllBubbleGrouping(container);
 
         // Restore scroll position so user stays at the same place
         requestAnimationFrame(() => {

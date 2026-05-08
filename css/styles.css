@@ -7921,6 +7921,66 @@ body.chat-bubbles .message.bubble-grouped.self .message-content {
     border-top-right-radius: 16px;
 }
 
+.message-group {
+    position: relative;
+}
+
+body.chat-bubbles .message-group {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 6px;
+    padding: 0 14px 0 6px;
+    margin-bottom: 6px;
+}
+
+body.chat-bubbles .message-group.group-self {
+    padding: 0 14px 0 14px;
+}
+
+body.chat-bubbles .message-group.group-self {
+    flex-direction: row-reverse;
+}
+
+body.chat-bubbles .message-group-stack {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+body.chat-bubbles .message-group-avatar {
+    width: 32px;
+    flex: 0 0 32px;
+    position: sticky;
+    bottom: 8px;
+    align-self: flex-end;
+    height: 32px;
+    z-index: 1;
+}
+
+body.chat-bubbles .message-group-avatar img.avatar-bubble {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    cursor: pointer;
+    display: block;
+}
+
+body.chat-bubbles .message-group.group-self .message-group-avatar {
+    display: none;
+}
+
+body.chat-bubbles .message-group .message {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+body.chat-bubbles .message-group .message .message-author .avatar-message {
+    display: none;
+}
+
 body.chat-bubbles .message::before {
     display: none !important;
 }

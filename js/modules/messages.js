@@ -739,7 +739,15 @@ Object.assign(NYM.prototype, {
             }
 
             if (insertBefore) {
-                container.insertBefore(messageEl, insertBefore);
+                let ref = insertBefore;
+                if (ref.parentNode !== container) {
+                    ref = ref.closest('.message-group') || null;
+                }
+                if (ref && ref.parentNode === container) {
+                    container.insertBefore(messageEl, ref);
+                } else {
+                    container.appendChild(messageEl);
+                }
             } else {
                 container.appendChild(messageEl);
             }
@@ -1277,9 +1285,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // For bubble layout: tag a message as `bubble-grouped` when it follows
-    // another message from the same author in close succession, so CSS can hide
-    // the avatar/nym header. IRC layout ignores the class.
     _applyBubbleGroupingTo(el) {
         if (!el || !el.classList || !el.dataset || !el.dataset.pubkey) return;
         const groupWindowMs = 5 * 60 * 1000;
@@ -1295,24 +1300,154 @@ Object.assign(NYM.prototype, {
         el.classList.toggle('bubble-grouped', !!inWindow);
     },
 
-    // Re-evaluate just the inserted message and its next sibling — used after a
-    // single-message append/insert since the insertion may sit between two
-    // same-author messages.
     _updateBubbleGrouping(messageEl) {
         if (!messageEl) return;
+        if (this._suppressBubbleRewrap) {
+            this._applyBubbleGroupingTo(messageEl);
+            this._applyBubbleGroupingTo(messageEl.nextElementSibling);
+            return;
+        }
+        const container = document.getElementById('messagesContainer');
+        if (container && (container.contains(messageEl) || messageEl.parentNode === null)) {
+            this._rewrapBubbleGroups(container);
+            const messages = container.querySelectorAll('[data-message-id]');
+            for (let i = 0; i < messages.length; i++) {
+                this._applyBubbleGroupingTo(messages[i]);
+            }
+            return;
+        }
         this._applyBubbleGroupingTo(messageEl);
         this._applyBubbleGroupingTo(messageEl.nextElementSibling);
     },
 
-    // Re-evaluate grouping for every message in a container. Used after bulk
-    // renders (historical hydration, cached-fragment restore) and when the
-    // bubbles layout is toggled on after messages already exist in the DOM.
     _recomputeAllBubbleGrouping(container) {
         if (!container) return;
+        this._rewrapBubbleGroups(container);
         const messages = container.querySelectorAll('[data-message-id]');
         for (let i = 0; i < messages.length; i++) {
             this._applyBubbleGroupingTo(messages[i]);
         }
+    },
+
+    _rewrapBubbleGroups(container) {
+        if (!container) return;
+        const isBubble = document.body.classList.contains('chat-bubbles');
+
+        const wrappers = Array.from(container.children).filter(c => c.classList && c.classList.contains('message-group'));
+        for (const wrapper of wrappers) {
+            if (wrapper._resizeObserver) {
+                wrapper._resizeObserver.disconnect();
+                wrapper._resizeObserver = null;
+            }
+            const stack = wrapper.querySelector(':scope > .message-group-stack');
+            if (stack) {
+                const msgs = Array.from(stack.children);
+                for (const m of msgs) container.insertBefore(m, wrapper);
+            }
+            wrapper.remove();
+        }
+
+        if (!isBubble) return;
+
+        const groupWindowMs = 5 * 60 * 1000;
+        const children = Array.from(container.children);
+        let currentGroup = null;
+        let lastPubkey = null;
+        let lastTs = 0;
+
+        for (const child of children) {
+            const isMessage = child.classList && child.classList.contains('message')
+                && child.dataset && child.dataset.pubkey && child.dataset.messageId;
+            if (!isMessage) {
+                currentGroup = null;
+                lastPubkey = null;
+                lastTs = 0;
+                continue;
+            }
+            const ts = parseInt(child.dataset.timestamp) || 0;
+            const pk = child.dataset.pubkey;
+            const sameAuthor = pk === lastPubkey;
+            const inWindow = sameAuthor && lastTs && ts && Math.abs(ts - lastTs) <= groupWindowMs;
+
+            if (!inWindow || !currentGroup) {
+                currentGroup = this._createMessageGroupWrapper(child);
+                container.insertBefore(currentGroup, child);
+            }
+            currentGroup.querySelector(':scope > .message-group-stack').appendChild(child);
+            lastPubkey = pk;
+            lastTs = ts;
+        }
+
+        const finalWrappers = container.querySelectorAll(':scope > .message-group');
+        for (const wrapper of finalWrappers) {
+            this._syncMessageGroupAvatarOffset(wrapper);
+        }
+    },
+
+    _syncMessageGroupAvatarOffset(wrapper) {
+        if (!wrapper) return;
+        const avatarBox = wrapper.querySelector(':scope > .message-group-avatar');
+        const stack = wrapper.querySelector(':scope > .message-group-stack');
+        if (!avatarBox || !stack) return;
+        const lastMsg = stack.lastElementChild;
+        if (!lastMsg) {
+            avatarBox.style.marginBottom = '';
+            return;
+        }
+        const contentEl = lastMsg.querySelector(':scope > .message-content');
+        if (!contentEl) {
+            avatarBox.style.marginBottom = '';
+            return;
+        }
+        const below = lastMsg.offsetHeight - (contentEl.offsetTop + contentEl.offsetHeight);
+        avatarBox.style.marginBottom = below > 0 ? below + 'px' : '';
+    },
+
+    _createMessageGroupWrapper(firstMessageEl) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message-group';
+        const pubkey = firstMessageEl.dataset.pubkey || '';
+        wrapper.dataset.pubkey = pubkey;
+        if (firstMessageEl.classList.contains('self')) wrapper.classList.add('group-self');
+        if (firstMessageEl.classList.contains('pm')) wrapper.classList.add('group-pm');
+
+        const avatarBox = document.createElement('div');
+        avatarBox.className = 'message-group-avatar';
+        const img = document.createElement('img');
+        img.className = 'avatar-bubble';
+        img.alt = '';
+        img.loading = 'lazy';
+        const safePk = this._safePubkey(pubkey);
+        if (safePk) img.dataset.avatarPubkey = safePk;
+        img.src = this.getAvatarUrl(pubkey);
+        const fallback = this.generateAvatarSvg(safePk);
+        img.onerror = function () { this.onerror = null; this.src = fallback; };
+        avatarBox.appendChild(img);
+        avatarBox.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const stackEl = wrapper.querySelector(':scope > .message-group-stack');
+            const lastMsg = stackEl && stackEl.lastElementChild;
+            if (!lastMsg) return;
+            const author = lastMsg.dataset.author || '';
+            const content = lastMsg.dataset.rawContent || '';
+            const msgId = lastMsg.dataset.messageId || '';
+            this.showContextMenu(e, author, pubkey, content, msgId, false, msgId);
+        });
+
+        const stack = document.createElement('div');
+        stack.className = 'message-group-stack';
+
+        wrapper.appendChild(avatarBox);
+        wrapper.appendChild(stack);
+
+        if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(() => this._syncMessageGroupAvatarOffset(wrapper));
+            ro.observe(stack);
+            wrapper._resizeObserver = ro;
+        }
+
+        return wrapper;
     },
 
     setQuoteReply(author, text) {
@@ -2019,10 +2154,12 @@ Object.assign(NYM.prototype, {
             const trailing = currentMessages.slice(cachedCount);
             this.virtualScroll.suppressAutoScroll = true;
             this._suppressSound = true;
+            this._suppressBubbleRewrap = true;
             for (let i = 0; i < trailing.length; i++) {
                 this.displayMessage(trailing[i]);
             }
             this._suppressSound = false;
+            this._suppressBubbleRewrap = false;
             this.virtualScroll.suppressAutoScroll = false;
         }
 
@@ -2106,12 +2243,14 @@ Object.assign(NYM.prototype, {
         // Suppress notification sounds during bulk rendering of stored messages
         // (e.g. when opening a conversation) to avoid replaying sounds
         this._suppressSound = true;
+        this._suppressBubbleRewrap = true;
 
         for (let i = 0; i < renderMessages.length; i++) {
             this.displayMessage(renderMessages[i]);
         }
 
         this._suppressSound = false;
+        this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
 
         // Per-message grouping during a bulk render is evaluated against the
