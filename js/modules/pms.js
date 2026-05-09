@@ -1409,6 +1409,13 @@ Object.assign(NYM.prototype, {
             if (!this.users.has(pubkey) || /^anon$/i.test(cleanBaseNym)) {
                 this.requestUserProfile(pubkey);
             }
+        } else {
+            // PM already exists — sync the displayed nym from the users map
+            // in case the profile was updated after the entry was created.
+            const cached = this.pmConversations.get(pubkey);
+            if (cached && cached.nym !== baseNym) {
+                this.updatePMNicknameFromProfile(pubkey, baseNym);
+            }
         }
     },
 

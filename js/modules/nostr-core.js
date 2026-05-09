@@ -758,6 +758,10 @@ Object.assign(NYM.prototype, {
                     // Update PM sidebar and header if this user has a PM conversation
                     if (pubkey !== this.pubkey) {
                         this.updatePMNicknameFromProfile(pubkey, truncatedName);
+                        // Refresh group sidebar entries that include this member
+                        if (typeof this.updateGroupMembershipDisplay === 'function') {
+                            this.updateGroupMembershipDisplay(pubkey);
+                        }
                     }
                 }
 
@@ -1852,8 +1856,11 @@ Object.assign(NYM.prototype, {
                         // Store and update for OTHER users (Bitchat users, PM contacts)
                         if (event.pubkey !== this.pubkey && (profile.name || profile.username || profile.display_name)) {
                             const profileName = (profile.name || profile.username || profile.display_name).substring(0, 20);
-                            // Store in users map
-                            if (!this.users.has(event.pubkey) || this.users.get(event.pubkey).nym.startsWith('anon')) {
+                            // Store in users map — always accept the newer kind 0
+                            // event as authoritative so stale nyms don't linger
+                            // when a contact updates their profile.
+                            const existingUser = this.users.get(event.pubkey);
+                            if (!existingUser) {
                                 this.users.set(event.pubkey, {
                                     nym: profileName,
                                     pubkey: event.pubkey,
@@ -1862,9 +1869,17 @@ Object.assign(NYM.prototype, {
                                     channels: new Set()
                                 });
                                 this.persistProfile(event.pubkey);
+                            } else if (existingUser.nym !== profileName) {
+                                existingUser.nym = profileName;
+                                this.users.set(event.pubkey, existingUser);
+                                this.persistProfile(event.pubkey);
                             }
                             // Update PM nickname displays
                             this.updatePMNicknameFromProfile(event.pubkey, profileName);
+                            // Refresh group sidebar entries that include this member
+                            if (typeof this.updateGroupMembershipDisplay === 'function') {
+                                this.updateGroupMembershipDisplay(event.pubkey);
+                            }
                         }
 
                         // Get lightning address

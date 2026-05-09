@@ -1936,6 +1936,36 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Refresh group sidebar avatar tooltips and in-chat header when a member's
+    // profile (nickname) changes. The group sidebar item's name reflects the
+    // group's subject, not member nicknames, but the avatar stack and the
+    // current group's header reference per-member nyms via the users map.
+    updateGroupMembershipDisplay(memberPubkey) {
+        if (!memberPubkey || !this.groupConversations) return;
+        for (const [groupId, group] of this.groupConversations.entries()) {
+            if (!group || !Array.isArray(group.members)) continue;
+            if (!group.members.includes(memberPubkey)) continue;
+            // Re-render the sidebar item so any per-member metadata (e.g. avatar
+            // alt/title attributes) reflects the latest profile data.
+            this.updateGroupConversationUI(groupId);
+            // If we're currently viewing this group, refresh its header so the
+            // (re)rendered nickname appears in the title bar.
+            if (this.inPMMode && this.currentGroup === groupId) {
+                const otherMembers = group.members.filter(pk => pk !== this.pubkey);
+                const headerAvatars = otherMembers.slice(0, 4).map(pk => {
+                    const sk = this._safePubkey(pk);
+                    const src = this.getAvatarUrl(pk);
+                    return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
+                }).join('');
+                const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+                const memberLabel = `<span style="font-size:12px;color:var(--text-dim);margin-left:4px">(${this.abbreviateNumber(group.members.length)} members)</span>`;
+                const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span style="margin-left:${otherMembers.length > 0 ? '8' : '0'}px">${this.escapeHtml(group.name)}</span>${memberLabel}`;
+                const channelEl = document.getElementById('currentChannel');
+                if (channelEl) channelEl.innerHTML = headerHtml;
+            }
+        }
+    },
+
     // Open a group conversation in the main chat area
     openGroup(groupId) {
         const group = this.groupConversations.get(groupId);
