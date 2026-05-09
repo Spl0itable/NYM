@@ -95,14 +95,11 @@ export async function onRequest(context) {
     }
   }, 30000);
 
-  // Track failed relays to avoid wasting cycles
-  const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
-  const FAILED_COOLDOWN = 60000;
-  const MAX_BACKOFF = 180000;
-
-  // Track reconnection attempts
+  // Track reconnection attempts (used for backoff, never abandoned)
   const reconnectAttempts = new Map();
-  const MAX_RECONNECT_ATTEMPTS = 5;
+  const RECONNECT_BASE_DELAY = 1000;
+  const RECONNECT_MAX_DELAY = 30000;
+  const CONNECT_TIMEOUT_MS = 5000;
 
   // Track relays pending reconnection
   const pendingReconnect = new Set();
@@ -157,26 +154,6 @@ export async function onRequest(context) {
       latency,
       events
     }]));
-  }
-
-  function shouldSkipRelay(relayUrl) {
-    const failure = failedRelays.get(relayUrl);
-    if (failure) {
-      const backoff = Math.min(FAILED_COOLDOWN * Math.pow(2, failure.attempts - 1), MAX_BACKOFF);
-      if (Date.now() - failure.failedAt < backoff) return true;
-      failedRelays.delete(relayUrl);
-    }
-    return false;
-  }
-
-  function trackRelayFailure(relayUrl) {
-    const existing = failedRelays.get(relayUrl);
-    const attempts = existing ? existing.attempts + 1 : 1;
-    failedRelays.set(relayUrl, { failedAt: Date.now(), attempts });
-  }
-
-  function clearRelayFailure(relayUrl) {
-    failedRelays.delete(relayUrl);
   }
 
   function validateRelayUrl(url) {
@@ -245,20 +222,17 @@ export async function onRequest(context) {
 
   function scheduleReconnect(relayUrl, type) {
     if (!serverOpen) return;
+    if (intentionallyClosed.has(relayUrl)) return;
     if (pendingReconnect.has(relayUrl)) return;
 
     const attempts = reconnectAttempts.get(relayUrl) || 0;
-    if (attempts >= MAX_RECONNECT_ATTEMPTS) {
-      trackRelayFailure(relayUrl);
-      reconnectAttempts.delete(relayUrl);
-      return;
-    }
     reconnectAttempts.set(relayUrl, attempts + 1);
-
     pendingReconnect.add(relayUrl);
 
-    const baseDelay = 3000;
-    const delay = baseDelay * Math.pow(1.5, attempts) + Math.random() * 2000;
+    const delay = Math.min(
+      RECONNECT_BASE_DELAY * Math.pow(1.7, attempts),
+      RECONNECT_MAX_DELAY
+    ) + Math.random() * 500;
 
     const timerId = setTimeout(() => {
       reconnectTimers.delete(relayUrl);
@@ -282,7 +256,6 @@ export async function onRequest(context) {
     if (upstreams.has(relayUrl)) return;
     if (!validateRelayUrl(relayUrl)) return;
     if (relayUrl === 'wss://relay.nosflare.com') return;
-    if (shouldSkipRelay(relayUrl)) return;
 
     const info = { ws: null, type, status: 'connecting', eventCount: 0, handled: false };
     upstreams.set(relayUrl, info);
@@ -297,18 +270,17 @@ export async function onRequest(context) {
         if (info.status === 'connecting') {
           info.handled = true;
           info.status = 'failed';
-          trackRelayFailure(relayUrl);
           try { ws.close(); } catch { /* noop */ }
           upstreams.delete(relayUrl);
           releaseOpenSlot();
           schedulePoolStatus();
+          scheduleReconnect(relayUrl, type);
         }
-      }, 8000);
+      }, CONNECT_TIMEOUT_MS);
 
       ws.addEventListener('open', () => {
         clearTimeout(timeout);
         info.status = 'connected';
-        clearRelayFailure(relayUrl);
         reconnectAttempts.delete(relayUrl);
         relayLatency.set(relayUrl, Date.now() - connectStartTime);
         releaseOpenSlot();
@@ -382,11 +354,7 @@ export async function onRequest(context) {
           return;
         }
 
-        if (wasConnected) {
-          scheduleReconnect(relayUrl, type);
-        } else {
-          trackRelayFailure(relayUrl);
-        }
+        scheduleReconnect(relayUrl, type);
       });
 
       ws.addEventListener('error', () => {
@@ -395,18 +363,18 @@ export async function onRequest(context) {
         info.handled = true;
 
         info.status = 'failed';
-        trackRelayFailure(relayUrl);
         upstreams.delete(relayUrl);
         releaseOpenSlot();
         schedulePoolStatus();
+        scheduleReconnect(relayUrl, type);
       });
     } catch {
       info.handled = true;
       info.status = 'failed';
-      trackRelayFailure(relayUrl);
       upstreams.delete(relayUrl);
       releaseOpenSlot();
       schedulePoolStatus();
+      scheduleReconnect(relayUrl, type);
     }
   }
 
@@ -452,12 +420,22 @@ export async function onRequest(context) {
               }
             }
 
-            // Cancel ALL pending reconnect timers
+            // Drop reconnect state for relays no longer requested
+            for (const url of Array.from(reconnectAttempts.keys())) {
+              if (!newRelaySet.has(url)) reconnectAttempts.delete(url);
+            }
+
+            // Cancel ALL pending reconnect timers and reset attempt counters
+            // for requested relays so they get fast first-retry behavior again.
             for (const [, timerId] of reconnectTimers) {
               clearTimeout(timerId);
             }
             reconnectTimers.clear();
             pendingReconnect.clear();
+            for (const url of newRelaySet) {
+              reconnectAttempts.delete(url);
+              intentionallyClosed.delete(url);
+            }
 
             // Connect all relays immediately (geo relays first in the array)
             for (const url of requestedRelays) {
@@ -565,6 +543,7 @@ export async function onRequest(context) {
     reconnectTimers.clear();
     pendingReconnect.clear();
     intentionallyClosed.clear();
+    reconnectAttempts.clear();
     if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
     if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
     upstreams.forEach((info) => {

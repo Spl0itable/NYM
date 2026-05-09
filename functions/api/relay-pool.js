@@ -22,7 +22,7 @@
 const SHARD_SIZE = 250;
 const MAX_SHARDS = 6;
 const SHARD_PATH = '/api/relay-pool-shard';
-const SHARD_OPEN_STAGGER_MS = 200;
+const SHARD_OPEN_STAGGER_MS = 25;
 
 export async function onRequest(context) {
   const { request } = context;
