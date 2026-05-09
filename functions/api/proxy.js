@@ -440,26 +440,33 @@ async function handleUnfurl(targetUrl, context) {
   return writeEdgeCache(context, cachePath, JSON.stringify(meta), 'application/json', 3600);
 }
 
-// Reverse-geocode lat/lng via Nominatim, edge-cached for 1 day
+// Reverse-geocode lat/lng via Nominatim, edge-cached for 1 day. Results are
+// always requested in English so address fields stay consistent for users.
 async function handleGeocode(searchParams, context) {
   const lat = parseFloat(searchParams.get('lat'));
   const lng = parseFloat(searchParams.get('lng'));
   const zoomRaw = parseInt(searchParams.get('zoom') || '10', 10);
   const zoom = Number.isFinite(zoomRaw) ? Math.min(18, Math.max(0, zoomRaw)) : 10;
+  const langRaw = (searchParams.get('lang') || 'en').toLowerCase();
+  const lang = /^[a-z]{2}(-[a-z]{2})?$/.test(langRaw) ? langRaw : 'en';
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
     return jsonResponse({ error: 'Invalid lat/lng' }, 400);
   }
 
   const latKey = lat.toFixed(4);
   const lngKey = lng.toFixed(4);
-  const cachePath = `/geocode?lat=${latKey}&lng=${lngKey}&zoom=${zoom}`;
+  const cachePath = `/geocode?lat=${latKey}&lng=${lngKey}&zoom=${zoom}&lang=${lang}`;
   const cached = await readEdgeCache(cachePath);
   if (cached) return cached;
 
-  const upstream = await fetch(
-    `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latKey}&lon=${lngKey}&zoom=${zoom}`,
-    { headers: { 'User-Agent': 'NymchatProxy/1.0', 'Accept': 'application/json' } }
-  );
+  const upstreamUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latKey}&lon=${lngKey}&zoom=${zoom}&accept-language=${lang}`;
+  const upstream = await fetch(upstreamUrl, {
+    headers: {
+      'User-Agent': 'NymchatProxy/1.0',
+      'Accept': 'application/json',
+      'Accept-Language': lang,
+    },
+  });
   if (!upstream.ok) {
     return jsonResponse({ error: `Upstream returned ${upstream.status}` }, 502);
   }

@@ -3618,6 +3618,14 @@ body.light-mode .verified-badge::before {
     gap: 8px;
 }
 
+.geohash-controls.geohash-controls-tl {
+    top: 20px;
+    left: 20px;
+    bottom: auto;
+    flex-direction: row;
+    gap: 10px;
+}
+
 .geohash-controls-row {
     display: flex;
     gap: 10px;
@@ -3884,6 +3892,12 @@ body.light-mode .verified-badge::before {
     .geohash-controls {
         bottom: 10px;
         left: 10px;
+    }
+
+    .geohash-controls.geohash-controls-tl {
+        top: 10px;
+        left: 10px;
+        bottom: auto;
     }
 
     .geohash-legend {

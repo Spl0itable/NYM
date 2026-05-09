@@ -103,6 +103,7 @@ window.nymHapticTap = function (ms) {
         'zoomMapOut':                 function () { nym().zoomMapOut(); },
         'toggleHeatmap':              function () { nym().toggleHeatmap(); },
         'toggleDaynight':             function () { nym().toggleDaynight(); },
+        'toggleGeohashGrid':          function () { nym().toggleGeohashGrid(); },
         'setActiveWindow':            function (_e, t) { nym().setGeohashActiveWindow(t.dataset.hours); },
         'setActiveWindowFromSelect':  function (_e, t) { nym().setGeohashActiveWindow(t.value); },
         'closeGeohashInfo':           function () { nym().closeGeohashInfo(); },

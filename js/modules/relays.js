@@ -2873,14 +2873,14 @@ Object.assign(NYM.prototype, {
     // Nominatim fallback if the worker is unreachable or returns an error.
     async fetchGeocode(lat, lng, zoom = 10) {
         const base = this._getProxyBaseUrl();
-        const direct = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=${zoom}`;
+        const direct = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=${zoom}&accept-language=en`;
         if (base) {
             try {
-                const res = await fetch(`${base}?action=geocode&lat=${lat}&lng=${lng}&zoom=${zoom}`);
+                const res = await fetch(`${base}?action=geocode&lat=${lat}&lng=${lng}&zoom=${zoom}&lang=en`);
                 if (res.ok) return await res.json();
             } catch (_) { /* fall through */ }
         }
-        const res = await fetch(direct);
+        const res = await fetch(direct, { headers: { 'Accept-Language': 'en' } });
         if (!res.ok) throw new Error(`Geocode failed: ${res.status}`);
         return res.json();
     },

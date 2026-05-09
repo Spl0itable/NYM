@@ -183,6 +183,61 @@
         return cityFeaturesPromise;
     }
 
+    const GEOHASH_BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
+
+    function geohashCellSize(precision) {
+        const totalBits = 5 * precision;
+        const lngBits = Math.ceil(totalBits / 2);
+        const latBits = Math.floor(totalBits / 2);
+        return {
+            lngStep: 360 / Math.pow(2, lngBits),
+            latStep: 180 / Math.pow(2, latBits)
+        };
+    }
+
+    function encodeGeohashRaw(lat, lng, precision) {
+        const bounds = { lat: [-90, 90], lng: [-180, 180] };
+        let isEven = true, bit = 0, ch = 0, geohash = '';
+        while (geohash.length < precision) {
+            if (isEven) {
+                const mid = (bounds.lng[0] + bounds.lng[1]) / 2;
+                if (lng >= mid) { ch = (ch << 1) + 1; bounds.lng[0] = mid; }
+                else { ch = ch << 1; bounds.lng[1] = mid; }
+            } else {
+                const mid = (bounds.lat[0] + bounds.lat[1]) / 2;
+                if (lat >= mid) { ch = (ch << 1) + 1; bounds.lat[0] = mid; }
+                else { ch = ch << 1; bounds.lat[1] = mid; }
+            }
+            isEven = !isEven;
+            if (++bit === 5) {
+                geohash += GEOHASH_BASE32[ch];
+                bit = 0; ch = 0;
+            }
+        }
+        return geohash;
+    }
+
+    function decodeGeohashBoundsRaw(geohash) {
+        const bounds = { lat: [-90, 90], lng: [-180, 180] };
+        let isEven = true;
+        for (let i = 0; i < geohash.length; i++) {
+            const cd = GEOHASH_BASE32.indexOf(geohash[i].toLowerCase());
+            if (cd === -1) return null;
+            for (let j = 4; j >= 0; j--) {
+                const mask = 1 << j;
+                if (isEven) {
+                    if (cd & mask) bounds.lng[0] = (bounds.lng[0] + bounds.lng[1]) / 2;
+                    else bounds.lng[1] = (bounds.lng[0] + bounds.lng[1]) / 2;
+                } else {
+                    if (cd & mask) bounds.lat[0] = (bounds.lat[0] + bounds.lat[1]) / 2;
+                    else bounds.lat[1] = (bounds.lat[0] + bounds.lat[1]) / 2;
+                }
+                isEven = !isEven;
+            }
+        }
+        return bounds;
+    }
+
     let heatPalette = null;
     function getHeatPalette() {
         if (heatPalette) return heatPalette;
@@ -279,15 +334,17 @@ Object.assign(NYM.prototype, {
     <button class="geohash-join-btn" id="geohashJoinBtn">Join Channel</button>
 </div>
 
+<div class="geohash-controls geohash-controls-tl">
+    <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapIn" aria-label="Zoom in">+</button>
+    <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapOut" aria-label="Zoom out">&minus;</button>
+    <button class="geohash-control-btn" data-action="resetGlobeView">Reset View</button>
+</div>
+
 <div class="geohash-controls">
-    <div class="geohash-controls-row">
-        <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapIn" aria-label="Zoom in">+</button>
-        <button class="geohash-control-btn geohash-zoom-btn" data-action="zoomMapOut" aria-label="Zoom out">&minus;</button>
-        <button class="geohash-control-btn" data-action="resetGlobeView">Reset View</button>
-    </div>
     <div class="geohash-controls-row">
         <button class="geohash-control-btn geohash-heatmap-btn" id="geohashHeatmapBtn" data-action="toggleHeatmap">Heat map</button>
         <button class="geohash-control-btn geohash-daynight-btn" id="geohashDaynightBtn" data-action="toggleDaynight">Day / Night</button>
+        <button class="geohash-control-btn geohash-grid-btn" id="geohashGridBtn" data-action="toggleGeohashGrid">Geohash</button>
     </div>
 </div>
 
@@ -368,6 +425,7 @@ Object.assign(NYM.prototype, {
         let drawScheduled = false;
         let heatmapMode = !!this._heatmapPreference;
         let daynightMode = !!this._daynightPreference;
+        let geohashGridMode = !!this._geohashGridPreference;
         const styles = getMapStyles();
 
         const ensureSubregions = () => {
@@ -413,6 +471,102 @@ Object.assign(NYM.prototype, {
             if (btn) btn.classList.toggle('active', daynightMode);
         };
         updateDaynightButton();
+
+        const updateGeohashGridButton = () => {
+            const btn = document.getElementById('geohashGridBtn');
+            if (btn) btn.classList.toggle('active', geohashGridMode);
+        };
+        updateGeohashGridButton();
+
+        const computeGridPrecision = () => {
+            const s = baseScale() * view.zoom;
+            let p = 1;
+            while (p < 9) {
+                const next = geohashCellSize(p + 1);
+                if (next.lngStep * s < 50) break;
+                p++;
+            }
+            return p;
+        };
+
+        const drawGeohashGrid = () => {
+            const precision = computeGridPrecision();
+            const { lngStep, latStep } = geohashCellSize(precision);
+            const s = baseScale() * view.zoom;
+            const halfLng = (cssWidth / 2) / s;
+            const halfLat = (cssHeight / 2) / s;
+            const lngMin = Math.max(-180, view.cx - halfLng);
+            const lngMax = Math.min(180, view.cx + halfLng);
+            const latMin = Math.max(-90, view.cy - halfLat);
+            const latMax = Math.min(90, view.cy + halfLat);
+
+            const startGi = Math.floor((lngMin + 180) / lngStep);
+            const endGi = Math.ceil((lngMax + 180) / lngStep);
+            const startLi = Math.floor((latMin + 90) / latStep);
+            const endLi = Math.ceil((latMax + 90) / latStep);
+
+            const isLight = document.body.classList.contains('light-mode');
+            const lineColor = isLight ? 'rgba(0, 100, 140, 0.45)' : 'rgba(0, 220, 255, 0.35)';
+            const fillColor = isLight ? 'rgba(0, 140, 180, 0.04)' : 'rgba(0, 220, 255, 0.04)';
+            const labelColor = isLight ? 'rgba(20, 30, 45, 0.85)' : 'rgba(220, 240, 255, 0.92)';
+            const labelStroke = isLight ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.7)';
+
+            ctx.save();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = lineColor;
+            ctx.fillStyle = fillColor;
+            ctx.beginPath();
+            for (let gi = startGi; gi < endGi; gi++) {
+                const lng0 = -180 + gi * lngStep;
+                const a = project(lng0, latMax);
+                const b = project(lng0, latMin);
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+            }
+            for (let li = startLi; li < endLi; li++) {
+                const lat0 = -90 + li * latStep;
+                const a = project(lngMin, lat0);
+                const b = project(lngMax, lat0);
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+            }
+            ctx.stroke();
+
+            const cellPxW = lngStep * s;
+            const cellPxH = latStep * s;
+            const showLabels = cellPxW >= 38 && cellPxH >= 22;
+            if (showLabels) {
+                const fontSize = Math.max(9, Math.min(14, Math.floor(Math.min(cellPxW, cellPxH) / 5)));
+                ctx.font = `600 ${fontSize}px var(--font-sans, system-ui, sans-serif)`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = 3;
+                for (let li = startLi; li < endLi; li++) {
+                    const cellLat = -90 + li * latStep + latStep / 2;
+                    if (cellLat < -90 || cellLat > 90) continue;
+                    for (let gi = startGi; gi < endGi; gi++) {
+                        const cellLng = -180 + gi * lngStep + lngStep / 2;
+                        if (cellLng < -180 || cellLng > 180) continue;
+                        const gh = encodeGeohashRaw(cellLat, cellLng, precision);
+                        const p = project(cellLng, cellLat);
+                        if (!inView(p, 0)) continue;
+                        ctx.strokeStyle = labelStroke;
+                        ctx.strokeText(gh, p.x, p.y);
+                        ctx.fillStyle = labelColor;
+                        ctx.fillText(gh, p.x, p.y);
+                    }
+                }
+            }
+            ctx.restore();
+        };
+
+        const findGeohashAt = (x, y) => {
+            const precision = computeGridPrecision();
+            const u = unproject(x, y);
+            if (u.lat < -90 || u.lat > 90 || u.lng < -180 || u.lng > 180) return null;
+            return encodeGeohashRaw(u.lat, u.lng, precision);
+        };
 
         const drawWorld = () => {
             ctx.fillStyle = styles.land;
@@ -790,6 +944,7 @@ Object.assign(NYM.prototype, {
                 drawChannels();
             }
             if (daynightMode) drawDaynight();
+            if (geohashGridMode) drawGeohashGrid();
             drawUserLocation();
         };
 
@@ -865,9 +1020,16 @@ Object.assign(NYM.prototype, {
             if (!wasDown || wasDrag) return;
 
             const rect = canvas.getBoundingClientRect();
-            const ch = findChannelAt(e.clientX - rect.left, e.clientY - rect.top);
+            const localX = e.clientX - rect.left;
+            const localY = e.clientY - rect.top;
+            const ch = findChannelAt(localX, localY);
             if (ch && typeof this.selectGeohashChannel === 'function') {
                 this.selectGeohashChannel(ch);
+                return;
+            }
+            if (geohashGridMode) {
+                const gh = findGeohashAt(localX, localY);
+                if (gh) this._selectGeohashCell(gh);
             }
         };
 
@@ -994,6 +1156,11 @@ Object.assign(NYM.prototype, {
                     this._daynightPreference = false;
                     updateDaynightButton();
                 }
+                if (geohashGridMode) {
+                    geohashGridMode = false;
+                    this._geohashGridPreference = false;
+                    updateGeohashGridButton();
+                }
                 clampView();
                 requestDraw();
             },
@@ -1020,7 +1187,28 @@ Object.assign(NYM.prototype, {
                 updateDaynightButton();
                 requestDraw();
             },
-            isDaynight: () => daynightMode
+            isDaynight: () => daynightMode,
+            toggleGeohashGrid: () => {
+                geohashGridMode = !geohashGridMode;
+                this._geohashGridPreference = geohashGridMode;
+                updateGeohashGridButton();
+                requestDraw();
+            },
+            isGeohashGrid: () => geohashGridMode,
+            zoomToBounds: (bounds, padding = 0.7) => {
+                const lngSpan = Math.max(1e-6, bounds.lng[1] - bounds.lng[0]);
+                const latSpan = Math.max(1e-6, bounds.lat[1] - bounds.lat[0]);
+                const s = baseScale();
+                const zLng = (cssWidth * padding) / (lngSpan * s);
+                const zLat = (cssHeight * padding) / (latSpan * s);
+                const target = Math.min(zLng, zLat);
+                view.zoom = Math.max(view.minZoom, Math.min(view.maxZoom, target));
+                view.cx = (bounds.lng[0] + bounds.lng[1]) / 2;
+                view.cy = (bounds.lat[0] + bounds.lat[1]) / 2;
+                clampView();
+                ensureSubregions();
+                requestDraw();
+            }
         };
 
         clampView();
@@ -1046,6 +1234,32 @@ Object.assign(NYM.prototype, {
 
     toggleDaynight() {
         if (this.geohashMap) this.geohashMap.toggleDaynight();
+    },
+
+    toggleGeohashGrid() {
+        if (this.geohashMap) this.geohashMap.toggleGeohashGrid();
+    },
+
+    _selectGeohashCell(geohash) {
+        const gh = geohash.toLowerCase();
+        const bounds = decodeGeohashBoundsRaw(gh);
+        if (!bounds) return;
+        const lat = (bounds.lat[0] + bounds.lat[1]) / 2;
+        const lng = (bounds.lng[0] + bounds.lng[1]) / 2;
+        if (this.geohashMap && this.geohashMap.zoomToBounds) {
+            this.geohashMap.zoomToBounds(bounds);
+        }
+        const existing = (this.geohashChannels || []).find(c => c.geohash && c.geohash.toLowerCase() === gh);
+        const channelInfo = existing || {
+            geohash: gh,
+            lat,
+            lng,
+            messages: 0,
+            isJoined: !!(this.userJoinedChannels && this.userJoinedChannels.has(gh))
+        };
+        if (typeof this.selectGeohashChannel === 'function') {
+            this.selectGeohashChannel(channelInfo);
+        }
     },
 
     _scheduleGeohashMapUpdate() {
