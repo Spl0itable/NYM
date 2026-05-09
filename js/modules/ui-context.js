@@ -660,8 +660,9 @@ Object.assign(NYM.prototype, {
                     if (!resp.ok) throw new Error(`Unfurl proxy returned ${resp.status}`);
                     data = await resp.json();
                 } catch (proxyErr) {
-                    // Proxy failed — try direct fetch
-                    if (!this._isCloudflareHost) this._fallbackToLocal();
+                    // Unfurl proxy failed for this URL — try direct fetch.
+                    // Don't treat as a global API outage: unfurl can fail per-URL
+                    // (target site down, CORS, 5xx) without the proxy being down.
                     const resp = await fetch(url, {
                         headers: { 'Accept': 'text/html' },
                         redirect: 'follow',

@@ -156,19 +156,14 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // NIP-44 plaintext max is 65535 bytes
-    _rumorByteSize(payload) {
-        const inner = JSON.stringify(payload);
-        const rumor = { kind: 30078, created_at: 0, tags: [['d', 'nymchat-settings']], content: inner, pubkey: this.pubkey || '' };
-        return new TextEncoder().encode(JSON.stringify(rumor)).length;
-    },
-
+    // Publishes group ephemeral keys to a dedicated nymchat-keys self-addressed encrypted giftwrap
     async _publishEncryptedSettings(settingsData) {
         const now = Math.floor(Date.now() / 1000);
-        const MAX_BYTES = 60000;
+        const MAX_PLAINTEXT = 28000;
 
         delete settingsData.groupEphemeralKeys;
 
+        // Bump the sync timestamp before publishing
         if (now > (this._lastSettingsSyncTs || 0)) {
             this._lastSettingsSyncTs = now;
             try { localStorage.setItem('nym_last_settings_sync_ts', String(now)); } catch (_) { }
@@ -184,32 +179,14 @@ Object.assign(NYM.prototype, {
             } catch (_) { }
         }
 
-        const trimSteps = [
-            () => { delete settingsData.groupMessageHistory; },
-            () => { delete settingsData.groupConversations; },
-            () => {
-                if (Array.isArray(settingsData.notificationHistory) && settingsData.notificationHistory.length > 20) {
-                    settingsData.notificationHistory = settingsData.notificationHistory.slice(-20);
-                } else {
-                    settingsData.notificationHistory = [];
-                }
-            },
-            () => { settingsData.notificationHistory = []; },
-            () => {
-                for (const k of ['blockedKeywords', 'closedPMs', 'leftGroups', 'hiddenChannels']) {
-                    if (Array.isArray(settingsData[k])) settingsData[k] = [];
-                }
-            }
-        ];
-
-        let i = 0;
-        while (this._rumorByteSize(settingsData) > MAX_BYTES && i < trimSteps.length) {
-            trimSteps[i++]();
+        let content = JSON.stringify(settingsData);
+        if (content.length > MAX_PLAINTEXT) {
+            delete settingsData.groupMessageHistory;
+            content = JSON.stringify(settingsData);
         }
-
-        if (this._rumorByteSize(settingsData) > MAX_BYTES) {
-            console.warn('[NostrSync] Settings payload too large after trimming; skipping publish');
-            return;
+        if (content.length > MAX_PLAINTEXT) {
+            delete settingsData.groupConversations;
+            content = JSON.stringify(settingsData);
         }
 
         await this._publishWrappedNostrEvent(settingsData, 'nymchat-settings', now);

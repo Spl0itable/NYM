@@ -268,7 +268,9 @@ Object.assign(NYM.prototype, {
                     detectedLanguage: data.detectedLanguage || 'auto',
                 };
             } catch (proxyErr) {
-                if (!this._isCloudflareHost) this._fallbackToLocal();
+                // Translate proxy failed for this request — try direct.
+                // Don't treat as a global API outage: translate can fail per-request
+                // (rate limit, upstream error) without the proxy being down.
                 return this._translateDirect(text, targetLang);
             }
         }
