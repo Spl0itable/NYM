@@ -159,7 +159,9 @@ Object.assign(NYM.prototype, {
     // Publishes group ephemeral keys to a dedicated nymchat-keys self-addressed encrypted giftwrap
     async _publishEncryptedSettings(settingsData) {
         const now = Math.floor(Date.now() / 1000);
-        const MAX_PLAINTEXT = 28000;
+        // NIP-44 caps plaintext at 65535 bytes
+        const NIP44_MAX_PLAINTEXT = 65535;
+        const RUMOR_OVERHEAD = 256; // kind, created_at, tags, pubkey, id, JSON syntax
 
         delete settingsData.groupEphemeralKeys;
 
@@ -179,14 +181,27 @@ Object.assign(NYM.prototype, {
             } catch (_) { }
         }
 
-        let content = JSON.stringify(settingsData);
-        if (content.length > MAX_PLAINTEXT) {
-            delete settingsData.groupMessageHistory;
-            content = JSON.stringify(settingsData);
-        }
-        if (content.length > MAX_PLAINTEXT) {
-            delete settingsData.groupConversations;
-            content = JSON.stringify(settingsData);
+        // Measure the actual rumor plaintext byte size (what NIP-44 will
+        // encrypt), accounting for JSON-string escaping of the payload.
+        const encoder = new TextEncoder();
+        const rumorByteSize = (payload) => {
+            const payloadJson = JSON.stringify(payload);
+            // The payload is embedded as a JSON string inside the rumor, so
+            // its escaping cost is the byte length of JSON.stringify(string).
+            return encoder.encode(JSON.stringify(payloadJson)).length + RUMOR_OVERHEAD;
+        };
+
+        const tooBig = () => rumorByteSize(settingsData) > NIP44_MAX_PLAINTEXT;
+
+        if (tooBig()) delete settingsData.groupMessageHistory;
+        if (tooBig()) delete settingsData.groupConversations;
+        if (tooBig()) delete settingsData.notificationHistory;
+
+        // Final guard: if even the trimmed payload is too large, bail out
+        // rather than asking nip44 to encrypt something it will reject.
+        if (tooBig()) {
+            console.warn('[NostrSync] Settings payload exceeds NIP-44 plaintext limit after truncation; skipping publish');
+            return;
         }
 
         await this._publishWrappedNostrEvent(settingsData, 'nymchat-settings', now);
