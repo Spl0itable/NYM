@@ -1,13 +1,17 @@
 // Cloudflare Pages Function: Relay pool router
-// Single WebSocket from the client; fans the relay set out across many
-// internal shard Workers (/api/relay-pool-shard), each holding a chunk
-// of upstream relay connections. This keeps any single Worker well
-// below Cloudflare's connection-per-invocation ceiling while letting
-// the client manage just one socket.
+// One client WebSocket; this Worker fans out to a small number of shard
+// Workers (/api/relay-pool-shard), each holding its own ~250 upstream
+// relay sockets. Each shard runs as an independent Worker invocation
+// with its own 6-simultaneous-outgoing-connection budget, so the total
+// capacity scales with shard count × 6 in-flight opens per shard.
 //
-// Client protocol (unchanged from the previous single-Worker pool):
+// SHARD_SIZE is chosen so the router never needs more than 6 shard
+// connections itself — Cloudflare caps outgoing connections at 6 per
+// Worker request, and the router is a Worker request too.
+//
+// Client protocol (unchanged):
 //   ["RELAYS", { relays, writeOnly, dmRelays }]
-//   ["EVENT", eventObj] / ["GEO_EVENT", evt, [urls]] / ["DM_EVENT", evt]
+//   ["EVENT", evt] / ["GEO_EVENT", evt, [urls]] / ["DM_EVENT", evt]
 //   ["REQ", subId, ...filters] / ["GEO_REQ", [urls], subId, ...filters]
 //   ["CLOSE", subId]
 // Router → client:
@@ -15,8 +19,10 @@
 //   ["NOTICE", msg] / ["POOL:STATUS", { connected, count, latency, events }]
 //   ["POOL:PING", ts]
 
-const SHARD_SIZE = 25;
+const SHARD_SIZE = 250;
+const MAX_SHARDS = 6;
 const SHARD_PATH = '/api/relay-pool-shard';
+const SHARD_OPEN_STAGGER_MS = 200;
 
 export async function onRequest(context) {
   const { request } = context;
@@ -32,12 +38,11 @@ export async function onRequest(context) {
   server.accept();
 
   let serverOpen = true;
-  const shards = []; // { id, ws, relays, dmRelays, writeOnly, status, connectedRelays, latency, events, _closing }
+  const shards = []; // { id, ws, relays, dmRelays, writeOnly, status, connectedRelays, latency, events, _closing, _reconnectAttempts }
   const activeSubscriptions = new Map(); // subId -> raw REQ JSON
-  let lastRelaysConfig = null;
 
   // Cross-shard dedup
-  const seenEvents = new Map(); // eventId -> 1
+  const seenEvents = new Map();
   const seenOKs = new Set();
   const seenEOSE = new Set();
   const DEDUP_MAX = 50000;
@@ -92,13 +97,17 @@ export async function onRequest(context) {
     if (statusTimer) return;
     statusTimer = setTimeout(() => {
       statusTimer = null;
+      const seen = new Set();
       const connected = [];
       const latency = {};
       const events = {};
       for (const sh of shards) {
         if (!sh.connectedRelays) continue;
         for (const url of sh.connectedRelays) {
-          if (!connected.includes(url)) connected.push(url);
+          if (!seen.has(url)) {
+            seen.add(url);
+            connected.push(url);
+          }
         }
         if (sh.latency) for (const [u, ms] of Object.entries(sh.latency)) latency[u] = ms;
         if (sh.events) for (const [u, c] of Object.entries(sh.events)) events[u] = c;
@@ -112,12 +121,24 @@ export async function onRequest(context) {
     }, 300);
   }
 
-  // Keepalive to client
+  // Keepalive client side
   let keepaliveTimer = setInterval(() => {
     if (!serverOpen) { clearInterval(keepaliveTimer); keepaliveTimer = null; return; }
     try { server.send(JSON.stringify(['POOL:PING', Date.now()])); }
     catch { clearInterval(keepaliveTimer); keepaliveTimer = null; }
   }, 30000);
+
+  // Shard-side keepalive: keep router→shard sockets warm so Cloudflare
+  // doesn't idle-kill them when the client is silent
+  let shardKeepaliveTimer = setInterval(() => {
+    if (!serverOpen) { clearInterval(shardKeepaliveTimer); shardKeepaliveTimer = null; return; }
+    const ping = JSON.stringify(['POOL:PING', Date.now()]);
+    for (const sh of shards) {
+      if (sh.ws && sh.ws.readyState === 1) {
+        try { sh.ws.send(ping); } catch { /* noop */ }
+      }
+    }
+  }, 25000);
 
   function chunkArray(arr, size) {
     const out = [];
@@ -130,22 +151,19 @@ export async function onRequest(context) {
     const writeOnly = Array.isArray(config.writeOnly) ? config.writeOnly.slice() : [];
     const dmRelays = Array.isArray(config.dmRelays) ? config.dmRelays.slice() : [];
 
-    // Combine read and write-only relays into a single sharded pool. The
-    // shard Worker treats writeOnly relays as write-only when constructing
-    // its config.
     const combined = [...new Set([...relays, ...writeOnly])];
-    const chunks = chunkArray(combined, SHARD_SIZE);
+    // Choose a chunk size that keeps total shards ≤ MAX_SHARDS so the router
+    // never tries to hold more than 6 outbound shard WebSockets.
+    const chunkSize = Math.max(SHARD_SIZE, Math.ceil(combined.length / MAX_SHARDS));
+    const chunks = chunkArray(combined, chunkSize);
     if (chunks.length === 0) chunks.push([]);
 
     const writeOnlySet = new Set(writeOnly);
-    const dmSet = new Set(dmRelays);
-
     return chunks.map((chunk, i) => ({
       id: `s${i}`,
       relays: chunk.filter(u => !writeOnlySet.has(u)),
       writeOnly: chunk.filter(u => writeOnlySet.has(u)),
-      dmRelays: i === 0 ? dmRelays.slice() : [],
-      _dmAware: i === 0 ? dmSet : null
+      dmRelays: i === 0 ? dmRelays.slice() : []
     }));
   }
 
@@ -181,7 +199,6 @@ export async function onRequest(context) {
     ws.addEventListener('open', () => {
       sh.status = 'open';
       sh._reconnectAttempts = 0;
-      // Send the shard's relay config
       try {
         ws.send(JSON.stringify(['RELAYS', {
           relays: sh.relays,
@@ -189,7 +206,6 @@ export async function onRequest(context) {
           dmRelays: sh.dmRelays
         }]));
       } catch { /* noop */ }
-      // Replay active subscriptions
       for (const [, raw] of activeSubscriptions) {
         try { ws.send(raw); } catch { /* noop */ }
       }
@@ -199,7 +215,6 @@ export async function onRequest(context) {
       const raw = event.data;
       if (typeof raw !== 'string' || raw.length < 4) return;
 
-      // POOL:STATUS — track per-shard then emit aggregate
       if (raw.startsWith('["POOL:STATUS"')) {
         try {
           const parsed = JSON.parse(raw);
@@ -212,10 +227,8 @@ export async function onRequest(context) {
         return;
       }
 
-      // POOL:PING — internal, do not forward to client
       if (raw.startsWith('["POOL:PING"')) return;
 
-      // EVENT
       if (raw.charCodeAt(2) === 69 && raw.startsWith('["EVENT"')) {
         const eid = extractEventId(raw);
         if (eid) {
@@ -227,7 +240,6 @@ export async function onRequest(context) {
         return;
       }
 
-      // OK
       if (raw.charCodeAt(2) === 79 && raw.startsWith('["OK"')) {
         const eid = extractOKEventId(raw);
         if (eid) {
@@ -238,7 +250,6 @@ export async function onRequest(context) {
         return;
       }
 
-      // EOSE
       if (raw.charCodeAt(2) === 69 && raw.startsWith('["EOSE"')) {
         const m = raw.match(/^\["EOSE","([^"]+)"/);
         if (m) {
@@ -250,7 +261,6 @@ export async function onRequest(context) {
         return;
       }
 
-      // NOTICE / anything else
       sendToClient(raw);
     });
 
@@ -283,14 +293,6 @@ export async function onRequest(context) {
     }, delay);
   }
 
-  function closeAllShards() {
-    for (const sh of shards) {
-      sh._closing = true;
-      try { if (sh.ws) sh.ws.close(); } catch { /* noop */ }
-    }
-    shards.length = 0;
-  }
-
   function broadcastToShards(raw) {
     for (const sh of shards) {
       if (sh.ws && sh.ws.readyState === 1) {
@@ -311,13 +313,12 @@ export async function onRequest(context) {
     if (t === 'RELAYS') {
       const config = msg[1];
       if (!config || typeof config !== 'object') return;
-      lastRelaysConfig = config;
 
       const plans = planShards(config);
       const planById = new Map(plans.map(p => [p.id, p]));
       const existingById = new Map(shards.map(s => [s.id, s]));
 
-      // Remove shards that no longer exist
+      // Drop shards that no longer exist in the new plan
       for (let i = shards.length - 1; i >= 0; i--) {
         const sh = shards[i];
         if (!planById.has(sh.id)) {
@@ -327,7 +328,8 @@ export async function onRequest(context) {
         }
       }
 
-      // Update existing shards or open new ones
+      // Update existing shards or open new ones (staggered)
+      let openIdx = 0;
       for (const plan of plans) {
         const existing = existingById.get(plan.id);
         if (existing) {
@@ -344,7 +346,18 @@ export async function onRequest(context) {
             } catch { /* noop */ }
           }
         } else {
-          openShard(plan);
+          if (openIdx === 0) {
+            openShard(plan);
+          } else {
+            const p = plan;
+            const delay = openIdx * SHARD_OPEN_STAGGER_MS;
+            setTimeout(() => {
+              if (!serverOpen) return;
+              if (shards.find(s => s.id === p.id)) return;
+              openShard(p);
+            }, delay);
+          }
+          openIdx++;
         }
       }
       return;
@@ -368,7 +381,6 @@ export async function onRequest(context) {
     }
 
     if (t === 'EVENT' || t === 'GEO_EVENT' || t === 'DM_EVENT' || t === 'GEO_REQ') {
-      // GEO_REQ also acts as a subscription — track it for replay
       if (t === 'GEO_REQ' && typeof msg[2] === 'string') {
         activeSubscriptions.set(msg[2], raw);
       }
@@ -380,8 +392,13 @@ export async function onRequest(context) {
   function cleanup() {
     serverOpen = false;
     if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+    if (shardKeepaliveTimer) { clearInterval(shardKeepaliveTimer); shardKeepaliveTimer = null; }
     if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
-    closeAllShards();
+    for (const sh of shards) {
+      sh._closing = true;
+      try { if (sh.ws) sh.ws.close(); } catch { /* noop */ }
+    }
+    shards.length = 0;
     activeSubscriptions.clear();
   }
 

@@ -1,11 +1,14 @@
 // Cloudflare Pages Function: Single-shard upstream Worker
-// Holds a chunk of upstream Nostr relay WebSocket connections (typically
-// ~25 relays) on behalf of the relay-pool router. The router opens one
-// internal WebSocket here per shard.
+// Holds a chunk of upstream Nostr relay WebSocket connections on behalf
+// of the relay-pool router. Each shard gets its own Worker invocation,
+// so each shard has an independent 6 simultaneous-outgoing-connections
+// budget (Cloudflare's hard cap). Opens are queued to keep in-flight
+// upstreams capped at 6, while many hundreds of established WebSockets
+// can stay open in steady state.
 //
 // Internal endpoint: wss://<host>/api/relay-pool-shard
 //
-// Protocol (client → proxy):
+// Protocol (router → shard):
 //   ["RELAYS", { relays: [...], writeOnly: [...], dmRelays: [...] }]
 //   ["EVENT", eventObj]          - fans out to all connected relays
 //   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
@@ -211,9 +214,33 @@ export async function onRequest(context) {
   }
 
   // Connect to a relay immediately (no staggering)
+  const MAX_CONCURRENT_OPENS = 6;
+  let inflightOpens = 0;
+  const openQueue = [];
+
+  function drainOpenQueue() {
+    while (inflightOpens < MAX_CONCURRENT_OPENS && openQueue.length > 0) {
+      const next = openQueue.shift();
+      if (upstreams.has(next.relayUrl)) continue;
+      inflightOpens++;
+      connectUpstream(next.relayUrl, next.type);
+    }
+  }
+
+  // Called by connect lifecycle (open/close/error) to release a slot
+  function releaseOpenSlot() {
+    if (inflightOpens > 0) inflightOpens--;
+    drainOpenQueue();
+  }
+
   function queueConnection(relayUrl, type) {
     if (upstreams.has(relayUrl)) return;
-    connectUpstream(relayUrl, type);
+    if (inflightOpens < MAX_CONCURRENT_OPENS) {
+      inflightOpens++;
+      connectUpstream(relayUrl, type);
+    } else {
+      openQueue.push({ relayUrl, type });
+    }
   }
 
   function scheduleReconnect(relayUrl, type) {
@@ -273,6 +300,7 @@ export async function onRequest(context) {
           trackRelayFailure(relayUrl);
           try { ws.close(); } catch { /* noop */ }
           upstreams.delete(relayUrl);
+          releaseOpenSlot();
           schedulePoolStatus();
         }
       }, 8000);
@@ -283,6 +311,7 @@ export async function onRequest(context) {
         clearRelayFailure(relayUrl);
         reconnectAttempts.delete(relayUrl);
         relayLatency.set(relayUrl, Date.now() - connectStartTime);
+        releaseOpenSlot();
         replaySubscriptions(relayUrl, ws);
         // Flush any buffered GEO_EVENTs that were waiting for this relay
         const buffered = pendingGeoEvents.get(relayUrl);
@@ -345,6 +374,7 @@ export async function onRequest(context) {
         const wasConnected = info.status === 'connected';
         info.status = 'closed';
         upstreams.delete(relayUrl);
+        if (!wasConnected) releaseOpenSlot();
         schedulePoolStatus();
 
         if (intentionallyClosed.has(relayUrl)) {
@@ -367,6 +397,7 @@ export async function onRequest(context) {
         info.status = 'failed';
         trackRelayFailure(relayUrl);
         upstreams.delete(relayUrl);
+        releaseOpenSlot();
         schedulePoolStatus();
       });
     } catch {
@@ -374,6 +405,7 @@ export async function onRequest(context) {
       info.status = 'failed';
       trackRelayFailure(relayUrl);
       upstreams.delete(relayUrl);
+      releaseOpenSlot();
       schedulePoolStatus();
     }
   }
@@ -396,6 +428,9 @@ export async function onRequest(context) {
       if (!Array.isArray(msg)) return;
 
       const msgType = msg[0];
+
+          // Inbound keepalive from router — silently absorb
+          if (msgType === 'POOL:PING') return;
 
           if (msgType === 'RELAYS') {
             const config = msg[1];
@@ -426,14 +461,10 @@ export async function onRequest(context) {
 
             // Connect all relays immediately (geo relays first in the array)
             for (const url of requestedRelays) {
-              if (!upstreams.has(url)) {
-                queueConnection(url, writeOnlyRelays.has(url) ? 'write' : 'read');
-              }
+              if (!upstreams.has(url)) queueConnection(url, writeOnlyRelays.has(url) ? 'write' : 'read');
             }
             for (const url of writeOnly) {
-              if (!upstreams.has(url)) {
-                queueConnection(url, 'write');
-              }
+              if (!upstreams.has(url)) queueConnection(url, 'write');
             }
           } else if (msgType === 'EVENT') {
             sendToUpstreams(event.data);
