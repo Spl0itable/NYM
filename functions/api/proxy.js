@@ -8,7 +8,6 @@
 //   GET  /api/proxy?action=unfurl&url=<url>      — Fetch Open Graph metadata for URL preview
 //   PUT  /api/proxy?action=upload                — Upload a blob to blossom.band (Nostr auth header)
 //   GET  /api/proxy?action=geo-relays            — Fetch bitchat geo-relay CSV (edge-cached)
-//   GET  /api/proxy?action=nip66-relays          — Discover relays via NIP-66 monitors (edge-cached)
 //   GET/POST /api/proxy?action=json&url=<url>    — Proxy a JSON request (LNURL, Nominatim, etc.)
 
 const ALLOWED_MEDIA_TYPES = new Set([
@@ -62,8 +61,6 @@ export async function onRequest(context) {
       return await handleBlossomUpload(request);
     } else if (action === 'geo-relays') {
       return await handleGeoRelays(context);
-    } else if (action === 'nip66-relays') {
-      return await handleNip66Relays(context);
     } else if (action === 'geocode') {
       return await handleGeocode(url.searchParams, context);
     } else if (action === 'giphy') {
@@ -158,131 +155,6 @@ function parseGeoRelaysCsv(csv) {
     parsed.push({ url: `wss://${host}`, lat, lng });
   }
   return parsed;
-}
-
-// NIP-66 relay discovery
-const NIP66_MONITORS = [
-  'wss://relay.nostr.watch',
-  'wss://history.nostr.watch',
-  'wss://relaypag.es'
-];
-const NIP66_CACHE_TTL = 3600; // 1 hour
-const NIP66_CACHE_KEY = 'https://nymchat-edge-cache.invalid/nip66-relays.json';
-const NIP66_PER_MONITOR_TIMEOUT = 10000;
-const NIP66_OVERALL_TIMEOUT = 12000;
-const NIP66_REQ_LIMIT = 1000;
-
-async function handleNip66Relays(context) {
-  const cache = caches.default;
-  const cacheKey = new Request(NIP66_CACHE_KEY, { method: 'GET' });
-
-  const cached = await cache.match(cacheKey);
-  if (cached) {
-    const headers = new Headers(cached.headers);
-    for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
-    headers.set('X-Edge-Cache', 'HIT');
-    return new Response(cached.body, { status: cached.status, headers });
-  }
-
-  const found = new Set();
-  const fetches = NIP66_MONITORS.map(url => fetchRelaysFromMonitor(url, found));
-  await Promise.race([
-    Promise.allSettled(fetches),
-    new Promise(resolve => setTimeout(resolve, NIP66_OVERALL_TIMEOUT))
-  ]);
-
-  const relays = [...found];
-  const headers = new Headers(CORS_HEADERS);
-  headers.set('Content-Type', 'application/json');
-  headers.set('Cache-Control', `public, max-age=${NIP66_CACHE_TTL}, s-maxage=${NIP66_CACHE_TTL}`);
-  headers.set('X-Edge-Cache', 'MISS');
-
-  const resp = new Response(JSON.stringify({ relays, count: relays.length, ts: Date.now() }), {
-    status: 200,
-    headers
-  });
-
-  if (relays.length > 0) {
-    if (context && context.waitUntil) {
-      context.waitUntil(cache.put(cacheKey, resp.clone()));
-    } else {
-      await cache.put(cacheKey, resp.clone());
-    }
-  }
-  return resp;
-}
-
-function fetchRelaysFromMonitor(monitorUrl, found) {
-  return new Promise((resolve) => {
-    let ws;
-    try { ws = new WebSocket(monitorUrl); } catch { return resolve(); }
-    const subId = 'd-' + Math.random().toString(36).slice(2, 9);
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      try {
-        if (ws.readyState === 1) {
-          try { ws.send(JSON.stringify(['CLOSE', subId])); } catch { /* noop */ }
-        }
-        ws.close();
-      } catch { /* noop */ }
-      resolve();
-    };
-    const timer = setTimeout(finish, NIP66_PER_MONITOR_TIMEOUT);
-
-    ws.addEventListener('open', () => {
-      const since = Math.floor(Date.now() / 1000) - 3 * 3600;
-      try {
-        ws.send(JSON.stringify(['REQ', subId, { kinds: [30166], since, limit: NIP66_REQ_LIMIT }]));
-      } catch { clearTimeout(timer); finish(); }
-    });
-
-    ws.addEventListener('message', (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (!Array.isArray(msg)) return;
-        if (msg[0] === 'EVENT' && msg[1] === subId) {
-          const evt = msg[2];
-          if (!evt || evt.kind !== 30166 || !Array.isArray(evt.tags)) return;
-          const dTag = evt.tags.find(t => t[0] === 'd');
-          if (!dTag || typeof dTag[1] !== 'string') return;
-          const url = normalizeRelayUrl(dTag[1]);
-          if (!url) return;
-          const rTags = evt.tags.filter(t => t[0] === 'R');
-          if (rTags.some(t => t[1] === 'auth' || t[1] === 'payment')) return;
-          const nTag = evt.tags.find(t => t[0] === 'n');
-          if (nTag && nTag[1] && nTag[1] !== 'clearnet') return;
-          found.add(url);
-        } else if (msg[0] === 'EOSE' && msg[1] === subId) {
-          clearTimeout(timer);
-          finish();
-        }
-      } catch { /* noop */ }
-    });
-
-    ws.addEventListener('error', () => { clearTimeout(timer); finish(); });
-    ws.addEventListener('close', () => { clearTimeout(timer); finish(); });
-  });
-}
-
-function normalizeRelayUrl(raw) {
-  if (typeof raw !== 'string') return null;
-  let s = raw.trim();
-  if (!s) return null;
-  if (s.startsWith('ws://')) return null;
-  if (!s.startsWith('wss://')) return null;
-  try {
-    const u = new URL(s);
-    if (u.protocol !== 'wss:') return null;
-    if (!u.hostname || !u.hostname.includes('.')) return null;
-    if (u.hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)) return null;
-    if (u.hostname.endsWith('.onion') || u.hostname.endsWith('.i2p')) return null;
-    const path = u.pathname.replace(/\/+$/, '');
-    return `wss://${u.hostname}${u.port ? ':' + u.port : ''}${path}`;
-  } catch {
-    return null;
-  }
 }
 
 // Generic JSON proxy for external HTTP APIs (LNURL, Nominatim, Giphy, NIP-11, etc.)

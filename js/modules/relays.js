@@ -1077,14 +1077,6 @@ Object.assign(NYM.prototype, {
                         });
                     }
 
-                    if (!this.settings.lowDataMode) {
-                        setTimeout(() => {
-                            this.discoverRelaysViaNip66().then(() => {
-                                if (this._isAnyPoolOpen()) this._poolSendRelayConfig();
-                            });
-                        }, 100);
-                    }
-
                     this.initialConnectionInProgress = false;
                     return;
                 }
@@ -1283,32 +1275,6 @@ Object.assign(NYM.prototype, {
                         }
                     });
                 }
-            }
-
-            // Discover additional relays via NIP-66 and connect to them
-            if (!this.settings.lowDataMode) {
-                setTimeout(() => {
-                    this.discoverRelaysViaNip66().then(() => {
-                        const relaysToConnect = [...this.allRelayUrls]
-                            .filter(url =>
-                                !this.relayPool.has(url) &&
-                                !this.blacklistedRelays.has(url) &&
-                                url !== 'wss://sendit.nosflare.com' &&
-                                this.shouldRetryRelay(url))
-                            .slice(0, this.maxRelaysForReq);
-                        relaysToConnect.forEach((relayUrl, index) => {
-                            setTimeout(() => {
-                                this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
-                                    const r = this.relayPool.get(relayUrl);
-                                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        this.subscribeRelayToChannel(r, relayUrl);
-                                        this.updateConnectionStatus();
-                                    }
-                                });
-                            }, index * 100);
-                        });
-                    });
-                }, 100);
             }
 
         } catch (error) {
@@ -2110,26 +2076,32 @@ Object.assign(NYM.prototype, {
         this._resubscribeChannels();
     },
 
-    // History fetch for a set of ephemeral pubkeys
+    // History fetch for a set of ephemeral pubkeys.
+    // Batches multiple pubkeys into a single #p filter per REQ.
     _recoverEphemeralHistory(ephPks) {
         if (!Array.isArray(ephPks) || ephPks.length === 0) return;
         const mkSubId = () => Math.random().toString(36).substring(2);
         const since = this._isFreshDevice
             ? 0
             : (this.lastPMSyncTime > 0 ? Math.max(0, this.lastPMSyncTime - 300) : 0);
-        const buildFilter = (pk) => {
-            const f = { kinds: [1059], '#p': [pk], limit: 500 };
+        const buildFilter = (pks) => {
+            const f = { kinds: [1059], '#p': pks, limit: 500 * pks.length };
             if (since > 0) f.since = since;
             return f;
         };
+        const BATCH = 20;
+        const chunks = [];
+        for (let i = 0; i < ephPks.length; i += BATCH) {
+            chunks.push(ephPks.slice(i, i + BATCH));
+        }
 
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            for (const pk of ephPks) {
-                this._poolSendToRole('critical', ['REQ', mkSubId(), buildFilter(pk)]);
+            for (const chunk of chunks) {
+                this._poolSendToRole('critical', ['REQ', mkSubId(), buildFilter(chunk)]);
             }
             return;
         }
-        const reqs = ephPks.map(pk => JSON.stringify(['REQ', mkSubId(), buildFilter(pk)]));
+        const reqs = chunks.map(chunk => JSON.stringify(['REQ', mkSubId(), buildFilter(chunk)]));
         this.relayPool.forEach(relay => {
             if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                 for (const req of reqs) {
@@ -2139,9 +2111,10 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Send independent REQ subscriptions for each ephemeral pubkey
+    // Send batched REQ subscriptions for ephemeral pubkeys.
+    // Multiple pubkeys are coalesced into a single #p filter to stay under
+    // per-connection subscription caps (relays typically allow 20-50).
     _refreshEphemeralSubscriptions() {
-        // Close previous ephemeral subscriptions
         for (const oldSubId of this._ephemeralSubIds) {
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 this._poolSend(['CLOSE', oldSubId]);
@@ -2159,14 +2132,14 @@ Object.assign(NYM.prototype, {
         const ephPks = this._getAllSelfEphemeralPubkeys();
         if (!ephPks.length) return;
 
-        // Always go back a full 7 days to catch messages sent to this ephemeral
-        // key while the device was offline or before ephemeral key sync occurred.
         const since = Math.floor(Date.now() / 1000) - 604800;
+        const BATCH = 20;
 
-        for (const ephPk of ephPks) {
+        for (let i = 0; i < ephPks.length; i += BATCH) {
+            const chunk = ephPks.slice(i, i + BATCH);
             const subId = Math.random().toString(36).substring(2);
             this._ephemeralSubIds.push(subId);
-            const filter = { kinds: [1059], "#p": [ephPk], since, limit: 200 };
+            const filter = { kinds: [1059], "#p": chunk, since, limit: 200 * chunk.length };
 
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 this._poolSend(['REQ', subId, filter]);
@@ -2201,9 +2174,8 @@ Object.assign(NYM.prototype, {
     },
 
     // Re-shard and update relay config across all workers.
-    // Called when the relay set changes (low data toggle, geo channel switch,
-    // NIP-66 discovery completed, etc.). Sends a single RELAYS config; the
-    // router handles internal sharding.
+    // Called when the relay set changes (low data toggle, geo channel switch).
+    // Sends a single RELAYS config; the router handles internal sharding.
     _poolSendRelayConfig() {
         if (!this.poolSocket) return;
         const blocked = new Set(['wss://relay.nosflare.com', 'wss://relay.nostraddress.com', 'wss://nostr-server-production.up.railway.app']);
@@ -2485,114 +2457,6 @@ Object.assign(NYM.prototype, {
         }
 
         return false;
-    },
-
-    // NIP-66 relay discovery: query monitor relays for kind 30166 events
-    // and merge any new clearnet wss URLs into allRelayUrls. Skipped in low
-    // data mode. Cached in localStorage between sessions.
-    async discoverRelaysViaNip66({ force = false } = {}) {
-        if (this.settings && this.settings.lowDataMode) return;
-        if (this._nip66Running) return;
-
-        const now = Date.now();
-        const interval = this.relayDiscoveryInterval || 24 * 3600 * 1000;
-        if (!force && this._nip66Done && this._nip66LastRun && (now - this._nip66LastRun) < interval) return;
-
-        // localStorage cache first (per-device convenience layer; the
-        // proxy edge cache provides the cross-user benefit)
-        if (!force) {
-            try {
-                const cached = localStorage.getItem('nym_discovered_relays');
-                if (cached) {
-                    const data = JSON.parse(cached);
-                    if (data && data.timestamp && (now - data.timestamp) < interval && Array.isArray(data.relays) && data.relays.length > 0) {
-                        this._mergeDiscoveredRelays(data.relays);
-                        this._nip66Done = true;
-                        this._nip66LastRun = now;
-                        return;
-                    }
-                }
-            } catch (_) { }
-        }
-
-        this._nip66Running = true;
-
-        let relays = [];
-        try {
-            const base = this._getProxyBaseUrl();
-            if (base) {
-                const res = await fetch(`${base}?action=nip66-relays`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data && Array.isArray(data.relays)) relays = data.relays;
-                }
-            }
-        } catch (_) { }
-
-        const added = this._mergeDiscoveredRelays(relays);
-
-        if (relays.length > 0) {
-            try {
-                localStorage.setItem('nym_discovered_relays', JSON.stringify({
-                    timestamp: now,
-                    relays
-                }));
-            } catch (_) { }
-        }
-
-        if (added > 0) {
-            if (this.useRelayProxy) {
-                if (this._isAnyPoolOpen()) this._poolSendRelayConfig();
-            } else {
-                this.retryDiscoveredRelays();
-            }
-        }
-
-        this._nip66Running = false;
-        this._nip66Done = true;
-        this._nip66LastRun = now;
-        this._nip66LastAdded = added;
-    },
-
-    _mergeDiscoveredRelays(urls) {
-        const blocked = new Set([
-            'wss://relay.nosflare.com',
-            'wss://relay.nostraddress.com',
-            'wss://nostr-server-production.up.railway.app'
-        ]);
-        let added = 0;
-        for (const raw of urls) {
-            if (added >= this.nip66MaxNewRelays) break;
-            const url = this._normalizeNip66RelayUrl(raw);
-            if (!url) continue;
-            if (blocked.has(url)) continue;
-            if (this.allRelayUrls.has(url)) continue;
-            this.allRelayUrls.add(url);
-            added++;
-        }
-        return added;
-    },
-
-    _normalizeNip66RelayUrl(raw) {
-        if (typeof raw !== 'string') return null;
-        let s = raw.trim();
-        if (!s) return null;
-        if (s.startsWith('ws://')) return null;
-        if (!s.startsWith('wss://')) {
-            if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return null;
-            s = 'wss://' + s;
-        }
-        try {
-            const u = new URL(s);
-            if (u.protocol !== 'wss:') return null;
-            if (!u.hostname || !u.hostname.includes('.')) return null;
-            if (u.hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)) return null;
-            if (u.hostname.endsWith('.onion') || u.hostname.endsWith('.i2p')) return null;
-            const path = u.pathname.replace(/\/+$/, '');
-            return `wss://${u.hostname}${u.port ? ':' + u.port : ''}${path}`;
-        } catch (_) {
-            return null;
-        }
     },
 
     async retryDiscoveredRelays() {
