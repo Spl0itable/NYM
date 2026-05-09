@@ -8227,6 +8227,102 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     font-family: var(--font-sans);
 }
 
+.relay-stats-low-data {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    margin: 0 4px 14px 4px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+}
+
+.relay-stats-low-data-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.relay-stats-low-data-title {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 2px;
+}
+
+.relay-stats-low-data-hint {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.4;
+}
+
+body.light-mode .relay-stats-low-data {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+.nym-switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.nym-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.nym-switch-track {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--glass-border);
+    border-radius: 22px;
+    transition: background var(--transition);
+}
+
+.nym-switch-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    background: var(--text-bright);
+    border-radius: 50%;
+    transition: transform var(--transition), background var(--transition);
+}
+
+.nym-switch input:checked + .nym-switch-track {
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+.nym-switch input:checked + .nym-switch-track .nym-switch-thumb {
+    transform: translateX(18px);
+    background: #fff;
+}
+
+.nym-switch input:focus-visible + .nym-switch-track {
+    box-shadow: 0 0 0 2px rgb(from var(--primary) r g b / 0.4);
+}
+
+body.light-mode .nym-switch-track {
+    background: rgba(0, 0, 0, 0.12);
+}
+
+body.light-mode .nym-switch-thumb {
+    background: #fff;
+}
+
 .relay-stats-cards {
     display: grid;
     grid-template-columns: repeat(4, 1fr);

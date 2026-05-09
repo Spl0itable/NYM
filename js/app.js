@@ -478,14 +478,13 @@ class NYM {
         this.relayPool = new Map();
         this._isCloudflareHost = this._detectCloudflareHost();
         this.useRelayProxy = true;
-        this.poolSockets = [];
         this.poolSocket = null;
         this.poolConnectedRelays = [];
         this.poolRelayTypes = {};
         this.poolReady = false;
         this._poolReconnecting = false;
         this._poolReconnectRetries = 0;
-        this.RELAYS_PER_WORKER = 25;
+        this._poolLastMessage = 0;
         this.blacklistedRelays = new Set();
         this.relayStats = {
             eventsPerRelay: new Map(),
@@ -538,6 +537,16 @@ class NYM {
         this.relayList = [];
         this.maxRelaysForReq = 1000;
         this.relayTimeout = 2000;
+        this.nip66MaxNewRelays = 1000;
+        this.monitorRelays = [
+            'wss://relay.nostr.watch',
+            'wss://history.nostr.watch',
+            'wss://relaypag.es'
+        ];
+        this.relayDiscoveryInterval = 24 * 3600 * 1000;
+        this._nip66Running = false;
+        this._nip66Done = false;
+        this._nip66LastRun = 0;
         this.eventDeduplication = new Map();
         this.reconnectingRelays = new Set();
         this.blacklistedRelays = new Set();
@@ -3210,7 +3219,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.62.335 ═══<br/>
+═══ Nymchat v3.63.335 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -5732,9 +5741,34 @@ async function routeToUrlChannel() {
 function openRelayStats() {
     const modal = document.getElementById('relayStatsModal');
     if (!modal) return;
+    syncLowDataToggleFromState();
     modal.classList.add('active');
     startRelayStatsLoop();
 }
+
+function syncLowDataToggleFromState() {
+    const toggle = document.getElementById('rsLowDataToggle');
+    if (!toggle || typeof nym === 'undefined') return;
+    toggle.checked = !!(nym.settings && nym.settings.lowDataMode);
+}
+
+function toggleLowDataModeFromStats(e) {
+    if (typeof nym === 'undefined') return;
+    const enabled = !!(e && e.target && e.target.checked);
+    const wasEnabled = !!(nym.settings && nym.settings.lowDataMode);
+    if (enabled === wasEnabled) return;
+
+    nym.settings.lowDataMode = enabled;
+    localStorage.setItem('nym_low_data_mode', String(enabled));
+
+    const settingsSelect = document.getElementById('lowDataModeSelect');
+    if (settingsSelect) settingsSelect.value = enabled ? 'true' : 'false';
+
+    nym.applyLowDataMode(enabled);
+    nym.displaySystemMessage(enabled ? 'Low Data Mode enabled' : 'Low Data Mode disabled');
+}
+
+window.toggleLowDataModeFromStats = toggleLowDataModeFromStats;
 
 function closeRelayStatsModal() {
     stopRelayStatsLoop();
@@ -5822,6 +5856,7 @@ function formatBytes(b) {
 
 function renderRelayStats() {
     if (typeof nym === 'undefined') return;
+    syncLowDataToggleFromState();
     const s = nym.relayStats;
     const pool = nym.relayPool;
 

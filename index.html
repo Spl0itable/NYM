@@ -867,6 +867,17 @@
             <button class="modal-close" data-action="closeModal" data-modal-id="relayStatsModal">&#x2715;</button>
             <div class="modal-header">Network Stats</div>
             <div class="modal-body" style="padding: 0;">
+                <div class="relay-stats-low-data" id="rsLowDataPanel">
+                    <div class="relay-stats-low-data-text">
+                        <div class="relay-stats-low-data-title">Using too much data?</div>
+                        <div class="relay-stats-low-data-hint">Enable Low Data Mode to limit relay
+                            connections to a small core set and load geo relays only when entering channels.</div>
+                    </div>
+                    <label class="nym-switch" title="Toggle Low Data Mode">
+                        <input type="checkbox" id="rsLowDataToggle" data-on-change="toggleLowDataModeFromStats">
+                        <span class="nym-switch-track"><span class="nym-switch-thumb"></span></span>
+                    </label>
+                </div>
                 <!-- Summary Cards -->
                 <div class="relay-stats-cards">
                     <div class="relay-stat-card">

@@ -1,24 +1,22 @@
-// Cloudflare Pages Function: Multiplexed WebSocket relay pool proxy
-// Single WebSocket from client, fans out to many upstream Nostr relays.
-// Uses string-based deduplication (no JSON.parse) to minimize CPU usage.
+// Cloudflare Pages Function: Relay pool router
+// Single WebSocket from the client; fans the relay set out across many
+// internal shard Workers (/api/relay-pool-shard), each holding a chunk
+// of upstream relay connections. This keeps any single Worker well
+// below Cloudflare's connection-per-invocation ceiling while letting
+// the client manage just one socket.
 //
-// Client connects to: wss://<host>/api/relay-pool
-//
-// Protocol (client → proxy):
-//   ["RELAYS", { relays: [...], writeOnly: [...], dmRelays: [...] }]
-//   ["EVENT", eventObj]          - fans out to all connected relays
-//   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
-//   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
-//   ["REQ", subId, ...filters]   - fans out to read relays only
-//   ["GEO_REQ", ["wss://geo1",...], subId, ...filters] - geo relays first, then all other read relays
-//   ["CLOSE", subId]             - fans out to read relays only
-//
-// Protocol (proxy → client):
-//   ["EVENT", subId, eventObj]   - deduplicated via string extraction (no JSON.parse)
-//   ["OK", eventId, bool, msg]   - first OK per event ID
-//   ["EOSE", subId]              - deduplicated (first per subscription ID)
-//   ["NOTICE", msg]              - forwarded as-is
-//   ["POOL:STATUS", { connected, failed, count, latency, events, relayTypes }]
+// Client protocol (unchanged from the previous single-Worker pool):
+//   ["RELAYS", { relays, writeOnly, dmRelays }]
+//   ["EVENT", eventObj] / ["GEO_EVENT", evt, [urls]] / ["DM_EVENT", evt]
+//   ["REQ", subId, ...filters] / ["GEO_REQ", [urls], subId, ...filters]
+//   ["CLOSE", subId]
+// Router → client:
+//   ["EVENT", subId, evt] / ["OK", id, ok, msg] / ["EOSE", subId]
+//   ["NOTICE", msg] / ["POOL:STATUS", { connected, count, latency, events }]
+//   ["POOL:PING", ts]
+
+const SHARD_SIZE = 25;
+const SHARD_PATH = '/api/relay-pool-shard';
 
 export async function onRequest(context) {
   const { request } = context;
@@ -28,166 +26,40 @@ export async function onRequest(context) {
     return new Response('Expected WebSocket upgrade', { status: 426 });
   }
 
+  const shardEndpoint = buildShardEndpoint(request.url);
+
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
 
-  // Relay pool state
-  const upstreams = new Map();       // relayUrl -> { ws, type, status, eventCount, handled }
-  const activeSubscriptions = new Map(); // subId -> raw JSON string of the REQ message
-  const seenEvents = new Map();      // eventId -> 1 (string-based dedup, no JSON.parse)
-  const seenOKs = new Set();         // eventId (only forward first OK per event)
-  const seenEOSE = new Set();        // subId (only forward first EOSE per subscription)
-  const relayLatency = new Map();    // relayUrl -> latency ms
-  let writeOnlyRelays = new Set();
-  let dmRelays = [];
   let serverOpen = true;
+  const shards = []; // { id, ws, relays, dmRelays, writeOnly, status, connectedRelays, latency, events, _closing }
+  const activeSubscriptions = new Map(); // subId -> raw REQ JSON
+  let lastRelaysConfig = null;
 
-  // Dedup housekeeping — increased capacity for high relay counts
+  // Cross-shard dedup
+  const seenEvents = new Map(); // eventId -> 1
+  const seenOKs = new Set();
+  const seenEOSE = new Set();
   const DEDUP_MAX = 50000;
   let dedupCounter = 0;
-
   function trimDedup() {
     if (++dedupCounter < 500) return;
     dedupCounter = 0;
     if (seenEvents.size > DEDUP_MAX) {
       const toDelete = seenEvents.size - DEDUP_MAX;
-      let deleted = 0;
-      for (const key of seenEvents.keys()) {
-        if (deleted >= toDelete) break;
-        seenEvents.delete(key);
-        deleted++;
-      }
+      let n = 0;
+      for (const k of seenEvents.keys()) { if (n >= toDelete) break; seenEvents.delete(k); n++; }
     }
     if (seenOKs.size > 2000) {
-      let deleted = 0;
-      for (const key of seenOKs) {
-        if (deleted >= 1000) break;
-        seenOKs.delete(key);
-        deleted++;
-      }
+      let n = 0;
+      for (const k of seenOKs) { if (n >= 1000) break; seenOKs.delete(k); n++; }
     }
     if (seenEOSE.size > 500) {
-      let deleted = 0;
-      for (const key of seenEOSE) {
-        if (deleted >= 250) break;
-        seenEOSE.delete(key);
-        deleted++;
-      }
+      let n = 0;
+      for (const k of seenEOSE) { if (n >= 250) break; seenEOSE.delete(k); n++; }
     }
   }
 
-  // Keepalive: send periodic POOL:PING to prevent Cloudflare idle timeout
-  let keepaliveTimer = setInterval(() => {
-    try {
-      if (serverOpen && server.readyState === 1) {
-        server.send(JSON.stringify(['POOL:PING', Date.now()]));
-      } else {
-        clearInterval(keepaliveTimer);
-        keepaliveTimer = null;
-      }
-    } catch {
-      clearInterval(keepaliveTimer);
-      keepaliveTimer = null;
-    }
-  }, 30000);
-
-  // Track failed relays to avoid wasting cycles
-  const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
-  const FAILED_COOLDOWN = 60000;
-  const MAX_BACKOFF = 180000;
-
-  // Track reconnection attempts
-  const reconnectAttempts = new Map();
-  const MAX_RECONNECT_ATTEMPTS = 5;
-
-  // Track relays pending reconnection
-  const pendingReconnect = new Set();
-  const reconnectTimers = new Map();
-  const intentionallyClosed = new Set();
-
-  // Buffered GEO_EVENTs waiting for geo relays to connect
-  // Map<relayUrl, Array<geoMsg string>>
-  const pendingGeoEvents = new Map();
-
-  // Connection batching state (used in cleanup)
-  let connectionTimer = null;
-  let connectionQueue = [];
-
-  // Throttle pool status updates
-  let statusTimer = null;
-  function schedulePoolStatus() {
-    if (statusTimer) return;
-    statusTimer = setTimeout(() => {
-      statusTimer = null;
-      sendPoolStatus();
-    }, 300);
-  }
-
-  function sendToClient(data) {
-    try {
-      if (serverOpen && server.readyState === 1) {
-        server.send(typeof data === 'string' ? data : JSON.stringify(data));
-      }
-    } catch {
-      // Client disconnected
-    }
-  }
-
-  function sendPoolStatus() {
-    const connected = [];
-    const latency = {};
-    const events = {};
-    upstreams.forEach((info, url) => {
-      if (info.status === 'connected') {
-        connected.push(url);
-        events[url] = info.eventCount;
-      }
-    });
-    // Only include latency for connected relays
-    relayLatency.forEach((ms, url) => {
-      if (connected.includes(url)) latency[url] = ms;
-    });
-    sendToClient(JSON.stringify(['POOL:STATUS', {
-      connected,
-      count: connected.length,
-      latency,
-      events
-    }]));
-  }
-
-  function shouldSkipRelay(relayUrl) {
-    const failure = failedRelays.get(relayUrl);
-    if (failure) {
-      const backoff = Math.min(FAILED_COOLDOWN * Math.pow(2, failure.attempts - 1), MAX_BACKOFF);
-      if (Date.now() - failure.failedAt < backoff) return true;
-      failedRelays.delete(relayUrl);
-    }
-    return false;
-  }
-
-  function trackRelayFailure(relayUrl) {
-    const existing = failedRelays.get(relayUrl);
-    const attempts = existing ? existing.attempts + 1 : 1;
-    failedRelays.set(relayUrl, { failedAt: Date.now(), attempts });
-  }
-
-  function clearRelayFailure(relayUrl) {
-    failedRelays.delete(relayUrl);
-  }
-
-  function validateRelayUrl(url) {
-    try {
-      const parsed = new URL(url);
-      return parsed.protocol === 'wss:' || parsed.protocol === 'ws:';
-    } catch {
-      return false;
-    }
-  }
-
-  // Extract Nostr event ID from raw JSON string without JSON.parse.
-  // Searches for "id":" AFTER the first '{' (start of the event object)
-  // to avoid false matches in subscription IDs or other envelope fields.
-  // Validates the extracted ID is exactly 64 characters (Nostr event ID length).
   function extractEventId(raw) {
     const braceIdx = raw.indexOf('{');
     if (braceIdx === -1) return null;
@@ -195,357 +67,332 @@ export async function onRequest(context) {
     if (idx === -1) return null;
     const start = idx + 6;
     const end = raw.indexOf('"', start);
-    if (end === -1 || end - start !== 64) return null; // Nostr event IDs are exactly 64 hex chars
+    if (end === -1 || end - start !== 64) return null;
     return raw.substring(start, end);
   }
-
-  // Extract OK event ID: ["OK","<eventId>",...]
-  // The event ID is the second element, starts at position 6
   function extractOKEventId(raw) {
-    // ["OK","  = positions 0-5, event ID starts at 6
     const start = 6;
     const end = raw.indexOf('"', start);
     if (end === -1 || end - start < 16) return null;
     return raw.substring(start, end);
   }
 
-  // Connect to a relay immediately (no staggering)
-  function queueConnection(relayUrl, type) {
-    if (upstreams.has(relayUrl)) return;
-    connectUpstream(relayUrl, type);
+  function sendToClient(data) {
+    if (!serverOpen) return;
+    try {
+      if (server.readyState === 1) {
+        server.send(typeof data === 'string' ? data : JSON.stringify(data));
+      }
+    } catch { /* noop */ }
   }
 
-  function scheduleReconnect(relayUrl, type) {
-    if (!serverOpen) return;
-    if (pendingReconnect.has(relayUrl)) return;
+  // Aggregate POOL:STATUS across shards and emit to client
+  let statusTimer = null;
+  function scheduleStatus() {
+    if (statusTimer) return;
+    statusTimer = setTimeout(() => {
+      statusTimer = null;
+      const connected = [];
+      const latency = {};
+      const events = {};
+      for (const sh of shards) {
+        if (!sh.connectedRelays) continue;
+        for (const url of sh.connectedRelays) {
+          if (!connected.includes(url)) connected.push(url);
+        }
+        if (sh.latency) for (const [u, ms] of Object.entries(sh.latency)) latency[u] = ms;
+        if (sh.events) for (const [u, c] of Object.entries(sh.events)) events[u] = c;
+      }
+      sendToClient(JSON.stringify(['POOL:STATUS', {
+        connected,
+        count: connected.length,
+        latency,
+        events
+      }]));
+    }, 300);
+  }
 
-    const attempts = reconnectAttempts.get(relayUrl) || 0;
-    if (attempts >= MAX_RECONNECT_ATTEMPTS) {
-      trackRelayFailure(relayUrl);
-      reconnectAttempts.delete(relayUrl);
+  // Keepalive to client
+  let keepaliveTimer = setInterval(() => {
+    if (!serverOpen) { clearInterval(keepaliveTimer); keepaliveTimer = null; return; }
+    try { server.send(JSON.stringify(['POOL:PING', Date.now()])); }
+    catch { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+  }, 30000);
+
+  function chunkArray(arr, size) {
+    const out = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  }
+
+  function planShards(config) {
+    const relays = Array.isArray(config.relays) ? config.relays.slice() : [];
+    const writeOnly = Array.isArray(config.writeOnly) ? config.writeOnly.slice() : [];
+    const dmRelays = Array.isArray(config.dmRelays) ? config.dmRelays.slice() : [];
+
+    // Combine read and write-only relays into a single sharded pool. The
+    // shard Worker treats writeOnly relays as write-only when constructing
+    // its config.
+    const combined = [...new Set([...relays, ...writeOnly])];
+    const chunks = chunkArray(combined, SHARD_SIZE);
+    if (chunks.length === 0) chunks.push([]);
+
+    const writeOnlySet = new Set(writeOnly);
+    const dmSet = new Set(dmRelays);
+
+    return chunks.map((chunk, i) => ({
+      id: `s${i}`,
+      relays: chunk.filter(u => !writeOnlySet.has(u)),
+      writeOnly: chunk.filter(u => writeOnlySet.has(u)),
+      dmRelays: i === 0 ? dmRelays.slice() : [],
+      _dmAware: i === 0 ? dmSet : null
+    }));
+  }
+
+  function openShard(plan) {
+    const sh = {
+      id: plan.id,
+      ws: null,
+      relays: plan.relays,
+      writeOnly: plan.writeOnly,
+      dmRelays: plan.dmRelays,
+      status: 'connecting',
+      connectedRelays: [],
+      latency: {},
+      events: {},
+      _closing: false,
+      _reconnectAttempts: 0
+    };
+    shards.push(sh);
+    connectShardWs(sh);
+    return sh;
+  }
+
+  function connectShardWs(sh) {
+    let ws;
+    try {
+      ws = new WebSocket(shardEndpoint);
+    } catch {
+      scheduleShardReconnect(sh);
       return;
     }
-    reconnectAttempts.set(relayUrl, attempts + 1);
+    sh.ws = ws;
 
-    pendingReconnect.add(relayUrl);
-
-    const baseDelay = 3000;
-    const delay = baseDelay * Math.pow(1.5, attempts) + Math.random() * 2000;
-
-    const timerId = setTimeout(() => {
-      reconnectTimers.delete(relayUrl);
-      pendingReconnect.delete(relayUrl);
-      if (serverOpen && !upstreams.has(relayUrl) && !intentionallyClosed.has(relayUrl)) {
-        queueConnection(relayUrl, type);
+    ws.addEventListener('open', () => {
+      sh.status = 'open';
+      sh._reconnectAttempts = 0;
+      // Send the shard's relay config
+      try {
+        ws.send(JSON.stringify(['RELAYS', {
+          relays: sh.relays,
+          writeOnly: sh.writeOnly,
+          dmRelays: sh.dmRelays
+        }]));
+      } catch { /* noop */ }
+      // Replay active subscriptions
+      for (const [, raw] of activeSubscriptions) {
+        try { ws.send(raw); } catch { /* noop */ }
       }
-    }, delay);
-    reconnectTimers.set(relayUrl, timerId);
-  }
+    });
 
-  // Replay all active subscriptions to a newly connected relay
-  function replaySubscriptions(relayUrl, ws) {
-    if (writeOnlyRelays.has(relayUrl)) return;
-    for (const [, reqMsg] of activeSubscriptions) {
-      try { ws.send(reqMsg); } catch { /* noop */ }
-    }
-  }
+    ws.addEventListener('message', (event) => {
+      const raw = event.data;
+      if (typeof raw !== 'string' || raw.length < 4) return;
 
-  function connectUpstream(relayUrl, type) {
-    if (upstreams.has(relayUrl)) return;
-    if (!validateRelayUrl(relayUrl)) return;
-    if (relayUrl === 'wss://relay.nosflare.com') return;
-    if (shouldSkipRelay(relayUrl)) return;
-
-    const info = { ws: null, type, status: 'connecting', eventCount: 0, handled: false };
-    upstreams.set(relayUrl, info);
-
-    const connectStartTime = Date.now();
-
-    try {
-      const ws = new WebSocket(relayUrl);
-      info.ws = ws;
-
-      const timeout = setTimeout(() => {
-        if (info.status === 'connecting') {
-          info.handled = true;
-          info.status = 'failed';
-          trackRelayFailure(relayUrl);
-          try { ws.close(); } catch { /* noop */ }
-          upstreams.delete(relayUrl);
-          schedulePoolStatus();
-        }
-      }, 8000);
-
-      ws.addEventListener('open', () => {
-        clearTimeout(timeout);
-        info.status = 'connected';
-        clearRelayFailure(relayUrl);
-        reconnectAttempts.delete(relayUrl);
-        relayLatency.set(relayUrl, Date.now() - connectStartTime);
-        replaySubscriptions(relayUrl, ws);
-        // Flush any buffered GEO_EVENTs that were waiting for this relay
-        const buffered = pendingGeoEvents.get(relayUrl);
-        if (buffered && buffered.length > 0) {
-          for (const geoMsg of buffered) {
-            try { ws.send(geoMsg); } catch { /* noop */ }
-          }
-          pendingGeoEvents.delete(relayUrl);
-        }
-        schedulePoolStatus();
-      });
-
-      // String-based dedup: extract event IDs without JSON.parse to minimize CPU
-      ws.addEventListener('message', (event) => {
-        const raw = event.data;
-        if (typeof raw !== 'string' || raw.length < 10) return;
-
-        // Detect message type from raw string prefix (avoids JSON.parse)
-        // EVENT: ["EVENT","subId",{...}]
-        if (raw.charCodeAt(2) === 69 && raw.startsWith('["EVENT"')) {
-          const eventId = extractEventId(raw);
-          if (eventId) {
-            if (seenEvents.has(eventId)) return; // Dedup
-            seenEvents.set(eventId, 1);
-            trimDedup();
-          }
-          info.eventCount++;
-          sendToClient(raw);
-
-        // OK: ["OK","eventId",bool,"msg"]
-        } else if (raw.charCodeAt(2) === 79 && raw.startsWith('["OK"')) {
-          const eventId = extractOKEventId(raw);
-          if (eventId) {
-            if (seenOKs.has(eventId)) return;
-            seenOKs.add(eventId);
-          }
-          sendToClient(raw);
-
-        // EOSE, NOTICE, or anything else
-        } else {
-          // Deduplicate EOSE: only forward the first EOSE per subscription ID
-          if (raw.charCodeAt(2) === 69 && raw.startsWith('["EOSE"')) {
-            const eoseMatch = raw.match(/^\["EOSE","([^"]+)"/);
-            if (eoseMatch) {
-              const eoseSubId = eoseMatch[1];
-              if (seenEOSE.has(eoseSubId)) return;
-              seenEOSE.add(eoseSubId);
-            }
-          }
-
-          sendToClient(raw);
-        }
-      });
-
-      ws.addEventListener('close', () => {
-        clearTimeout(timeout);
-        if (info.handled) return;
-        info.handled = true;
-
-        const wasConnected = info.status === 'connected';
-        info.status = 'closed';
-        upstreams.delete(relayUrl);
-        schedulePoolStatus();
-
-        if (intentionallyClosed.has(relayUrl)) {
-          intentionallyClosed.delete(relayUrl);
-          return;
-        }
-
-        if (wasConnected) {
-          scheduleReconnect(relayUrl, type);
-        } else {
-          trackRelayFailure(relayUrl);
-        }
-      });
-
-      ws.addEventListener('error', () => {
-        clearTimeout(timeout);
-        if (info.handled) return;
-        info.handled = true;
-
-        info.status = 'failed';
-        trackRelayFailure(relayUrl);
-        upstreams.delete(relayUrl);
-        schedulePoolStatus();
-      });
-    } catch {
-      info.handled = true;
-      info.status = 'failed';
-      trackRelayFailure(relayUrl);
-      upstreams.delete(relayUrl);
-      schedulePoolStatus();
-    }
-  }
-
-  function sendToUpstreams(data, filter) {
-    const msg = typeof data === 'string' ? data : JSON.stringify(data);
-    upstreams.forEach((info, url) => {
-      if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-        if (!filter || filter(url, info)) {
-          try { info.ws.send(msg); } catch { /* noop */ }
-        }
+      // POOL:STATUS — track per-shard then emit aggregate
+      if (raw.startsWith('["POOL:STATUS"')) {
+        try {
+          const parsed = JSON.parse(raw);
+          const status = parsed[1] || {};
+          sh.connectedRelays = Array.isArray(status.connected) ? status.connected : [];
+          sh.latency = status.latency || {};
+          sh.events = status.events || {};
+        } catch { /* noop */ }
+        scheduleStatus();
+        return;
       }
+
+      // POOL:PING — internal, do not forward to client
+      if (raw.startsWith('["POOL:PING"')) return;
+
+      // EVENT
+      if (raw.charCodeAt(2) === 69 && raw.startsWith('["EVENT"')) {
+        const eid = extractEventId(raw);
+        if (eid) {
+          if (seenEvents.has(eid)) return;
+          seenEvents.set(eid, 1);
+          trimDedup();
+        }
+        sendToClient(raw);
+        return;
+      }
+
+      // OK
+      if (raw.charCodeAt(2) === 79 && raw.startsWith('["OK"')) {
+        const eid = extractOKEventId(raw);
+        if (eid) {
+          if (seenOKs.has(eid)) return;
+          seenOKs.add(eid);
+        }
+        sendToClient(raw);
+        return;
+      }
+
+      // EOSE
+      if (raw.charCodeAt(2) === 69 && raw.startsWith('["EOSE"')) {
+        const m = raw.match(/^\["EOSE","([^"]+)"/);
+        if (m) {
+          const subId = m[1];
+          if (seenEOSE.has(subId)) return;
+          seenEOSE.add(subId);
+        }
+        sendToClient(raw);
+        return;
+      }
+
+      // NOTICE / anything else
+      sendToClient(raw);
+    });
+
+    ws.addEventListener('close', () => {
+      sh.ws = null;
+      sh.status = 'closed';
+      sh.connectedRelays = [];
+      sh.latency = {};
+      sh.events = {};
+      scheduleStatus();
+      if (!serverOpen || sh._closing) return;
+      scheduleShardReconnect(sh);
+    });
+
+    ws.addEventListener('error', () => {
+      // close handler runs next
     });
   }
 
-  // Handle messages from client
+  function scheduleShardReconnect(sh) {
+    if (!serverOpen || sh._closing) return;
+    const attempts = sh._reconnectAttempts || 0;
+    sh._reconnectAttempts = attempts + 1;
+    const baseDelay = Math.min(1500 * Math.pow(1.7, attempts), 30000);
+    const delay = Math.floor(baseDelay * (0.7 + Math.random() * 0.3));
+    setTimeout(() => {
+      if (!serverOpen || sh._closing) return;
+      if (sh.ws && (sh.ws.readyState === 0 || sh.ws.readyState === 1)) return;
+      connectShardWs(sh);
+    }, delay);
+  }
+
+  function closeAllShards() {
+    for (const sh of shards) {
+      sh._closing = true;
+      try { if (sh.ws) sh.ws.close(); } catch { /* noop */ }
+    }
+    shards.length = 0;
+  }
+
+  function broadcastToShards(raw) {
+    for (const sh of shards) {
+      if (sh.ws && sh.ws.readyState === 1) {
+        try { sh.ws.send(raw); } catch { /* noop */ }
+      }
+    }
+  }
+
+  // Client → router messages
   server.addEventListener('message', (event) => {
-    try {
-      const msg = JSON.parse(event.data);
-      if (!Array.isArray(msg)) return;
+    const raw = event.data;
+    if (typeof raw !== 'string') return;
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+    if (!Array.isArray(msg)) return;
+    const t = msg[0];
 
-      const msgType = msg[0];
+    if (t === 'RELAYS') {
+      const config = msg[1];
+      if (!config || typeof config !== 'object') return;
+      lastRelaysConfig = config;
 
-          if (msgType === 'RELAYS') {
-            const config = msg[1];
-            if (!config || typeof config !== 'object') return;
+      const plans = planShards(config);
+      const planById = new Map(plans.map(p => [p.id, p]));
+      const existingById = new Map(shards.map(s => [s.id, s]));
 
-            const writeOnly = config.writeOnly || [];
-            dmRelays = config.dmRelays || [];
-            writeOnlyRelays = new Set(writeOnly);
+      // Remove shards that no longer exist
+      for (let i = shards.length - 1; i >= 0; i--) {
+        const sh = shards[i];
+        if (!planById.has(sh.id)) {
+          sh._closing = true;
+          try { if (sh.ws) sh.ws.close(); } catch { /* noop */ }
+          shards.splice(i, 1);
+        }
+      }
 
-            const requestedRelays = config.relays || [];
-
-            // Disconnect relays no longer in the list
-            const newRelaySet = new Set([...requestedRelays, ...writeOnly]);
-            for (const [url, info] of upstreams) {
-              if (!newRelaySet.has(url)) {
-                intentionallyClosed.add(url);
-                try { if (info.ws) info.ws.close(); } catch { /* noop */ }
-                upstreams.delete(url);
-              }
-            }
-
-            // Cancel ALL pending reconnect timers
-            for (const [, timerId] of reconnectTimers) {
-              clearTimeout(timerId);
-            }
-            reconnectTimers.clear();
-            pendingReconnect.clear();
-
-            // Connect all relays immediately (geo relays first in the array)
-            for (const url of requestedRelays) {
-              if (!upstreams.has(url)) {
-                queueConnection(url, writeOnlyRelays.has(url) ? 'write' : 'read');
-              }
-            }
-            for (const url of writeOnly) {
-              if (!upstreams.has(url)) {
-                queueConnection(url, 'write');
-              }
-            }
-          } else if (msgType === 'EVENT') {
-            sendToUpstreams(event.data);
-          } else if (msgType === 'GEO_EVENT') {
-            const geoMsg = JSON.stringify(['EVENT', msg[1]]);
-            const geoUrls = msg[2] || [];
-            const geoSet = new Set(geoUrls);
-            const sentGeo = new Set();
-            // Send to connected geo relays first
-            upstreams.forEach((info, url) => {
-              if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-                try { info.ws.send(geoMsg); sentGeo.add(url); } catch { /* noop */ }
-              }
-            });
-            // For geo relays that aren't connected yet, ensure they get connected
-            // and buffer the event so it gets sent when they open
-            // (critical for ephemeral kind 20000 which relays don't store)
-            for (const url of geoUrls) {
-              if (sentGeo.has(url)) continue;
-              const info = upstreams.get(url);
-              if (info && info.status === 'connecting') {
-                // Relay is connecting — buffer this event for delivery on open
-                if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
-                pendingGeoEvents.get(url).push(geoMsg);
-              } else if (!info && validateRelayUrl(url)) {
-                // Relay not in upstreams at all — queue connection and buffer
-                queueConnection(url, 'read');
-                if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
-                pendingGeoEvents.get(url).push(geoMsg);
-              }
-            }
-            // Then send to all other connected relays
-            upstreams.forEach((info, url) => {
-              if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-                try { info.ws.send(geoMsg); } catch { /* noop */ }
-              }
-            });
-          } else if (msgType === 'DM_EVENT') {
-            const dmMsg = JSON.stringify(['EVENT', msg[1]]);
-            const dmSet = new Set(dmRelays);
-            upstreams.forEach((info, url) => {
-              if (dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-                try { info.ws.send(dmMsg); } catch { /* noop */ }
-              }
-            });
-            upstreams.forEach((info, url) => {
-              if (!dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-                try { info.ws.send(dmMsg); } catch { /* noop */ }
-              }
-            });
-          } else if (msgType === 'GEO_REQ') {
-            // ["GEO_REQ", ["wss://geo1", ...], subId, ...filters]
-            // Send REQ to geo relays first, then all other read relays
-            const geoList = msg[1] || [];
-            const reqMsg = JSON.stringify(['REQ', ...msg.slice(2)]);
-            const subId = msg[2];
-            activeSubscriptions.set(subId, reqMsg);
-            const geoSet = new Set(geoList);
-            // Ensure geo relays are connected (they'll get subscription via replaySubscriptions)
-            for (const url of geoList) {
-              if (!upstreams.has(url) && validateRelayUrl(url)) {
-                queueConnection(url, 'read');
-              }
-            }
-            // Geo relays first
-            upstreams.forEach((info, url) => {
-              if (geoSet.has(url) && info.type !== 'write' && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-                try { info.ws.send(reqMsg); } catch { /* noop */ }
-              }
-            });
-            // Then all other read relays
-            upstreams.forEach((info, url) => {
-              if (!geoSet.has(url) && info.type !== 'write' && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-                try { info.ws.send(reqMsg); } catch { /* noop */ }
-              }
-            });
-          } else if (msgType === 'REQ') {
-            const subId = msg[1];
-            activeSubscriptions.set(subId, event.data);
-            sendToUpstreams(event.data, (url, info) => info.type !== 'write');
-          } else if (msgType === 'CLOSE') {
-            const subId = msg[1];
-            activeSubscriptions.delete(subId);
-            seenEOSE.delete(subId); // Allow EOSE for future subscriptions with same pattern
-            sendToUpstreams(event.data, (url, info) => info.type !== 'write');
+      // Update existing shards or open new ones
+      for (const plan of plans) {
+        const existing = existingById.get(plan.id);
+        if (existing) {
+          existing.relays = plan.relays;
+          existing.writeOnly = plan.writeOnly;
+          existing.dmRelays = plan.dmRelays;
+          if (existing.ws && existing.ws.readyState === 1) {
+            try {
+              existing.ws.send(JSON.stringify(['RELAYS', {
+                relays: existing.relays,
+                writeOnly: existing.writeOnly,
+                dmRelays: existing.dmRelays
+              }]));
+            } catch { /* noop */ }
           }
-    } catch {
-      // Parse error
+        } else {
+          openShard(plan);
+        }
+      }
+      return;
+    }
+
+    if (t === 'REQ') {
+      const subId = msg[1];
+      if (typeof subId === 'string') activeSubscriptions.set(subId, raw);
+      broadcastToShards(raw);
+      return;
+    }
+
+    if (t === 'CLOSE') {
+      const subId = msg[1];
+      if (typeof subId === 'string') {
+        activeSubscriptions.delete(subId);
+        seenEOSE.delete(subId);
+      }
+      broadcastToShards(raw);
+      return;
+    }
+
+    if (t === 'EVENT' || t === 'GEO_EVENT' || t === 'DM_EVENT' || t === 'GEO_REQ') {
+      // GEO_REQ also acts as a subscription — track it for replay
+      if (t === 'GEO_REQ' && typeof msg[2] === 'string') {
+        activeSubscriptions.set(msg[2], raw);
+      }
+      broadcastToShards(raw);
+      return;
     }
   });
 
-  // Handle client disconnect
-  function cleanupAll() {
+  function cleanup() {
     serverOpen = false;
-    if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
-    connectionQueue = [];
-    for (const [, timerId] of reconnectTimers) clearTimeout(timerId);
-    reconnectTimers.clear();
-    pendingReconnect.clear();
-    intentionallyClosed.clear();
     if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
     if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
-    upstreams.forEach((info) => {
-      try { if (info.ws) info.ws.close(); } catch { /* noop */ }
-    });
-    upstreams.clear();
+    closeAllShards();
+    activeSubscriptions.clear();
   }
 
-  server.addEventListener('close', cleanupAll);
-  server.addEventListener('error', cleanupAll);
+  server.addEventListener('close', cleanup);
+  server.addEventListener('error', cleanup);
 
-  return new Response(null, {
-    status: 101,
-    webSocket: client,
-  });
+  return new Response(null, { status: 101, webSocket: client });
+}
+
+function buildShardEndpoint(requestUrl) {
+  const u = new URL(requestUrl);
+  const protocol = u.protocol === 'http:' ? 'ws:' : 'wss:';
+  return `${protocol}//${u.host}${SHARD_PATH}`;
 }

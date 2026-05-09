@@ -197,6 +197,7 @@ window.nymHapticTap = function (ms) {
         'previewTextSize':            function (_e, t) { window.previewTextSize(t.value); },
         'commitTextSize':             function (_e, t) { window.commitTextSize(t.value); },
         'resetTextSize':              function () { window.resetTextSize(); },
+        'toggleLowDataModeFromStats': function (e) { window.toggleLowDataModeFromStats(e); },
         'onTransparencyChange':       function (_e, t) { window.onTransparencyChange(t.value); },
         'addBlockedKeyword':          function () { nym().addBlockedKeyword(); },
         'executeSettingsTransfer':    function () { nym().executeSettingsTransfer(); },
