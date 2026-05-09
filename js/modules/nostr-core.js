@@ -1447,6 +1447,20 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
+    // Issue a profile fetch for a pubkey at most once per throttle window.
+    // Used to discover nickname/avatar updates for already-cached contacts
+    // (the main subscription does not include kind 0, so we need to poll
+    // when the user opens or receives a PM).
+    refreshUserProfileThrottled(pubkey, throttleMs = 60000) {
+        if (!pubkey) return;
+        if (!this._profileRefreshAttempts) this._profileRefreshAttempts = new Map();
+        const now = Date.now();
+        const last = this._profileRefreshAttempts.get(pubkey) || 0;
+        if (now - last < throttleMs) return;
+        this._profileRefreshAttempts.set(pubkey, now);
+        try { this.fetchProfileFromRelay(pubkey); } catch (_) { }
+    },
+
     // Direct profile fetch - sends REQ and resolves when the kind 0 handler
     // processes the response (or after a timeout fallback).
     // Concurrent calls for the same pubkey share a single REQ via an in-flight

@@ -1307,6 +1307,20 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Debounced wrapper around resubscribeAllRelays. Used when the critical
+    // subscription's author lists change (e.g. PM contacts added during
+    // hydration) so we don't tear down and rebuild every relay subscription
+    // for each individual addition.
+    _scheduleCriticalResubscribe(delayMs = 750) {
+        if (this._criticalResubscribeTimer) {
+            clearTimeout(this._criticalResubscribeTimer);
+        }
+        this._criticalResubscribeTimer = setTimeout(() => {
+            this._criticalResubscribeTimer = null;
+            try { this.resubscribeAllRelays(); } catch (_) { }
+        }, delayMs);
+    },
+
     resubscribeAllRelays() {
         // Multiplexed pool mode: re-subscribe through proxy
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
@@ -2334,6 +2348,15 @@ Object.assign(NYM.prototype, {
                 { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 }
             );
             // Ephemeral pubkey subscriptions are sent as independent REQs
+        }
+
+        // Subscribe to kind 0 (profile metadata) for current PM contacts so
+        // nickname/avatar updates push in real-time. 
+        const pmAuthors = this.pmConversations
+            ? Array.from(this.pmConversations.keys()).filter(pk => typeof pk === 'string' && pk.length === 64)
+            : [];
+        if (pmAuthors.length > 0) {
+            filters.push({ kinds: [0], authors: pmAuthors });
         }
 
         return filters;

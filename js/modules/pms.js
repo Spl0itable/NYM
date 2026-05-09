@@ -1405,9 +1405,23 @@ Object.assign(NYM.prototype, {
 
             this.updateViewMoreButton('pmList');
 
-            // Proactively request their profile
+            // Proactively request their profile. Unknown/anon contacts get
+            // an immediate fetch; known contacts go through the throttled
+            // refresh so we still pick up nickname/avatar updates without
+            // hammering relays on every PM message.
             if (!this.users.has(pubkey) || /^anon$/i.test(cleanBaseNym)) {
                 this.requestUserProfile(pubkey);
+            } else if (typeof this.refreshUserProfileThrottled === 'function') {
+                this.refreshUserProfileThrottled(pubkey);
+            }
+
+            // The critical subscription includes a kind 0 filter scoped to
+            // PM contacts so nickname/avatar updates push in real-time. A
+            // new contact needs the subscription rebuilt so the relay starts
+            // forwarding their kind 0 events. Debounce against burst churn
+            // (e.g. hydration adding many PMs in quick succession).
+            if (typeof this._scheduleCriticalResubscribe === 'function') {
+                this._scheduleCriticalResubscribe();
             }
         } else {
             // PM already exists — sync the displayed nym from the users map
@@ -1415,6 +1429,11 @@ Object.assign(NYM.prototype, {
             const cached = this.pmConversations.get(pubkey);
             if (cached && cached.nym !== baseNym) {
                 this.updatePMNicknameFromProfile(pubkey, baseNym);
+            }
+            // Also poll for a fresh kind 0 since there is no ongoing
+            // subscription for contact profile updates.
+            if (typeof this.refreshUserProfileThrottled === 'function') {
+                this.refreshUserProfileThrottled(pubkey);
             }
         }
     },
@@ -1499,6 +1518,12 @@ Object.assign(NYM.prototype, {
         this.currentGeohash = null;
         this.userScrolledUp = false;
         if (this.pendingEdit) this.cancelEditMessage();
+
+        // Pull a fresh kind 0 so the header/sidebar reflect any profile
+        // updates the contact has published since we last fetched.
+        if (typeof this.refreshUserProfileThrottled === 'function') {
+            this.refreshUserProfileThrottled(pubkey);
+        }
 
         // Track navigation history
         this._pushNavigation({ type: 'pm', nym, pubkey });
