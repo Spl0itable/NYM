@@ -947,6 +947,9 @@ Object.assign(NYM.prototype, {
             this.displayMessage(msg);
             // Force auto-scroll to bottom for group messages
             this._scheduleScrollToBottom();
+            if (typeof this._markChannelRead === 'function') {
+                this._markChannelRead(groupConvKey, msg.created_at);
+            }
         } else {
             // Not viewing this group — leave the cached DOM in place
             if (!isOwn && !senderBlocked) {

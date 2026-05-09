@@ -424,33 +424,8 @@
                     }
                 }
 
-                // Surface persisted unread state
-                if (this.unreadCounts && this.unreadCounts.size > 0) {
-                    for (const [channel, count] of this.unreadCounts) {
-                        if (!count || count <= 0) continue;
-                        let item = null;
-                        if (channel.startsWith('pm-')) {
-                            const keys = channel.substring(3).split('-');
-                            const otherPubkey = keys.find(k => k !== this.pubkey);
-                            if (otherPubkey) {
-                                item = document.querySelector(`[data-pubkey="${otherPubkey}"]`);
-                            }
-                        } else if (channel.startsWith('group-')) {
-                            const groupId = channel.substring(6);
-                            item = document.querySelector(`[data-group-id="${groupId}"]`);
-                        } else if (channel.startsWith('#')) {
-                            item = document.querySelector(`[data-geohash="${channel.substring(1)}"]`);
-                        } else {
-                            item = document.querySelector(`[data-channel="${channel}"][data-geohash=""]`);
-                        }
-                        if (!item) continue;
-                        item.classList.add('has-unread');
-                        const badge = item.querySelector('.unread-badge');
-                        if (badge) {
-                            badge.textContent = count > 99 ? '99+' : count;
-                            badge.style.display = 'block';
-                        }
-                    }
+                if (typeof this.recomputeAllUnreadCounts === 'function') {
+                    this.recomputeAllUnreadCounts();
                 }
 
                 if (typeof this.sortChannelsByActivity === 'function') {

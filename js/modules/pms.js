@@ -1114,6 +1114,9 @@ Object.assign(NYM.prototype, {
                 this.displayMessage(msg);
                 // Force auto-scroll to bottom for PM messages
                 this._scheduleScrollToBottom();
+                if (typeof this._markChannelRead === 'function') {
+                    this._markChannelRead(conversationKey, msg.created_at);
+                }
                 // Send READ receipt if viewing the conversation, and mark
                 // the message so openPM doesn't re-send on next open.
                 if (!isOwn) {

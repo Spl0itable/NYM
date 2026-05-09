@@ -1222,55 +1222,67 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     updateUnreadCount(channel) {
-        const count = (this.unreadCounts.get(channel) || 0) + 1;
+        const count = this._recomputeUnreadCount(channel);
         this.unreadCounts.set(channel, count);
         this._persistUnreadCounts();
+        this._renderUnreadBadge(channel, count);
+        this._scheduleChannelSort();
+    },
 
-        // Handle PM unread counts using conversation key
+    // Counter is derived from cached messages newer than lastRead so it
+    // can't drift from the actual cache contents.
+    _recomputeUnreadCount(channel) {
+        if (!this.channelLastRead) this.channelLastRead = new Map();
+        const lastRead = this.channelLastRead.get(channel) || 0;
+        let messages;
+        if (channel.startsWith('pm-') || channel.startsWith('group-')) {
+            messages = this.pmMessages && this.pmMessages.get(channel);
+        } else {
+            messages = this.messages && this.messages.get(channel);
+        }
+        if (!Array.isArray(messages) || messages.length === 0) return 0;
+        let count = 0;
+        for (const m of messages) {
+            if (!m || m.isOwn) continue;
+            if ((m.created_at || 0) <= lastRead) continue;
+            if (this.blockedUsers && m.pubkey && this.blockedUsers.has(m.pubkey)) continue;
+            if (typeof this.isNymBlocked === 'function' && m.author && this.isNymBlocked(m.author)) continue;
+            count++;
+        }
+        return count;
+    },
+
+    _markChannelRead(channel, ts) {
+        if (!this.channelLastRead) this.channelLastRead = new Map();
+        const cur = this.channelLastRead.get(channel) || 0;
+        const next = ts || Math.floor(Date.now() / 1000);
+        if (next > cur) {
+            this.channelLastRead.set(channel, next);
+            this._persistUnreadCounts();
+        }
+    },
+
+    _renderUnreadBadge(channel, count) {
+        let item = null;
         if (channel.startsWith('pm-')) {
-            // Extract the other user's pubkey from conversation key
             const keys = channel.substring(3).split('-');
             const otherPubkey = keys.find(k => k !== this.pubkey);
-            if (otherPubkey) {
-                const badge = document.querySelector(`[data-pubkey="${otherPubkey}"] .unread-badge`);
-                if (badge) {
-                    badge.textContent = count > 99 ? '99+' : count;
-                    badge.style.display = count > 0 ? 'block' : 'none';
-                    const item = badge.closest('.pm-item, .channel-item');
-                    if (item) item.classList.toggle('has-unread', count > 0);
-                }
-            }
+            if (otherPubkey) item = document.querySelector(`[data-pubkey="${otherPubkey}"]`);
         } else if (channel.startsWith('group-')) {
-            // Group chat unread counts
             const groupId = channel.substring(6);
-            const badge = document.querySelector(`[data-group-id="${groupId}"] .unread-badge`);
-            if (badge) {
-                badge.textContent = count > 99 ? '99+' : count;
-                badge.style.display = count > 0 ? 'block' : 'none';
-                const item = badge.closest('.pm-item, .channel-item');
-                if (item) item.classList.toggle('has-unread', count > 0);
-            }
+            item = document.querySelector(`[data-group-id="${groupId}"]`);
+        } else if (channel.startsWith('#')) {
+            item = document.querySelector(`[data-geohash="${channel.substring(1)}"]`);
         } else {
-            // Regular channel unread counts
-            let selector;
-            if (channel.startsWith('#')) {
-                // Geohash channel
-                selector = `[data-geohash="${channel.substring(1)}"]`;
-            } else {
-                selector = `[data-channel="${channel}"][data-geohash=""]`;
-            }
-
-            const badge = document.querySelector(`${selector} .unread-badge`);
-            if (badge) {
-                badge.textContent = count > 99 ? '99+' : count;
-                badge.style.display = count > 0 ? 'block' : 'none';
-                const item = badge.closest('.channel-item');
-                if (item) item.classList.toggle('has-unread', count > 0);
-            }
+            item = document.querySelector(`[data-channel="${channel}"][data-geohash=""]`);
         }
-
-        // Re-sort channels by activity
-        this._scheduleChannelSort();
+        if (!item) return;
+        const badge = item.querySelector('.unread-badge');
+        if (badge) {
+            badge.textContent = count > 99 ? '99+' : count;
+            badge.style.display = count > 0 ? 'block' : 'none';
+        }
+        item.classList.toggle('has-unread', count > 0);
     },
 
     // Throttle the sidebar sort so it fires immediately on the first call
@@ -1396,48 +1408,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     clearUnreadCount(channel) {
-        this.unreadCounts.set(channel, 0);
-        // Persist immediately so a fast reload doesn't lose the cleared state.
-        this._persistUnreadCounts(true);
-
-        // Handle PM unread counts using conversation key
-        if (channel.startsWith('pm-')) {
-            // Extract the other user's pubkey from conversation key
-            const keys = channel.substring(3).split('-');
-            const otherPubkey = keys.find(k => k !== this.pubkey);
-            if (otherPubkey) {
-                const badge = document.querySelector(`[data-pubkey="${otherPubkey}"] .unread-badge`);
-                if (badge) {
-                    badge.style.display = 'none';
-                    const item = badge.closest('.pm-item, .channel-item');
-                    if (item) item.classList.remove('has-unread');
-                }
-            }
-        } else if (channel.startsWith('group-')) {
-            // Group chat unread counts
-            const groupId = channel.substring(6);
-            const badge = document.querySelector(`[data-group-id="${groupId}"] .unread-badge`);
-            if (badge) {
-                badge.style.display = 'none';
-                const item = badge.closest('.pm-item, .channel-item');
-                if (item) item.classList.remove('has-unread');
-            }
+        if (!this.channelLastRead) this.channelLastRead = new Map();
+        let lastTs = Math.floor(Date.now() / 1000);
+        let messages;
+        if (channel.startsWith('pm-') || channel.startsWith('group-')) {
+            messages = this.pmMessages && this.pmMessages.get(channel);
         } else {
-            // Regular channel unread counts — match updateUnreadCount selector logic
-            let selector;
-            if (channel.startsWith('#')) {
-                selector = `[data-geohash="${channel.substring(1)}"]`;
-            } else {
-                selector = `[data-channel="${channel}"][data-geohash=""]`;
-            }
-
-            const badge = document.querySelector(`${selector} .unread-badge`);
-            if (badge) {
-                badge.style.display = 'none';
-                const item = badge.closest('.channel-item');
-                if (item) item.classList.remove('has-unread');
+            messages = this.messages && this.messages.get(channel);
+        }
+        if (Array.isArray(messages)) {
+            for (const m of messages) {
+                if (m && (m.created_at || 0) > lastTs) lastTs = m.created_at;
             }
         }
+        this.channelLastRead.set(channel, lastTs);
+        this.unreadCounts.set(channel, 0);
+        this._persistUnreadCounts(true);
+        this._renderUnreadBadge(channel, 0);
     },
 
     navigateHistory(direction) {
@@ -1497,8 +1484,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             for (const [k, v] of this.channelLastActivity) {
                 if (v > 0) activity[k] = v;
             }
+            const lastRead = {};
+            if (this.channelLastRead) {
+                for (const [k, v] of this.channelLastRead) {
+                    if (v > 0) lastRead[k] = v;
+                }
+            }
             localStorage.setItem('nym_unread_counts', JSON.stringify(unread));
             localStorage.setItem('nym_channel_activity', JSON.stringify(activity));
+            localStorage.setItem('nym_channel_last_read', JSON.stringify(lastRead));
         } catch (_) { }
     },
 
@@ -1520,7 +1514,30 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                 }
             }
+            if (!this.channelLastRead) this.channelLastRead = new Map();
+            const r = localStorage.getItem('nym_channel_last_read');
+            if (r) {
+                const parsed = JSON.parse(r);
+                for (const [k, v] of Object.entries(parsed || {})) {
+                    if (typeof v === 'number' && v > 0) this.channelLastRead.set(k, v);
+                }
+            }
         } catch (_) { }
+    },
+
+    recomputeAllUnreadCounts() {
+        const keys = new Set();
+        if (this.messages) for (const k of this.messages.keys()) keys.add(k);
+        if (this.pmMessages) for (const k of this.pmMessages.keys()) keys.add(k);
+        if (this.unreadCounts) for (const k of this.unreadCounts.keys()) keys.add(k);
+        for (const k of keys) {
+            if (!k) continue;
+            const count = this._recomputeUnreadCount(k);
+            if (count > 0) this.unreadCounts.set(k, count);
+            else this.unreadCounts.delete(k);
+            this._renderUnreadBadge(k, count);
+        }
+        this._persistUnreadCounts(true);
     },
 
 });

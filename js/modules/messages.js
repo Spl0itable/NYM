@@ -273,6 +273,9 @@ Object.assign(NYM.prototype, {
                 }
                 return;
             }
+            if (typeof this._markChannelRead === 'function' && message.created_at) {
+                this._markChannelRead(storageKey, message.created_at);
+            }
         }
 
         // Don't re-add if already displayed in DOM
