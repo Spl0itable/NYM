@@ -165,20 +165,24 @@ Object.assign(NYM.prototype, {
             // Real pubkey catch-up REQ
             const realFilter = { kinds: [1059], '#p': [this.pubkey], since, limit: 200 };
 
-            // Ephemeral pubkey catch-up REQs (independent to prevent linking)
+            // Ephemeral pubkey catch-up REQs, batched to stay under relay
+            // per-connection subscription caps.
             const ephPks = this._getAllSelfEphemeralPubkeys();
+            const BATCH = 20;
+            const ephChunks = [];
+            for (let i = 0; i < ephPks.length; i += BATCH) {
+                ephChunks.push(ephPks.slice(i, i + BATCH));
+            }
 
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                // Pool mode: send through pool proxy to critical shards
                 this._poolSendToRole('critical', ['REQ', mkSubId(), realFilter]);
-                for (const pk of ephPks) {
-                    this._poolSendToRole('critical', ['REQ', mkSubId(), { kinds: [1059], '#p': [pk], since, limit: 100 }]);
+                for (const chunk of ephChunks) {
+                    this._poolSendToRole('critical', ['REQ', mkSubId(), { kinds: [1059], '#p': chunk, since, limit: 100 * chunk.length }]);
                 }
             } else {
-                // Direct mode: send to all connected relays
                 const realReq = JSON.stringify(['REQ', mkSubId(), realFilter]);
-                const ephReqs = ephPks.map(pk => JSON.stringify(['REQ', mkSubId(),
-                    { kinds: [1059], '#p': [pk], since, limit: 100 }
+                const ephReqs = ephChunks.map(chunk => JSON.stringify(['REQ', mkSubId(),
+                    { kinds: [1059], '#p': chunk, since, limit: 100 * chunk.length }
                 ]));
                 this.relayPool.forEach(relay => {
                     if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {

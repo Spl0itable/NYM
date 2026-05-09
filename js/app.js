@@ -478,14 +478,13 @@ class NYM {
         this.relayPool = new Map();
         this._isCloudflareHost = this._detectCloudflareHost();
         this.useRelayProxy = true;
-        this.poolSockets = [];
         this.poolSocket = null;
         this.poolConnectedRelays = [];
         this.poolRelayTypes = {};
         this.poolReady = false;
         this._poolReconnecting = false;
         this._poolReconnectRetries = 0;
-        this.RELAYS_PER_WORKER = 25;
+        this._poolLastMessage = 0;
         this.blacklistedRelays = new Set();
         this.relayStats = {
             eventsPerRelay: new Map(),
@@ -538,16 +537,6 @@ class NYM {
         this.relayList = [];
         this.maxRelaysForReq = 1000;
         this.relayTimeout = 2000;
-        this.nip66MaxNewRelays = 1000;
-        this.monitorRelays = [
-            'wss://relay.nostr.watch',
-            'wss://history.nostr.watch',
-            'wss://relaypag.es'
-        ];
-        this.relayDiscoveryInterval = 24 * 3600 * 1000;
-        this._nip66Running = false;
-        this._nip66Done = false;
-        this._nip66LastRun = 0;
         this.eventDeduplication = new Map();
         this.reconnectingRelays = new Set();
         this.blacklistedRelays = new Set();
