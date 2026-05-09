@@ -199,14 +199,17 @@ Object.assign(NYM.prototype, {
             const data = await resp.json();
             if (data.event) {
                 // Publish the signed bot event to all connected relays
-                const msg = ['EVENT', data.event];
-                if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                    this._poolSend(msg);
+                const msg = JSON.stringify(['EVENT', data.event]);
+                if (this.useRelayProxy && this.poolSockets.length > 0) {
+                    for (const pool of this.poolSockets) {
+                        if (pool.ws && pool.ws.readyState === WebSocket.OPEN) {
+                            try { pool.ws.send(msg); } catch { }
+                        }
+                    }
                 } else {
-                    const raw = JSON.stringify(msg);
                     for (const [, ws] of this.relayPool) {
                         if (ws.readyState === WebSocket.OPEN) {
-                            try { ws.send(raw); } catch { }
+                            try { ws.send(msg); } catch { }
                         }
                     }
                 }
