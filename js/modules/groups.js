@@ -548,18 +548,24 @@ Object.assign(NYM.prototype, {
             const inviteMembers = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
                 .map(t => t[1]);
+            const inviteMods = (rumor.tags || [])
+                .filter(t => Array.isArray(t) && t[0] === 'mod' && t[1])
+                .map(t => t[1]);
             if (!this.groupConversations.has(groupId)) {
                 this.addGroupConversation(
                     groupId,
                     groupName,
                     inviteMembers,
                     (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
-                    { createdBy: senderPubkey }
+                    { createdBy: senderPubkey, mods: inviteMods }
                 );
             }
             const grp = this.groupConversations.get(groupId);
             if (grp && !grp.createdBy) {
                 grp.createdBy = senderPubkey;
+            }
+            if (grp && inviteMods.length > 0 && (!Array.isArray(grp.mods) || grp.mods.length === 0)) {
+                grp.mods = [...inviteMods];
             }
             if (grp) {
                 this._saveGroupConversations();
@@ -605,11 +611,25 @@ Object.assign(NYM.prototype, {
             const memberPubkeys = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
                 .map(t => t[1]);
+            const ownerTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'owner' && t[1]);
+            const addMods = (rumor.tags || [])
+                .filter(t => Array.isArray(t) && t[0] === 'mod' && t[1])
+                .map(t => t[1]);
             // Determine who was added by comparing new member list with existing group
             const existingGroup = this.groupConversations.get(groupId);
             const existingMembers = existingGroup ? new Set(existingGroup.members) : new Set();
             const newMembers = memberPubkeys.filter(pk => !existingMembers.has(pk));
-            this.addGroupConversation(groupId, groupName, memberPubkeys, (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000);
+            this.addGroupConversation(
+                groupId,
+                groupName,
+                memberPubkeys,
+                (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
+                { createdBy: ownerTag ? ownerTag[1] : undefined, mods: addMods }
+            );
+            const grpAdd = this.groupConversations.get(groupId);
+            if (grpAdd && addMods.length > 0 && (!Array.isArray(grpAdd.mods) || grpAdd.mods.length === 0)) {
+                grpAdd.mods = [...addMods];
+            }
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
             if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
@@ -1007,6 +1027,7 @@ Object.assign(NYM.prototype, {
         tags.push(['g', groupId]);
         tags.push(['subject', name]);
         tags.push(['type', 'group-invite']);
+        tags.push(['owner', this.pubkey]);
         tags.push(['x', nymMessageId]);
 
         // Bootstrap ephemeral keys: include our first ephemeral pk so members
@@ -1076,6 +1097,10 @@ Object.assign(NYM.prototype, {
         tags.push(['g', groupId]);
         tags.push(['subject', group.name]);
         tags.push(['type', 'group-add-member']);
+        if (group.createdBy) tags.push(['owner', group.createdBy]);
+        if (Array.isArray(group.mods)) {
+            for (const modPk of group.mods) tags.push(['mod', modPk]);
+        }
         tags.push(['x', nymMessageId]);
 
         // Include our ephemeral pk so the new member (and existing members) learn it
@@ -1841,6 +1866,99 @@ Object.assign(NYM.prototype, {
         return avatarHtml + overflowHtml;
     },
 
+    // Channel-message reader avatars (kind 20000 message IDs keyed in channelMessageReaders)
+    updateChannelReaderAvatars(messageId) {
+        if (this.inPMMode || !this.currentGeohash) {
+            this._updateSingleChannelReaders(messageId);
+            return;
+        }
+        const storageKey = `#${this.currentGeohash}`;
+        const messages = this.messages.get(storageKey);
+        if (!messages) {
+            this._updateSingleChannelReaders(messageId);
+            return;
+        }
+
+        const latestReadByReader = new Map();
+        const ownMessages = messages
+            .filter(m => m.isOwn && m.id && this.channelMessageReaders.has(m.id))
+            .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+
+        for (const msg of ownMessages) {
+            const readers = this.channelMessageReaders.get(msg.id);
+            if (!readers) continue;
+            for (const [pk] of readers) {
+                if (!latestReadByReader.has(pk)) latestReadByReader.set(pk, msg.id);
+            }
+        }
+
+        const displayReaders = new Map();
+        for (const [pk, msgId] of latestReadByReader) {
+            if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
+            const readers = this.channelMessageReaders.get(msgId);
+            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
+            displayReaders.get(msgId).set(pk, name);
+        }
+
+        for (const msg of ownMessages) {
+            const el = document.querySelector(`.channel-readers[data-msg-id="${msg.id}"]`);
+            if (!el) continue;
+            const waterfallReaders = displayReaders.get(msg.id);
+            const html = waterfallReaders && waterfallReaders.size > 0
+                ? this._buildGroupReadersHtmlFromMap(waterfallReaders)
+                : '';
+            el.innerHTML = html;
+            if (html && !el._readerLongPressBound) {
+                this._bindChannelReaderLongPress(el, msg.id);
+                el._readerLongPressBound = true;
+            }
+        }
+    },
+
+    _updateSingleChannelReaders(messageId) {
+        const el = document.querySelector(`.channel-readers[data-msg-id="${messageId}"]`);
+        if (!el) return;
+        const readers = this.channelMessageReaders.get(messageId);
+        if (!readers || readers.size === 0) return;
+        el.innerHTML = this._buildGroupReadersHtmlFromMap(readers);
+        if (!el._readerLongPressBound) {
+            this._bindChannelReaderLongPress(el, messageId);
+            el._readerLongPressBound = true;
+        }
+    },
+
+    _buildChannelReadersHtml(messageId) {
+        const readers = this.channelMessageReaders.get(messageId);
+        if (!readers || readers.size === 0) return '';
+        return this._buildGroupReadersHtmlFromMap(readers);
+    },
+
+    _bindChannelReaderLongPress(el, messageId) {
+        let timer = null;
+        const start = (e) => {
+            e.stopPropagation();
+            timer = setTimeout(() => {
+                timer = null;
+                window.nymHapticTap && window.nymHapticTap();
+                this.showChannelReadersModal(messageId, el);
+            }, 500);
+        };
+        const cancel = (e) => { if (e) e.stopPropagation(); if (timer) { clearTimeout(timer); timer = null; } };
+        el.addEventListener('mousedown', start);
+        el.addEventListener('touchstart', start, { passive: false });
+        el.addEventListener('mouseup', cancel);
+        el.addEventListener('mouseleave', cancel);
+        el.addEventListener('touchend', cancel);
+        el.addEventListener('touchcancel', cancel);
+        el.style.cursor = 'pointer';
+    },
+
+    showChannelReadersModal(messageId, anchorEl) {
+        const readers = this.channelMessageReaders.get(messageId);
+        if (!readers || readers.size === 0) return;
+        this._showReadersModalFromMap(readers, anchorEl);
+    },
+
     // Returns the inner HTML for a .group-readers span: up to 3 avatars + overflow badge
     _buildGroupReadersHtml(nymMessageId) {
         const MAX_VISIBLE = 3;
@@ -1881,8 +1999,13 @@ Object.assign(NYM.prototype, {
     },
 
     showReadersModal(nymMessageId, anchorEl) {
-        this.closeReadersModal();
         const readers = this.groupMessageReaders.get(nymMessageId);
+        if (!readers || readers.size === 0) return;
+        this._showReadersModalFromMap(readers, anchorEl);
+    },
+
+    _showReadersModalFromMap(readers, anchorEl) {
+        this.closeReadersModal();
         if (!readers || readers.size === 0) return;
 
         const userItems = Array.from(readers.entries()).map(([pubkey, nym]) => {

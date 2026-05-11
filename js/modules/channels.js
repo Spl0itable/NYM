@@ -794,6 +794,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         }
 
+        if (!this.inPMMode && previousGeohash && previousGeohash !== geohash &&
+            typeof this.sendChannelTypingStop === 'function') {
+            this.sendChannelTypingStop(previousGeohash);
+        }
+
         this.inPMMode = false;
         this.currentPM = null;
         this.currentChannel = channel;
@@ -1372,19 +1377,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // Non-geohash channels mix in with geohash by unread count — no forced grouping
             }
 
-            // Default: sort by unread count
+            // Default: sort by most recent activity so live channels float
+            // to the top regardless of stale unread counts left over from cache
             const aChannel = a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel;
             const bChannel = b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel;
 
-            const aUnread = this.unreadCounts.get(aChannel) || 0;
-            const bUnread = this.unreadCounts.get(bChannel) || 0;
-
-            if (aUnread !== bUnread) return bUnread - aUnread;
-
-            // Tiebreaker: sort by most recent activity
             const aActivity = this.channelLastActivity.get(aChannel) || 0;
             const bActivity = this.channelLastActivity.get(bChannel) || 0;
-            return bActivity - aActivity;
+
+            if (aActivity !== bActivity) return bActivity - aActivity;
+
+            // Tiebreaker: unread count
+            const aUnread = this.unreadCounts.get(aChannel) || 0;
+            const bUnread = this.unreadCounts.get(bChannel) || 0;
+            return bUnread - aUnread;
         });
 
         // Clear and re-append

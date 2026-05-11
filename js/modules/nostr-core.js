@@ -601,6 +601,10 @@ Object.assign(NYM.prototype, {
             } else if (tTag && tTag[1] === 'nym-poll-vote') {
                 this.handlePollVoteEvent(event);
             }
+        } else if (event.kind === 24420) {
+            this.handleChannelTypingEvent(event);
+        } else if (event.kind === 24421) {
+            this.handleChannelReadReceipt(event);
         } else if (event.kind === 7) {
             // Handle reactions (NIP-25)
             this.handleReaction(event);
@@ -1238,6 +1242,8 @@ Object.assign(NYM.prototype, {
             convKey = this.getGroupConversationKey(this.currentGroup);
         } else if (this.inPMMode && this.currentPM) {
             convKey = this.getPMConversationKey(this.currentPM);
+        } else if (!this.inPMMode && this.currentGeohash) {
+            convKey = `channel-${this.currentGeohash}`;
         }
 
         const convTypers = convKey ? this.typingUsers.get(convKey) : null;
@@ -1307,6 +1313,160 @@ Object.assign(NYM.prototype, {
             return { messageId, receiptType };
         }
         return null;
+    },
+
+    // Public channel typing indicators (kind 24420) and read receipts (kind 24421).
+    // Ephemeral kinds — relays don't store them, so we only react to live signals.
+    _canPublishChannelEvent() {
+        if (!this.connected || !this.pubkey) return false;
+        return !!this.privkey
+            || !!(window.nostr?.signEvent)
+            || (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected);
+    },
+
+    async _sendChannelTypingEvent(status, geohash) {
+        if (!geohash || !this._canPublishChannelEvent()) return;
+        const event = {
+            kind: 24420,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [
+                ['typing', status],
+                ['g', geohash],
+                ['n', this.nym]
+            ],
+            content: '',
+            pubkey: this.pubkey
+        };
+        try {
+            const signed = await this.signEvent(event);
+            this.sendToRelay(["EVENT", signed]);
+            this.ensureGeoRelayDelivery(signed, geohash);
+        } catch (_) { }
+    },
+
+    handleChannelTypingSignal() {
+        if (this.settings?.typingIndicatorsEnabled === false) return;
+        if (this.inPMMode || !this.currentGeohash) return;
+        if (!this._canPublishChannelEvent()) return;
+
+        const now = Date.now();
+        if (now - this._typingThrottleTime < this._typingSendInterval) return;
+        this._typingThrottleTime = now;
+
+        if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
+        const geohash = this.currentGeohash;
+        this._sendChannelTypingEvent('start', geohash);
+        this._typingStopTimer = setTimeout(() => {
+            this._sendChannelTypingEvent('stop', geohash);
+        }, 4000);
+    },
+
+    sendChannelTypingStop(geohash) {
+        const targetGeohash = geohash || this.currentGeohash;
+        if (!targetGeohash) return;
+        if (this.settings?.typingIndicatorsEnabled === false) return;
+        if (!this._canPublishChannelEvent()) return;
+        if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
+        this._typingThrottleTime = 0;
+        this._sendChannelTypingEvent('stop', targetGeohash);
+    },
+
+    handleChannelTypingEvent(event) {
+        if (!event || event.pubkey === this.pubkey) return;
+        if (this.settings?.typingIndicatorsEnabled === false) return;
+
+        const ageMs = Date.now() - (event.created_at || 0) * 1000;
+        if (ageMs > this._typingExpireMs) return;
+
+        let status = null, geohash = null, rawNym = null;
+        for (const tag of event.tags) {
+            if (!Array.isArray(tag)) continue;
+            if (tag[0] === 'typing') status = tag[1];
+            else if (tag[0] === 'g') geohash = tag[1];
+            else if (tag[0] === 'n') rawNym = tag[1];
+        }
+        if (!status || !geohash) return;
+        const displayNym = this.stripPubkeySuffix(rawNym || this.getNymFromPubkey(event.pubkey));
+        if (this.isNymBlocked(displayNym) || this.blockedUsers.has(event.pubkey)) return;
+
+        const convKey = `channel-${geohash}`;
+        if (!this.typingUsers.has(convKey)) this.typingUsers.set(convKey, new Map());
+        const convTypers = this.typingUsers.get(convKey);
+
+        if (status === 'stop') {
+            const entry = convTypers.get(event.pubkey);
+            if (entry && entry.timeout) clearTimeout(entry.timeout);
+            convTypers.delete(event.pubkey);
+        } else {
+            const existing = convTypers.get(event.pubkey);
+            if (existing && existing.timeout) clearTimeout(existing.timeout);
+            const timeout = setTimeout(() => {
+                convTypers.delete(event.pubkey);
+                this.renderTypingIndicator();
+            }, this._typingExpireMs);
+            convTypers.set(event.pubkey, { nym: displayNym, timeout, timestamp: Date.now() });
+        }
+        this.renderTypingIndicator();
+    },
+
+    async sendChannelReadReceipt(messageId, authorPubkey, geohash) {
+        if (this.settings?.readReceiptsEnabled === false) return;
+        if (!messageId || !authorPubkey || !geohash) return;
+        if (authorPubkey === this.pubkey) return;
+        if (!this._canPublishChannelEvent()) return;
+
+        if (!this._sentChannelReadReceipts) this._sentChannelReadReceipts = new Set();
+        if (this._sentChannelReadReceipts.has(messageId)) return;
+        this._sentChannelReadReceipts.add(messageId);
+        if (this._sentChannelReadReceipts.size > 2000) {
+            const arr = Array.from(this._sentChannelReadReceipts);
+            this._sentChannelReadReceipts = new Set(arr.slice(-1500));
+        }
+
+        const event = {
+            kind: 24421,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [
+                ['e', messageId],
+                ['p', authorPubkey],
+                ['g', geohash],
+                ['n', this.nym]
+            ],
+            content: '',
+            pubkey: this.pubkey
+        };
+        try {
+            const signed = await this.signEvent(event);
+            this.sendToRelay(["EVENT", signed]);
+            this.ensureGeoRelayDelivery(signed, geohash);
+        } catch (_) { }
+    },
+
+    handleChannelReadReceipt(event) {
+        if (!event || event.pubkey === this.pubkey) return;
+
+        const ageMs = Date.now() - (event.created_at || 0) * 1000;
+        if (ageMs > 5 * 60 * 1000) return;
+
+        let messageId = null, geohash = null, rawNym = null;
+        for (const tag of event.tags) {
+            if (!Array.isArray(tag)) continue;
+            if (tag[0] === 'e') messageId = tag[1];
+            else if (tag[0] === 'g') geohash = tag[1];
+            else if (tag[0] === 'n') rawNym = tag[1];
+        }
+        if (!messageId || !geohash) return;
+        const readerName = this.stripPubkeySuffix(rawNym || this.getNymFromPubkey(event.pubkey));
+        if (this.isNymBlocked(readerName) || this.blockedUsers.has(event.pubkey)) return;
+
+        if (!this.channelMessageReaders.has(messageId)) {
+            this.channelMessageReaders.set(messageId, new Map());
+        }
+        this.channelMessageReaders.get(messageId).set(event.pubkey, readerName);
+
+        if (!this.inPMMode && this.currentGeohash === geohash && typeof this.updateChannelReaderAvatars === 'function') {
+            this.updateChannelReaderAvatars(messageId);
+        }
     },
 
     // Check if a rumor is a Nymchat message (has 'x' tag for message ID)

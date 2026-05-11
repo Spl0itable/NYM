@@ -950,9 +950,13 @@ Object.assign(NYM.prototype, {
             this.handleInputChange(e.target.value);
             this.autoResizeTextarea(e.target);
             this.updateTranslateInputBtn();
-            // Signal typing in PM/group mode
-            if (this.inPMMode && e.target.value.trim().length > 0) {
-                this.handleTypingSignal();
+            // Signal typing for PMs, groups, and public channels
+            if (e.target.value.trim().length > 0) {
+                if (this.inPMMode) {
+                    this.handleTypingSignal();
+                } else if (this.currentGeohash) {
+                    this.handleChannelTypingSignal();
+                }
             }
         });
 

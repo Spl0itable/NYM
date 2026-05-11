@@ -1541,7 +1541,8 @@ body.light-mode .channel-context-menu {
     min-width: 50px;
 }
 
-.group-readers {
+.group-readers,
+.channel-readers {
     display: flex;
     justify-content: flex-end;
     gap: 2px;
@@ -8079,7 +8080,6 @@ body.chat-bubbles .message.pm .message-content {
 }
 
 body.chat-bubbles .message.mentioned .message-content {
-    background: rgb(from var(--secondary) r g b / 0.18);
     box-shadow: inset 0 0 0 1px rgb(from var(--secondary) r g b / 0.25);
 }
 
@@ -8100,7 +8100,6 @@ body.light-mode.chat-bubbles .message.pm .message-content {
 }
 
 body.light-mode.chat-bubbles .message.mentioned .message-content {
-    background: rgb(from var(--secondary) r g b / 0.14);
     box-shadow: inset 0 0 0 1px rgb(from var(--secondary) r g b / 0.2);
 }
 
@@ -9170,7 +9169,6 @@ body.solid-ui.chat-bubbles .message.self .message-content {
 }
 
 body.solid-ui.chat-bubbles .message.mentioned .message-content {
-    background: color-mix(in srgb, var(--secondary) 28%, #2a2a3a);
     box-shadow: inset 0 0 0 1px var(--secondary);
 }
 
@@ -9184,7 +9182,6 @@ body.solid-ui.light-mode.chat-bubbles .message.self .message-content {
 }
 
 body.solid-ui.light-mode.chat-bubbles .message.mentioned .message-content {
-    background: color-mix(in srgb, var(--secondary) 22%, #e6e6e0);
     box-shadow: inset 0 0 0 1px var(--secondary);
 }
 

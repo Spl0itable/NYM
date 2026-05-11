@@ -216,6 +216,9 @@ Object.assign(NYM.prototype, {
                 const prevActivity = this.channelLastActivity.get(storageKey) || 0;
                 if (msgTime > prevActivity) {
                     this.channelLastActivity.set(storageKey, msgTime);
+                    if (typeof this._persistUnreadCounts === 'function') {
+                        this._persistUnreadCounts();
+                    }
                     // Throttled sort so discovered/historical channels order by activity
                     if (typeof this._scheduleChannelSort === 'function') {
                         this._scheduleChannelSort();
@@ -275,6 +278,13 @@ Object.assign(NYM.prototype, {
             }
             if (typeof this._markChannelRead === 'function' && message.created_at) {
                 this._markChannelRead(storageKey, message.created_at);
+            }
+
+            // Send a public read receipt (kind 24421) for fresh incoming messages
+            if (!message.isOwn && !message.isHistorical && message.geohash &&
+                message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
+                typeof this.sendChannelReadReceipt === 'function') {
+                this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);
             }
         }
 
@@ -458,7 +468,12 @@ Object.assign(NYM.prototype, {
 
             // Delivery status for own PM messages
             let deliveryCheckmark = '';
-            if (message.isOwn && message.isPM) {
+            if (message.isOwn && !message.isPM && message.geohash &&
+                message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
+                typeof this._buildChannelReadersHtml === 'function') {
+                const avatarHtml = this._buildChannelReadersHtml(message.id);
+                deliveryCheckmark = `<span class="channel-readers" data-msg-id="${message.id}">${avatarHtml}</span>`;
+            } else if (message.isOwn && message.isPM) {
                 if (message.isGroup && message.nymMessageId) {
                     // Group messages: show stacked reader avatars instead of checkmarks
                     const avatarHtml = this._buildGroupReadersHtml(message.nymMessageId);
@@ -1367,6 +1382,12 @@ Object.assign(NYM.prototype, {
                 lastTs = 0;
                 continue;
             }
+            if (child.classList.contains('blocked-user-message')) {
+                currentGroup = null;
+                lastPubkey = null;
+                lastTs = 0;
+                continue;
+            }
             const ts = parseInt(child.dataset.timestamp) || 0;
             const pk = child.dataset.pubkey;
             const sameAuthor = pk === lastPubkey;
@@ -1823,6 +1844,7 @@ Object.assign(NYM.prototype, {
             this.hideAutocomplete();
             this.hideEmojiAutocomplete();
             this.sendTypingStop();
+            this.sendChannelTypingStop();
             return;
         }
 
@@ -1872,6 +1894,7 @@ Object.assign(NYM.prototype, {
         this.hideAutocomplete();
         this.hideEmojiAutocomplete();
         this.sendTypingStop();
+        this.sendChannelTypingStop();
 
         // Hardcore mode: rotate keypair after every sent message
         if (this.connectionMode === 'ephemeral' && localStorage.getItem('nym_keypair_mode') === 'hardcore') {
@@ -1937,6 +1960,7 @@ Object.assign(NYM.prototype, {
         this.hideAutocomplete();
         this.hideEmojiAutocomplete();
         this.sendTypingStop();
+        this.sendChannelTypingStop();
     },
 
     hideMessagesFromBlockedUser(pubkey) {
@@ -1945,6 +1969,14 @@ Object.assign(NYM.prototype, {
             if (msg.dataset.pubkey === pubkey) {
                 msg.style.display = 'none';
                 msg.classList.add('blocked-user-message');
+            }
+        });
+
+        // Hide bubble-mode group wrappers (so the avatar disappears too)
+        document.querySelectorAll('.message-group').forEach(group => {
+            if (group.dataset.pubkey === pubkey) {
+                group.style.display = 'none';
+                group.classList.add('blocked-user-group');
             }
         });
 
@@ -2030,6 +2062,14 @@ Object.assign(NYM.prototype, {
                     msg.style.display = '';
                     msg.classList.remove('blocked-user-message');
                 }
+            }
+        });
+
+        // Restore bubble-mode group wrappers
+        document.querySelectorAll('.message-group.blocked-user-group').forEach(group => {
+            if (group.dataset.pubkey === pubkey) {
+                group.style.display = '';
+                group.classList.remove('blocked-user-group');
             }
         });
     },

@@ -1455,6 +1455,7 @@ Object.assign(NYM.prototype, {
         let filters = [];
 
         // Subscribe to channel messages (geohash and non-geohash both use the g tag)
+        const sinceNow = Math.floor(Date.now() / 1000);
         filters = [
             {
                 kinds: [20000],
@@ -1479,6 +1480,11 @@ Object.assign(NYM.prototype, {
                 kinds: [5],
                 since: since24h,
                 limit: 50
+            },
+            {
+                kinds: [24420, 24421],
+                "#g": [channelKey],
+                since: sinceNow
             }
         ];
 
@@ -1551,6 +1557,7 @@ Object.assign(NYM.prototype, {
         const filters = [];
 
         if (geohashChannels.length > 0) {
+            const sinceNow = Math.floor(Date.now() / 1000);
             filters.push({
                 kinds: [20000],
                 "#g": geohashChannels,
@@ -1563,6 +1570,11 @@ Object.assign(NYM.prototype, {
                 "#g": geohashChannels,
                 since: since24h,
                 limit: 50 * geohashChannels.length
+            });
+            filters.push({
+                kinds: [24420, 24421],
+                "#g": geohashChannels,
+                since: sinceNow
             });
             // Mark as loaded
             geohashChannels.forEach(ch => this.channelLoadedFromRelays.add(ch));
