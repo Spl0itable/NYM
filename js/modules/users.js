@@ -1261,7 +1261,8 @@ Object.assign(NYM.prototype, {
     },
 
     _fillUserLabel(label, baseNym, pubkey, isDev, isBot) {
-        label.appendChild(document.createTextNode(baseNym));
+        const displayNym = baseNym && baseNym.length > 20 ? baseNym.slice(0, 20) + '...' : baseNym;
+        label.appendChild(document.createTextNode(displayNym));
         const suffix = this.getPubkeySuffix(pubkey);
         const suffixSpan = document.createElement('span');
         suffixSpan.className = 'nym-suffix';

@@ -1352,10 +1352,18 @@ Object.assign(NYM.prototype, {
         const isBubble = document.body.classList.contains('chat-bubbles');
 
         const wrappers = Array.from(container.children).filter(c => c.classList && c.classList.contains('message-group'));
+        const salvagedAvatars = new Map();
         for (const wrapper of wrappers) {
             if (wrapper._resizeObserver) {
                 wrapper._resizeObserver.disconnect();
                 wrapper._resizeObserver = null;
+            }
+            const pk = wrapper.dataset.pubkey || '';
+            const avatarImg = wrapper.querySelector(':scope > .message-group-avatar > img.avatar-bubble');
+            if (pk && avatarImg) {
+                let bin = salvagedAvatars.get(pk);
+                if (!bin) { bin = []; salvagedAvatars.set(pk, bin); }
+                bin.push(avatarImg);
             }
             const stack = wrapper.querySelector(':scope > .message-group-stack');
             if (stack) {
@@ -1394,7 +1402,9 @@ Object.assign(NYM.prototype, {
             const inWindow = sameAuthor && lastTs && ts && Math.abs(ts - lastTs) <= groupWindowMs;
 
             if (!inWindow || !currentGroup) {
-                currentGroup = this._createMessageGroupWrapper(child);
+                const bin = salvagedAvatars.get(pk);
+                const reusableImg = (bin && bin.length) ? bin.shift() : null;
+                currentGroup = this._createMessageGroupWrapper(child, reusableImg);
                 container.insertBefore(currentGroup, child);
             }
             currentGroup.querySelector(':scope > .message-group-stack').appendChild(child);
@@ -1427,7 +1437,7 @@ Object.assign(NYM.prototype, {
         avatarBox.style.marginBottom = below > 0 ? below + 'px' : '';
     },
 
-    _createMessageGroupWrapper(firstMessageEl) {
+    _createMessageGroupWrapper(firstMessageEl, reusableAvatarImg = null) {
         const wrapper = document.createElement('div');
         wrapper.className = 'message-group';
         const pubkey = firstMessageEl.dataset.pubkey || '';
@@ -1437,15 +1447,20 @@ Object.assign(NYM.prototype, {
 
         const avatarBox = document.createElement('div');
         avatarBox.className = 'message-group-avatar';
-        const img = document.createElement('img');
-        img.className = 'avatar-bubble';
-        img.alt = '';
-        img.loading = 'lazy';
         const safePk = this._safePubkey(pubkey);
-        if (safePk) img.dataset.avatarPubkey = safePk;
-        img.src = this.getAvatarUrl(pubkey);
-        const fallback = this.generateAvatarSvg(safePk);
-        img.onerror = function () { this.onerror = null; this.src = fallback; };
+        let img;
+        if (reusableAvatarImg) {
+            img = reusableAvatarImg;
+        } else {
+            img = document.createElement('img');
+            img.className = 'avatar-bubble';
+            img.alt = '';
+            img.loading = 'lazy';
+            if (safePk) img.dataset.avatarPubkey = safePk;
+            img.src = this.getAvatarUrl(pubkey);
+            const fallback = this.generateAvatarSvg(safePk);
+            img.onerror = function () { this.onerror = null; this.src = fallback; };
+        }
         avatarBox.appendChild(img);
         avatarBox.addEventListener('click', (e) => {
             e.preventDefault();

@@ -1936,6 +1936,7 @@ Object.assign(NYM.prototype, {
     _bindChannelReaderLongPress(el, messageId) {
         let timer = null;
         const start = (e) => {
+            if (e.type === 'mousedown' && e.button !== 0) return;
             e.stopPropagation();
             timer = setTimeout(() => {
                 timer = null;
@@ -1950,6 +1951,7 @@ Object.assign(NYM.prototype, {
         el.addEventListener('mouseleave', cancel);
         el.addEventListener('touchend', cancel);
         el.addEventListener('touchcancel', cancel);
+        el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); cancel(e); });
         el.style.cursor = 'pointer';
     },
 
@@ -1981,6 +1983,7 @@ Object.assign(NYM.prototype, {
     _bindReaderLongPress(el, nymMessageId) {
         let timer = null;
         const start = (e) => {
+            if (e.type === 'mousedown' && e.button !== 0) return;
             e.stopPropagation();
             timer = setTimeout(() => {
                 timer = null;
@@ -1995,6 +1998,7 @@ Object.assign(NYM.prototype, {
         el.addEventListener('mouseleave', cancel);
         el.addEventListener('touchend', cancel);
         el.addEventListener('touchcancel', cancel);
+        el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); cancel(e); });
         el.style.cursor = 'pointer';
     },
 

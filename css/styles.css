@@ -3163,6 +3163,17 @@ body.chat-bubbles .edited-indicator-irc {
     margin-bottom: 10px;
 }
 
+.emoji-modal-close,
+.gif-modal-close {
+    position: static;
+    top: auto;
+    right: auto;
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+}
+
 .emoji-search-input {
     flex: 1;
     background: rgba(255, 255, 255, 0.05);

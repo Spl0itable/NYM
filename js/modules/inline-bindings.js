@@ -137,7 +137,9 @@ window.nymHapticTap = function (ms) {
         'selectImage':                function () { window.selectImage(); },
         'selectP2PFile':              function () { window.selectP2PFile(); },
         'toggleEmojiPicker':          function () { nym().toggleEmojiPicker(); },
+        'closeEnhancedEmojiModal':    function () { nym().closeEnhancedEmojiModal(); },
         'toggleGifPicker':            function () { nym().toggleGifPicker(); },
+        'closeGifPicker':             function () { nym().closeGifPicker(); },
         'scrollToBottom':             function () { window.scrollToBottom(); },
 
         // PM / report modals

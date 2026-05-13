@@ -1590,6 +1590,7 @@ Object.assign(NYM.prototype, {
         gifPicker.innerHTML = `
 <div class="gif-modal-header">
     <input type="text" class="gif-search-input" placeholder="Search GIFs..." id="gifSearchInput">
+    <button class="modal-close gif-modal-close" data-action="closeGifPicker" aria-label="Close">&#x2715;</button>
 </div>
 <div id="gifResults" class="gif-grid"></div>
 <div class="gif-attribution">Powered by <a href="https://giphy.com" target="_blank">GIPHY</a></div>

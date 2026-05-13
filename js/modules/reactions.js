@@ -519,6 +519,7 @@ Object.assign(NYM.prototype, {
         modal.innerHTML = `
 <div class="emoji-modal-header">
     <input type="text" class="emoji-search-input" placeholder="Search emoji by name..." id="emojiSearchInput">
+    <button class="modal-close emoji-modal-close" data-action="closeEnhancedEmojiModal" aria-label="Close">&#x2715;</button>
 </div>
 ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
@@ -640,6 +641,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         modal.innerHTML = `
 <div class="emoji-modal-header">
     <input type="text" class="emoji-search-input" placeholder="Search emoji by name..." id="emojiSearchInput">
+    <button class="modal-close emoji-modal-close" data-action="closeEnhancedEmojiModal" aria-label="Close">&#x2715;</button>
 </div>
 ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
