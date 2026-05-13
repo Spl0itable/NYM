@@ -1,6 +1,33 @@
 // settings.js - User settings: load/save, sync to Nostr, theme/color mode, image blur
 
+const INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
+
+function _normalizeIndicatorScope(value, fallback = 'everywhere') {
+    if (value === true || value === 'true') return 'everywhere';
+    if (value === false || value === 'false') return 'disabled';
+    if (typeof value === 'string' && INDICATOR_SCOPES.includes(value)) return value;
+    return fallback;
+}
+
 Object.assign(NYM.prototype, {
+
+    isIndicatorAllowedFor(scope, context) {
+        const s = _normalizeIndicatorScope(scope);
+        if (s === 'disabled') return false;
+        if (s === 'everywhere') return true;
+        if (s === 'pms') return context === 'pm';
+        if (s === 'groups') return context === 'group';
+        if (s === 'pms-groups') return context === 'pm' || context === 'group';
+        return true;
+    },
+
+    isReadReceiptAllowedFor(context) {
+        return this.isIndicatorAllowedFor(this.settings?.readReceiptsScope, context);
+    },
+
+    isTypingIndicatorAllowedFor(context) {
+        return this.isIndicatorAllowedFor(this.settings?.typingIndicatorsScope, context);
+    },
 
     async saveSyncedSettings() {
         if (!this.pubkey) return;
@@ -102,8 +129,10 @@ Object.assign(NYM.prototype, {
             lightningAddress: this.lightningAddress,
             dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
             dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
-            readReceiptsEnabled: this.settings.readReceiptsEnabled !== false,
-            typingIndicatorsEnabled: this.settings.typingIndicatorsEnabled !== false,
+            readReceiptsEnabled: _normalizeIndicatorScope(this.settings.readReceiptsScope) !== 'disabled',
+            readReceiptsScope: _normalizeIndicatorScope(this.settings.readReceiptsScope),
+            typingIndicatorsEnabled: _normalizeIndicatorScope(this.settings.typingIndicatorsScope) !== 'disabled',
+            typingIndicatorsScope: _normalizeIndicatorScope(this.settings.typingIndicatorsScope),
             pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
             chatLayout: this.settings.chatLayout || 'irc',
             nickStyle: this.settings.nickStyle || 'fancy',
@@ -497,8 +526,14 @@ Object.assign(NYM.prototype, {
             timeFormat: localStorage.getItem('nym_time_format') || '12hr',
             dmForwardSecrecyEnabled: localStorage.getItem('nym_dm_fwdsec_enabled') === 'true',
             dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
-            readReceiptsEnabled: localStorage.getItem('nym_read_receipts_enabled') !== 'false',  // Enabled by default
-            typingIndicatorsEnabled: localStorage.getItem('nym_typing_indicators_enabled') !== 'false',  // Enabled by default
+            readReceiptsScope: _normalizeIndicatorScope(
+                localStorage.getItem('nym_read_receipts_scope'),
+                localStorage.getItem('nym_read_receipts_enabled') === 'false' ? 'disabled' : 'everywhere'
+            ),
+            typingIndicatorsScope: _normalizeIndicatorScope(
+                localStorage.getItem('nym_typing_indicators_scope'),
+                localStorage.getItem('nym_typing_indicators_enabled') === 'false' ? 'disabled' : 'everywhere'
+            ),
             pinnedLandingChannel: pinnedLandingChannel,
             nickStyle: localStorage.getItem('nym_nick_style') || 'fancy',
             chatLayout: localStorage.getItem('nym_chat_layout') || 'bubbles',

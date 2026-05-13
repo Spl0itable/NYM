@@ -2612,16 +2612,17 @@ async function showSettings() {
         };
     }
 
-    // Fill in read receipts toggle
+    const VALID_INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
     const readReceiptsSel = document.getElementById('readReceiptsSelect');
     if (readReceiptsSel) {
-        readReceiptsSel.value = nym.settings.readReceiptsEnabled !== false ? 'true' : 'false';
+        const scope = nym.settings.readReceiptsScope;
+        readReceiptsSel.value = VALID_INDICATOR_SCOPES.includes(scope) ? scope : 'everywhere';
     }
 
-    // Fill in typing indicators toggle
     const typingIndicatorsSel = document.getElementById('typingIndicatorsSelect');
     if (typingIndicatorsSel) {
-        typingIndicatorsSel.value = nym.settings.typingIndicatorsEnabled !== false ? 'true' : 'false';
+        const scope = nym.settings.typingIndicatorsScope;
+        typingIndicatorsSel.value = VALID_INDICATOR_SCOPES.includes(scope) ? scope : 'everywhere';
     }
 
     // Fill in show-status toggle
@@ -2834,10 +2835,13 @@ async function saveSettings() {
     localStorage.setItem('nym_dm_fwdsec_enabled', String(nym.settings.dmForwardSecrecyEnabled));
     localStorage.setItem('nym_dm_ttl_seconds', String(nym.settings.dmTTLSeconds));
 
-    // Read and save read receipts setting
-    const readReceiptsEnabled = document.getElementById('readReceiptsSelect').value === 'true';
-    nym.settings.readReceiptsEnabled = readReceiptsEnabled;
-    localStorage.setItem('nym_read_receipts_enabled', String(readReceiptsEnabled));
+    const SAVE_INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
+    const rrRaw = document.getElementById('readReceiptsSelect').value;
+    const readReceiptsScope = SAVE_INDICATOR_SCOPES.includes(rrRaw) ? rrRaw : 'everywhere';
+    nym.settings.readReceiptsScope = readReceiptsScope;
+    nym.settings.readReceiptsEnabled = readReceiptsScope !== 'disabled';
+    localStorage.setItem('nym_read_receipts_scope', readReceiptsScope);
+    localStorage.setItem('nym_read_receipts_enabled', String(readReceiptsScope !== 'disabled'));
 
     // Read and save translation language
     const translateLangEl = document.getElementById('translateLanguageSelect');
@@ -2846,10 +2850,12 @@ async function saveSettings() {
         localStorage.setItem('nym_translate_language', translateLangEl.value);
     }
 
-    // Read and save typing indicators setting
-    const typingIndicatorsEnabled = document.getElementById('typingIndicatorsSelect').value === 'true';
-    nym.settings.typingIndicatorsEnabled = typingIndicatorsEnabled;
-    localStorage.setItem('nym_typing_indicators_enabled', String(typingIndicatorsEnabled));
+    const tiRaw = document.getElementById('typingIndicatorsSelect').value;
+    const typingIndicatorsScope = SAVE_INDICATOR_SCOPES.includes(tiRaw) ? tiRaw : 'everywhere';
+    nym.settings.typingIndicatorsScope = typingIndicatorsScope;
+    nym.settings.typingIndicatorsEnabled = typingIndicatorsScope !== 'disabled';
+    localStorage.setItem('nym_typing_indicators_scope', typingIndicatorsScope);
+    localStorage.setItem('nym_typing_indicators_enabled', String(typingIndicatorsScope !== 'disabled'));
 
     // Read and save status indicator visibility setting. When changed,
     // broadcast to other clients so they suppress this user's status dot.
@@ -3221,7 +3227,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.63.337 ═══<br/>
+═══ Nymchat v3.63.338 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4998,15 +5004,30 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_dm_ttl_seconds', String(s.dmTTLSeconds));
     }
 
-    // Read receipts
-    if (typeof s.readReceiptsEnabled === 'boolean') {
+    const VALID_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
+    if (typeof s.readReceiptsScope === 'string' && VALID_SCOPES.includes(s.readReceiptsScope)) {
+        nym.settings.readReceiptsScope = s.readReceiptsScope;
+        nym.settings.readReceiptsEnabled = s.readReceiptsScope !== 'disabled';
+        localStorage.setItem('nym_read_receipts_scope', s.readReceiptsScope);
+        localStorage.setItem('nym_read_receipts_enabled', String(s.readReceiptsScope !== 'disabled'));
+    } else if (typeof s.readReceiptsEnabled === 'boolean') {
+        const scope = s.readReceiptsEnabled ? 'everywhere' : 'disabled';
+        nym.settings.readReceiptsScope = scope;
         nym.settings.readReceiptsEnabled = s.readReceiptsEnabled;
+        localStorage.setItem('nym_read_receipts_scope', scope);
         localStorage.setItem('nym_read_receipts_enabled', String(s.readReceiptsEnabled));
     }
 
-    // Typing indicators
-    if (typeof s.typingIndicatorsEnabled === 'boolean') {
+    if (typeof s.typingIndicatorsScope === 'string' && VALID_SCOPES.includes(s.typingIndicatorsScope)) {
+        nym.settings.typingIndicatorsScope = s.typingIndicatorsScope;
+        nym.settings.typingIndicatorsEnabled = s.typingIndicatorsScope !== 'disabled';
+        localStorage.setItem('nym_typing_indicators_scope', s.typingIndicatorsScope);
+        localStorage.setItem('nym_typing_indicators_enabled', String(s.typingIndicatorsScope !== 'disabled'));
+    } else if (typeof s.typingIndicatorsEnabled === 'boolean') {
+        const scope = s.typingIndicatorsEnabled ? 'everywhere' : 'disabled';
+        nym.settings.typingIndicatorsScope = scope;
         nym.settings.typingIndicatorsEnabled = s.typingIndicatorsEnabled;
+        localStorage.setItem('nym_typing_indicators_scope', scope);
         localStorage.setItem('nym_typing_indicators_enabled', String(s.typingIndicatorsEnabled));
     }
 

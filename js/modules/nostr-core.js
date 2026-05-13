@@ -1057,8 +1057,7 @@ Object.assign(NYM.prototype, {
     async sendBitchatReceipt(messageId, receiptType, recipientPubkey) {
         if (!this.privkey || !this.bitchatUsers.has(recipientPubkey)) return;
 
-        // Skip READ receipts (0x02) if user has disabled them in settings
-        if (receiptType === 0x02 && this.settings?.readReceiptsEnabled === false) {
+        if (receiptType === 0x02 && !this.isReadReceiptAllowedFor('pm')) {
             return;
         }
 
@@ -1081,11 +1080,10 @@ Object.assign(NYM.prototype, {
     // Uses NIP-17 gift wrap with a special rumor format for receipts
     // Format: rumor with kind 69420 (custom), content empty, tags include ['x', messageId] and ['receipt', type]
     // Using kind 69420 instead of 14 to avoid showing blank DMs in other NIP-17 clients
-    async sendNymReceipt(messageId, receiptType, recipientPubkey) {
+    async sendNymReceipt(messageId, receiptType, recipientPubkey, context = 'pm') {
         if (!this._canSendGiftWraps()) return;
 
-        // Skip READ receipts if user has disabled them in settings
-        if (receiptType === 'read' && this.settings?.readReceiptsEnabled === false) {
+        if (receiptType === 'read' && !this.isReadReceiptAllowedFor(context)) {
             return;
         }
 
@@ -1135,7 +1133,8 @@ Object.assign(NYM.prototype, {
     // Called when input changes in PM/group mode to signal typing
     handleTypingSignal() {
         if (!this._canSendGiftWraps() || !this.inPMMode) return;
-        if (this.settings?.typingIndicatorsEnabled === false) return;
+        const context = this.currentGroup ? 'group' : 'pm';
+        if (!this.isTypingIndicatorAllowedFor(context)) return;
 
         const now = Date.now();
         if (now - this._typingThrottleTime < this._typingSendInterval) return;
@@ -1156,7 +1155,8 @@ Object.assign(NYM.prototype, {
     // Send typing stop immediately (e.g. when message is sent)
     sendTypingStop() {
         if (!this._canSendGiftWraps() || !this.inPMMode) return;
-        if (this.settings?.typingIndicatorsEnabled === false) return;
+        const context = this.currentGroup ? 'group' : 'pm';
+        if (!this.isTypingIndicatorAllowedFor(context)) return;
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
         this._sendTypingEvent('stop');
@@ -1345,7 +1345,7 @@ Object.assign(NYM.prototype, {
     },
 
     handleChannelTypingSignal() {
-        if (this.settings?.typingIndicatorsEnabled === false) return;
+        if (!this.isTypingIndicatorAllowedFor('channel')) return;
         if (this.inPMMode || !this.currentGeohash) return;
         if (!this._canPublishChannelEvent()) return;
 
@@ -1364,7 +1364,7 @@ Object.assign(NYM.prototype, {
     sendChannelTypingStop(geohash) {
         const targetGeohash = geohash || this.currentGeohash;
         if (!targetGeohash) return;
-        if (this.settings?.typingIndicatorsEnabled === false) return;
+        if (!this.isTypingIndicatorAllowedFor('channel')) return;
         if (!this._canPublishChannelEvent()) return;
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
@@ -1373,7 +1373,7 @@ Object.assign(NYM.prototype, {
 
     handleChannelTypingEvent(event) {
         if (!event || event.pubkey === this.pubkey) return;
-        if (this.settings?.typingIndicatorsEnabled === false) return;
+        if (!this.isTypingIndicatorAllowedFor('channel')) return;
 
         const ageMs = Date.now() - (event.created_at || 0) * 1000;
         if (ageMs > this._typingExpireMs) return;
@@ -1410,7 +1410,7 @@ Object.assign(NYM.prototype, {
     },
 
     async sendChannelReadReceipt(messageId, authorPubkey, geohash) {
-        if (this.settings?.readReceiptsEnabled === false) return;
+        if (!this.isReadReceiptAllowedFor('channel')) return;
         if (!messageId || !authorPubkey || !geohash) return;
         if (authorPubkey === this.pubkey) return;
         if (!this._canPublishChannelEvent()) return;

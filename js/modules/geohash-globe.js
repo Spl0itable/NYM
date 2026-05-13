@@ -342,7 +342,7 @@ Object.assign(NYM.prototype, {
 
 <div class="geohash-controls">
     <div class="geohash-controls-row">
-        <button class="geohash-control-btn geohash-heatmap-btn" id="geohashHeatmapBtn" data-action="toggleHeatmap">Heat map</button>
+        <button class="geohash-control-btn geohash-heatmap-btn" id="geohashHeatmapBtn" data-action="toggleHeatmap">Heat</button>
         <button class="geohash-control-btn geohash-daynight-btn" id="geohashDaynightBtn" data-action="toggleDaynight">Day / Night</button>
         <button class="geohash-control-btn geohash-grid-btn" id="geohashGridBtn" data-action="toggleGeohashGrid">Geohash</button>
     </div>
