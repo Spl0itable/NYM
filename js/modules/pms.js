@@ -162,32 +162,37 @@ Object.assign(NYM.prototype, {
             );
             const mkSubId = () => Math.random().toString(36).substring(2);
 
-            // Real pubkey catch-up REQ
+            // Real pubkey catch-up — fires immediately
             const realFilter = { kinds: [1059], '#p': [this.pubkey], since, limit: 200 };
-
-            // Ephemeral pubkey catch-up REQs (independent to prevent linking)
-            const ephPks = this._getAllSelfEphemeralPubkeys();
-
+            const realSubId = mkSubId();
+            this._registerBackfillSub(realSubId);
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                // Pool mode: send through pool proxy to critical shards
-                this._poolSendToRole('critical', ['REQ', mkSubId(), realFilter]);
-                for (const pk of ephPks) {
-                    this._poolSendToRole('critical', ['REQ', mkSubId(), { kinds: [1059], '#p': [pk], since, limit: 100 }]);
-                }
+                this._poolSendToRole('critical', ['REQ', realSubId, realFilter]);
             } else {
-                // Direct mode: send to all connected relays
-                const realReq = JSON.stringify(['REQ', mkSubId(), realFilter]);
-                const ephReqs = ephPks.map(pk => JSON.stringify(['REQ', mkSubId(),
-                    { kinds: [1059], '#p': [pk], since, limit: 100 }
-                ]));
+                const req = JSON.stringify(this._normalizeReqPayload(['REQ', realSubId, realFilter]));
                 this.relayPool.forEach(relay => {
                     if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        try { relay.ws.send(realReq); } catch (_) { }
-                        for (const req of ephReqs) {
-                            try { relay.ws.send(req); } catch (_) { }
-                        }
+                        this._safeWsSend(relay.ws, req, { critical: true });
                     }
                 });
+            }
+
+            // Ephemeral pubkey catch-up — single batched REQ with all keys
+            const ephPks = this._getAllSelfEphemeralPubkeys();
+            if (ephPks.length) {
+                const subId = mkSubId();
+                const filter = { kinds: [1059], '#p': ephPks, since, limit: 100 * ephPks.length };
+                this._registerBackfillSub(subId);
+                if (this.useRelayProxy && this._isAnyPoolOpen()) {
+                    this._poolSendToRole('critical', ['REQ', subId, filter]);
+                } else {
+                    const req = JSON.stringify(this._normalizeReqPayload(['REQ', subId, filter]));
+                    this.relayPool.forEach(relay => {
+                        if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                            this._safeWsSend(relay.ws, req, { critical: true });
+                        }
+                    });
+                }
             }
         }
 

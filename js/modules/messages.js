@@ -280,8 +280,11 @@ Object.assign(NYM.prototype, {
                 this._markChannelRead(storageKey, message.created_at);
             }
 
-            // Send a public read receipt (kind 24421) for fresh incoming messages
-            if (!message.isOwn && !message.isHistorical && message.geohash &&
+            // Send a public read receipt (kind 24421) only for messages the
+            // user can actually see: fresh, in the current channel, tab
+            // visible, and not scrolled away from the bottom.
+            const canBeSeen = !document.hidden && !this.userScrolledUp;
+            if (canBeSeen && !message.isOwn && !message.isHistorical && message.geohash &&
                 message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
                 typeof this.sendChannelReadReceipt === 'function') {
                 this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);

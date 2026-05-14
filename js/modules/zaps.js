@@ -176,17 +176,11 @@ Object.assign(NYM.prototype, {
 
         try { this.requestUserProfile(pubkey); } catch (_) { }
 
-        // Fire a direct, one-shot profile request to a few relays
-        const subId = 'ln-addr-' + Math.random().toString(36).slice(2);
-        const req = ["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }];
-        try { this.sendRequestToFewRelays(req); } catch (_) { }
+        // Trigger a batched profile fetch (kind 0 has LUD16/LUD06)
+        try { this.queueProfileFetch(pubkey); } catch (_) { }
 
         // Wait for handleEvent(kind 0) to notice LUD16/LUD06 (or timeout)
-        const addr = await this.waitForLightningAddress(pubkey, 8000);
-
-        try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
-
-        return addr;
+        return await this.waitForLightningAddress(pubkey, 4000);
     },
 
     async loadLightningAddress() {

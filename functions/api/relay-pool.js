@@ -10,15 +10,16 @@
 //   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
 //   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
 //   ["REQ", subId, ...filters]   - fans out to read relays only
-//   ["GEO_REQ", ["wss://geo1",...], subId, ...filters] - geo relays first, then all other read relays
 //   ["CLOSE", subId]             - fans out to read relays only
 //
 // Protocol (proxy → client):
 //   ["EVENT", subId, eventObj]   - deduplicated via string extraction (no JSON.parse)
 //   ["OK", eventId, bool, msg]   - first OK per event ID
 //   ["EOSE", subId]              - deduplicated (first per subscription ID)
-//   ["NOTICE", msg]              - forwarded as-is
-//   ["POOL:STATUS", { connected, failed, count, latency, events, relayTypes }]
+//   ["NOTICE", reason, relayUrl] - attributed to originating relay
+//   ["CLOSED", subId, reason, relayUrl] - attributed to originating relay
+//   ["POOL:RELAY_BAN", relayUrl, reason] - relay permanently dropped (auth, restricted, etc.)
+//   ["POOL:STATUS", { connected, count, latency, events }]
 
 export async function onRequest(context) {
   const { request } = context;
@@ -34,6 +35,7 @@ export async function onRequest(context) {
   // Relay pool state
   const upstreams = new Map();       // relayUrl -> { ws, type, status, eventCount, handled }
   const activeSubscriptions = new Map(); // subId -> raw JSON string of the REQ message
+  const subRelays = new Map();       // subId -> Set<relayUrl> the REQ was sent to
   const seenEvents = new Map();      // eventId -> 1 (string-based dedup, no JSON.parse)
   const seenOKs = new Set();         // eventId (only forward first OK per event)
   const seenEOSE = new Set();        // subId (only forward first EOSE per subscription)
@@ -104,6 +106,8 @@ export async function onRequest(context) {
   const pendingReconnect = new Set();
   const reconnectTimers = new Map();
   const intentionallyClosed = new Set();
+  // Relays that returned auth-required / unsupported-query CLOSED; never reconnect
+  const permanentlySkipped = new Set();
 
   // Buffered GEO_EVENTs waiting for geo relays to connect
   // Map<relayUrl, Array<geoMsg string>>
@@ -156,6 +160,9 @@ export async function onRequest(context) {
   }
 
   function shouldSkipRelay(relayUrl) {
+    // Permanent skip: relays that have rejected us with auth-required,
+    // unsupported filter shape, etc. won't recover, don't retry.
+    if (permanentlySkipped.has(relayUrl)) return true;
     const failure = failedRelays.get(relayUrl);
     if (failure) {
       const backoff = Math.min(FAILED_COOLDOWN * Math.pow(2, failure.attempts - 1), MAX_BACKOFF);
@@ -165,10 +172,32 @@ export async function onRequest(context) {
     return false;
   }
 
+  function isPermanentRejection(reason) {
+    if (typeof reason !== 'string') return false;
+    return /auth[\s\-_:]*required/i.test(reason)
+      || /\bauthentic/i.test(reason)
+      || /nip-?42/i.test(reason)
+      || /\bblocked\b/i.test(reason)
+      || /\bbanned\b/i.test(reason)
+      || /\brestricted\b/i.test(reason)
+      || /\bforbidden\b/i.test(reason)
+      || /\bunauthorized\b/i.test(reason)
+      || /\bunsupported\b/i.test(reason)
+      || /payment[\s\-_:]*required/i.test(reason)
+      || /\bpaid\b/i.test(reason)
+      || /\bpow\b/i.test(reason)
+      || /\bprotected\b/i.test(reason)
+      || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
+      || /\binvalid query\b/i.test(reason);
+  }
+
   function trackRelayFailure(relayUrl) {
     const existing = failedRelays.get(relayUrl);
     const attempts = existing ? existing.attempts + 1 : 1;
     failedRelays.set(relayUrl, { failedAt: Date.now(), attempts });
+    if (attempts >= 5) {
+      markPermanentlySkipped(relayUrl, 'connection-failed: repeated failures');
+    }
   }
 
   function clearRelayFailure(relayUrl) {
@@ -215,6 +244,26 @@ export async function onRequest(context) {
     connectUpstream(relayUrl, type);
   }
 
+  function markPermanentlySkipped(relayUrl, reason) {
+    if (!relayUrl || permanentlySkipped.has(relayUrl)) return;
+    permanentlySkipped.add(relayUrl);
+    intentionallyClosed.add(relayUrl);
+    const pendingTimer = reconnectTimers.get(relayUrl);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      reconnectTimers.delete(relayUrl);
+    }
+    pendingReconnect.delete(relayUrl);
+    const info = upstreams.get(relayUrl);
+    if (info && info.ws) {
+      try { info.ws.close(); } catch { /* noop */ }
+    }
+    upstreams.delete(relayUrl);
+    for (const targets of subRelays.values()) targets.delete(relayUrl);
+    sendToClient(JSON.stringify(['POOL:RELAY_BAN', relayUrl, reason]));
+    schedulePoolStatus();
+  }
+
   function scheduleReconnect(relayUrl, type) {
     if (!serverOpen) return;
     if (pendingReconnect.has(relayUrl)) return;
@@ -223,6 +272,7 @@ export async function onRequest(context) {
     if (attempts >= MAX_RECONNECT_ATTEMPTS) {
       trackRelayFailure(relayUrl);
       reconnectAttempts.delete(relayUrl);
+      markPermanentlySkipped(relayUrl, 'connection-failed: max reconnect attempts');
       return;
     }
     reconnectAttempts.set(relayUrl, attempts + 1);
@@ -242,11 +292,15 @@ export async function onRequest(context) {
     reconnectTimers.set(relayUrl, timerId);
   }
 
-  // Replay all active subscriptions to a newly connected relay
   function replaySubscriptions(relayUrl, ws) {
     if (writeOnlyRelays.has(relayUrl)) return;
-    for (const [, reqMsg] of activeSubscriptions) {
-      try { ws.send(reqMsg); } catch { /* noop */ }
+    for (const [subId, reqMsg] of activeSubscriptions) {
+      try {
+        ws.send(reqMsg);
+        let targets = subRelays.get(subId);
+        if (!targets) { targets = new Set(); subRelays.set(subId, targets); }
+        targets.add(relayUrl);
+      } catch { /* noop */ }
     }
   }
 
@@ -320,9 +374,9 @@ export async function onRequest(context) {
           }
           sendToClient(raw);
 
-        // EOSE, NOTICE, or anything else
+        // EOSE, AUTH, NOTICE, CLOSED, or anything else
         } else {
-          // Deduplicate EOSE: only forward the first EOSE per subscription ID
+          // EOSE dedup: only forward the first per subId
           if (raw.charCodeAt(2) === 69 && raw.startsWith('["EOSE"')) {
             const eoseMatch = raw.match(/^\["EOSE","([^"]+)"/);
             if (eoseMatch) {
@@ -330,6 +384,38 @@ export async function onRequest(context) {
               if (seenEOSE.has(eoseSubId)) return;
               seenEOSE.add(eoseSubId);
             }
+            sendToClient(raw);
+            return;
+          }
+
+          if (raw.startsWith('["AUTH"')) {
+            markPermanentlySkipped(relayUrl, 'auth-required');
+            return;
+          }
+
+          if (raw.startsWith('["NOTICE"')) {
+            const m = raw.match(/^\["NOTICE",\s*"((?:[^"\\]|\\.)*)"/);
+            const reason = m ? m[1] : '';
+            if (/no such sub|unknown subscription/i.test(reason)) return;
+            if (m && isPermanentRejection(reason)) {
+              markPermanentlySkipped(relayUrl, reason);
+              return;
+            }
+            sendToClient(JSON.stringify(['NOTICE', reason, relayUrl]));
+            return;
+          }
+
+          if (raw.startsWith('["CLOSED"')) {
+            const m = raw.match(/^\["CLOSED","([^"]+)",\s*"((?:[^"\\]|\\.)*)"/);
+            const subId = m ? m[1] : '';
+            const reason = m ? m[2] : '';
+            if (m && isPermanentRejection(reason)) {
+              markPermanentlySkipped(relayUrl, reason);
+              sendToClient(JSON.stringify(['CLOSED', subId, reason, relayUrl]));
+              return;
+            }
+            sendToClient(JSON.stringify(['CLOSED', subId, reason, relayUrl]));
+            return;
           }
 
           sendToClient(raw);
@@ -344,6 +430,7 @@ export async function onRequest(context) {
         const wasConnected = info.status === 'connected';
         info.status = 'closed';
         upstreams.delete(relayUrl);
+        for (const targets of subRelays.values()) targets.delete(relayUrl);
         schedulePoolStatus();
 
         if (intentionallyClosed.has(relayUrl)) {
@@ -483,41 +570,25 @@ export async function onRequest(context) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
               }
             });
-          } else if (msgType === 'GEO_REQ') {
-            // ["GEO_REQ", ["wss://geo1", ...], subId, ...filters]
-            // Send REQ to geo relays first, then all other read relays
-            const geoList = msg[1] || [];
-            const reqMsg = JSON.stringify(['REQ', ...msg.slice(2)]);
-            const subId = msg[2];
-            activeSubscriptions.set(subId, reqMsg);
-            const geoSet = new Set(geoList);
-            // Ensure geo relays are connected (they'll get subscription via replaySubscriptions)
-            for (const url of geoList) {
-              if (!upstreams.has(url) && validateRelayUrl(url)) {
-                queueConnection(url, 'read');
-              }
-            }
-            // Geo relays first
-            upstreams.forEach((info, url) => {
-              if (geoSet.has(url) && info.type !== 'write' && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-                try { info.ws.send(reqMsg); } catch { /* noop */ }
-              }
-            });
-            // Then all other read relays
-            upstreams.forEach((info, url) => {
-              if (!geoSet.has(url) && info.type !== 'write' && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
-                try { info.ws.send(reqMsg); } catch { /* noop */ }
-              }
-            });
           } else if (msgType === 'REQ') {
             const subId = msg[1];
             activeSubscriptions.set(subId, event.data);
-            sendToUpstreams(event.data, (url, info) => info.type !== 'write');
+            const reqTargets = new Set();
+            subRelays.set(subId, reqTargets);
+            sendToUpstreams(event.data, (url, info) => {
+              if (info.type === 'write') return false;
+              reqTargets.add(url);
+              return true;
+            });
           } else if (msgType === 'CLOSE') {
             const subId = msg[1];
+            const targets = subRelays.get(subId);
             activeSubscriptions.delete(subId);
-            seenEOSE.delete(subId); // Allow EOSE for future subscriptions with same pattern
-            sendToUpstreams(event.data, (url, info) => info.type !== 'write');
+            subRelays.delete(subId);
+            seenEOSE.delete(subId);
+            if (targets && targets.size > 0) {
+              sendToUpstreams(event.data, (url, info) => info.type !== 'write' && targets.has(url));
+            }
           }
     } catch {
       // Parse error

@@ -192,13 +192,18 @@ Object.assign(NYM.prototype, {
             const closestRelays = this.getClosestRelaysForGeohash(geohash, this.geoRelayCount);
             if (closestRelays.length > 0) {
                 const geoRelayUrls = new Set(closestRelays.map(r => r.url));
+                const prev = this.geoRelayConnections.get(geohash);
+                const changed = !prev || prev.size !== geoRelayUrls.size ||
+                    [...geoRelayUrls].some(u => !prev.has(u));
                 this.geoRelayConnections.set(geohash, geoRelayUrls);
                 for (const r of closestRelays) {
                     this.currentGeoRelays.add(r.url);
                 }
-                this._poolSendRelayConfig();
-                this.channelLoadedFromRelays.delete(geohash);
-                this.subscribeToChannelTargeted(geohash, 'geohash');
+                if (changed) {
+                    this._poolSendRelayConfig();
+                    this.channelLoadedFromRelays.delete(geohash);
+                    this.subscribeToChannelTargeted(geohash, 'geohash');
+                }
             }
             return;
         }
@@ -232,6 +237,7 @@ Object.assign(NYM.prototype, {
 
         // Connect to each geo relay with staggered timing
         const connectionPromises = [];
+        let newlyConnected = 0;
         for (let i = 0; i < closestRelays.length; i++) {
             const relayUrl = closestRelays[i].url;
 
@@ -260,6 +266,7 @@ Object.assign(NYM.prototype, {
                     this.currentGeoRelays.add(relayUrl);
                     this.subscribeRelayToChannel(relay, relayUrl, geohash);
                     this.updateConnectionStatus();
+                    newlyConnected++;
                 }
             });
             connectionPromises.push(connectionPromise);
@@ -268,18 +275,12 @@ Object.assign(NYM.prototype, {
         // Wait for all connection attempts to complete
         await Promise.all(connectionPromises);
 
-        // Log final geo relay count
-        const connectedGeoRelays = Array.from(this.currentGeoRelays).filter(url => {
-            const relay = this.relayPool.get(url);
-            return relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
-        });
-
         // Update network stats to reflect newly connected geo relays
         this.updateRelayStatus();
 
-        // Re-subscribe the channel on all geo relays that just connected,
-        // since the initial subscription may have fired before they were ready
-        if (connectedGeoRelays.length > 0) {
+        // Only re-subscribe the channel if we actually opened new geo relay
+        // connections — otherwise the existing channel sub is still alive
+        if (newlyConnected > 0) {
             this.channelLoadedFromRelays.delete(geohash);
             this.loadChannelFromRelays(geohash, 'geohash');
         }
@@ -288,53 +289,27 @@ Object.assign(NYM.prototype, {
         this.ensureDefaultRelaysConnected();
     },
 
-    // Send a channel subscription (REQ) directly to a single relay
+    // Send a channel-backfill REQ directly to a single relay. The REQ
+    // auto-closes on EOSE so it doesn't accumulate as a persistent sub.
     subscribeRelayToChannel(relay, relayUrl, channelKeyOverride) {
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
         const channelKey = channelKeyOverride || this.currentGeohash || this.currentChannel;
         if (!channelKey) return;
 
-        // Re-use the existing subscription ID so the relay pool treats
-        // responses as part of the same logical subscription, or create one.
-        let subId = this.channelSubscriptions.get(channelKey);
-        if (!subId) {
-            subId = Math.random().toString(36).substring(2);
-            this.channelSubscriptions.set(channelKey, subId);
-        }
-
         const since24h = Math.floor(Date.now() / 1000) - 86400;
         const filters = [
-            {
-                kinds: [20000],
-                '#g': [channelKey],
-                since: since24h,
-                limit: this.channelMessageLimit
-            },
-            {
-                kinds: [30078],
-                '#t': ['nym-poll', 'nym-poll-vote'],
-                '#g': [channelKey],
-                since: since24h,
-                limit: 50
-            },
-            {
-                kinds: [7],
-                '#k': ['20000'],
-                since: since24h,
-                limit: this.channelMessageLimit
-            },
-            {
-                kinds: [5],
-                since: since24h,
-                limit: 50
-            }
+            { kinds: [20000], '#g': [channelKey], since: since24h, limit: this.channelMessageLimit },
+            { kinds: [30078], '#t': ['nym-poll', 'nym-poll-vote'], '#g': [channelKey], since: since24h, limit: 50 },
+            { kinds: [7], '#k': ['20000'], since: since24h, limit: this.channelMessageLimit },
+            { kinds: [5], since: since24h, limit: 50 }
         ];
 
-        if (!relay.subscriptions) {
-            relay.subscriptions = new Set();
-        }
+        const subId = Math.random().toString(36).substring(2);
+        this._registerBackfillSub(subId);
+
+        if (!relay.subscriptions) relay.subscriptions = new Set();
         relay.subscriptions.add(subId);
-        this._safeWsSend(relay.ws, JSON.stringify(['REQ', subId, ...filters]), { critical: true });
+        this._safeWsSend(relay.ws, JSON.stringify(this._normalizeReqPayload(['REQ', subId, ...filters])), { critical: true });
     },
 
     // Ensure the first 5 broadcast relays are always connected regardless of channel
@@ -618,9 +593,15 @@ Object.assign(NYM.prototype, {
         // Clear failed relays so they can be retried immediately
         this.failedRelays.clear();
 
-        // Clear blacklist and timestamps
+        // Clear blacklist and timestamps, but preserve permanent rejections
+        // (auth-required, unsupported filter) since those won't change.
+        const keep = this._permanentBlacklist || new Set();
         this.blacklistedRelays.clear();
         this.blacklistTimestamps.clear();
+        for (const url of keep) {
+            this.blacklistedRelays.add(url);
+            this.blacklistTimestamps.set(url, Date.now() + (10 * 365 * 24 * 3600 * 1000));
+        }
 
         // Clear reconnecting set to allow fresh attempts
         if (this.reconnectingRelays) {
@@ -1422,7 +1403,7 @@ Object.assign(NYM.prototype, {
             if (!relay.subscriptions) relay.subscriptions = new Set();
             relay.subscriptions.add(subId);
             const filters = this._buildGeoFilters(since24h);
-            this._safeWsSend(ws, JSON.stringify(["REQ", subId, ...filters]), { critical: true });
+            this._safeWsSend(ws, JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters])), { critical: true });
             return;
         }
 
@@ -1437,220 +1418,104 @@ Object.assign(NYM.prototype, {
         this._safeWsSend(ws, JSON.stringify(["REQ", subId, ...filters]), { critical: true });
     },
 
-    // This is called when a user switches to a channel that hasn't been fully loaded
-    subscribeToChannelTargeted(channelKey, channelType) {
-        // Skip if already loaded
-        if (this.channelLoadedFromRelays.has(channelKey)) {
-            return;
-        }
+    _sendChannelReq(subId, filters, channelKey, channelType) {
+        if (!filters || filters.length === 0) return;
 
-        // Close any prior subscription for the same channel before opening a new one,
-        // so relays don't accumulate zombie subs on reconnect or rapid re-subscribe.
-        if (this.channelSubscriptions.has(channelKey)) {
-            this.closeChannelSubscription(channelKey, { force: true });
-        }
-
-        // Mark as loaded to prevent duplicate requests
-        this.channelLoadedFromRelays.add(channelKey);
-
-        const subId = Math.random().toString(36).substring(2);
-        const since24h = Math.floor(Date.now() / 1000) - 86400; // 24 hours ago
-        let filters = [];
-
-        // Subscribe to channel messages (geohash and non-geohash both use the g tag)
-        const sinceNow = Math.floor(Date.now() / 1000);
-        filters = [
-            {
-                kinds: [20000],
-                "#g": [channelKey],
-                since: since24h,
-                limit: this.channelMessageLimit
-            },
-            {
-                kinds: [30078],
-                "#t": ["nym-poll", "nym-poll-vote"],
-                "#g": [channelKey],
-                since: since24h,
-                limit: 50
-            },
-            {
-                kinds: [7],
-                "#k": ["20000"],
-                since: since24h,
-                limit: this.channelMessageLimit
-            },
-            {
-                kinds: [5],
-                since: since24h,
-                limit: 50
-            },
-            {
-                kinds: [24420, 24421],
-                "#g": [channelKey],
-                since: sinceNow
-            }
-        ];
-
-        if (filters.length === 0) return;
-
-        // Multiplexed pool mode: send REQ through single socket
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            // For geohash channels, use GEO_REQ so geo relays get the
-            // subscription first — they have the most relevant data
-            if (channelType === 'geohash' && channelKey) {
-                const closestRelays = this.getClosestRelaysForGeohash(channelKey);
-                if (closestRelays.length > 0) {
-                    this._poolSend(["GEO_REQ", closestRelays.map(r => r.url), subId, ...filters]);
-                    this.channelSubscriptions.set(channelKey, subId);
-                    return;
-                }
-            }
             this._poolSend(["REQ", subId, ...filters]);
-            this.channelSubscriptions.set(channelKey, subId);
             return;
         }
 
-        // Direct mode: send to geo relays first, then all others (async fan-out)
-        const reqStr = JSON.stringify(["REQ", subId, ...filters]);
-        const sentUrls = new Set();
-        const geoTargets = [];
-        const otherTargets = [];
-
-        if (channelType === 'geohash' && channelKey) {
-            const closestRelays = this.getClosestRelaysForGeohash(channelKey);
-            for (const r of closestRelays) {
-                const relay = this.relayPool.get(r.url);
-                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                    if (!relay.subscriptions) relay.subscriptions = new Set();
-                    relay.subscriptions.add(subId);
-                    geoTargets.push(relay);
-                    sentUrls.add(r.url);
-                }
-            }
-        }
-
-        this.relayPool.forEach((relay, url) => {
-            if (!sentUrls.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                relay.type !== 'write') {
+        const reqStr = JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters]));
+        const targets = [];
+        this.relayPool.forEach((relay) => {
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                 if (!relay.subscriptions) relay.subscriptions = new Set();
                 relay.subscriptions.add(subId);
-                otherTargets.push(relay);
+                targets.push(relay);
             }
         });
-
-        this._broadcastAsync(geoTargets, reqStr, { critical: true });
-        this._broadcastAsync(otherTargets, reqStr, { critical: true });
-
-        // Store the subscription ID for this channel
-        this.channelSubscriptions.set(channelKey, subId);
+        this._broadcastAsync(targets, reqStr, { critical: true });
     },
 
-    // Batch multiple channel subscriptions into fewer REQs for efficiency
-    subscribeToChannelBatch(channels) {
-        if (!channels || channels.length === 0) return;
+    // Register a subId as a short-lived backfill sub: auto-CLOSEs ~300ms
+    // after the first EOSE arrives, or after a hard timeout (default 4s) if
+    // no EOSE comes. Keeps concurrent sub count near zero in steady state.
+    _registerBackfillSub(subId, opts) {
+        if (!subId) return;
+        if (!this._backfillSubs) this._backfillSubs = new Map();
+        if (this._backfillSubs.has(subId)) return;
+        const timeoutMs = (opts && opts.timeoutMs) || 4000;
 
-        // Only geohash channels
-        const geohashChannels = [];
-        const since24h = Math.floor(Date.now() / 1000) - 86400;
-
-        channels.forEach(({ key, type }) => {
-            // Skip already loaded channels
-            if (this.channelLoadedFromRelays.has(key)) return;
-            geohashChannels.push(key);
-        });
-
-        // Build batched filters
-        const filters = [];
-
-        if (geohashChannels.length > 0) {
-            const sinceNow = Math.floor(Date.now() / 1000);
-            filters.push({
-                kinds: [20000],
-                "#g": geohashChannels,
-                since: since24h,
-                limit: this.channelMessageLimit * geohashChannels.length
-            });
-            filters.push({
-                kinds: [30078],
-                "#t": ["nym-poll", "nym-poll-vote"],
-                "#g": geohashChannels,
-                since: since24h,
-                limit: 50 * geohashChannels.length
-            });
-            filters.push({
-                kinds: [24420, 24421],
-                "#g": geohashChannels,
-                since: sinceNow
-            });
-            // Mark as loaded
-            geohashChannels.forEach(ch => this.channelLoadedFromRelays.add(ch));
-        }
-
-        if (filters.length === 0) return;
-
-        const subId = Math.random().toString(36).substring(2);
-
-        // Track the batched subId per channel so closeChannelSubscription can target it later
-        for (const ch of geohashChannels) {
-            this.channelSubscriptions.set(ch, subId);
-        }
-
-        // Multiplexed pool mode
-        if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            if (geohashChannels.length > 0) {
-                const geoUrls = new Set();
-                for (const ch of geohashChannels) {
-                    const closest = this.getClosestRelaysForGeohash(ch);
-                    for (const r of closest) geoUrls.add(r.url);
+        let closed = false;
+        const closeNow = () => {
+            if (closed) return;
+            closed = true;
+            if (entry.timer) clearTimeout(entry.timer);
+            if (this._backfillSubs) this._backfillSubs.delete(subId);
+            const closeMsg = JSON.stringify(["CLOSE", subId]);
+            if (this.useRelayProxy && this._isAnyPoolOpen()) {
+                for (const p of this.poolSockets) {
+                    this._safeWsSend(p.ws, closeMsg, { critical: true });
                 }
-                if (geoUrls.size > 0) {
-                    this._poolSend(["GEO_REQ", [...geoUrls], subId, ...filters]);
-                    return;
-                }
+            } else {
+                this.relayPool.forEach((relay) => {
+                    if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+                    if (relay.subscriptions && relay.subscriptions.has(subId)) {
+                        this._safeWsSend(relay.ws, closeMsg, { critical: true });
+                        relay.subscriptions.delete(subId);
+                    }
+                });
             }
-            this._poolSend(["REQ", subId, ...filters]);
+        };
+        const entry = { timer: setTimeout(closeNow, timeoutMs), close: closeNow };
+        this._backfillSubs.set(subId, entry);
+    },
+
+    // Open a persistent typing-only sub for the currently-viewed channel.
+    // No-op if not the current channel or if one already exists.
+    _ensureChannelTypingSub(channelKey, channelType) {
+        if (!channelKey) return;
+        const isCurrent = channelKey === this.currentChannel || channelKey === this.currentGeohash;
+        if (!isCurrent) return;
+        if (!this._channelTypingSubs) this._channelTypingSubs = new Map();
+        if (this._channelTypingSubs.has(channelKey)) return;
+
+        const sinceNow = Math.floor(Date.now() / 1000);
+        const typingFilter = [{ kinds: [24420, 24421], "#g": [channelKey], since: sinceNow }];
+        const typingSubId = Math.random().toString(36).substring(2);
+        this._channelTypingSubs.set(channelKey, typingSubId);
+        this.channelSubscriptions.set(channelKey, typingSubId);
+        this._sendChannelReq(typingSubId, typingFilter, channelKey, channelType);
+    },
+
+    // kind 20000 events are ephemeral and not stored by relays, so per-channel
+    // backfill is pointless. Live messages flow via the broad kind-20000 sub.
+    // Only open a typing sub (kind 24420/24421) for the currently-viewed channel.
+    subscribeToChannelTargeted(channelKey, channelType) {
+        if (this.channelLoadedFromRelays.has(channelKey)) {
+            this._ensureChannelTypingSub(channelKey, channelType);
             return;
         }
+        this.channelLoadedFromRelays.add(channelKey);
+        this._ensureChannelTypingSub(channelKey, channelType);
+    },
 
-        // Direct mode: send to geo relays first, then all others (async fan-out)
-        const reqStr = JSON.stringify(["REQ", subId, ...filters]);
-        const sentUrls = new Set();
-        const geoTargets = [];
-        const otherTargets = [];
-
-        if (geohashChannels.length > 0) {
-            for (const ch of geohashChannels) {
-                const closest = this.getClosestRelaysForGeohash(ch);
-                for (const r of closest) {
-                    if (sentUrls.has(r.url)) continue;
-                    const relay = this.relayPool.get(r.url);
-                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                        if (!relay.subscriptions) relay.subscriptions = new Set();
-                        relay.subscriptions.add(subId);
-                        geoTargets.push(relay);
-                        sentUrls.add(r.url);
-                    }
-                }
-            }
-        }
-
-        this.relayPool.forEach((relay, url) => {
-            if (!sentUrls.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                relay.type !== 'write') {
-                if (!relay.subscriptions) relay.subscriptions = new Set();
-                relay.subscriptions.add(subId);
-                otherTargets.push(relay);
-            }
+    // Per-channel backfill REQs were causing massive relay spam. Now a no-op:
+    // the broad kind-20000 sub covers any stored events; typing subs are only
+    // opened for the currently-viewed channel via subscribeToChannelTargeted.
+    subscribeToChannelBatch(channels) {
+        if (!channels || channels.length === 0) return;
+        channels.forEach(({ key }) => {
+            if (key) this.channelLoadedFromRelays.add(key);
         });
-
-        this._broadcastAsync(geoTargets, reqStr, { critical: true });
-        this._broadcastAsync(otherTargets, reqStr, { critical: true });
     },
 
     // Load messages for a channel from relays - called when switching channels
     loadChannelFromRelays(channelKey, channelType) {
-        // Only load if we haven't already sent a targeted request
+        // Already backfilled this session — just ensure typing sub exists for current channel
         if (this.channelLoadedFromRelays.has(channelKey)) {
+            this._ensureChannelTypingSub(channelKey, channelType);
             return;
         }
 
@@ -1827,7 +1692,8 @@ Object.assign(NYM.prototype, {
     _shardRelaysByRole(allRelays, geoRelayUrls, dmRelays) {
         const blocked = new Set(['wss://relay.nosflare.com', 'wss://relay.nostraddress.com', 'wss://nostr-server-production.up.railway.app']);
         const writeOnly = new Set(['wss://sendit.nosflare.com']);
-        const isValid = (url) => !blocked.has(url) && !writeOnly.has(url);
+        const permanent = this._permanentBlacklist || new Set();
+        const isValid = (url) => !blocked.has(url) && !writeOnly.has(url) && !permanent.has(url);
 
         // Categorize relays by role
         const geoSet = new Set(geoRelayUrls || []);
@@ -2013,7 +1879,6 @@ Object.assign(NYM.prototype, {
                         this._shardReconnecting.delete(shardId);
                         this._startPoolKeepalive();
                         this._poolSubscribeOnWorker(shard.id);
-                        this._resubscribeChannels();
                     })
                     .catch(() => {
                         // Keep retrying — every shard matters for full relay coverage.
@@ -2215,6 +2080,15 @@ Object.assign(NYM.prototype, {
                         return;
                     }
 
+                    if (msgType === 'POOL:RELAY_BAN') {
+                        const banUrl = msg[1];
+                        const banReason = msg[2] || 'banned';
+                        if (typeof banUrl === 'string' && banUrl.startsWith('wss://')) {
+                            this._permanentlyBlacklistRelay(banUrl, banReason);
+                        }
+                        return;
+                    }
+
                     if (msgType === 'POOL:STATUS') {
                         const status = msg[1];
                         poolEntry.connectedRelays = status.connected || [];
@@ -2341,8 +2215,50 @@ Object.assign(NYM.prototype, {
         }, 30000);
     },
 
-    // Send data to ALL open pool worker sockets
+    // Normalize a filter array: dedup values inside any array field (kinds,
+    // authors, ids, #X tags) and drop entirely-duplicate filter objects.
+    // Strict relays (Pocket) reject filters with duplicate tag values.
+    _normalizeFilters(filters) {
+        if (!Array.isArray(filters)) return filters;
+        const seen = new Set();
+        const out = [];
+        for (const f of filters) {
+            if (!f || typeof f !== 'object') continue;
+            const cleaned = {};
+            for (const key of Object.keys(f)) {
+                const v = f[key];
+                if (Array.isArray(v)) {
+                    cleaned[key] = [...new Set(v)];
+                } else {
+                    cleaned[key] = v;
+                }
+            }
+            const sig = JSON.stringify(
+                Object.keys(cleaned).sort().reduce((acc, k) => {
+                    const v = cleaned[k];
+                    acc[k] = Array.isArray(v) ? [...v].sort() : v;
+                    return acc;
+                }, {})
+            );
+            if (seen.has(sig)) continue;
+            seen.add(sig);
+            out.push(cleaned);
+        }
+        return out;
+    },
+
+    _normalizeReqPayload(data) {
+        if (!Array.isArray(data)) return data;
+        if (data[0] === 'REQ') {
+            return ['REQ', data[1], ...this._normalizeFilters(data.slice(2))];
+        }
+        return data;
+    },
+
     _poolSend(data) {
+        if (Array.isArray(data) && data[0] === 'REQ') {
+            data = this._normalizeReqPayload(data);
+        }
         const msg = typeof data === 'string' ? data : JSON.stringify(data);
         const critical = Array.isArray(data) && (data[0] === 'EVENT' || data[0] === 'DM_EVENT' || data[0] === 'GEO_EVENT' || data[0] === 'CLOSE');
         for (const p of this.poolSockets) {
@@ -2350,8 +2266,10 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Send data only to pool workers matching a specific role
     _poolSendToRole(role, data) {
+        if (Array.isArray(data) && data[0] === 'REQ') {
+            data = this._normalizeReqPayload(data);
+        }
         const msg = typeof data === 'string' ? data : JSON.stringify(data);
         const critical = Array.isArray(data) && (data[0] === 'EVENT' || data[0] === 'DM_EVENT' || data[0] === 'GEO_EVENT' || data[0] === 'CLOSE');
         for (const p of this.poolSockets) {
@@ -2364,6 +2282,13 @@ Object.assign(NYM.prototype, {
         const p = this.poolSockets.find(w => w.id === shardId);
         if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) return;
 
+        // Close prior broad sub on this worker so the proxy/relays don't
+        // accumulate duplicate broad subs across reconnects.
+        if (p._lastSubId) {
+            this._safeWsSend(p.ws, JSON.stringify(["CLOSE", p._lastSubId]), { critical: true });
+            p._lastSubId = null;
+        }
+
         const since24h = Math.floor(Date.now() / 1000) - 86400;
 
         // Geo/discovered shards only get kind 20000
@@ -2373,8 +2298,9 @@ Object.assign(NYM.prototype, {
             : this._buildCriticalFilters(since24h);
 
         const subId = Math.random().toString(36).substring(2);
+        p._lastSubId = subId;
 
-        const msg = JSON.stringify(["REQ", subId, ...filters]);
+        const msg = JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters]));
         this._safeWsSend(p.ws, msg, { critical: true });
 
         // Also subscribe to ephemeral pubkeys on critical shards
@@ -2383,22 +2309,19 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Build geo-only filters (kind 20000) for geo/discovered relay shards
     _buildGeoFilters(since24h) {
         const filters = [];
         if (!this.settings.groupChatPMOnlyMode) {
-            filters.push({ kinds: [20000], since: since24h, limit: 100 });
+            filters.push({ kinds: [20000], since: since24h });
         }
         return filters;
     },
 
-    // Build full subscription filters for critical (default + DM) relay shards
     _buildCriticalFilters(since24h) {
         const filters = [];
 
-        // Skip geohash channel subscriptions in group chat & PM only mode
         if (!this.settings.groupChatPMOnlyMode) {
-            filters.push({ kinds: [20000], since: since24h, limit: 100 });
+            filters.push({ kinds: [20000], since: since24h });
             filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since24h, limit: 100 });
             filters.push({ kinds: [7], "#k": ["20000"], since: since24h, limit: 100 });
             filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since24h, limit: 100 });
@@ -2488,83 +2411,88 @@ Object.assign(NYM.prototype, {
         this._resubscribeChannels();
     },
 
-    // History fetch for a set of ephemeral pubkeys
-    _recoverEphemeralHistory(ephPks) {
+    // History fetch for ephemeral pubkeys
+    async _recoverEphemeralHistory(ephPks) {
         if (!Array.isArray(ephPks) || ephPks.length === 0) return;
-        const mkSubId = () => Math.random().toString(36).substring(2);
         const since = this._isFreshDevice
             ? 0
             : (this.lastPMSyncTime > 0 ? Math.max(0, this.lastPMSyncTime - 300) : 0);
-        const buildFilter = (pk) => {
-            const f = { kinds: [1059], '#p': [pk], limit: 500 };
-            if (since > 0) f.since = since;
-            return f;
-        };
+
+        const filter = { kinds: [1059], '#p': ephPks, limit: 500 * ephPks.length };
+        if (since > 0) filter.since = since;
+        const subId = Math.random().toString(36).substring(2);
+        this._registerBackfillSub(subId);
 
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            for (const pk of ephPks) {
-                this._poolSendToRole('critical', ['REQ', mkSubId(), buildFilter(pk)]);
-            }
-            return;
-        }
-        const reqs = ephPks.map(pk => JSON.stringify(['REQ', mkSubId(), buildFilter(pk)]));
-        this.relayPool.forEach(relay => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                for (const req of reqs) {
+            this._poolSendToRole('critical', ['REQ', subId, filter]);
+        } else {
+            const req = JSON.stringify(this._normalizeReqPayload(['REQ', subId, filter]));
+            this.relayPool.forEach(relay => {
+                if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                     this._safeWsSend(relay.ws, req, { critical: true });
                 }
-            }
-        });
+            });
+        }
+
+        await this._waitForEoseOrTimeout(subId, 5000);
     },
 
-    // Send independent REQ subscriptions for each ephemeral pubkey
-    _refreshEphemeralSubscriptions() {
-        // Close previous ephemeral subscriptions
-        for (const oldSubId of this._ephemeralSubIds) {
-            if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                this._poolSend(['CLOSE', oldSubId]);
-            } else {
-                const closeMsg = JSON.stringify(['CLOSE', oldSubId]);
-                this.relayPool.forEach(relay => {
-                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        this._safeWsSend(relay.ws, closeMsg, { critical: true });
-                    }
-                });
+    // Subscribe to gift wraps (kind 1059) for all of our ephemeral pubkeys
+    async _refreshEphemeralSubscriptions() {
+        if (this._ephRefreshInFlight) return;
+        this._ephRefreshInFlight = true;
+        try {
+            for (const oldSubId of (this._ephemeralSubIds || [])) {
+                if (this.useRelayProxy && this._isAnyPoolOpen()) {
+                    this._poolSendToRole('critical', ['CLOSE', oldSubId]);
+                } else {
+                    const closeMsg = JSON.stringify(['CLOSE', oldSubId]);
+                    this.relayPool.forEach(relay => {
+                        if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                            this._safeWsSend(relay.ws, closeMsg, { critical: true });
+                        }
+                    });
+                }
             }
-        }
-        this._ephemeralSubIds = [];
+            this._ephemeralSubIds = [];
 
-        const ephPks = this._getAllSelfEphemeralPubkeys();
-        if (!ephPks.length) return;
+            const ephPks = this._getAllSelfEphemeralPubkeys();
+            if (!ephPks.length) return;
 
-        // Always go back a full 7 days to catch messages sent to this ephemeral
-        // key while the device was offline or before ephemeral key sync occurred.
-        const since = Math.floor(Date.now() / 1000) - 604800;
-
-        for (const ephPk of ephPks) {
+            const since = Math.floor(Date.now() / 1000) - 604800;
             const subId = Math.random().toString(36).substring(2);
             this._ephemeralSubIds.push(subId);
-            const filter = { kinds: [1059], "#p": [ephPk], since, limit: 200 };
+            const filter = { kinds: [1059], "#p": ephPks, since, limit: 200 * ephPks.length };
 
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                this._poolSend(['REQ', subId, filter]);
+                this._poolSendToRole('critical', ['REQ', subId, filter]);
             } else {
-                const msg = JSON.stringify(['REQ', subId, filter]);
-                this.relayPool.forEach((relay, url) => {
+                const msg = JSON.stringify(this._normalizeReqPayload(['REQ', subId, filter]));
+                this.relayPool.forEach((relay) => {
                     if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                         this._safeWsSend(relay.ws, msg, { critical: true });
                     }
                 });
             }
+
+            await this._waitForEoseOrTimeout(subId, 5000);
+        } finally {
+            this._ephRefreshInFlight = false;
         }
     },
 
     // Re-subscribe to active channel subscriptions after a relay reconnection.
-    // Clears stale tracking state so subscribeToChannelTargeted() will re-send REQs.
+    // Coalesces rapid back-to-back calls (e.g. multiple shard reconnects) so
+    // we don't wipe and re-fire every joined channel's REQ each time.
     _resubscribeChannels() {
+        const now = Date.now();
+        if (this._lastResubscribeAt && now - this._lastResubscribeAt < 15000) return;
+        this._lastResubscribeAt = now;
+
         // Clear stale channel tracking — old subscription IDs are invalid after reconnect
         this.channelLoadedFromRelays.clear();
         this.channelSubscriptions.clear();
+        if (this._channelTypingSubs) this._channelTypingSubs.clear();
 
         // Re-subscribe to current channel immediately
         if (this.currentChannel) {
@@ -2579,8 +2507,19 @@ Object.assign(NYM.prototype, {
     },
 
     // Re-shard and update relay config across all workers.
-    // Called when geo relays change.
+    // Debounced so rapid permanent-blacklist or other config-change events
+    // coalesce into one RELAYS push. Only sends to shards whose relay list
+    // actually changed (compared to the worker's last known config).
     _poolSendRelayConfig() {
+        if (!this._isAnyPoolOpen()) return;
+        if (this._poolSendRelayConfigTimer) return;
+        this._poolSendRelayConfigTimer = setTimeout(() => {
+            this._poolSendRelayConfigTimer = null;
+            this._poolSendRelayConfigNow();
+        }, 500);
+    },
+
+    _poolSendRelayConfigNow() {
         if (!this._isAnyPoolOpen()) return;
 
         // Gather current relay sets
@@ -2607,11 +2546,21 @@ Object.assign(NYM.prototype, {
         const existingIds = new Set(this.poolSockets.map(p => p.id));
         const newShardIds = new Set(shards.map(s => s.id));
 
-        // Update existing workers with new relay configs
+        const arraysEqual = (a, b) => {
+            if (!a || !b) return a === b;
+            if (a.length !== b.length) return false;
+            const setA = new Set(a);
+            for (const v of b) if (!setA.has(v)) return false;
+            return true;
+        };
+
         for (const shard of shards) {
             const existing = this.poolSockets.find(p => p.id === shard.id);
             if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
-                // Update relay list for this worker
+                const sameRelays = arraysEqual(existing.relays, shard.relays);
+                const sameDm = arraysEqual(existing.dmRelays || [], shard.dmRelays || []);
+                const sameWrite = arraysEqual(existing.writeOnly || [], shard.writeOnly || []);
+                if (sameRelays && sameDm && sameWrite) continue;
                 existing.relays = shard.relays;
                 existing.dmRelays = shard.dmRelays || [];
                 existing.writeOnly = shard.writeOnly || [];
@@ -3283,26 +3232,54 @@ Object.assign(NYM.prototype, {
 
         const msg = JSON.stringify(message);
         let sent = 0;
+        const subId = Array.isArray(message) && message[0] === 'REQ' ? message[1] : null;
 
-        // Prefer broadcast relays (more likely to have profiles)
+        const sendTo = (relay, url) => {
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
+                if (this._safeWsSend(relay.ws, msg, { critical: true })) {
+                    if (subId) {
+                        if (!relay.subscriptions) relay.subscriptions = new Set();
+                        relay.subscriptions.add(subId);
+                    }
+                    sent++;
+                    return true;
+                }
+            }
+            return false;
+        };
+
         for (const url of this.defaultRelays) {
             if (sent >= maxRelays) break;
             const relay = this.relayPool.get(url);
-            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                if (this._safeWsSend(relay.ws, msg, { critical: true })) sent++;
-            }
+            if (relay) sendTo(relay, url);
         }
 
-        // Fill from pool if needed
         if (sent < maxRelays) {
             for (const [url, relay] of this.relayPool) {
                 if (sent >= maxRelays) break;
-                if (this.defaultRelays.includes(url)) continue; // already sent
-                if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                    if (this._safeWsSend(relay.ws, msg, { critical: true })) sent++;
-                }
+                if (this.defaultRelays.includes(url)) continue;
+                sendTo(relay, url);
             }
         }
+    },
+
+    // Close a sub that was opened via sendRequestToFewRelays. Routes through
+    // the same destinations the REQ used so we don't send CLOSE to relays
+    // that never received the REQ (which would respond "No such subscription").
+    closeFewRelaysSub(subId) {
+        if (!subId) return;
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            this._poolSendToRole('critical', ["CLOSE", subId]);
+            return;
+        }
+        const closeMsg = JSON.stringify(["CLOSE", subId]);
+        this.relayPool.forEach((relay) => {
+            if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+            if (relay.subscriptions && relay.subscriptions.has(subId)) {
+                this._safeWsSend(relay.ws, closeMsg, { critical: true });
+                relay.subscriptions.delete(subId);
+            }
+        });
     },
 
     broadcastEvent(message) {
@@ -3415,30 +3392,25 @@ Object.assign(NYM.prototype, {
         // Skip channel loading in group chat & PM only mode
         if (this.settings.groupChatPMOnlyMode) return;
 
+        // Debounce: don't re-batch joined channels more than once per 30s
+        const now = Date.now();
+        if (this._lastJoinedChannelsLoadAt && now - this._lastJoinedChannelsLoadAt < 30000) return;
+
         const channelsToLoad = [];
+        const seen = new Set();
+        const add = (key, type) => {
+            if (!key || seen.has(key)) return;
+            if (this.channelLoadedFromRelays.has(key)) return;
+            seen.add(key);
+            channelsToLoad.push({ key, type });
+        };
 
-        // Add user-joined channels
-        this.userJoinedChannels.forEach(channelKey => {
-            channelsToLoad.push({
-                key: channelKey,
-                type: 'geohash'
-            });
-        });
+        this.userJoinedChannels.forEach(k => add(k, 'geohash'));
+        this.commonGeohashes.forEach(g => add(g, 'geohash'));
+        if (this.currentChannel) add(this.currentChannel, 'geohash');
 
-        // Add common geohashes
-        this.commonGeohashes.forEach(geohash => {
-            if (!this.channelLoadedFromRelays.has(geohash)) {
-                channelsToLoad.push({ key: geohash, type: 'geohash' });
-            }
-        });
-
-        // Also load current channel if not loaded
-        if (this.currentChannel && !this.channelLoadedFromRelays.has(this.currentChannel)) {
-            channelsToLoad.push({
-                key: this.currentChannel,
-                type: 'geohash'
-            });
-        }
+        if (channelsToLoad.length === 0) return;
+        this._lastJoinedChannelsLoadAt = now;
 
         // Batch load in chunks
         const batchSize = this.channelSubscriptionBatchSize;
@@ -3487,12 +3459,71 @@ Object.assign(NYM.prototype, {
             case 'OK':
                 // Event was accepted
                 break;
-            case 'EOSE':
-                // End of stored events
+            case 'EOSE': {
+                const eoseSubId = data[0];
+                if (this._eoseWaiters && this._eoseWaiters.has(eoseSubId)) {
+                    const w = this._eoseWaiters.get(eoseSubId);
+                    clearTimeout(w.timer);
+                    this._eoseWaiters.delete(eoseSubId);
+                    w.resolve();
+                }
+                if (this._backfillSubs && this._backfillSubs.has(eoseSubId)) {
+                    const entry = this._backfillSubs.get(eoseSubId);
+                    if (entry && !entry._eoseScheduled) {
+                        entry._eoseScheduled = true;
+                        setTimeout(() => entry.close(), 300);
+                    }
+                }
                 break;
-            case 'NOTICE':
+            }
+            case 'AUTH': {
+                // We don't implement NIP-42. Drop the relay that's asking
+                // for AUTH so we don't waste connections on it.
+                const authRelay = (typeof data[0] === 'string' && data[0].startsWith('wss://'))
+                    ? data[0] : relayUrl;
+                this._permanentlyBlacklistRelay(authRelay, 'auth-required');
+                break;
+            }
+            case 'CLOSED': {
+                // Direct: ["CLOSED", subId, reason]
+                // Pool (proxy-attributed): ["CLOSED", subId, reason, relayUrl]
+                const closedSubId = data[0];
+                const reason = data[1] || '';
+                const attributedRelay = (typeof data[2] === 'string' && data[2].startsWith('wss://'))
+                    ? data[2] : relayUrl;
+                if (this._backfillSubs && this._backfillSubs.has(closedSubId)) {
+                    const entry = this._backfillSubs.get(closedSubId);
+                    if (entry) {
+                        if (entry.timer) clearTimeout(entry.timer);
+                        this._backfillSubs.delete(closedSubId);
+                    }
+                }
+                if (this._isPermanentRejection(reason)) {
+                    this._permanentlyBlacklistRelay(attributedRelay, reason);
+                } else if (typeof reason === 'string' && /rate-?limit|too many|concurrent/i.test(reason)) {
+                    this._noteRateLimit(attributedRelay);
+                    this._recordRelayError(attributedRelay, reason);
+                } else if (typeof reason === 'string' && /error|invalid|bad filter|malformed/i.test(reason)) {
+                    this._recordRelayError(attributedRelay, reason);
+                }
+                break;
+            }
+            case 'NOTICE': {
+                // Direct: ["NOTICE", reason]
+                // Pool (proxy-attributed): ["NOTICE", reason, relayUrl]
                 const notice = data[0];
+                const attributedRelay = (typeof data[1] === 'string' && data[1].startsWith('wss://'))
+                    ? data[1] : relayUrl;
+                if (this._isPermanentRejection(notice)) {
+                    this._permanentlyBlacklistRelay(attributedRelay, notice);
+                } else if (typeof notice === 'string' && /rate-?limit|too many|concurrent/i.test(notice)) {
+                    this._noteRateLimit(attributedRelay);
+                    this._recordRelayError(attributedRelay, notice);
+                } else if (typeof notice === 'string' && /error|invalid|bad filter|malformed/i.test(notice)) {
+                    this._recordRelayError(attributedRelay, notice);
+                }
                 break;
+            }
         }
     },
 
@@ -3576,6 +3607,151 @@ Object.assign(NYM.prototype, {
         return Math.max(0, Math.floor(baseMs * factor));
     },
 
+    // Track relays that have rate-limited us recently. We back off new
+    // REQs to those relays for a short window so we stop antagonizing them.
+    _noteRateLimit(relayUrl) {
+        if (!this._rateLimitedRelays) this._rateLimitedRelays = new Map();
+        const now = Date.now();
+        const key = relayUrl || 'relay-pool';
+        const prev = this._rateLimitedRelays.get(key) || { count: 0, until: 0 };
+        prev.count++;
+        // Back off 10s for first hit, doubling up to 5 min
+        const backoff = Math.min(10000 * Math.pow(2, prev.count - 1), 300000);
+        prev.until = now + backoff;
+        this._rateLimitedRelays.set(key, prev);
+        // Aggressively close all non-essential backfill subs to clear the queue
+        if (this._backfillSubs) {
+            for (const [, entry] of this._backfillSubs) {
+                try { entry.close(); } catch (_) { }
+            }
+        }
+        // Decay the count over time so a one-off doesn't punish forever
+        setTimeout(() => {
+            const cur = this._rateLimitedRelays.get(key);
+            if (cur && cur.count > 0) cur.count--;
+        }, 60000);
+    },
+
+    _isRateLimited(relayUrl) {
+        if (!this._rateLimitedRelays) return false;
+        const entry = this._rateLimitedRelays.get(relayUrl || 'relay-pool');
+        return !!(entry && entry.until > Date.now());
+    },
+
+    _isPermanentRejection(reason) {
+        if (typeof reason !== 'string') return false;
+        return /auth[\s\-_:]*required/i.test(reason)
+            || /\bauthentic/i.test(reason)
+            || /nip-?42/i.test(reason)
+            || /\bblocked\b/i.test(reason)
+            || /\bbanned\b/i.test(reason)
+            || /\brestricted\b/i.test(reason)
+            || /\bforbidden\b/i.test(reason)
+            || /\bunauthorized\b/i.test(reason)
+            || /\bunsupported\b/i.test(reason)
+            || /payment[\s\-_:]*required/i.test(reason)
+            || /\bpaid\b/i.test(reason)
+            || /\bpow\b/i.test(reason)
+            || /\bprotected\b/i.test(reason)
+            || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
+            || /\binvalid query\b/i.test(reason)
+            || /\bconnection-failed\b/i.test(reason);
+    },
+
+    // Count error responses per relay. If a relay sends 5+ errors within
+    // 60s (rate-limit, malformed-filter, etc.), drop it for the session.
+    _recordRelayError(relayUrl, reason) {
+        if (!relayUrl || relayUrl === 'relay-pool') return;
+        if (this._permanentBlacklist && this._permanentBlacklist.has(relayUrl)) return;
+        if (!this._relayErrorCounts) this._relayErrorCounts = new Map();
+        const now = Date.now();
+        let entry = this._relayErrorCounts.get(relayUrl);
+        if (!entry || (now - entry.firstAt) > 60000) {
+            entry = { count: 0, firstAt: now };
+            this._relayErrorCounts.set(relayUrl, entry);
+        }
+        entry.count++;
+        if (entry.count >= 5) {
+            this._relayErrorCounts.delete(relayUrl);
+            this._permanentlyBlacklistRelay(relayUrl, `repeated errors: ${reason}`);
+        }
+    },
+
+    // Add a relay to the permanent (session-long) blacklist and disconnect it.
+    // Subsequent reconnect attempts skip it; in pool mode we also send a
+    // RELAYS update so the worker drops the upstream connection.
+    _permanentlyBlacklistRelay(relayUrl, reason) {
+        if (!relayUrl || relayUrl === 'relay-pool') return;
+        if (!this._permanentBlacklist) this._permanentBlacklist = new Set();
+        if (this._permanentBlacklist.has(relayUrl)) return;
+        this._permanentBlacklist.add(relayUrl);
+
+        // Also push into the regular blacklist with a far-future timestamp
+        // so existing skip checks (shouldRetryRelay etc.) honor it.
+        this.blacklistedRelays.add(relayUrl);
+        if (this.blacklistTimestamps) {
+            this.blacklistTimestamps.set(relayUrl, Date.now() + (10 * 365 * 24 * 3600 * 1000));
+        }
+
+        // Direct mode: close + remove from pool
+        const direct = this.relayPool && this.relayPool.get(relayUrl);
+        if (direct && direct.ws) {
+            try { direct.ws.close(); } catch (_) { }
+            this.relayPool.delete(relayUrl);
+        }
+
+        // Drop from our active geo sets so we stop trying to reach it
+        if (this.currentGeoRelays) this.currentGeoRelays.delete(relayUrl);
+        if (this.geoRelayConnections) {
+            for (const set of this.geoRelayConnections.values()) set.delete(relayUrl);
+        }
+
+        // Pool mode: re-send relay config so workers drop this upstream
+        if (this.useRelayProxy && typeof this._poolSendRelayConfig === 'function') {
+            this._poolSendRelayConfig();
+        }
+    },
+
+    // Resolve when EOSE arrives for the given subId (or after timeoutMs).
+    // Used to serialize ephemeral-pubkey REQs so they don't burst in parallel.
+    _waitForEoseOrTimeout(subId, timeoutMs = 2000) {
+        return new Promise(resolve => {
+            if (!this._eoseWaiters) this._eoseWaiters = new Map();
+            if (this._eoseWaiters.has(subId)) {
+                resolve();
+                return;
+            }
+            const timer = setTimeout(() => {
+                this._eoseWaiters.delete(subId);
+                resolve();
+            }, timeoutMs);
+            this._eoseWaiters.set(subId, { resolve, timer });
+        });
+    },
+
+    // Cap concurrent one-shot REQs (profile/LN/etc) so we don't trip
+    // per-relay "too many concurrent subscriptions" rate limits.
+    _oneShotReqMax: 4,
+    _oneShotReqAcquire(fn) {
+        if (!this._oneShotReqState) this._oneShotReqState = { active: 0, queue: [] };
+        const s = this._oneShotReqState;
+        const run = () => {
+            s.active++;
+            try { fn(); } catch (_) { this._oneShotReqDone(); }
+        };
+        if (s.active < this._oneShotReqMax) run();
+        else s.queue.push(run);
+    },
+    _oneShotReqDone() {
+        if (!this._oneShotReqState) return;
+        const s = this._oneShotReqState;
+        s.active = Math.max(0, s.active - 1);
+        if (s.active < this._oneShotReqMax && s.queue.length > 0) {
+            const next = s.queue.shift();
+            try { next(); } catch (_) { this._oneShotReqDone(); }
+        }
+    },
+
     // bufferedAmount-aware send with optional per-socket queue for critical messages
     _safeWsSend(ws, msg, opts) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return false;
@@ -3633,35 +3809,42 @@ Object.assign(NYM.prototype, {
         step();
     },
 
-    // Send CLOSE for a channel's tracked subscription and clear local state.
-    // Keeps subs alive for joined/common channels so background messages keep flowing.
+    // Close the persistent typing sub for a channel (if any). Backfill subs
+    // self-close on EOSE so they don't need explicit cleanup here.
     closeChannelSubscription(channelKey, opts) {
         if (!channelKey) return;
-        const force = opts && opts.force;
-        if (!force) {
-            if (this.userJoinedChannels && this.userJoinedChannels.has(channelKey)) return;
-            if (Array.isArray(this.commonGeohashes)
-                ? this.commonGeohashes.includes(channelKey)
-                : (this.commonGeohashes && this.commonGeohashes.has && this.commonGeohashes.has(channelKey))) return;
+
+        const subIds = [];
+        if (this._channelTypingSubs && this._channelTypingSubs.has(channelKey)) {
+            subIds.push(this._channelTypingSubs.get(channelKey));
+            this._channelTypingSubs.delete(channelKey);
         }
-        const subId = this.channelSubscriptions.get(channelKey);
-        this.channelSubscriptions.delete(channelKey);
+        // Legacy: any leftover sub tracked via channelSubscriptions
+        if (this.channelSubscriptions.has(channelKey)) {
+            const sid = this.channelSubscriptions.get(channelKey);
+            if (sid && !subIds.includes(sid)) subIds.push(sid);
+            this.channelSubscriptions.delete(channelKey);
+        }
         this.channelLoadedFromRelays.delete(channelKey);
-        if (!subId) return;
-        const closeMsg = JSON.stringify(["CLOSE", subId]);
-        if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            for (const p of this.poolSockets) {
-                this._safeWsSend(p.ws, closeMsg, { critical: true });
+        if (subIds.length === 0) return;
+
+        const sendCloseFor = (subId) => {
+            const closeMsg = JSON.stringify(["CLOSE", subId]);
+            if (this.useRelayProxy && this._isAnyPoolOpen()) {
+                for (const p of this.poolSockets) {
+                    this._safeWsSend(p.ws, closeMsg, { critical: true });
+                }
+                return;
             }
-            return;
-        }
-        this.relayPool.forEach((relay) => {
-            if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
-            if (relay.subscriptions && relay.subscriptions.has(subId)) {
-                this._safeWsSend(relay.ws, closeMsg, { critical: true });
-                relay.subscriptions.delete(subId);
-            }
-        });
+            this.relayPool.forEach((relay) => {
+                if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+                if (relay.subscriptions && relay.subscriptions.has(subId)) {
+                    this._safeWsSend(relay.ws, closeMsg, { critical: true });
+                    relay.subscriptions.delete(subId);
+                }
+            });
+        };
+        for (const id of subIds) sendCloseFor(id);
     },
 
     // Coalesce channel subscription requests over a short window so multiple
@@ -3684,6 +3867,13 @@ Object.assign(NYM.prototype, {
         if (this._pendingChannelLoadTimer) {
             clearTimeout(this._pendingChannelLoadTimer);
             this._pendingChannelLoadTimer = null;
+        }
+        // If we're being rate-limited, defer the flush to give relays time
+        // to clear their concurrent-sub counter. The queue accumulates
+        // channels in the meantime so the next flush is a single batch.
+        if (this._isRateLimited('relay-pool')) {
+            this._pendingChannelLoadTimer = setTimeout(() => this._flushPendingChannelLoad(), 5000);
+            return;
         }
         const queue = this._pendingChannelLoadQueue || [];
         this._pendingChannelLoadQueue = [];

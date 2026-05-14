@@ -1481,6 +1481,7 @@ Object.assign(NYM.prototype, {
             let receivedCount = 0;
             let messageHandlers = [];
 
+            let releasedSlot = false;
             const cleanup = () => {
                 messageHandlers.forEach(handler => {
                     const index = this.relayMessageHandlers?.indexOf(handler);
@@ -1488,13 +1489,17 @@ Object.assign(NYM.prototype, {
                         this.relayMessageHandlers.splice(index, 1);
                     }
                 });
-                this.sendToRelay(["CLOSE", subId]);
+                try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+                if (!releasedSlot && typeof this._oneShotReqDone === 'function') {
+                    releasedSlot = true;
+                    this._oneShotReqDone();
+                }
             };
 
             const timeout = setTimeout(() => {
                 cleanup();
                 resolve();
-            }, 3000);
+            }, 2500);
 
             const handleMessage = (msg, relayUrl) => {
                 if (!Array.isArray(msg)) return false;
@@ -1548,7 +1553,9 @@ Object.assign(NYM.prototype, {
                 }
             ];
 
-            this.sendRequestToFewRelays(subscription);
+            const fire = () => this.sendRequestToFewRelays(subscription);
+            if (typeof this._oneShotReqAcquire === 'function') this._oneShotReqAcquire(fire);
+            else fire();
         });
     },
 

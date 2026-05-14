@@ -1140,14 +1140,15 @@ Object.assign(NYM.prototype, {
         if (now - this._typingThrottleTime < this._typingSendInterval) return;
         this._typingThrottleTime = now;
 
-        // Clear previous stop timer
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
 
-        // Send start
+        const convKey = this.currentGroup ? `group:${this.currentGroup}` : `pm:${this.currentPM}`;
+        if (!this._pmTypingStartedFor) this._pmTypingStartedFor = new Set();
+        this._pmTypingStartedFor.add(convKey);
         this._sendTypingEvent('start');
 
-        // Auto-send stop after 4s of no further typing
         this._typingStopTimer = setTimeout(() => {
+            if (this._pmTypingStartedFor) this._pmTypingStartedFor.delete(convKey);
             this._sendTypingEvent('stop');
         }, 4000);
     },
@@ -1157,8 +1158,11 @@ Object.assign(NYM.prototype, {
         if (!this._canSendGiftWraps() || !this.inPMMode) return;
         const context = this.currentGroup ? 'group' : 'pm';
         if (!this.isTypingIndicatorAllowedFor(context)) return;
+        const convKey = this.currentGroup ? `group:${this.currentGroup}` : `pm:${this.currentPM}`;
+        if (!this._pmTypingStartedFor || !this._pmTypingStartedFor.has(convKey)) return;
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
+        this._pmTypingStartedFor.delete(convKey);
         this._sendTypingEvent('stop');
     },
 
@@ -1355,8 +1359,11 @@ Object.assign(NYM.prototype, {
 
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         const geohash = this.currentGeohash;
+        if (!this._channelTypingStartedFor) this._channelTypingStartedFor = new Set();
+        this._channelTypingStartedFor.add(geohash);
         this._sendChannelTypingEvent('start', geohash);
         this._typingStopTimer = setTimeout(() => {
+            if (this._channelTypingStartedFor) this._channelTypingStartedFor.delete(geohash);
             this._sendChannelTypingEvent('stop', geohash);
         }, 4000);
     },
@@ -1364,10 +1371,13 @@ Object.assign(NYM.prototype, {
     sendChannelTypingStop(geohash) {
         const targetGeohash = geohash || this.currentGeohash;
         if (!targetGeohash) return;
+        // Only emit 'stop' if we actually emitted a 'start' for this geohash
+        if (!this._channelTypingStartedFor || !this._channelTypingStartedFor.has(targetGeohash)) return;
         if (!this.isTypingIndicatorAllowedFor('channel')) return;
         if (!this._canPublishChannelEvent()) return;
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
+        this._channelTypingStartedFor.delete(targetGeohash);
         this._sendChannelTypingEvent('stop', targetGeohash);
     },
 
@@ -1625,49 +1635,29 @@ Object.assign(NYM.prototype, {
     // processes the response (or after a timeout fallback).
     // Concurrent calls for the same pubkey share a single REQ via an in-flight
     // promise map; subsequent callers attach a resolver instead of re-issuing.
+    // Awaitable profile fetch. Routes through the batched profile queue
+    // so many concurrent callers share a single REQ instead of opening one
+    // each (and tripping per-relay "too many concurrent" limits).
     async fetchProfileDirect(pubkey) {
-        if (!this._profileFetchInFlight) this._profileFetchInFlight = new Map();
-        const existing = this._profileFetchInFlight.get(pubkey);
-        if (existing) {
-            await new Promise(resolve => {
-                if (!this.pendingProfileResolvers.has(pubkey)) {
-                    this.pendingProfileResolvers.set(pubkey, []);
-                }
-                // No own timer/CLOSE: piggyback on the in-flight request
-                this.pendingProfileResolvers.get(pubkey).push({ resolve, timer: null });
-                // Safety: still resolve if the in-flight request never completes
-                setTimeout(resolve, 4500);
-            });
-            return;
-        }
+        if (!pubkey) return;
 
-        const subId = 'pm-profile-' + Math.random().toString(36).slice(2);
-        const req = ["REQ", subId, { kinds: [0], authors: [pubkey], limit: 1 }];
+        // Skip if we already have a fresh profile (avoids needless REQ)
+        const lastFetch = (this.profileFetchedAt && this.profileFetchedAt.get(pubkey)) || 0;
+        const fresh = Date.now() - lastFetch < 5 * 60 * 1000;
+        if (fresh && this.userAvatars && this.userAvatars.has(pubkey)) return;
 
-        const inflight = (async () => {
-            try { this.sendRequestToFewRelays(req); } catch (_) { }
-
-            await new Promise(resolve => {
-                const timer = setTimeout(() => {
-                    this._removeProfileResolver(pubkey, entry);
-                    resolve();
-                }, 4000);
-                const entry = { resolve, timer };
-                if (!this.pendingProfileResolvers.has(pubkey)) {
-                    this.pendingProfileResolvers.set(pubkey, []);
-                }
-                this.pendingProfileResolvers.get(pubkey).push(entry);
-            });
-
-            try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
-        })();
-
-        this._profileFetchInFlight.set(pubkey, inflight);
-        try {
-            await inflight;
-        } finally {
-            this._profileFetchInFlight.delete(pubkey);
-        }
+        return new Promise(resolve => {
+            if (!this.pendingProfileResolvers.has(pubkey)) {
+                this.pendingProfileResolvers.set(pubkey, []);
+            }
+            const timer = setTimeout(() => {
+                this._removeProfileResolver(pubkey, entry);
+                resolve();
+            }, 2500);
+            const entry = { resolve, timer };
+            this.pendingProfileResolvers.get(pubkey).push(entry);
+            try { this.queueProfileFetch(pubkey); } catch (_) { resolve(); }
+        });
     },
 
     // Resolve all pending profile callbacks for a pubkey (called from kind 0 handler)
@@ -1693,13 +1683,10 @@ Object.assign(NYM.prototype, {
     // Returns immediately (fire-and-forget). The kind 0 handler updates
     // rendered avatars/names retroactively when responses arrive.
     queueProfileFetch(pubkey) {
-        // Skip if we already have a fresh profile or there's an in-flight
-        // direct fetch for this pubkey (avoids redundant relay REQs from
-        // multiple rendering paths racing on the same author).
+        // Skip if we already have a fresh profile
         const lastFetch = this.profileFetchedAt && this.profileFetchedAt.get(pubkey) || 0;
         const fresh = Date.now() - lastFetch < 5 * 60 * 1000;
         if (fresh && this.userAvatars && this.userAvatars.has(pubkey)) return;
-        if (this._profileFetchInFlight && this._profileFetchInFlight.has(pubkey)) return;
 
         if (this._profileBatchSet && this._profileBatchSet.has(pubkey)) return;
         if (!this._profileBatchQueue) this._profileBatchQueue = [];
@@ -1719,14 +1706,22 @@ Object.assign(NYM.prototype, {
         this._profileBatchTimer = null;
         if (pubkeys.length === 0) return;
 
-        const subId = 'batch-profile-' + Math.random().toString(36).slice(2);
-        const req = ["REQ", subId, { kinds: [0], authors: pubkeys, limit: pubkeys.length }];
-        try { this.sendRequestToFewRelays(req); } catch (_) { }
+        const run = () => {
+            const subId = 'batch-profile-' + Math.random().toString(36).slice(2);
+            const req = ["REQ", subId, { kinds: [0], authors: pubkeys, limit: pubkeys.length }];
+            try { this.sendRequestToFewRelays(req); } catch (_) { }
 
-        // Close subscription after responses arrive or timeout
-        setTimeout(() => {
-            try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
-        }, 4000);
+            setTimeout(() => {
+                try { this.closeFewRelaysSub(subId); } catch (_) { }
+                if (typeof this._oneShotReqDone === 'function') this._oneShotReqDone();
+            }, 2500);
+        };
+
+        if (typeof this._oneShotReqAcquire === 'function') {
+            this._oneShotReqAcquire(run);
+        } else {
+            run();
+        }
     },
 
     async generateKeypair() {
@@ -2095,10 +2090,15 @@ Object.assign(NYM.prototype, {
         ];
 
         if (this.connected) {
-            this.sendRequestToFewRelays(subscription);
-            setTimeout(() => {
-                this.sendToRelay(["CLOSE", subId]);
-            }, 3500);
+            const run = () => {
+                this.sendRequestToFewRelays(subscription);
+                setTimeout(() => {
+                    try { this.closeFewRelaysSub(subId); } catch (_) { }
+                    if (typeof this._oneShotReqDone === 'function') this._oneShotReqDone();
+                }, 2500);
+            };
+            if (typeof this._oneShotReqAcquire === 'function') this._oneShotReqAcquire(run);
+            else run();
         } else {
             this.messageQueue.push(JSON.stringify(subscription));
         }
