@@ -95,6 +95,9 @@ export async function onRequest(context) {
     }
   }, 30000);
 
+  // Relays that must never be banned, skipped, or backed off
+  const APP_RELAY = 'wss://relay.nymchat.app';
+
   // Track failed relays to avoid wasting cycles
   const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
   const FAILED_COOLDOWN = 60000;
@@ -162,6 +165,7 @@ export async function onRequest(context) {
   }
 
   function shouldSkipRelay(relayUrl) {
+    if (relayUrl === APP_RELAY) return false;
     // Permanent skip: relays that have rejected us with auth-required,
     // unsupported filter shape, etc. won't recover, don't retry.
     if (permanentlySkipped.has(relayUrl)) return true;
@@ -194,6 +198,7 @@ export async function onRequest(context) {
   }
 
   function trackRelayFailure(relayUrl) {
+    if (relayUrl === APP_RELAY) return;
     const existing = failedRelays.get(relayUrl);
     const attempts = existing ? existing.attempts + 1 : 1;
     failedRelays.set(relayUrl, { failedAt: Date.now(), attempts });
@@ -248,6 +253,7 @@ export async function onRequest(context) {
 
   function markPermanentlySkipped(relayUrl, reason) {
     if (!relayUrl || permanentlySkipped.has(relayUrl)) return;
+    if (relayUrl === APP_RELAY) return;
     permanentlySkipped.add(relayUrl);
     intentionallyClosed.add(relayUrl);
     const pendingTimer = reconnectTimers.get(relayUrl);
@@ -270,8 +276,9 @@ export async function onRequest(context) {
     if (!serverOpen) return;
     if (pendingReconnect.has(relayUrl)) return;
 
+    const isAppRelay = relayUrl === APP_RELAY;
     const attempts = reconnectAttempts.get(relayUrl) || 0;
-    if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+    if (!isAppRelay && attempts >= MAX_RECONNECT_ATTEMPTS) {
       trackRelayFailure(relayUrl);
       reconnectAttempts.delete(relayUrl);
       markPermanentlySkipped(relayUrl, 'connection-failed: max reconnect attempts');
@@ -282,7 +289,8 @@ export async function onRequest(context) {
     pendingReconnect.add(relayUrl);
 
     const baseDelay = 3000;
-    const delay = baseDelay * Math.pow(1.5, attempts) + Math.random() * 2000;
+    const maxAttemptsForBackoff = isAppRelay ? 6 : attempts;
+    const delay = baseDelay * Math.pow(1.5, Math.min(attempts, maxAttemptsForBackoff)) + Math.random() * 2000;
 
     const timerId = setTimeout(() => {
       reconnectTimers.delete(relayUrl);

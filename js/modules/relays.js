@@ -312,6 +312,61 @@ Object.assign(NYM.prototype, {
         this._safeWsSend(relay.ws, JSON.stringify(this._normalizeReqPayload(['REQ', subId, ...filters])), { critical: true });
     },
 
+    // Force the app relay (wss://relay.nymchat.app) to be connected
+    async ensureAppRelayConnected() {
+        const url = this.appRelay;
+        if (!url) return;
+
+        this.blacklistedRelays.delete(url);
+        this.blacklistTimestamps.delete(url);
+        this.failedRelays.delete(url);
+
+        if (this.useRelayProxy) {
+            if (!navigator.onLine) return;
+            if (!this._isAnyPoolOpen()) {
+                if (!this._poolReconnecting) this._schedulePoolReconnect();
+                return;
+            }
+            const expectedShards = this._computeExpectedShards();
+            const shard = expectedShards.find(s => Array.isArray(s.relays) && s.relays.includes(url));
+            if (!shard) return;
+            const existing = this.poolSockets.find(p => p.id === shard.id);
+            const shardOpen = existing && existing.ws && existing.ws.readyState === WebSocket.OPEN;
+            if (!shardOpen) this._reconnectPoolShard(shard);
+            return;
+        }
+
+        const relay = this.relayPool.get(url);
+        const isOpen = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
+        if (isOpen) return;
+
+        if (this.reconnectingRelays && this.reconnectingRelays.has(url)) return;
+        if (this.pendingConnections && this.pendingConnections.has(url)) return;
+
+        await this.connectToRelay(url, 'relay');
+        const r = this.relayPool.get(url);
+        if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+            this.subscribeToSingleRelay(url);
+            this.updateConnectionStatus();
+        }
+    },
+
+    startAppRelayWatchdog() {
+        if (this._appRelayWatchdog) return;
+        this.ensureAppRelayConnected();
+        this._appRelayWatchdog = setInterval(() => {
+            if (!navigator.onLine) return;
+            this.ensureAppRelayConnected();
+        }, 15000);
+    },
+
+    stopAppRelayWatchdog() {
+        if (this._appRelayWatchdog) {
+            clearInterval(this._appRelayWatchdog);
+            this._appRelayWatchdog = null;
+        }
+    },
+
     // Ensure the first 5 broadcast relays are always connected regardless of channel
     async ensureDefaultRelaysConnected() {
         // Pool mode: proxy manages all connections
@@ -995,6 +1050,7 @@ Object.assign(NYM.prototype, {
         try {
             this.initialConnectionInProgress = true;
             this.updateConnectionStatus('Connecting...');
+            this.startAppRelayWatchdog();
 
             // Use multiplexed relay pool when running on Cloudflare (or remote proxy)
             if (this.useRelayProxy) {
@@ -1540,6 +1596,7 @@ Object.assign(NYM.prototype, {
     },
 
     shouldRetryRelay(relayUrl) {
+        if (relayUrl === this.appRelay) return true;
         const failedAttempt = this.failedRelays.get(relayUrl);
         if (!failedAttempt) return true;
 
@@ -2792,11 +2849,12 @@ Object.assign(NYM.prototype, {
 
                         // Implement exponential backoff for reconnection
                         // Use faster reconnection for previously connected relays
+                        const isAppRelay = relayUrl === this.appRelay;
                         const attemptReconnect = (attempt = 0) => {
-                            const maxAttempts = 10;
+                            const maxAttempts = isAppRelay ? Infinity : 10;
                             // Faster initial delay for previously connected relays (1s vs 5s)
-                            const baseDelay = wasConnected ? 1000 : 5000;
-                            const maxDelay = wasConnected ? 30000 : 60000;
+                            const baseDelay = (wasConnected || isAppRelay) ? 1000 : 5000;
+                            const maxDelay = (wasConnected || isAppRelay) ? 30000 : 60000;
 
                             // Calculate exponential backoff delay
                             const delay = Math.min(baseDelay * Math.pow(1.5, attempt), maxDelay);
@@ -3746,6 +3804,7 @@ Object.assign(NYM.prototype, {
     // RELAYS update so the worker drops the upstream connection.
     _permanentlyBlacklistRelay(relayUrl, reason) {
         if (!relayUrl || relayUrl === 'relay-pool') return;
+        if (relayUrl === this.appRelay) return;
         if (!this._permanentBlacklist) this._permanentBlacklist = new Set();
         if (this._permanentBlacklist.has(relayUrl)) return;
         this._permanentBlacklist.add(relayUrl);
