@@ -1031,6 +1031,9 @@ Object.assign(NYM.prototype, {
             if (!user || !user.nym) return;
             if (blockedUsers.has(user.nym)) return;
             if (pmOnlyPubkeys && !pmOnlyPubkeys.has(pubkey)) return;
+            if (pubkey !== this.pubkey && !this.isFriend?.(pubkey) &&
+                typeof this.isGibberishNym === 'function' &&
+                this.isGibberishNym(user.nym)) return;
 
             const isRecent = (now - user.lastSeen) < ACTIVE_THRESHOLD;
             let effectiveStatus = user.status;

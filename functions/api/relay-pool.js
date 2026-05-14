@@ -259,6 +259,160 @@ export async function onRequest(context) {
     return raw.substring(start, end);
   }
 
+  // Extract a JSON string field from an event object embedded in a raw frame.
+  // Limited to the substring after the first '{' so it skips envelope fields.
+  // Returns the decoded value (handling common \" / \\ / \n escapes) or null.
+  function extractEventStringField(raw, fieldName) {
+    const braceIdx = raw.indexOf('{');
+    if (braceIdx === -1) return null;
+    const key = '"' + fieldName + '":"';
+    const idx = raw.indexOf(key, braceIdx);
+    if (idx === -1) return null;
+    let i = idx + key.length;
+    let out = '';
+    const max = Math.min(raw.length, i + 4096);
+    while (i < max) {
+      const c = raw.charCodeAt(i);
+      if (c === 92) {
+        const n = raw.charCodeAt(i + 1);
+        if (n === 110) out += '\n';
+        else if (n === 116) out += '\t';
+        else if (n === 114) out += '\r';
+        else if (n === 117) {
+          out += String.fromCharCode(parseInt(raw.substring(i + 2, i + 6), 16) || 0);
+          i += 6; continue;
+        } else out += raw[i + 1];
+        i += 2; continue;
+      }
+      if (c === 34) return out;
+      out += raw[i];
+      i++;
+    }
+    return null;
+  }
+
+  function extractEventKind(raw) {
+    const braceIdx = raw.indexOf('{');
+    if (braceIdx === -1) return -1;
+    const idx = raw.indexOf('"kind":', braceIdx);
+    if (idx === -1) return -1;
+    let i = idx + 7;
+    while (raw.charCodeAt(i) === 32) i++;
+    let n = 0;
+    let saw = false;
+    while (i < raw.length) {
+      const c = raw.charCodeAt(i);
+      if (c < 48 || c > 57) break;
+      n = n * 10 + (c - 48);
+      saw = true;
+      i++;
+    }
+    return saw ? n : -1;
+  }
+
+  // Find a tag value in the raw "tags":[["n","<value>"], ...] structure.
+  // Conservative pattern match keyed on `["<tagName>","` — no JSON.parse.
+  function extractTagValue(raw, tagName) {
+    const braceIdx = raw.indexOf('{');
+    if (braceIdx === -1) return null;
+    const tagsIdx = raw.indexOf('"tags":', braceIdx);
+    if (tagsIdx === -1) return null;
+    const needle = '["' + tagName + '","';
+    const idx = raw.indexOf(needle, tagsIdx);
+    if (idx === -1) return null;
+    const start = idx + needle.length;
+    const end = raw.indexOf('"', start);
+    if (end === -1 || end - start > 256) return null;
+    return raw.substring(start, end);
+  }
+
+  // Mirror of the client-side _looksLikeRandomToken heuristic.
+  // Recognises nanoid-style spam strings like "IBLm9lyTuP", "AJvgLLPASR".
+  function looksLikeRandomToken(token) {
+    if (!token || token.length < 8 || token.length > 40) return false;
+    if (!/^[A-Za-z0-9]+$/.test(token)) return false;
+    if (!/[A-Z]/.test(token) || !/[a-z]/.test(token)) return false;
+
+    const half = Math.floor(token.length / 2);
+    for (let unit = 3; unit <= half; unit++) {
+      const head = token.substring(0, unit);
+      if (token.substring(unit, unit * 2) === head) return true;
+    }
+
+    let interiorUpper = 0;
+    for (let i = 1; i < token.length; i++) {
+      const c = token.charCodeAt(i);
+      if (c >= 65 && c <= 90) interiorUpper++;
+    }
+    return (interiorUpper / (token.length - 1)) >= 0.25;
+  }
+
+  // Mirror of isSpamMessage — used at the relay-proxy boundary to drop
+  // jibberish channel events before they ever reach the client.
+  function isSpamContent(content) {
+    if (typeof content !== 'string') return false;
+    const trimmed = content.trim();
+    if (trimmed.includes('joined the channel via bitchat.land')) return true;
+    if (trimmed.includes('["client","chorus"]')) return true;
+    if (trimmed.length < 6) return false;
+    if (trimmed.includes('://') || trimmed.startsWith('www.')) return false;
+    if (/^ln(bc|tb|ts)/i.test(trimmed)) return false;
+    if (/^cashu/i.test(trimmed)) return false;
+    if (/^(npub|nsec|note|nevent|naddr)1[a-z0-9]+$/i.test(trimmed)) return false;
+    if (trimmed.includes('```') || trimmed.includes('`')) return false;
+    if (trimmed.startsWith('data:image')) return false;
+
+    const tokens = trimmed.split(/\s+/).filter(Boolean);
+    if (tokens.length >= 2) {
+      const first = tokens[0];
+      if (first.length >= 6 && /^[A-Za-z0-9]+$/.test(first) &&
+          tokens.every(t => t === first)) return true;
+    }
+    if (tokens.length === 1 && tokens[0].length >= 12 && /^[A-Za-z0-9]+$/.test(tokens[0])) {
+      const t = tokens[0];
+      for (let unit = 4; unit <= Math.floor(t.length / 2); unit++) {
+        const head = t.substring(0, unit);
+        if (t.substring(unit, unit * 2) === head) return true;
+      }
+    }
+
+    let gibberish = 0;
+    let analyzable = 0;
+    for (const tok of tokens) {
+      if (tok.length < 6) continue;
+      analyzable++;
+      if (looksLikeRandomToken(tok)) gibberish++;
+    }
+    if (analyzable > 0 && gibberish / analyzable >= 0.5) return true;
+    if (tokens.length === 1 && looksLikeRandomToken(tokens[0])) return true;
+
+    return false;
+  }
+
+  function isSpamNym(nym) {
+    if (typeof nym !== 'string') return false;
+    const n = nym.trim();
+    if (!n || n.length < 8) return false;
+    return looksLikeRandomToken(n);
+  }
+
+  // Channel spam suppression at the pool boundary. Only inspects kind 20000
+  // (ephemeral geohash messages) since other kinds are typically encrypted or
+  // app-internal. Tracks drop counts for diagnostics.
+  let droppedSpamCount = 0;
+  function isSpamEventFrame(raw) {
+    const kind = extractEventKind(raw);
+    if (kind !== 20000) return false;
+    const content = extractEventStringField(raw, 'content');
+    if (content && isSpamContent(content)) return true;
+    const nymTag = extractTagValue(raw, 'n');
+    if (nymTag) {
+      const cleanNym = nymTag.replace(/#[a-fA-F0-9]{4}$/, '');
+      if (isSpamNym(cleanNym)) return true;
+    }
+    return false;
+  }
+
   // Connect to a relay immediately (no staggering)
   function queueConnection(relayUrl, type) {
     if (upstreams.has(relayUrl)) return;
@@ -391,6 +545,12 @@ export async function onRequest(context) {
             if (seenEvents.has(eventId)) return; // Dedup
             seenEvents.set(eventId, 1);
             trimDedup();
+          }
+          // Drop channel spam server-side so the client never has to render
+          // a flood of gibberish kind-20000 events.
+          if (isSpamEventFrame(raw)) {
+            droppedSpamCount++;
+            return;
           }
           info.eventCount++;
           sendToClient(raw);

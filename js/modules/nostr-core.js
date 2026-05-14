@@ -212,6 +212,12 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            // Drop spam-bot events
+            if (event.pubkey !== this.pubkey && !this.isFriend?.(event.pubkey) &&
+                this.isGibberishNym(nym)) {
+                return;
+            }
+
             // Track discovered geohash for potential batch loading
             if (geohash && !this.discoveredGeohashes.has(geohash)) {
                 this.discoveredGeohashes.add(geohash);
@@ -783,21 +789,69 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Does a token look like a randomly-generated alphanumeric string
+    _looksLikeRandomToken(token) {
+        if (!token || token.length < 8 || token.length > 40) return false;
+        if (!/^[A-Za-z0-9]+$/.test(token)) return false;
+
+        const hasUpper = /[A-Z]/.test(token);
+        const hasLower = /[a-z]/.test(token);
+        if (!hasUpper || !hasLower) return false;
+
+        const half = Math.floor(token.length / 2);
+        for (let unit = 3; unit <= half; unit++) {
+            const head = token.substring(0, unit);
+            if (token.substring(unit, unit * 2) === head) return true;
+        }
+
+        let interiorUpper = 0;
+        for (let i = 1; i < token.length; i++) {
+            const c = token.charCodeAt(i);
+            if (c >= 65 && c <= 90) interiorUpper++;
+        }
+        const interiorUpperRatio = interiorUpper / (token.length - 1);
+        return interiorUpperRatio >= 0.25;
+    },
+
+    // Detects repeated-token spam such as "abc abc abc" or "abcabcabc"
+    _hasRepeatedTokenSpam(trimmed) {
+        const tokens = trimmed.split(/\s+/).filter(Boolean);
+        if (tokens.length >= 2) {
+            const first = tokens[0];
+            if (first.length >= 6 && /^[A-Za-z0-9]+$/.test(first) &&
+                tokens.every(t => t === first)) {
+                return true;
+            }
+        }
+        if (tokens.length === 1 && tokens[0].length >= 12 && /^[A-Za-z0-9]+$/.test(tokens[0])) {
+            const t = tokens[0];
+            for (let unit = 4; unit <= Math.floor(t.length / 2); unit++) {
+                const head = t.substring(0, unit);
+                if (t.substring(unit, unit * 2) === head) return true;
+            }
+        }
+        return false;
+    },
+
     isSpamMessage(content) {
         // Check if spam filter is disabled
         if (this.spamFilterEnabled === false) return false;
+        if (typeof content !== 'string') return false;
 
         // Remove whitespace to check the core content
         const trimmed = content.trim();
-
-        // Allow empty messages or very short ones
-        if (trimmed.length < 20) return false;
 
         // Block client spam
         if (trimmed.includes('joined the channel via bitchat.land')) return true;
 
         // Block non-nym client messages
         if (trimmed.includes('["client","chorus"]')) return true;
+
+        // Standard mode stops here — only well-known spam strings are blocked
+        if (this.spamFilterAggressive === false) return false;
+
+        // Allow empty messages or very short ones
+        if (trimmed.length < 6) return false;
 
         // Check if it's a URL (contains :// or starts with www.)
         if (trimmed.includes('://') || trimmed.startsWith('www.')) return false;
@@ -814,19 +868,38 @@ Object.assign(NYM.prototype, {
         // Check for code blocks or formatted content
         if (trimmed.includes('```') || trimmed.includes('`')) return false;
 
+        if (trimmed.startsWith('data:image')) return false;
+
+        if (this._hasRepeatedTokenSpam(trimmed)) return true;
+
         const words = trimmed.split(/[\s\u3000\u2000-\u200B\u0020\u00A0.,;!?。、，；！？\n]/);
-        const longestWord = Math.max(...words.map(w => w.length));
+        const filteredWords = words.filter(Boolean);
+
+        let gibberishTokens = 0;
+        let analyzableTokens = 0;
+        for (const tok of filteredWords) {
+            if (tok.length < 6) continue;
+            analyzableTokens++;
+            if (this._looksLikeRandomToken(tok)) gibberishTokens++;
+        }
+        if (analyzableTokens > 0 && gibberishTokens / analyzableTokens >= 0.5) {
+            return true;
+        }
+
+        if (filteredWords.length === 1 && this._looksLikeRandomToken(filteredWords[0])) {
+            return true;
+        }
+
+        const longestWord = filteredWords.reduce((m, w) => Math.max(m, w.length), 0);
 
         if (longestWord > 100) {
-            if (trimmed.startsWith('data:image')) return false;
-
             const hasOnlyAlphaNumeric = /^[a-zA-Z0-9]+$/.test(trimmed);
             if (hasOnlyAlphaNumeric && trimmed.length > 100) {
                 return true;
             }
 
-            if (/^[a-zA-Z0-9]+$/.test(words.find(w => w.length > 100))) {
-                const longWord = words.find(w => w.length > 100);
+            const longWord = filteredWords.find(w => w.length > 100);
+            if (longWord && /^[a-zA-Z0-9]+$/.test(longWord)) {
                 const charFreq = {};
                 for (const char of longWord) {
                     charFreq[char] = (charFreq[char] || 0) + 1;
@@ -843,6 +916,16 @@ Object.assign(NYM.prototype, {
         }
 
         return false;
+    },
+
+    // Detects a randomized / spam-bot nym
+    isGibberishNym(nym) {
+        if (this.spamFilterEnabled === false) return false;
+        if (this.spamFilterAggressive === false) return false;
+        if (typeof nym !== 'string') return false;
+        const n = nym.trim();
+        if (!n || n.length < 8) return false;
+        return this._looksLikeRandomToken(n);
     },
 
     handleMuteList(event) {
