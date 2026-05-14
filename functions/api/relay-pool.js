@@ -11,6 +11,7 @@
 //   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
 //   ["REQ", subId, ...filters]   - fans out to read relays only
 //   ["CLOSE", subId]             - fans out to read relays only
+//   ["KIND_BLACKLIST", { "wss://relay": [kind, ...], ... }] - skip relay for REQs whose kinds are all in its set
 //
 // Protocol (proxy → client):
 //   ["EVENT", subId, eventObj]   - deduplicated via string extraction (no JSON.parse)
@@ -42,6 +43,7 @@ export async function onRequest(context) {
   const relayLatency = new Map();    // relayUrl -> latency ms
   let writeOnlyRelays = new Set();
   let dmRelays = [];
+  const kindBlacklist = new Map();
   let serverOpen = true;
 
   // Dedup housekeeping — increased capacity for high relay counts
@@ -575,11 +577,38 @@ export async function onRequest(context) {
             activeSubscriptions.set(subId, event.data);
             const reqTargets = new Set();
             subRelays.set(subId, reqTargets);
+            const reqKinds = new Set();
+            for (let i = 2; i < msg.length; i++) {
+              const f = msg[i];
+              if (f && Array.isArray(f.kinds)) {
+                for (const k of f.kinds) reqKinds.add(k);
+              }
+            }
             sendToUpstreams(event.data, (url, info) => {
               if (info.type === 'write') return false;
+              if (reqKinds.size > 0) {
+                const blocked = kindBlacklist.get(url);
+                if (blocked && blocked.size > 0) {
+                  let allBlocked = true;
+                  for (const k of reqKinds) {
+                    if (!blocked.has(k)) { allBlocked = false; break; }
+                  }
+                  if (allBlocked) return false;
+                }
+              }
               reqTargets.add(url);
               return true;
             });
+          } else if (msgType === 'KIND_BLACKLIST') {
+            const config = msg[1];
+            if (!config || typeof config !== 'object') return;
+            kindBlacklist.clear();
+            for (const relay of Object.keys(config)) {
+              const kinds = config[relay];
+              if (Array.isArray(kinds) && kinds.length > 0) {
+                kindBlacklist.set(relay, new Set(kinds.filter(k => typeof k === 'number')));
+              }
+            }
           } else if (msgType === 'CLOSE') {
             const subId = msg[1];
             const targets = subRelays.get(subId);

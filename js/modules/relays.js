@@ -617,31 +617,30 @@ Object.assign(NYM.prototype, {
 
     async checkConnectionHealth() {
 
-        // Pool mode: check individual poolSockets for staleness
-        // (browser throttles timers when backgrounded so keepalive may not fire)
         if (this.useRelayProxy) {
             const now = Date.now();
-            const STALE_MS = 120000; // >3 missed POOL:PING cycles (30s each) + margin
+            const STALE_MS = 120000;
             let closedAny = false;
             for (const p of this.poolSockets) {
                 if (p.ws && p.ws.readyState === WebSocket.OPEN) {
                     const silenceMs = now - (p.lastMessage || 0);
                     if (silenceMs > STALE_MS) {
-                        // Connection is likely a zombie — close to trigger reconnect
                         p.ws.close();
                         closedAny = true;
                     }
                 }
             }
             if (closedAny) {
-                // onclose handlers will fire and trigger reconnection;
-                // force status update so UI reflects disconnected state immediately
                 this._mergePoolStatus();
                 this._syncLegacyPoolSocket();
             }
+            this.updateConnectionStatus();
+            if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
+                this._schedulePoolReconnect();
+            }
+            return;
         }
 
-        // First, check if we think we're connected
         let actuallyConnected = 0;
         const deadRelays = [];
 
@@ -2058,6 +2057,14 @@ Object.assign(NYM.prototype, {
                     dmRelays: shard.dmRelays || []
                 }]));
 
+                if (this._relayUnsupportedKinds && this._relayUnsupportedKinds.size > 0) {
+                    const payload = {};
+                    for (const [relay, kinds] of this._relayUnsupportedKinds) {
+                        payload[relay] = [...kinds];
+                    }
+                    try { ws.send(JSON.stringify(['KIND_BLACKLIST', payload])); } catch (_) { }
+                }
+
                 poolEntry.lastMessage = Date.now();
                 this._syncLegacyPoolSocket();
 
@@ -2250,9 +2257,59 @@ Object.assign(NYM.prototype, {
     _normalizeReqPayload(data) {
         if (!Array.isArray(data)) return data;
         if (data[0] === 'REQ') {
-            return ['REQ', data[1], ...this._normalizeFilters(data.slice(2))];
+            const subId = data[1];
+            const filters = data.slice(2);
+            if (subId) this._trackSubKinds(subId, filters);
+            return ['REQ', subId, ...this._normalizeFilters(filters)];
         }
         return data;
+    },
+
+    _trackSubKinds(subId, filters) {
+        if (!this._subKinds) this._subKinds = new Map();
+        const kinds = new Set();
+        for (const f of filters) {
+            if (f && Array.isArray(f.kinds)) {
+                for (const k of f.kinds) if (typeof k === 'number') kinds.add(k);
+            }
+        }
+        if (kinds.size === 0) return;
+        if (this._subKinds.has(subId)) this._subKinds.delete(subId);
+        this._subKinds.set(subId, kinds);
+        if (this._subKinds.size > 2000) {
+            const firstKey = this._subKinds.keys().next().value;
+            this._subKinds.delete(firstKey);
+        }
+    },
+
+    _recordUnsupportedKindRejection(relayUrl, subId) {
+        if (!relayUrl || relayUrl === 'relay-pool' || !subId) return;
+        const kinds = this._subKinds && this._subKinds.get(subId);
+        if (!kinds || kinds.size === 0) return;
+        if (!this._relayUnsupportedKinds) this._relayUnsupportedKinds = new Map();
+        let set = this._relayUnsupportedKinds.get(relayUrl);
+        if (!set) {
+            set = new Set();
+            this._relayUnsupportedKinds.set(relayUrl, set);
+        }
+        let added = false;
+        for (const k of kinds) {
+            if (!set.has(k)) { set.add(k); added = true; }
+        }
+        if (added) this._sendKindBlacklistToWorkers();
+    },
+
+    _sendKindBlacklistToWorkers() {
+        if (!this.useRelayProxy || !this._isAnyPoolOpen()) return;
+        if (!this._relayUnsupportedKinds || this._relayUnsupportedKinds.size === 0) return;
+        const payload = {};
+        for (const [relay, kinds] of this._relayUnsupportedKinds) {
+            payload[relay] = [...kinds];
+        }
+        const msg = JSON.stringify(['KIND_BLACKLIST', payload]);
+        for (const p of this.poolSockets) {
+            this._safeWsSend(p.ws, msg, { critical: true });
+        }
     },
 
     _poolSend(data) {
@@ -3498,7 +3555,9 @@ Object.assign(NYM.prototype, {
                         this._backfillSubs.delete(closedSubId);
                     }
                 }
-                if (this._isPermanentRejection(reason)) {
+                if (this._isUnsupportedKind(reason)) {
+                    this._recordUnsupportedKindRejection(attributedRelay, closedSubId);
+                } else if (this._isPermanentRejection(reason)) {
                     this._permanentlyBlacklistRelay(attributedRelay, reason);
                 } else if (typeof reason === 'string' && /rate-?limit|too many|concurrent/i.test(reason)) {
                     this._noteRateLimit(attributedRelay);
@@ -3514,7 +3573,9 @@ Object.assign(NYM.prototype, {
                 const notice = data[0];
                 const attributedRelay = (typeof data[1] === 'string' && data[1].startsWith('wss://'))
                     ? data[1] : relayUrl;
-                if (this._isPermanentRejection(notice)) {
+                if (this._isUnsupportedKind(notice)) {
+                    // Per-REQ only: don't blacklist the relay for other kinds.
+                } else if (this._isPermanentRejection(notice)) {
                     this._permanentlyBlacklistRelay(attributedRelay, notice);
                 } else if (typeof notice === 'string' && /rate-?limit|too many|concurrent/i.test(notice)) {
                     this._noteRateLimit(attributedRelay);
@@ -3561,10 +3622,11 @@ Object.assign(NYM.prototype, {
                 dot.style.background = 'var(--danger)';
             }
         } else {
-            // Multiplexed pool mode: use pool-reported count across all workers
-            if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            // Pool mode: relayPool entries hold a stale legacy poolSocket ref
+            // and report disconnected during single-worker reconnects.
+            if (this.useRelayProxy) {
                 const count = this.poolConnectedRelays.length;
-                if (count > 0) {
+                if (this._isAnyPoolOpen() && count > 0) {
                     statusEl.textContent = `Connected (${count} relays)`;
                     dot.style.background = 'var(--primary)';
                     this.connected = true;
@@ -3575,16 +3637,13 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Check actual WebSocket connection states, not just pool size
             let actuallyConnected = 0;
 
             this.relayPool.forEach((relay, url) => {
                 if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                     actuallyConnected++;
                 } else {
-                    // Clean up dead connections from pool
                     this.relayPool.delete(url);
-
                 }
             });
 
@@ -3655,7 +3714,12 @@ Object.assign(NYM.prototype, {
             || /\bprotected\b/i.test(reason)
             || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
             || /\binvalid query\b/i.test(reason)
-            || /\bconnection-failed\b/i.test(reason);
+            || /\bconnection-failed\b/i.test(reason)
+            || /kinds?\s*not\s*supported/i.test(reason);
+    },
+
+    _isUnsupportedKind(reason) {
+        return typeof reason === 'string' && /kinds?\s*not\s*supported/i.test(reason);
     },
 
     // Count error responses per relay. If a relay sends 5+ errors within
