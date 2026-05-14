@@ -569,6 +569,9 @@ Object.assign(NYM.prototype, {
                         }
                     } else {
                         setTimeout(() => this.resubscribeAllRelays(), 250);
+                        if (this._poolFallbackActive && navigator.onLine) {
+                            this._schedulePoolReconnectInBackground(true);
+                        }
                     }
                 }, delay);
             } else {
@@ -607,6 +610,9 @@ Object.assign(NYM.prototype, {
                 } else {
                     // Always refresh subscriptions when window regains focus
                     setTimeout(() => this.resubscribeAllRelays(), 250);
+                    if (this._poolFallbackActive && navigator.onLine) {
+                        this._schedulePoolReconnectInBackground(true);
+                    }
                 }
             }, delay);
         });
@@ -637,6 +643,9 @@ Object.assign(NYM.prototype, {
                     } else {
                         // Always refresh subscriptions when app resumes
                         setTimeout(() => this.resubscribeAllRelays(), 250);
+                        if (this._poolFallbackActive && navigator.onLine) {
+                            this._schedulePoolReconnectInBackground(true);
+                        }
                     }
                 }, 200);
             });
@@ -841,6 +850,11 @@ Object.assign(NYM.prototype, {
                 this._lastPoolReconnectSchedule = 0; // Clear debounce for network restore
                 this._schedulePoolReconnect();
                 return;
+            }
+
+            // Fell back to direct mode earlier — try to restore the pool now
+            if (this._poolFallbackActive) {
+                this._schedulePoolReconnectInBackground(true);
             }
 
             // Clear any existing reconnection interval
@@ -1078,6 +1092,7 @@ Object.assign(NYM.prototype, {
                                 // Temporarily disable pool mode to allow direct connections,
                                 // but schedule background reconnect to restore pool mode later
                                 this.useRelayProxy = false;
+                                this._poolFallbackActive = true;
                                 this._schedulePoolReconnectInBackground();
                             }
                             // Fall through to direct relay connection code below
@@ -1644,6 +1659,7 @@ Object.assign(NYM.prototype, {
         if (this._isCloudflareHost || this._remoteApiFailed) return;
         this._remoteApiFailed = true;
         this.useRelayProxy = false;
+        this._poolFallbackActive = true;
         console.warn('[NYM] Remote API unreachable, falling back to direct connections');
         this._schedulePoolReconnectInBackground();
     },
@@ -1670,6 +1686,7 @@ Object.assign(NYM.prototype, {
 
         // Disable pool mode so all relay methods use direct connections
         this.useRelayProxy = false;
+        this._poolFallbackActive = true;
         console.warn('[NYM] Pool mode disabled, switching to direct relay connections');
 
         // Connect directly to relays
@@ -1677,56 +1694,72 @@ Object.assign(NYM.prototype, {
         if (this.currentGeohash) {
             this.connectToGeoRelays(this.currentGeohash);
         }
+
+        // Keep trying to restore pool mode in the background
+        this._schedulePoolReconnectInBackground();
     },
 
     // Try to restore pool mode in the background
-    _schedulePoolReconnectInBackground() {
-        if (this._bgPoolReconnectTimer) return;
-        let attempts = 0;
+    _schedulePoolReconnectInBackground(immediate = false) {
+        if (!this._poolFallbackActive) return;
+        if (this._bgPoolReconnectInFlight) return;
+
+        if (this._bgPoolReconnectTimer) {
+            if (!immediate) return;
+            clearTimeout(this._bgPoolReconnectTimer);
+            this._bgPoolReconnectTimer = null;
+        }
+
+        if (typeof this._bgPoolReconnectAttempts !== 'number') {
+            this._bgPoolReconnectAttempts = 0;
+        }
 
         const tryRestore = () => {
-            attempts++;
-            if (attempts > 4) {
-                // Give up restoring pool mode for this session
-                clearTimeout(this._bgPoolReconnectTimer);
-                this._bgPoolReconnectTimer = null;
+            this._bgPoolReconnectTimer = null;
+            if (!this._poolFallbackActive) return;
+            if (!navigator.onLine) {
+                this._bgPoolReconnectAttempts = 0;
                 return;
             }
-            // Temporarily clear the remote-API-failed flag
+
+            this._bgPoolReconnectAttempts++;
             const wasRemoteApiFailed = this._remoteApiFailed;
             this._remoteApiFailed = false;
             this.useRelayProxy = true;
             this._poolConnecting = false;
             this._poolReconnecting = false;
+            this._bgPoolReconnectInFlight = true;
+
             this._connectToRelayPool()
                 .then(() => {
-                    // Pool restored — switch back to pool mode
-                    clearTimeout(this._bgPoolReconnectTimer);
-                    this._bgPoolReconnectTimer = null;
+                    this._bgPoolReconnectInFlight = false;
+                    this._bgPoolReconnectAttempts = 0;
+                    this._poolFallbackActive = false;
                     console.log('[NYM] Pool mode restored');
                     this._startPoolKeepalive();
                     this._startPoolShardHealthCheck();
                     this._poolSubscribe();
-                    // Close direct relay connections (pool handles them now)
-                    this.relayPool.forEach((relay, url) => {
+                    this.relayPool.forEach((relay) => {
                         try { if (relay.ws) relay.ws.close(); } catch (_) { }
                     });
                     this.relayPool.clear();
                     this.updateConnectionStatus();
+                    this.retryPendingDMsOnReconnect();
                 })
                 .catch(() => {
-                    // Failed — stay in direct mode and restore the
-                    // remote-API-failed flag so other call sites keep
-                    // routing direct until the next retry tick.
+                    this._bgPoolReconnectInFlight = false;
                     this._remoteApiFailed = wasRemoteApiFailed;
                     this.useRelayProxy = false;
-                    const base = Math.min(30000 * Math.pow(2, attempts - 1), 120000);
+                    if (!this._poolFallbackActive) return;
+                    const expIdx = Math.min(this._bgPoolReconnectAttempts - 1, 4);
+                    const base = Math.min(15000 * Math.pow(2, expIdx), 120000);
                     const delay = this._jitter(base);
                     this._bgPoolReconnectTimer = setTimeout(tryRestore, delay);
                 });
         };
 
-        this._bgPoolReconnectTimer = setTimeout(tryRestore, 15000);
+        const initialDelay = immediate ? 0 : 15000;
+        this._bgPoolReconnectTimer = setTimeout(tryRestore, initialDelay);
     },
 
     _getProxiedRelayUrl(relayUrl) {
