@@ -71,20 +71,15 @@ Object.assign(NYM.prototype, {
         return conversation;
     },
 
-    trackMessage(pubkey, channel, isHistorical = false) {
-        // Don't track historical messages from initial load
-        if (isHistorical) {
-            return;
-        }
+    trackMessage(pubkey, channel, isHistorical = false, content = '') {
+        if (isHistorical) return;
 
         const now = Date.now();
-        const channelKey = channel; // Use channel as key for per-channel tracking
+        const channelKey = channel;
 
-        // Create channel-specific tracking
         if (!this.floodTracking.has(channelKey)) {
             this.floodTracking.set(channelKey, new Map());
         }
-
         const channelTracking = this.floodTracking.get(channelKey);
 
         if (!channelTracking.has(pubkey)) {
@@ -93,30 +88,65 @@ Object.assign(NYM.prototype, {
                 firstMessageTime: now,
                 blocked: false
             });
-            return;
+        } else {
+            const tracking = channelTracking.get(pubkey);
+            if (now - tracking.firstMessageTime > 2000) {
+                tracking.count = 1;
+                tracking.firstMessageTime = now;
+                tracking.blocked = false;
+            } else {
+                tracking.count++;
+                if (tracking.count > 10 && !tracking.blocked) {
+                    tracking.blocked = true;
+                    tracking.blockedUntil = now + 900000;
+                }
+            }
         }
 
-        const tracking = channelTracking.get(pubkey);
-
-        // Reset if more than 2 seconds have passed
-        if (now - tracking.firstMessageTime > 2000) {
-            tracking.count = 1;
-            tracking.firstMessageTime = now;
-            tracking.blocked = false;
-        } else {
-            tracking.count++;
-
-            // Block if more than 10 messages in 2 seconds IN THIS CHANNEL
-            if (tracking.count > 10 && !tracking.blocked) {
-                tracking.blocked = true;
-                tracking.blockedUntil = now + 900000; // 15 minutes
-
-                const nym = this.getNymFromPubkey(pubkey);
-            }
+        if (content) {
+            this._trackContent(pubkey, content, now);
         }
     },
 
+    _trackContent(pubkey, content, now) {
+        if (!this.contentFloodTracking) this.contentFloodTracking = new Map();
+        const normalized = content.replace(/\s+/g, ' ').trim().toLowerCase();
+        if (normalized.length < 6) return;
+
+        let entry = this.contentFloodTracking.get(pubkey);
+        if (!entry) {
+            entry = { samples: [], blockedUntil: 0 };
+            this.contentFloodTracking.set(pubkey, entry);
+        }
+
+        const WINDOW = 120000;
+        entry.samples = entry.samples.filter(s => now - s.t < WINDOW);
+        entry.samples.push({ t: now, c: normalized });
+
+        let matches = 0;
+        for (const s of entry.samples) {
+            if (s.c === normalized || s.c.includes(normalized) || normalized.includes(s.c)) {
+                matches++;
+            }
+        }
+
+        if (matches >= 3) {
+            entry.blockedUntil = now + 900000;
+        }
+    },
+
+    isContentFlooding(pubkey) {
+        if (!this.contentFloodTracking) return false;
+        const entry = this.contentFloodTracking.get(pubkey);
+        if (!entry) return false;
+        if (Date.now() < entry.blockedUntil) return true;
+        entry.blockedUntil = 0;
+        return false;
+    },
+
     isFlooding(pubkey, channel) {
+        if (this.isContentFlooding(pubkey)) return true;
+
         const channelTracking = this.floodTracking.get(channel);
         if (!channelTracking) return false;
 
@@ -128,7 +158,6 @@ Object.assign(NYM.prototype, {
             if (now < tracking.blockedUntil) {
                 return true;
             } else {
-                // Unblock after timeout
                 tracking.blocked = false;
                 tracking.blockedUntil = null;
             }
