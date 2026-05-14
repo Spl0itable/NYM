@@ -1170,16 +1170,15 @@ Object.assign(NYM.prototype, {
         // Compute rumor id once
         const rumorWithId = { ...rumor };
         rumorWithId.id = NT.getEventHash(rumorWithId);
+        const rumorJson = JSON.stringify(rumorWithId);
 
-        for (const pubkey of members) {
+        const wrapOne = async (pubkey) => {
             try {
-                // Use ephemeral recipient key when available (timing-attack mitigation)
                 const encryptTo = groupId ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
 
-                // Seal: encrypt rumor to recipient via extension or remote signer
                 const sealContent = useExtension
-                    ? await window.nostr.nip44.encrypt(encryptTo, JSON.stringify(rumorWithId))
-                    : await _nip46Encrypt(encryptTo, JSON.stringify(rumorWithId));
+                    ? await window.nostr.nip44.encrypt(encryptTo, rumorJson)
+                    : await _nip46Encrypt(encryptTo, rumorJson);
                 const sealUnsigned = {
                     kind: 13, content: sealContent, created_at: this.randomNow(), tags: []
                 };
@@ -1187,7 +1186,6 @@ Object.assign(NYM.prototype, {
                     ? await window.nostr.signEvent(sealUnsigned)
                     : await _nip46SignEvent(sealUnsigned);
 
-                // Wrap with local ephemeral keypair
                 const ephSk = NT.generateSecretKey();
                 const ckWrap = NT.nip44.getConversationKey(ephSk, encryptTo);
                 const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
@@ -1208,7 +1206,18 @@ Object.assign(NYM.prototype, {
             } catch (e) {
                 console.warn('[GiftWrap] Remote wrap failed for', pubkey, e);
             }
-        }
+        };
+
+        // Controlled-concurrency pool
+        const limit = useNip46 ? 4 : 8;
+        const queue = members.slice();
+        const workers = new Array(Math.min(limit, queue.length)).fill(0).map(async () => {
+            while (queue.length) {
+                const pk = queue.shift();
+                await wrapOne(pk);
+            }
+        });
+        await Promise.all(workers);
     },
 
     // Send a message to a group via NIP-17 gift wraps (one per member).

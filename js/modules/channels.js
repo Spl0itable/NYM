@@ -819,6 +819,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.cleanupGeoRelays(previousGeohash);
         }
 
+        // Close the prior channel's REQ on relays unless it's joined/common
+        // (keep those alive so background unread counts keep updating)
+        const previousKey = previousGeohash || previousChannel;
+        const newKey = geohash || channel;
+        if (previousKey && previousKey !== newKey && typeof this.closeChannelSubscription === 'function') {
+            this.closeChannelSubscription(previousKey);
+        }
+
         // Connect to nearby relays for geohash channels (async, non-blocking)
         // connectToGeoRelays handles its own subscription internally after
         // geo relays are configured. The proxy buffers GEO_EVENTs for relays

@@ -334,7 +334,7 @@ Object.assign(NYM.prototype, {
             relay.subscriptions = new Set();
         }
         relay.subscriptions.add(subId);
-        relay.ws.send(JSON.stringify(['REQ', subId, ...filters]));
+        this._safeWsSend(relay.ws, JSON.stringify(['REQ', subId, ...filters]), { critical: true });
     },
 
     // Ensure the first 5 broadcast relays are always connected regardless of channel
@@ -1023,7 +1023,8 @@ Object.assign(NYM.prototype, {
                 for (let attempt = 0; attempt < maxRetries; attempt++) {
                     try {
                         if (attempt > 0) {
-                            const delay = Math.min(2000 * Math.pow(2, attempt - 1), 8000);
+                            const base = Math.min(2000 * Math.pow(2, attempt - 1), 8000);
+                            const delay = this._jitter(base);
                             this.updateConnectionStatus(`Reconnecting (attempt ${attempt + 1})...`);
                             await new Promise(r => setTimeout(r, delay));
                         }
@@ -1388,7 +1389,7 @@ Object.assign(NYM.prototype, {
         // Close all active subscriptions for this relay
         if (relay.subscriptions) {
             relay.subscriptions.forEach(subId => {
-                relay.ws.send(JSON.stringify(["CLOSE", subId]));
+                this._safeWsSend(relay.ws, JSON.stringify(["CLOSE", subId]), { critical: true });
             });
             relay.subscriptions.clear();
         } else {
@@ -1421,23 +1422,19 @@ Object.assign(NYM.prototype, {
             if (!relay.subscriptions) relay.subscriptions = new Set();
             relay.subscriptions.add(subId);
             const filters = this._buildGeoFilters(since24h);
-            ws.send(JSON.stringify(["REQ", subId, ...filters]));
+            this._safeWsSend(ws, JSON.stringify(["REQ", subId, ...filters]), { critical: true });
             return;
         }
 
-        // Critical (default + DM) relays get the full subscription set
         const subId = Math.random().toString(36).substring(2);
 
-        // Track this subscription
         if (!relay.subscriptions) {
             relay.subscriptions = new Set();
         }
         relay.subscriptions.add(subId);
 
         const filters = this._buildCriticalFilters(since24h);
-
-        // Send single REQ with all filters
-        ws.send(JSON.stringify(["REQ", subId, ...filters]));
+        this._safeWsSend(ws, JSON.stringify(["REQ", subId, ...filters]), { critical: true });
     },
 
     // This is called when a user switches to a channel that hasn't been fully loaded
@@ -1445,6 +1442,12 @@ Object.assign(NYM.prototype, {
         // Skip if already loaded
         if (this.channelLoadedFromRelays.has(channelKey)) {
             return;
+        }
+
+        // Close any prior subscription for the same channel before opening a new one,
+        // so relays don't accumulate zombie subs on reconnect or rapid re-subscribe.
+        if (this.channelSubscriptions.has(channelKey)) {
+            this.closeChannelSubscription(channelKey, { force: true });
         }
 
         // Mark as loaded to prevent duplicate requests
@@ -1507,11 +1510,12 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Direct mode: send to geo relays first, then all others
+        // Direct mode: send to geo relays first, then all others (async fan-out)
         const reqStr = JSON.stringify(["REQ", subId, ...filters]);
         const sentUrls = new Set();
+        const geoTargets = [];
+        const otherTargets = [];
 
-        // Geo relays first for geohash channels
         if (channelType === 'geohash' && channelKey) {
             const closestRelays = this.getClosestRelaysForGeohash(channelKey);
             for (const r of closestRelays) {
@@ -1519,21 +1523,23 @@ Object.assign(NYM.prototype, {
                 if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                     if (!relay.subscriptions) relay.subscriptions = new Set();
                     relay.subscriptions.add(subId);
-                    relay.ws.send(reqStr);
+                    geoTargets.push(relay);
                     sentUrls.add(r.url);
                 }
             }
         }
 
-        // Then all other readable relays
         this.relayPool.forEach((relay, url) => {
             if (!sentUrls.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN &&
                 relay.type !== 'write') {
                 if (!relay.subscriptions) relay.subscriptions = new Set();
                 relay.subscriptions.add(subId);
-                relay.ws.send(reqStr);
+                otherTargets.push(relay);
             }
         });
+
+        this._broadcastAsync(geoTargets, reqStr, { critical: true });
+        this._broadcastAsync(otherTargets, reqStr, { critical: true });
 
         // Store the subscription ID for this channel
         this.channelSubscriptions.set(channelKey, subId);
@@ -1584,9 +1590,13 @@ Object.assign(NYM.prototype, {
 
         const subId = Math.random().toString(36).substring(2);
 
+        // Track the batched subId per channel so closeChannelSubscription can target it later
+        for (const ch of geohashChannels) {
+            this.channelSubscriptions.set(ch, subId);
+        }
+
         // Multiplexed pool mode
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            // Collect geo relays for all channels in the batch
             if (geohashChannels.length > 0) {
                 const geoUrls = new Set();
                 for (const ch of geohashChannels) {
@@ -1602,11 +1612,12 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Direct mode: send to geo relays first, then all others
+        // Direct mode: send to geo relays first, then all others (async fan-out)
         const reqStr = JSON.stringify(["REQ", subId, ...filters]);
         const sentUrls = new Set();
+        const geoTargets = [];
+        const otherTargets = [];
 
-        // Geo relays first
         if (geohashChannels.length > 0) {
             for (const ch of geohashChannels) {
                 const closest = this.getClosestRelaysForGeohash(ch);
@@ -1616,22 +1627,24 @@ Object.assign(NYM.prototype, {
                     if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                         if (!relay.subscriptions) relay.subscriptions = new Set();
                         relay.subscriptions.add(subId);
-                        relay.ws.send(reqStr);
+                        geoTargets.push(relay);
                         sentUrls.add(r.url);
                     }
                 }
             }
         }
 
-        // Then all other readable relays
         this.relayPool.forEach((relay, url) => {
             if (!sentUrls.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN &&
                 relay.type !== 'write') {
                 if (!relay.subscriptions) relay.subscriptions = new Set();
                 relay.subscriptions.add(subId);
-                relay.ws.send(reqStr);
+                otherTargets.push(relay);
             }
         });
+
+        this._broadcastAsync(geoTargets, reqStr, { critical: true });
+        this._broadcastAsync(otherTargets, reqStr, { critical: true });
     },
 
     // Load messages for a channel from relays - called when switching channels
@@ -1648,7 +1661,7 @@ Object.assign(NYM.prototype, {
 
         // If we have very few messages, send a targeted request
         if (currentMessages.length < 50) {
-            this.subscribeToChannelTargeted(channelKey, channelType);
+            this._queueChannelSubscription(channelKey, channelType);
         } else {
             // Mark as loaded so we don't recheck on every channel switch
             this.channelLoadedFromRelays.add(channelKey);
@@ -1786,7 +1799,8 @@ Object.assign(NYM.prototype, {
                     // routing direct until the next retry tick.
                     this._remoteApiFailed = wasRemoteApiFailed;
                     this.useRelayProxy = false;
-                    const delay = Math.min(30000 * Math.pow(2, attempts - 1), 120000);
+                    const base = Math.min(30000 * Math.pow(2, attempts - 1), 120000);
+                    const delay = this._jitter(base);
                     this._bgPoolReconnectTimer = setTimeout(tryRestore, delay);
                 });
         };
@@ -2330,20 +2344,18 @@ Object.assign(NYM.prototype, {
     // Send data to ALL open pool worker sockets
     _poolSend(data) {
         const msg = typeof data === 'string' ? data : JSON.stringify(data);
+        const critical = Array.isArray(data) && (data[0] === 'EVENT' || data[0] === 'DM_EVENT' || data[0] === 'GEO_EVENT' || data[0] === 'CLOSE');
         for (const p of this.poolSockets) {
-            if (p.ws && p.ws.readyState === WebSocket.OPEN) {
-                try { p.ws.send(msg); } catch (_) { }
-            }
+            this._safeWsSend(p.ws, msg, { critical });
         }
     },
 
     // Send data only to pool workers matching a specific role
     _poolSendToRole(role, data) {
         const msg = typeof data === 'string' ? data : JSON.stringify(data);
+        const critical = Array.isArray(data) && (data[0] === 'EVENT' || data[0] === 'DM_EVENT' || data[0] === 'GEO_EVENT' || data[0] === 'CLOSE');
         for (const p of this.poolSockets) {
-            if (p.role === role && p.ws && p.ws.readyState === WebSocket.OPEN) {
-                try { p.ws.send(msg); } catch (_) { }
-            }
+            if (p.role === role) this._safeWsSend(p.ws, msg, { critical });
         }
     },
 
@@ -2363,7 +2375,7 @@ Object.assign(NYM.prototype, {
         const subId = Math.random().toString(36).substring(2);
 
         const msg = JSON.stringify(["REQ", subId, ...filters]);
-        try { p.ws.send(msg); } catch (_) { }
+        this._safeWsSend(p.ws, msg, { critical: true });
 
         // Also subscribe to ephemeral pubkeys on critical shards
         if (!isGeoOrDiscovered) {
@@ -2499,7 +2511,7 @@ Object.assign(NYM.prototype, {
         this.relayPool.forEach(relay => {
             if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
                 for (const req of reqs) {
-                    try { relay.ws.send(req); } catch (_) { }
+                    this._safeWsSend(relay.ws, req, { critical: true });
                 }
             }
         });
@@ -2515,7 +2527,7 @@ Object.assign(NYM.prototype, {
                 const closeMsg = JSON.stringify(['CLOSE', oldSubId]);
                 this.relayPool.forEach(relay => {
                     if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        try { relay.ws.send(closeMsg); } catch (_) { }
+                        this._safeWsSend(relay.ws, closeMsg, { critical: true });
                     }
                 });
             }
@@ -2540,7 +2552,7 @@ Object.assign(NYM.prototype, {
                 const msg = JSON.stringify(['REQ', subId, filter]);
                 this.relayPool.forEach((relay, url) => {
                     if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                        try { relay.ws.send(msg); } catch (_) { }
+                        this._safeWsSend(relay.ws, msg, { critical: true });
                     }
                 });
             }
@@ -3203,12 +3215,12 @@ Object.assign(NYM.prototype, {
             // For REQ messages, send to all relays EXCEPT sendit.nosflare.com
             this.sendRequestToAllRelaysExceptNosflare(message);
         } else {
-            // For other messages (CLOSE, etc.), send to all relays
-            this.relayPool.forEach((relay, url) => {
-                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    relay.ws.send(msg);
-                }
+            const targets = [];
+            this.relayPool.forEach((relay) => {
+                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) targets.push(relay);
             });
+            const critical = Array.isArray(message) && message[0] === 'CLOSE';
+            this._broadcastAsync(targets, msg, { critical });
         }
     },
 
@@ -3223,22 +3235,24 @@ Object.assign(NYM.prototype, {
 
         const msg = JSON.stringify(message);
         const sent = new Set();
+        const priority = [];
+        const rest = [];
 
-        // Priority: always send to bitchat's DM relays first
         for (const url of this.bitchatDMRelays) {
             const relay = this.relayPool.get(url);
             if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                relay.ws.send(msg);
+                priority.push(relay);
                 sent.add(url);
             }
         }
-
-        // Then fan out to all other connected relays for maximum propagation
         this.relayPool.forEach((relay, url) => {
             if (!sent.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                relay.ws.send(msg);
+                rest.push(relay);
             }
         });
+
+        this._broadcastAsync(priority, msg, { critical: true });
+        this._broadcastAsync(rest, msg, { critical: true });
 
         return sent.size;
     },
@@ -3251,13 +3265,13 @@ Object.assign(NYM.prototype, {
         }
 
         const msg = JSON.stringify(message);
-
-        // Send REQ to all connected relays EXCEPT nosflare (write-only)
-        this.relayPool.forEach((relay, url) => {
+        const targets = [];
+        this.relayPool.forEach((relay) => {
             if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                relay.ws.send(msg);
+                targets.push(relay);
             }
         });
+        this._broadcastAsync(targets, msg, { critical: true });
     },
 
     sendRequestToFewRelays(message, maxRelays = 5) {
@@ -3275,8 +3289,7 @@ Object.assign(NYM.prototype, {
             if (sent >= maxRelays) break;
             const relay = this.relayPool.get(url);
             if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                relay.ws.send(msg);
-                sent++;
+                if (this._safeWsSend(relay.ws, msg, { critical: true })) sent++;
             }
         }
 
@@ -3286,8 +3299,7 @@ Object.assign(NYM.prototype, {
                 if (sent >= maxRelays) break;
                 if (this.defaultRelays.includes(url)) continue; // already sent
                 if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                    relay.ws.send(msg);
-                    sent++;
+                    if (this._safeWsSend(relay.ws, msg, { critical: true })) sent++;
                 }
             }
         }
@@ -3296,8 +3308,6 @@ Object.assign(NYM.prototype, {
     broadcastEvent(message) {
         // Multiplexed pool mode: proxy handles fan-out to all relays
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            // For geohash channel events, use GEO_EVENT so the proxy
-            // sends to geo relays first (same priority as DM_EVENT).
             let evt = null;
             try {
                 if (Array.isArray(message) && message[0] === 'EVENT' && message[1] && typeof message[1] === 'object') {
@@ -3308,15 +3318,11 @@ Object.assign(NYM.prototype, {
             if (geohashTag && geohashTag[1]) {
                 const closestRelays = this.getClosestRelaysForGeohash(geohashTag[1]);
                 if (closestRelays.length > 0) {
-                    // Send GEO_EVENT to geo workers, plain EVENT to the rest
-                    const geoMsg = ['GEO_EVENT', evt, closestRelays.map(r => r.url)];
-                    const plainMsg = message;
+                    const geoMsg = JSON.stringify(['GEO_EVENT', evt, closestRelays.map(r => r.url)]);
+                    const plainMsg = JSON.stringify(message);
                     for (const p of this.poolSockets) {
-                        if (p.ws && p.ws.readyState === WebSocket.OPEN) {
-                            try {
-                                p.ws.send(JSON.stringify(p.role === 'geo' ? geoMsg : plainMsg));
-                            } catch (_) { }
-                        }
+                        const out = p.role === 'geo' ? geoMsg : plainMsg;
+                        this._safeWsSend(p.ws, out, { critical: true });
                     }
                     return;
                 }
@@ -3339,38 +3345,35 @@ Object.assign(NYM.prototype, {
 
         if (wideFanout) {
             const sent = new Set();
+            const geoTargets = [];
+            const otherTargets = [];
             const geohashTag = evt && evt.tags && evt.tags.find(t => t[0] === 'g');
             if (geohashTag && geohashTag[1]) {
                 const closestRelays = this.getClosestRelaysForGeohash(geohashTag[1]);
                 for (const r of closestRelays) {
                     const relay = this.relayPool.get(r.url);
                     if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        relay.ws.send(msg);
+                        geoTargets.push(relay);
                         sent.add(r.url);
                     }
                 }
             }
-
-            // Then send to every other connected relay for propagation
             this.relayPool.forEach((relay, url) => {
                 if (!sent.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    relay.ws.send(msg);
+                    otherTargets.push(relay);
                 }
             });
+            this._broadcastAsync(geoTargets, msg, { critical: true });
+            this._broadcastAsync(otherTargets, msg, { critical: true });
         } else {
-            // Broadcast relays + nosflare
+            const targets = [];
             this.defaultRelays.forEach(relayUrl => {
                 const relay = this.relayPool.get(relayUrl);
-                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    relay.ws.send(msg);
-                }
+                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) targets.push(relay);
             });
-
-            // Also send to nosflare if connected, to ensure a widely reachable write endpoint
             const nosflare = this.relayPool.get('wss://sendit.nosflare.com');
-            if (nosflare && nosflare.ws && nosflare.ws.readyState === WebSocket.OPEN) {
-                nosflare.ws.send(msg);
-            }
+            if (nosflare && nosflare.ws && nosflare.ws.readyState === WebSocket.OPEN) targets.push(nosflare);
+            this._broadcastAsync(targets, msg, { critical: true });
         }
     },
 
@@ -3564,6 +3567,131 @@ Object.assign(NYM.prototype, {
                 this.connected = false;
             }
 
+        }
+    },
+
+    // Apply +/- 25% jitter to a base delay to avoid thundering herd on reconnect
+    _jitter(baseMs, spread = 0.25) {
+        const factor = 1 - spread + Math.random() * spread * 2;
+        return Math.max(0, Math.floor(baseMs * factor));
+    },
+
+    // bufferedAmount-aware send with optional per-socket queue for critical messages
+    _safeWsSend(ws, msg, opts) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        const threshold = (opts && opts.threshold) || 1048576;
+        if (ws.bufferedAmount > threshold) {
+            if (opts && opts.critical) this._queueSocketSend(ws, msg);
+            return false;
+        }
+        try { ws.send(msg); return true; }
+        catch (_) { return false; }
+    },
+
+    _queueSocketSend(ws, msg) {
+        if (!ws._sendQueue) ws._sendQueue = [];
+        if (ws._sendQueue.length > 256) return;
+        ws._sendQueue.push(msg);
+        if (ws._draining) return;
+        ws._draining = true;
+        const drain = () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                ws._draining = false;
+                ws._sendQueue = null;
+                return;
+            }
+            const drainTarget = 524288;
+            while (ws._sendQueue && ws._sendQueue.length > 0 && ws.bufferedAmount < drainTarget) {
+                try { ws.send(ws._sendQueue.shift()); }
+                catch (_) { break; }
+            }
+            if (ws._sendQueue && ws._sendQueue.length > 0) {
+                setTimeout(drain, 50);
+            } else {
+                ws._draining = false;
+            }
+        };
+        setTimeout(drain, 50);
+    },
+
+    // Async fan-out: yields between chunks so slow relays don't block faster ones
+    _broadcastAsync(relays, msg, opts) {
+        const list = Array.isArray(relays) ? relays : Array.from(relays || []);
+        const chunkSize = (opts && opts.chunkSize) || 6;
+        const sendOpts = { critical: !!(opts && opts.critical) };
+        let i = 0;
+        const step = () => {
+            let count = 0;
+            while (i < list.length && count < chunkSize) {
+                const entry = list[i++];
+                const ws = entry && (entry.ws || entry);
+                this._safeWsSend(ws, msg, sendOpts);
+                count++;
+            }
+            if (i < list.length) setTimeout(step, 0);
+        };
+        step();
+    },
+
+    // Send CLOSE for a channel's tracked subscription and clear local state.
+    // Keeps subs alive for joined/common channels so background messages keep flowing.
+    closeChannelSubscription(channelKey, opts) {
+        if (!channelKey) return;
+        const force = opts && opts.force;
+        if (!force) {
+            if (this.userJoinedChannels && this.userJoinedChannels.has(channelKey)) return;
+            if (Array.isArray(this.commonGeohashes)
+                ? this.commonGeohashes.includes(channelKey)
+                : (this.commonGeohashes && this.commonGeohashes.has && this.commonGeohashes.has(channelKey))) return;
+        }
+        const subId = this.channelSubscriptions.get(channelKey);
+        this.channelSubscriptions.delete(channelKey);
+        this.channelLoadedFromRelays.delete(channelKey);
+        if (!subId) return;
+        const closeMsg = JSON.stringify(["CLOSE", subId]);
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            for (const p of this.poolSockets) {
+                this._safeWsSend(p.ws, closeMsg, { critical: true });
+            }
+            return;
+        }
+        this.relayPool.forEach((relay) => {
+            if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+            if (relay.subscriptions && relay.subscriptions.has(subId)) {
+                this._safeWsSend(relay.ws, closeMsg, { critical: true });
+                relay.subscriptions.delete(subId);
+            }
+        });
+    },
+
+    // Coalesce channel subscription requests over a short window so multiple
+    // channels share one batched REQ instead of firing one REQ each.
+    _queueChannelSubscription(channelKey, channelType) {
+        if (!channelKey) return;
+        if (this.channelLoadedFromRelays.has(channelKey)) return;
+        if (!this._pendingChannelLoadQueue) this._pendingChannelLoadQueue = [];
+        if (this._pendingChannelLoadQueue.some(c => c.key === channelKey)) return;
+        this._pendingChannelLoadQueue.push({ key: channelKey, type: channelType });
+
+        const isCurrent = (channelKey === this.currentChannel || channelKey === this.currentGeohash);
+        const delay = isCurrent ? 30 : 150;
+
+        if (this._pendingChannelLoadTimer) clearTimeout(this._pendingChannelLoadTimer);
+        this._pendingChannelLoadTimer = setTimeout(() => this._flushPendingChannelLoad(), delay);
+    },
+
+    _flushPendingChannelLoad() {
+        if (this._pendingChannelLoadTimer) {
+            clearTimeout(this._pendingChannelLoadTimer);
+            this._pendingChannelLoadTimer = null;
+        }
+        const queue = this._pendingChannelLoadQueue || [];
+        this._pendingChannelLoadQueue = [];
+        if (queue.length === 0) return;
+        if (queue.length === 1) {
+            this.subscribeToChannelTargeted(queue[0].key, queue[0].type);
+        } else {
+            this.subscribeToChannelBatch(queue);
         }
     },
 
