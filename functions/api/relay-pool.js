@@ -22,13 +22,27 @@
 //   ["POOL:RELAY_BAN", relayUrl, reason] - relay permanently dropped (auth, restricted, etc.)
 //   ["POOL:STATUS", { connected, count, latency, events }]
 
+const NYMCHAT_APP_ORIGINS = new Set([
+  'https://web.nymchat.app'
+]);
+
+function isNymchatClient(request) {
+  const origin = (request.headers.get('Origin') || '').toLowerCase();
+  if (NYMCHAT_APP_ORIGINS.has(origin)) return true;
+  const ua = request.headers.get('User-Agent') || '';
+  return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
+}
+
 export async function onRequest(context) {
-  const { request } = context;
+  const { request, env } = context;
 
   const upgradeHeader = request.headers.get('Upgrade');
   if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket upgrade', { status: 426 });
   }
+
+  const clientIsNymchat = isNymchatClient(request);
+  const proxySecret = env && env.NYMCHAT_PROXY_SECRET ? env.NYMCHAT_PROXY_SECRET : null;
 
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
@@ -326,7 +340,13 @@ export async function onRequest(context) {
     const connectStartTime = Date.now();
 
     try {
-      const ws = new WebSocket(relayUrl);
+      let upstreamUrl = relayUrl;
+      if (relayUrl === APP_RELAY && clientIsNymchat && proxySecret) {
+        const u = new URL(relayUrl);
+        u.searchParams.set('nymchat_proxy', proxySecret);
+        upstreamUrl = u.toString();
+      }
+      const ws = new WebSocket(upstreamUrl);
       info.ws = ws;
 
       const timeout = setTimeout(() => {
