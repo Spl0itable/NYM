@@ -796,7 +796,8 @@ Object.assign(NYM.prototype, {
 
         const hasUpper = /[A-Z]/.test(token);
         const hasLower = /[a-z]/.test(token);
-        if (!hasUpper || !hasLower) return false;
+        const hasDigit = /[0-9]/.test(token);
+        const hasLetter = hasUpper || hasLower;
 
         const half = Math.floor(token.length / 2);
         for (let unit = 3; unit <= half; unit++) {
@@ -804,13 +805,19 @@ Object.assign(NYM.prototype, {
             if (token.substring(unit, unit * 2) === head) return true;
         }
 
-        let interiorUpper = 0;
-        for (let i = 1; i < token.length; i++) {
-            const c = token.charCodeAt(i);
-            if (c >= 65 && c <= 90) interiorUpper++;
+        if (hasLetter && hasDigit && token.length <= 20) return true;
+
+        if (hasUpper && hasLower) {
+            let interiorUpper = 0;
+            for (let i = 1; i < token.length; i++) {
+                const c = token.charCodeAt(i);
+                if (c >= 65 && c <= 90) interiorUpper++;
+            }
+            const interiorUpperRatio = interiorUpper / (token.length - 1);
+            if (interiorUpperRatio >= 0.2) return true;
         }
-        const interiorUpperRatio = interiorUpper / (token.length - 1);
-        return interiorUpperRatio >= 0.25;
+
+        return false;
     },
 
     // Detects repeated-token spam such as "abc abc abc" or "abcabcabc"
