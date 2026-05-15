@@ -800,7 +800,9 @@ Object.assign(NYM.prototype, {
         const half = Math.floor(token.length / 2);
         for (let unit = 3; unit <= half; unit++) {
             const head = token.substring(0, unit);
-            if (token.substring(unit, unit * 2) === head) return true;
+            if (token.substring(unit, unit * 2) === head) {
+                if (new Set(head).size >= 3) return true;
+            }
         }
 
         if (hasUpper && hasLower) {
@@ -842,7 +844,7 @@ Object.assign(NYM.prototype, {
             const t = tokens[0];
             for (let unit = 4; unit <= Math.floor(t.length / 2); unit++) {
                 const head = t.substring(0, unit);
-                if (t.substring(unit, unit * 2) === head) return true;
+                if (t.substring(unit, unit * 2) === head && new Set(head).size >= 3) return true;
             }
         }
         return false;
