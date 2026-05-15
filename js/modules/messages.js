@@ -179,6 +179,73 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
+    _trackPubkeyMessage(pubkey, eventId, silent) {
+        if (!pubkey || !eventId || this.trustedPubkeys.has(pubkey)) return;
+        let ids = this.pubkeyMsgIds.get(pubkey);
+        if (!ids) {
+            ids = new Set();
+            this.pubkeyMsgIds.set(pubkey, ids);
+            if (this.pubkeyMsgIds.size > 20000) {
+                this.pubkeyMsgIds.delete(this.pubkeyMsgIds.keys().next().value);
+            }
+        }
+        ids.add(eventId);
+        if (ids.size >= 2) {
+            this.pubkeyMsgIds.delete(pubkey);
+            this.trustedPubkeys.add(pubkey);
+            if (this.trustedPubkeys.size > 50000) {
+                this.trustedPubkeys.delete(this.trustedPubkeys.values().next().value);
+            }
+            if (!silent) this._revealGatedPubkey(pubkey);
+        }
+    },
+
+    _isPubkeyGated(pubkey) {
+        return !this.trustedPubkeys.has(pubkey);
+    },
+
+    _markNymchatPubkey(pubkey) {
+        if (!pubkey || this.nymchatPubkeys.has(pubkey)) return;
+        this.nymchatPubkeys.add(pubkey);
+        if (this.nymchatPubkeys.size > 5000) {
+            this.nymchatPubkeys = new Set(Array.from(this.nymchatPubkeys).slice(-4000));
+        }
+        if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
+        this._revealGatedPubkey(pubkey);
+    },
+
+    // Drop cached DOM for channels holding this pubkey's messages and re-render
+    // the current channel so its now-visible messages appear.
+    _revealGatedPubkey(pubkey) {
+        const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+        let affectsCurrent = false;
+        this.messages.forEach((msgs, key) => {
+            if (msgs.some(m => m.pubkey === pubkey)) {
+                this.channelDOMCache.delete(key);
+                if (key === currentKey) affectsCurrent = true;
+            }
+        });
+        if (affectsCurrent && !this.inPMMode) this._scheduleCurrentChannelRerender();
+    },
+
+    // Debounced so history backfill doesn't trigger a re-render storm.
+    _scheduleCurrentChannelRerender() {
+        if (this._gateRerenderTimer) return;
+        this._gateRerenderTimer = setTimeout(() => {
+            this._gateRerenderTimer = null;
+            this._rerenderCurrentChannel();
+        }, 250);
+    },
+
+    _rerenderCurrentChannel() {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+        const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+        this.channelDOMCache.delete(storageKey);
+        container.innerHTML = '';
+        this.renderMessagesWithVirtualScroll(container, storageKey, false);
+    },
+
     isMentioned(content) {
         if (!content || !this.nym) return false;
 
@@ -293,6 +360,13 @@ Object.assign(NYM.prototype, {
                 if (this.geohashMap && message.geohash && this.isValidGeohash && this.isValidGeohash(message.geohash)) {
                     this._scheduleGeohashMapUpdate();
                 }
+            }
+
+            if (!message.isOwn && !this.isFriend(message.pubkey) &&
+                !this.nymchatPubkeys.has(message.pubkey) &&
+                this._isPubkeyGated(message.pubkey)) {
+                message._spamGated = true;
+                return; // stored but not rendered; no unread bump
             }
 
             // Now check if we should actually render this message
@@ -2296,6 +2370,10 @@ Object.assign(NYM.prototype, {
 
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
+            if (!msg.isOwn && !this.isFriend(msg.pubkey) &&
+                !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
+                return false;
+            }
             if (this.blockedUsers.has(msg.pubkey) || this.isNymBlocked(msg.author) || msg.blocked) return false;
             if (this.hasBlockedKeyword(msg.content, msg.author)) return false;
             if (this.isSpamMessage(msg.content)) return false;

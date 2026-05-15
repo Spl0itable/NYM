@@ -22,6 +22,7 @@
     // Meta store keys.
     const META_PROCESSED_PM_EVENT_IDS = 'processedPMEventIds';
     const META_DELETED_EVENT_IDS = 'deletedEventIds';
+    const META_NYMCHAT_PUBKEYS = 'nymchatPubkeys';
 
     Object.assign(NYM.prototype, {
 
@@ -253,6 +254,12 @@
                         ids: Array.from(this.deletedEventIds)
                     });
                 }
+                if (this.nymchatPubkeys && this.nymchatPubkeys.size > 0) {
+                    this._cachePut('meta', {
+                        key: META_NYMCHAT_PUBKEYS,
+                        ids: Array.from(this.nymchatPubkeys)
+                    });
+                }
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
@@ -265,6 +272,8 @@
                         for (const id of m.ids) this.processedPMEventIds.add(id);
                     } else if (m.key === META_DELETED_EVENT_IDS && this.deletedEventIds) {
                         for (const id of m.ids) this.deletedEventIds.add(id);
+                    } else if (m.key === META_NYMCHAT_PUBKEYS && this.nymchatPubkeys) {
+                        for (const id of m.ids) this.nymchatPubkeys.add(id);
                     }
                 }
             } catch (_) { }
@@ -349,6 +358,13 @@
                     if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
                     const msgs = c.messages.map(m => this._hydrateMessage(m));
                     this.messages.set(c.key, msgs);
+                    if (typeof this._trackPubkeyMessage === 'function') {
+                        for (const m of msgs) {
+                            if (m && m.pubkey && m.id) {
+                                this._trackPubkeyMessage(m.pubkey, m.id, true);
+                            }
+                        }
+                    }
                     if (msgs.length > 0) {
                         const last = msgs[msgs.length - 1];
                         const lastTs = (last.created_at || 0) * 1000;

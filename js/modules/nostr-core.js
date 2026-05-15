@@ -232,6 +232,10 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            if (event.pubkey !== this.pubkey) {
+                this._trackPubkeyMessage(event.pubkey, event.id);
+            }
+
             // Check flooding FOR THIS CHANNEL (only for non-historical messages)
             if (!isHistorical && this.isFlooding(event.pubkey, geohash)) {
                 return;
@@ -347,7 +351,9 @@ Object.assign(NYM.prototype, {
             // Don't display duplicate of own messages
             if (!this.isDuplicateMessage(message)) {
                 this.displayMessage(message);
-                this.updateUserPresence(nym, event.pubkey, message.channel, geohash, event.created_at);
+                if (!message._spamGated) {
+                    this.updateUserPresence(nym, event.pubkey, message.channel, geohash, event.created_at);
+                }
 
                 // Notification check
                 const _notifStorageKey = geohash ? `#${geohash}` : message.channel;
@@ -355,6 +361,7 @@ Object.assign(NYM.prototype, {
                 const _isViewingChannel = !this.inPMMode && _notifStorageKey === _notifCurrentKey;
 
                 const shouldNotify = !message.isOwn &&
+                    !message._spamGated &&
                     this.isMentioned(message.content) &&
                     !this.isNymBlocked(nym) &&
                     !isHistorical &&
@@ -376,7 +383,8 @@ Object.assign(NYM.prototype, {
                 }
 
                 // Silently track historical mentions in notification history
-                if (isHistorical && !message.isOwn && this.isMentioned(message.content) && !this.isNymBlocked(nym)) {
+                if (isHistorical && !message.isOwn && !message._spamGated &&
+                    this.isMentioned(message.content) && !this.isNymBlocked(nym)) {
                     this._addNotificationToHistory(nym, message.content, {
                         type: 'geohash',
                         channel: geohash,
@@ -1597,6 +1605,8 @@ Object.assign(NYM.prototype, {
         if (!messageId || !geohash) return;
         const readerName = this.stripPubkeySuffix(rawNym || this.getNymFromPubkey(event.pubkey));
         if (this.isNymBlocked(readerName) || this.blockedUsers.has(event.pubkey)) return;
+
+        this._markNymchatPubkey(event.pubkey);
 
         if (!this.channelMessageReaders.has(messageId)) {
             this.channelMessageReaders.set(messageId, new Map());
