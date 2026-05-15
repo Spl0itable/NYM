@@ -7960,6 +7960,10 @@ body.chat-bubbles .message-group {
     margin-bottom: 6px;
 }
 
+body.chat-bubbles .message-group:not(:has(.message:not(.blocked):not(.blocked-user-message))) {
+    display: none;
+}
+
 body.chat-bubbles .message-group.group-self {
     padding: 0 14px 0 14px;
 }

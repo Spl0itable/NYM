@@ -156,8 +156,7 @@ Object.assign(NYM.prototype, {
             syncMLSHistory: this.settings.syncMLSHistory !== false,
             showStatus: this.settings.showStatus !== false,
             cachePMs: this.settings.cachePMs !== false,
-            keypairMode: localStorage.getItem('nym_keypair_mode') || 'persistent',
-            spamFilterLevel: localStorage.getItem('nym_spam_filter_level') || 'aggressive'
+            keypairMode: localStorage.getItem('nym_keypair_mode') || 'persistent'
         };
     },
 
@@ -546,8 +545,7 @@ Object.assign(NYM.prototype, {
             acceptPMs: localStorage.getItem('nym_accept_pms') || 'enabled',
             cachePMs: localStorage.getItem('nym_cache_pms') !== 'false', // default true
             syncMLSHistory: localStorage.getItem('nym_sync_mls_history') !== 'false', // default true
-            showStatus: localStorage.getItem('nym_show_status') !== 'false', // default true
-            spamFilterLevel: localStorage.getItem('nym_spam_filter_level') || 'aggressive'
+            showStatus: localStorage.getItem('nym_show_status') !== 'false' // default true
         };
     },
 
@@ -616,15 +614,6 @@ Object.assign(NYM.prototype, {
         this.powDifficulty = powDifficulty;
         this.enablePow = powDifficulty > 0;
         localStorage.setItem('nym_pow_difficulty', powDifficulty.toString());
-
-        const spamSel = document.getElementById('spamFilterSelect');
-        if (spamSel) {
-            const level = spamSel.value || 'aggressive';
-            this.settings.spamFilterLevel = level;
-            localStorage.setItem('nym_spam_filter_level', level);
-            this.spamFilterEnabled = level !== 'off';
-            this.spamFilterAggressive = level === 'aggressive';
-        }
     },
 
 });

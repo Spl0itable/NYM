@@ -560,11 +560,8 @@ class NYM {
         this.dismissedTransferEvents = new Set(JSON.parse(localStorage.getItem('nym_dismissed_transfers') || '[]'));
         this.powDifficulty = 12;
         this.enablePow = false;
-        {
-            const _spamLevel = localStorage.getItem('nym_spam_filter_level') || 'aggressive';
-            this.spamFilterEnabled = _spamLevel !== 'off';
-            this.spamFilterAggressive = _spamLevel === 'aggressive';
-        }
+        this.spamFilterEnabled = true;
+        this.spamFilterAggressive = true;
         this.connectionMode = 'ephemeral';
         this.currentChannel = 'nym';
         this.currentGeohash = '';
@@ -2689,11 +2686,6 @@ async function showSettings() {
         lowDataSelect.value = nym.settings.lowDataMode ? 'true' : 'false';
     }
 
-    const spamFilterSelect = document.getElementById('spamFilterSelect');
-    if (spamFilterSelect) {
-        spamFilterSelect.value = localStorage.getItem('nym_spam_filter_level') || 'aggressive';
-    }
-
     const powDifficultySelect = document.getElementById('powDifficultySelect');
     if (powDifficultySelect) {
         powDifficultySelect.value = localStorage.getItem('nym_pow_difficulty') || '0';
@@ -3242,7 +3234,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.63.349 ═══<br/>
+═══ Nymchat v3.63.350 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -5093,15 +5085,6 @@ async function applyNostrSettings(s) {
         nym.powDifficulty = s.powDifficulty;
         nym.enablePow = s.powDifficulty > 0;
         localStorage.setItem('nym_pow_difficulty', String(s.powDifficulty));
-    }
-
-    // Spam filter level
-    if (typeof s.spamFilterLevel === 'string') {
-        const level = ['off', 'standard', 'aggressive'].includes(s.spamFilterLevel) ? s.spamFilterLevel : 'aggressive';
-        nym.settings.spamFilterLevel = level;
-        nym.spamFilterEnabled = level !== 'off';
-        nym.spamFilterAggressive = level === 'aggressive';
-        localStorage.setItem('nym_spam_filter_level', level);
     }
 
     // Hide non-pinned
