@@ -316,6 +316,7 @@ Object.assign(NYM.prototype, {
     async ensureAppRelayConnected() {
         const url = this.appRelay;
         if (!url) return;
+        if (!this.useRelayProxy) return;
 
         this.blacklistedRelays.delete(url);
         this.blacklistTimestamps.delete(url);
@@ -353,6 +354,7 @@ Object.assign(NYM.prototype, {
 
     startAppRelayWatchdog() {
         if (this._appRelayWatchdog) return;
+        if (!this.useRelayProxy) return;
         this.ensureAppRelayConnected();
         this._appRelayWatchdog = setInterval(() => {
             if (!navigator.onLine) return;
@@ -1636,22 +1638,18 @@ Object.assign(NYM.prototype, {
     _detectCloudflareHost() {
         try {
             const host = window.location.hostname;
-            if (host.endsWith('.pages.dev') || host.endsWith('.workers.dev')) return true;
-            // Known Cloudflare Pages custom domains for this app
-            if (host === 'web.nymchat.app' || host === 'app.nymchat.app' || host === 'nymchat.app') return true;
+            if (host === 'web.nymchat.app') return true;
         } catch {
             // Not in a browser context
         }
         return false;
     },
 
-    // Returns the host to use for API endpoints.
-    // When running on Cloudflare, use the current host; otherwise use the production host
-    // so that local/PWA instances still route through the relay proxy pool and bot.
+    // Returns the host to use for API endpoints, or null when this instance
+    // can't reach the proxy (local dev, third-party host, etc.).
     _getApiHost() {
         if (this._isCloudflareHost) return window.location.host;
-        if (this._remoteApiFailed) return null;
-        return 'web.nymchat.app';
+        return null;
     },
 
     // Mark the remote API as unavailable and fall back to local/direct
@@ -1702,6 +1700,7 @@ Object.assign(NYM.prototype, {
     // Try to restore pool mode in the background
     _schedulePoolReconnectInBackground(immediate = false) {
         if (!this._poolFallbackActive) return;
+        if (!this._isCloudflareHost) return;
         if (this._bgPoolReconnectInFlight) return;
 
         if (this._bgPoolReconnectTimer) {
@@ -1763,13 +1762,16 @@ Object.assign(NYM.prototype, {
     },
 
     _getProxiedRelayUrl(relayUrl) {
-        if (!this.useRelayProxy) return relayUrl;
-        return `wss://${this._getApiHost()}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
+        const host = this._getApiHost();
+        if (!this.useRelayProxy || !host) return relayUrl;
+        return `wss://${host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
     },
 
     // Multiplexed relay pool (multi-worker WebSocket proxy)
     _getRelayPoolUrl() {
-        return `wss://${this._getApiHost()}/api/relay-pool`;
+        const host = this._getApiHost();
+        if (!host) return null;
+        return `wss://${host}/api/relay-pool`;
     },
 
     // Returns true if any pool worker socket is open
@@ -1872,6 +1874,7 @@ Object.assign(NYM.prototype, {
     _schedulePoolReconnect() {
         if (this._poolReconnecting) return;
         if (!this.useRelayProxy) return;
+        if (!this._isCloudflareHost) return;
 
         // Debounce: prevent rapid-fire reconnect scheduling from multiple event handlers
         const now = Date.now();
@@ -1933,6 +1936,7 @@ Object.assign(NYM.prototype, {
     // health check (_ensureAllShardsConnected) acts as a final safety net.
     _reconnectPoolShard(shard) {
         if (!this.useRelayProxy) return;
+        if (!this._isCloudflareHost) return;
         const shardId = shard.id;
 
         if (!this._shardReconnecting) this._shardReconnecting = new Set();
@@ -1997,6 +2001,7 @@ Object.assign(NYM.prototype, {
     // Reconnect any expected shard that's missing or not in OPEN state.
     _ensureAllShardsConnected() {
         if (!this.useRelayProxy) return;
+        if (!this._isCloudflareHost) return;
         if (!navigator.onLine) return;
         if (!this._isAnyPoolOpen()) return;
 
@@ -2105,6 +2110,7 @@ Object.assign(NYM.prototype, {
     _connectSinglePoolWorker(shard) {
         return new Promise((resolve, reject) => {
             const url = this._getRelayPoolUrl();
+            if (!url) return reject(new Error('Relay proxy unavailable on this host'));
             const ws = new WebSocket(url);
 
             const poolEntry = {
@@ -2740,6 +2746,8 @@ Object.assign(NYM.prototype, {
         // Pool mode: all relay connections are managed by the multiplexed pool worker
         if (this.useRelayProxy) return;
 
+        if (relayUrl === this.appRelay) return;
+
         // Block known-bad relays entirely - never connect
         if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com' || relayUrl === 'wss://nostr-server-production.up.railway.app') {
             return; // Silently skip blocked relays
@@ -3235,6 +3243,7 @@ Object.assign(NYM.prototype, {
     // Returns the base URL for the Cloudflare proxy endpoint (translation, media, unfurl).
     // Routes through the production host when running locally. Returns null if remote is down.
     _getProxyBaseUrl() {
+        if (!this.useRelayProxy) return null;
         const host = this._getApiHost();
         if (!host) return null;
         return `https://${host}/api/proxy`;

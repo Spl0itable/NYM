@@ -796,10 +796,6 @@ Object.assign(NYM.prototype, {
 
         const hasUpper = /[A-Z]/.test(token);
         const hasLower = /[a-z]/.test(token);
-        const hasDigit = /[0-9]/.test(token);
-        const hasLetter = hasUpper || hasLower;
-
-        if (hasLetter && hasDigit) return true;
 
         const half = Math.floor(token.length / 2);
         for (let unit = 3; unit <= half; unit++) {
@@ -860,7 +856,7 @@ Object.assign(NYM.prototype, {
         let score = 1;
         const lower = token.toLowerCase();
         const hasDigit = /[0-9]/.test(token);
-        if (hasDigit && /[A-Za-z]/.test(token)) score += 2;
+        if (hasDigit && /[A-Za-z]/.test(token)) score += 1;
         if (/[A-Z]/.test(token.substring(1))) score += 1;
         if (/[a-z][A-Z]/.test(token)) score += 1;
         const vowelCount = (lower.match(/[aeiou]/g) || []).length;

@@ -190,7 +190,9 @@ Object.assign(NYM.prototype, {
             });
         }
         try {
-            const resp = await fetch(`https://${this._getApiHost()}/api/bot`, {
+            const apiHost = this._getApiHost();
+            if (!apiHost) return;
+            const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers })

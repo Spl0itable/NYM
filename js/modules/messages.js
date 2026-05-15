@@ -372,11 +372,20 @@ Object.assign(NYM.prototype, {
 
         const messageEl = document.createElement('div');
 
-        // Check if nym is blocked or message contains blocked keywords or is spam
-        if (this.blockedUsers.has(message.author) ||
-            this.hasBlockedKeyword(message.content, message.author) ||
-            this.isSpamMessage(message.content)) {
-            // Don't create the element at all for blocked/spam content
+        // Check if nym is blocked or message contains blocked keywords or is spam.
+        // For our own outgoing messages, surface a system message so the sender
+        // knows why their message disappeared (it was still sent to relays).
+        const keywordHit = this.hasBlockedKeyword(message.content, message.author);
+        const spamHit = this.isSpamMessage(message.content);
+        if (this.blockedUsers.has(message.author) || keywordHit || spamHit) {
+            if (message.isOwn) {
+                const reason = keywordHit
+                    ? 'matched one of your blocked keywords'
+                    : spamHit
+                        ? 'was flagged by the spam filter'
+                        : 'matched a block rule';
+                this.displaySystemMessage(`Your message ${reason} and was hidden locally. It was still sent.`);
+            }
             return;
         }
 
