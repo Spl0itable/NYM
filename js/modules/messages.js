@@ -108,6 +108,16 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _hashContent(s) {
+        // FNV-1a 32-bit
+        let h = 0x811c9dc5;
+        for (let i = 0; i < s.length; i++) {
+            h ^= s.charCodeAt(i);
+            h = Math.imul(h, 0x01000193);
+        }
+        return h >>> 0;
+    },
+
     _trackContent(pubkey, content, now) {
         if (!this.contentFloodTracking) this.contentFloodTracking = new Map();
         const normalized = content.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -115,22 +125,25 @@ Object.assign(NYM.prototype, {
 
         let entry = this.contentFloodTracking.get(pubkey);
         if (!entry) {
-            entry = { samples: [], blockedUntil: 0 };
+            entry = { hashes: new Map(), blockedUntil: 0 };
             this.contentFloodTracking.set(pubkey, entry);
         }
 
         const WINDOW = 120000;
-        entry.samples = entry.samples.filter(s => now - s.t < WINDOW);
-        entry.samples.push({ t: now, c: normalized });
-
-        let matches = 0;
-        for (const s of entry.samples) {
-            if (s.c === normalized || s.c.includes(normalized) || normalized.includes(s.c)) {
-                matches++;
-            }
+        for (const [h, info] of entry.hashes) {
+            if (now - info.lastSeen > WINDOW) entry.hashes.delete(h);
         }
 
-        if (matches >= 3) {
+        const hash = this._hashContent(normalized);
+        let info = entry.hashes.get(hash);
+        if (!info) {
+            info = { count: 0, lastSeen: now };
+            entry.hashes.set(hash, info);
+        }
+        info.count++;
+        info.lastSeen = now;
+
+        if (info.count >= 3) {
             entry.blockedUntil = now + 900000;
         }
     },

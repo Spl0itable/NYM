@@ -828,7 +828,6 @@ Object.assign(NYM.prototype, {
                 tokens.every(t => t === first)) {
                 return true;
             }
-
             const baseLen = Math.min(...tokens.map(t => t.length));
             if (baseLen >= 6) {
                 const base = tokens.find(t => t.length === baseLen);

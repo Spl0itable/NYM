@@ -331,7 +331,11 @@ export async function onRequest(context) {
   function looksLikeRandomToken(token) {
     if (!token || token.length < 8 || token.length > 40) return false;
     if (!/^[A-Za-z0-9]+$/.test(token)) return false;
-    if (!/[A-Z]/.test(token) || !/[a-z]/.test(token)) return false;
+
+    const hasUpper = /[A-Z]/.test(token);
+    const hasLower = /[a-z]/.test(token);
+    const hasDigit = /[0-9]/.test(token);
+    const hasLetter = hasUpper || hasLower;
 
     const half = Math.floor(token.length / 2);
     for (let unit = 3; unit <= half; unit++) {
@@ -339,16 +343,120 @@ export async function onRequest(context) {
       if (token.substring(unit, unit * 2) === head) return true;
     }
 
-    let interiorUpper = 0;
-    for (let i = 1; i < token.length; i++) {
-      const c = token.charCodeAt(i);
-      if (c >= 65 && c <= 90) interiorUpper++;
+    if (hasLetter && hasDigit && token.length <= 20) return true;
+
+    if (hasUpper && hasLower) {
+      let interiorUpper = 0;
+      for (let i = 1; i < token.length; i++) {
+        const c = token.charCodeAt(i);
+        if (c >= 65 && c <= 90) interiorUpper++;
+      }
+      if ((interiorUpper / (token.length - 1)) >= 0.2) return true;
     }
-    return (interiorUpper / (token.length - 1)) >= 0.25;
+
+    return false;
   }
 
-  // Mirror of isSpamMessage — used at the relay-proxy boundary to drop
-  // jibberish channel events before they ever reach the client.
+  const RX_ZERO_WIDTH = /[​-‏‪-‮⁠-⁯﻿]/;
+  const RARE_BIGRAMS = ['xw','xz','xj','xk','wx','wz','wj','wq','jq','jx','jz','kq','kx','kz','vq','vx','vz','zx','zk','zp','pq','pz','fq','fz','gq','gz','hq','hz'];
+
+  function scoreSingleAlphanumWord(token) {
+    if (!/^[A-Za-z][A-Za-z0-9]{7,14}$/.test(token)) return 0;
+    let score = 1;
+    const lower = token.toLowerCase();
+    const hasDigit = /[0-9]/.test(token);
+    if (hasDigit && /[A-Za-z]/.test(token)) score += 2;
+    if (/[A-Z]/.test(token.substring(1))) score += 1;
+    if (/[a-z][A-Z]/.test(token)) score += 1;
+    const vowelCount = (lower.match(/[aeiou]/g) || []).length;
+    if (vowelCount / token.length <= 0.2) score += 1;
+    if (/q(?!u)/i.test(token)) score += 2;
+    let rare = 0;
+    for (const bg of RARE_BIGRAMS) {
+      if (lower.includes(bg)) rare++;
+    }
+    if (rare > 0) score += Math.min(rare, 2);
+    return score;
+  }
+
+  function hasMixedScriptToken(text) {
+    for (const tok of text.split(/\s+/)) {
+      if (tok.length < 4) continue;
+      const hasLatin = /[A-Za-z]/.test(tok);
+      const hasCyrillic = /[Ѐ-ӿ]/.test(tok);
+      const hasGreek = /[Ͱ-Ͽ]/.test(tok);
+      if ((hasLatin && hasCyrillic) || (hasLatin && hasGreek) || (hasCyrillic && hasGreek)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function hasRepeatedTokenSpam(trimmed) {
+    const tokens = trimmed.split(/\s+/).filter(Boolean);
+    if (tokens.length >= 2) {
+      const first = tokens[0];
+      if (first.length >= 6 && /^[A-Za-z0-9]+$/.test(first) &&
+          tokens.every(t => t === first)) {
+        return true;
+      }
+      const baseLen = Math.min(...tokens.map(t => t.length));
+      if (baseLen >= 6) {
+        const base = tokens.find(t => t.length === baseLen);
+        if (base && /^[A-Za-z0-9]+$/.test(base) && tokens.every(t => {
+          if (t.length % baseLen !== 0) return false;
+          for (let i = 0; i < t.length; i += baseLen) {
+            if (t.substring(i, i + baseLen) !== base) return false;
+          }
+          return true;
+        })) {
+          return true;
+        }
+      }
+    }
+    if (tokens.length === 1 && tokens[0].length >= 12 && /^[A-Za-z0-9]+$/.test(tokens[0])) {
+      const t = tokens[0];
+      for (let unit = 4; unit <= Math.floor(t.length / 2); unit++) {
+        const head = t.substring(0, unit);
+        if (t.substring(unit, unit * 2) === head) return true;
+      }
+    }
+    return false;
+  }
+
+  function spamScore(trimmed) {
+    let score = 0;
+
+    if (RX_ZERO_WIDTH.test(trimmed)) score += 3;
+    if (hasRepeatedTokenSpam(trimmed)) score += 3;
+    if (hasMixedScriptToken(trimmed)) score += 2;
+
+    const tokens = trimmed.split(/\s+/).filter(Boolean);
+    if (tokens.length === 1) {
+      if (looksLikeRandomToken(tokens[0])) score += 3;
+      score += scoreSingleAlphanumWord(tokens[0]);
+      if (tokens[0].length >= 12) score += 1;
+    } else {
+      let gibberish = 0, analyzable = 0;
+      for (const tok of tokens) {
+        if (tok.length < 6) continue;
+        analyzable++;
+        if (looksLikeRandomToken(tok)) gibberish++;
+      }
+      if (analyzable > 0 && gibberish / analyzable >= 0.5) score += 3;
+    }
+
+    const digitCount = (trimmed.match(/[0-9]/g) || []).length;
+    const letterCount = (trimmed.match(/[A-Za-z]/g) || []).length;
+    if (trimmed.length >= 8 && letterCount > 0 && digitCount / trimmed.length > 0.5) score += 1;
+
+    const emojiMatches = trimmed.match(/\p{Extended_Pictographic}/gu) || [];
+    if (emojiMatches.length >= 4 && letterCount > 0) score += 1;
+
+    return score;
+  }
+
+  // Drop gibberish channel events before they reach the client
   function isSpamContent(content) {
     if (typeof content !== 'string') return false;
     const trimmed = content.trim();
@@ -361,32 +469,7 @@ export async function onRequest(context) {
     if (/^(npub|nsec|note|nevent|naddr)1[a-z0-9]+$/i.test(trimmed)) return false;
     if (trimmed.includes('```') || trimmed.includes('`')) return false;
     if (trimmed.startsWith('data:image')) return false;
-
-    const tokens = trimmed.split(/\s+/).filter(Boolean);
-    if (tokens.length >= 2) {
-      const first = tokens[0];
-      if (first.length >= 6 && /^[A-Za-z0-9]+$/.test(first) &&
-          tokens.every(t => t === first)) return true;
-    }
-    if (tokens.length === 1 && tokens[0].length >= 12 && /^[A-Za-z0-9]+$/.test(tokens[0])) {
-      const t = tokens[0];
-      for (let unit = 4; unit <= Math.floor(t.length / 2); unit++) {
-        const head = t.substring(0, unit);
-        if (t.substring(unit, unit * 2) === head) return true;
-      }
-    }
-
-    let gibberish = 0;
-    let analyzable = 0;
-    for (const tok of tokens) {
-      if (tok.length < 6) continue;
-      analyzable++;
-      if (looksLikeRandomToken(tok)) gibberish++;
-    }
-    if (analyzable > 0 && gibberish / analyzable >= 0.5) return true;
-    if (tokens.length === 1 && looksLikeRandomToken(tokens[0])) return true;
-
-    return false;
+    return spamScore(trimmed) >= 3;
   }
 
   function isSpamNym(nym) {
@@ -396,9 +479,60 @@ export async function onRequest(context) {
     return looksLikeRandomToken(n);
   }
 
-  // Channel spam suppression at the pool boundary. Only inspects kind 20000
-  // (ephemeral geohash messages) since other kinds are typically encrypted or
-  // app-internal. Tracks drop counts for diagnostics.
+  // FNV-1a 32-bit
+  function hashContent(s) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0;
+  }
+
+  // Per-pubkey content flood
+  const contentFloodTracking = new Map();
+  const CONTENT_FLOOD_WINDOW_MS = 120000;
+  const CONTENT_FLOOD_BLOCK_MS = 900000;
+  const CONTENT_FLOOD_THRESHOLD = 3;
+
+  function trackContentFlood(pubkey, content, now) {
+    const normalized = content.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (normalized.length < 6) return false;
+
+    let entry = contentFloodTracking.get(pubkey);
+    if (!entry) {
+      entry = { hashes: new Map(), blockedUntil: 0 };
+      contentFloodTracking.set(pubkey, entry);
+    }
+
+    for (const [h, info] of entry.hashes) {
+      if (now - info.lastSeen > CONTENT_FLOOD_WINDOW_MS) entry.hashes.delete(h);
+    }
+
+    const hash = hashContent(normalized);
+    let info = entry.hashes.get(hash);
+    if (!info) {
+      info = { count: 0, lastSeen: now };
+      entry.hashes.set(hash, info);
+    }
+    info.count++;
+    info.lastSeen = now;
+
+    if (info.count >= CONTENT_FLOOD_THRESHOLD) {
+      entry.blockedUntil = now + CONTENT_FLOOD_BLOCK_MS;
+    }
+    return false;
+  }
+
+  function isContentFlooding(pubkey, now) {
+    const entry = contentFloodTracking.get(pubkey);
+    if (!entry) return false;
+    if (now < entry.blockedUntil) return true;
+    if (entry.blockedUntil) entry.blockedUntil = 0;
+    return false;
+  }
+
+  // Channel spam suppression at the pool boundary
   let droppedSpamCount = 0;
   function isSpamEventFrame(raw) {
     const kind = extractEventKind(raw);
@@ -409,6 +543,12 @@ export async function onRequest(context) {
     if (nymTag) {
       const cleanNym = nymTag.replace(/#[a-fA-F0-9]{4}$/, '');
       if (isSpamNym(cleanNym)) return true;
+    }
+    const pubkey = extractEventStringField(raw, 'pubkey');
+    if (pubkey && content) {
+      const now = Date.now();
+      if (isContentFlooding(pubkey, now)) return true;
+      trackContentFlood(pubkey, content, now);
     }
     return false;
   }
