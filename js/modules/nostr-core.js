@@ -791,7 +791,7 @@ Object.assign(NYM.prototype, {
 
     // Does a token look like a randomly-generated alphanumeric string
     _looksLikeRandomToken(token) {
-        if (!token || token.length < 8 || token.length > 40) return false;
+        if (!token || token.length < 8) return false;
         if (!/^[A-Za-z0-9]+$/.test(token)) return false;
 
         const hasUpper = /[A-Z]/.test(token);
@@ -799,13 +799,13 @@ Object.assign(NYM.prototype, {
         const hasDigit = /[0-9]/.test(token);
         const hasLetter = hasUpper || hasLower;
 
+        if (hasLetter && hasDigit) return true;
+
         const half = Math.floor(token.length / 2);
         for (let unit = 3; unit <= half; unit++) {
             const head = token.substring(0, unit);
             if (token.substring(unit, unit * 2) === head) return true;
         }
-
-        if (hasLetter && hasDigit && token.length <= 20) return true;
 
         if (hasUpper && hasLower) {
             let interiorUpper = 0;
@@ -856,7 +856,7 @@ Object.assign(NYM.prototype, {
     _RARE_BIGRAMS: ['xw','xz','xj','xk','wx','wz','wj','wq','jq','jx','jz','kq','kx','kz','vq','vx','vz','zx','zk','zp','pq','pz','fq','fz','gq','gz','hq','hz'],
 
     _scoreSingleAlphanumWord(token) {
-        if (!/^[A-Za-z][A-Za-z0-9]{7,14}$/.test(token)) return 0;
+        if (!/^[A-Za-z0-9]{8,}$/.test(token)) return 0;
         let score = 1;
         const lower = token.toLowerCase();
         const hasDigit = /[0-9]/.test(token);
