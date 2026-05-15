@@ -351,6 +351,7 @@ Object.assign(NYM.prototype, {
             // Don't display duplicate of own messages
             if (!this.isDuplicateMessage(message)) {
                 this.displayMessage(message);
+                // Skip presence for spam-gated senders
                 if (!message._spamGated) {
                     this.updateUserPresence(nym, event.pubkey, message.channel, geohash, event.created_at);
                 }

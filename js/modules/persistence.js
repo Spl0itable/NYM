@@ -358,6 +358,7 @@
                     if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
                     const msgs = c.messages.map(m => this._hydrateMessage(m));
                     this.messages.set(c.key, msgs);
+                    // Rebuild spam-gate counts from cache
                     if (typeof this._trackPubkeyMessage === 'function') {
                         for (const m of msgs) {
                             if (m && m.pubkey && m.id) {

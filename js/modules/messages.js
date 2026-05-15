@@ -214,36 +214,19 @@ Object.assign(NYM.prototype, {
         this._revealGatedPubkey(pubkey);
     },
 
-    // Drop cached DOM for channels holding this pubkey's messages and re-render
-    // the current channel so its now-visible messages appear.
+    // Insert messages in place
     _revealGatedPubkey(pubkey) {
         const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-        let affectsCurrent = false;
         this.messages.forEach((msgs, key) => {
-            if (msgs.some(m => m.pubkey === pubkey)) {
+            if (!msgs.some(m => m.pubkey === pubkey)) return;
+            if (!this.inPMMode && key === currentKey) {
+                for (const m of msgs) {
+                    if (m.pubkey === pubkey) this.displayMessage(m);
+                }
+            } else {
                 this.channelDOMCache.delete(key);
-                if (key === currentKey) affectsCurrent = true;
             }
         });
-        if (affectsCurrent && !this.inPMMode) this._scheduleCurrentChannelRerender();
-    },
-
-    // Debounced so history backfill doesn't trigger a re-render storm.
-    _scheduleCurrentChannelRerender() {
-        if (this._gateRerenderTimer) return;
-        this._gateRerenderTimer = setTimeout(() => {
-            this._gateRerenderTimer = null;
-            this._rerenderCurrentChannel();
-        }, 250);
-    },
-
-    _rerenderCurrentChannel() {
-        const container = document.getElementById('messagesContainer');
-        if (!container) return;
-        const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-        this.channelDOMCache.delete(storageKey);
-        container.innerHTML = '';
-        this.renderMessagesWithVirtualScroll(container, storageKey, false);
     },
 
     isMentioned(content) {
@@ -366,7 +349,7 @@ Object.assign(NYM.prototype, {
                 !this.nymchatPubkeys.has(message.pubkey) &&
                 this._isPubkeyGated(message.pubkey)) {
                 message._spamGated = true;
-                return; // stored but not rendered; no unread bump
+                return;
             }
 
             // Now check if we should actually render this message
@@ -2370,6 +2353,7 @@ Object.assign(NYM.prototype, {
 
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
+            // Spam gate
             if (!msg.isOwn && !this.isFriend(msg.pubkey) &&
                 !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
                 return false;
