@@ -1257,6 +1257,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         let count = 0;
         for (const m of messages) {
             if (!m || m.isOwn) continue;
+            if (m._spamGated) continue;
             if ((m.created_at || 0) <= lastRead) continue;
             if (this.blockedUsers && m.pubkey && this.blockedUsers.has(m.pubkey)) continue;
             if (typeof this.isNymBlocked === 'function' && m.author && this.isNymBlocked(m.author)) continue;

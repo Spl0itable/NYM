@@ -218,13 +218,23 @@ Object.assign(NYM.prototype, {
     _revealGatedPubkey(pubkey) {
         const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
         this.messages.forEach((msgs, key) => {
-            if (!msgs.some(m => m.pubkey === pubkey)) return;
+            let hadGated = false;
+            for (const m of msgs) {
+                if (m.pubkey === pubkey && m._spamGated) {
+                    m._spamGated = false;
+                    hadGated = true;
+                }
+            }
+            if (!hadGated) return;
             if (!this.inPMMode && key === currentKey) {
                 for (const m of msgs) {
                     if (m.pubkey === pubkey) this.displayMessage(m);
                 }
             } else {
                 this.channelDOMCache.delete(key);
+            }
+            if (typeof this.updateUnreadCount === 'function') {
+                this.updateUnreadCount(key);
             }
         });
     },
