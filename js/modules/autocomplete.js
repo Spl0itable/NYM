@@ -88,30 +88,33 @@ Object.assign(NYM.prototype, {
         }
 
         if (matches.length > 0) {
-            dropdown.innerHTML = matches.map(({ name, emoji }, index) => `
-                <div class="emoji-item ${index === 0 ? 'selected' : ''}" data-name="${name}" data-emoji="${emoji}">
-                    <span class="emoji-item-emoji">${emoji}</span>
-                    <span class="emoji-item-name">:${name}:</span>
-                </div>
-            `).join('');
+            this._renderEmojiAutocompleteItems(dropdown, matches);
             dropdown.classList.add('active');
             this.emojiAutocompleteIndex = 0;
-
-            // Add click handlers for each emoji item
-            dropdown.querySelectorAll('.emoji-item').forEach((item, index) => {
-                item.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this.emojiAutocompleteIndex = index;
-                    // Remove selected from all, add to clicked
-                    dropdown.querySelectorAll('.emoji-item').forEach(i => i.classList.remove('selected'));
-                    item.classList.add('selected');
-                    this.selectEmojiAutocomplete();
-                };
-            });
         } else {
             this.hideEmojiAutocomplete();
         }
+    },
+
+    _renderEmojiAutocompleteItems(dropdown, matches) {
+        const frag = document.createDocumentFragment();
+        matches.forEach(({ name, emoji }, index) => {
+            const item = document.createElement('div');
+            item.className = index === 0 ? 'emoji-item selected' : 'emoji-item';
+            item.dataset.name = name;
+            item.dataset.emoji = emoji;
+            item.dataset.action = 'selectSpecificEmojiAutocomplete';
+            const emojiSpan = document.createElement('span');
+            emojiSpan.className = 'emoji-item-emoji';
+            emojiSpan.textContent = emoji;
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'emoji-item-name';
+            nameSpan.textContent = `:${name}:`;
+            item.appendChild(emojiSpan);
+            item.appendChild(nameSpan);
+            frag.appendChild(item);
+        });
+        dropdown.replaceChildren(frag);
     },
 
     hideEmojiAutocomplete() {
@@ -135,25 +138,27 @@ Object.assign(NYM.prototype, {
 
     selectEmojiAutocomplete() {
         const selected = document.querySelector('.emoji-item.selected');
-        if (selected) {
-            const emoji = selected.dataset.emoji;
-            const input = document.getElementById('messageInput');
-            const value = input.value;
-            const cursor = (typeof input.selectionStart === 'number')
-                ? input.selectionStart
-                : value.length;
-            const before = value.substring(0, cursor);
-            const after = value.substring(cursor);
-            // Find the start of the :shortcode token at end of `before`
-            const m = before.match(/:([a-z0-9_+-]*)$/i);
-            const colonIndex = m ? before.length - m[0].length : before.lastIndexOf(':');
-            const replaced = before.substring(0, colonIndex) + emoji + ' ';
-            input.value = replaced + after;
-            input.selectionStart = input.selectionEnd = replaced.length;
-            input.focus();
-            this.hideEmojiAutocomplete();
-            this.addToRecentEmojis(emoji);
-        }
+        if (selected) this.selectSpecificEmojiAutocomplete(selected.dataset.emoji);
+    },
+
+    selectSpecificEmojiAutocomplete(emoji) {
+        if (!emoji) return;
+        const input = document.getElementById('messageInput');
+        const value = input.value;
+        const cursor = (typeof input.selectionStart === 'number')
+            ? input.selectionStart
+            : value.length;
+        const before = value.substring(0, cursor);
+        const after = value.substring(cursor);
+        // Find the start of the :shortcode token at end of `before`
+        const m = before.match(/:([a-z0-9_+-]*)$/i);
+        const colonIndex = m ? before.length - m[0].length : before.lastIndexOf(':');
+        const replaced = before.substring(0, colonIndex) + emoji + ' ';
+        input.value = replaced + after;
+        input.selectionStart = input.selectionEnd = replaced.length;
+        input.focus();
+        this.hideEmojiAutocomplete();
+        this.addToRecentEmojis(emoji);
     },
 
     showAutocomplete(search) {
@@ -189,13 +194,11 @@ Object.assign(NYM.prototype, {
                     effectiveStatus = 'offline';
                 }
 
-                // Create HTML version for display
-                const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
-
                 const userEntry = {
                     nym: user.nym,
                     pubkey: pubkey,
-                    displayNym: displayNym,
+                    baseNym: baseNym,
+                    suffix: suffix,
                     searchableNym: searchableNym,
                     lastSeen: user.lastSeen,
                     effectiveStatus: effectiveStatus
@@ -231,38 +234,86 @@ Object.assign(NYM.prototype, {
         ].slice(0, 8);
 
         if (allUsers.length > 0) {
-            dropdown.innerHTML = allUsers.map((user, index) => {
-                const statusClass = `status-${user.effectiveStatus}`;
-                const acAvatarSrc = this.getAvatarUrl(user.pubkey);
-                const safePk = this._safePubkey(user.pubkey);
-                return `
-        <div class="autocomplete-item ${index === 0 ? 'selected' : ''}"
-                data-nym="${this.escapeHtml(user.nym)}"
-                data-pubkey="${safePk}"
-                data-ac-nym="${this.escapeHtml(user.nym)}"
-                data-ac-pubkey="${safePk}"
-                data-action="selectSpecificAutocomplete">
-            <img src="${this.escapeHtml(acAvatarSrc)}" class="avatar-message ${statusClass}" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><strong>@${user.displayNym}</strong>
-        </div>
-    `;
-            }).join('');
+            const localStatusOff = this.settings && this.settings.showStatus === false;
+            this._reconcileAutocompleteItems(dropdown, allUsers, localStatusOff);
             dropdown.classList.add('active');
             this.autocompleteIndex = 0;
-
-            // Add click handlers
-            dropdown.querySelectorAll('.autocomplete-item').forEach((item, index) => {
-                item.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this.autocompleteIndex = index;
-                    dropdown.querySelectorAll('.autocomplete-item').forEach(i => i.classList.remove('selected'));
-                    item.classList.add('selected');
-                    this.selectAutocomplete();
-                };
-            });
         } else {
             this.hideAutocomplete();
         }
+    },
+
+    _createAutocompleteItem(safePk) {
+        const item = document.createElement('div');
+        item.className = 'autocomplete-item';
+        item.dataset.action = 'selectSpecificAutocomplete';
+        const wrap = document.createElement('span');
+        wrap.className = 'user-avatar-wrap';
+        const img = document.createElement('img');
+        img.className = 'avatar-message';
+        img.alt = '';
+        img.loading = 'lazy';
+        // Avatar fallback is handled by the delegated error listener in inline-bindings.js
+        if (safePk) img.dataset.avatarPubkey = safePk;
+        wrap.appendChild(img);
+        const dot = document.createElement('span');
+        dot.className = 'user-status-dot';
+        wrap.appendChild(dot);
+        const strong = document.createElement('strong');
+        item.appendChild(wrap);
+        item.appendChild(strong);
+        return item;
+    },
+
+    // Reconcile dropdown rows in place so avatars don't reload (flicker) on refresh
+    _reconcileAutocompleteItems(dropdown, allUsers, localStatusOff) {
+        const existing = new Map();
+        for (const el of dropdown.querySelectorAll('.autocomplete-item')) {
+            if (el.dataset.acPubkey) existing.set(el.dataset.acPubkey, el);
+        }
+        let prev = null;
+        allUsers.forEach((user, index) => {
+            const safePk = this._safePubkey(user.pubkey);
+            const statusHidden = localStatusOff ||
+                !!(this.statusHiddenUsers && this.statusHiddenUsers.has(user.pubkey));
+            const avatarSrc = this.getAvatarUrl(user.pubkey);
+
+            let item = existing.get(safePk);
+            if (item) {
+                existing.delete(safePk);
+            } else {
+                item = this._createAutocompleteItem(safePk);
+            }
+
+            item.dataset.nym = user.nym;
+            item.dataset.pubkey = safePk;
+            item.dataset.acNym = user.nym;
+            item.dataset.acPubkey = safePk;
+            item.classList.toggle('selected', index === 0);
+
+            const wrap = item.querySelector('.user-avatar-wrap');
+            wrap.classList.toggle('no-status', statusHidden);
+            const img = wrap.querySelector('img');
+            if (img.getAttribute('src') !== avatarSrc) img.src = avatarSrc;
+            const dot = wrap.querySelector('.user-status-dot');
+            dot.className = `user-status-dot status-${user.effectiveStatus}`;
+
+            const strong = item.querySelector('strong');
+            const label = `@${user.baseNym}#${user.suffix}`;
+            if (strong.dataset.label !== label) {
+                strong.dataset.label = label;
+                strong.textContent = `@${user.baseNym}`;
+                const sfx = document.createElement('span');
+                sfx.className = 'nym-suffix';
+                sfx.textContent = `#${user.suffix}`;
+                strong.appendChild(sfx);
+            }
+
+            const ref = prev ? prev.nextSibling : dropdown.firstChild;
+            if (ref !== item) dropdown.insertBefore(item, ref);
+            prev = item;
+        });
+        for (const el of existing.values()) el.remove();
     },
 
     selectSpecificAutocomplete(nym, pubkey) {
@@ -270,8 +321,11 @@ Object.assign(NYM.prototype, {
         const value = input.value;
         const lastAtIndex = value.lastIndexOf('@');
 
-        // Use just the base nym without suffix in the message
-        input.value = value.substring(0, lastAtIndex) + '@' + nym + ' ';
+        // Insert "@base#suffix" so the mention resolves to one specific pubkey,
+        // matching keyboard selection — identically-named users aren't cross-notified.
+        const baseNym = this.stripPubkeySuffix(nym);
+        const suffix = this.getPubkeySuffix(pubkey);
+        input.value = value.substring(0, lastAtIndex) + '@' + baseNym + '#' + suffix + ' ';
         input.focus();
         this.hideAutocomplete();
     },
@@ -390,38 +444,53 @@ Object.assign(NYM.prototype, {
         matches = matches.slice(0, 8);
 
         if (matches.length > 0) {
-            dropdown.innerHTML = matches.map((ch, index) => {
-                const locationName = this.isValidGeohash(ch.name) ? this.getGeohashLocation(ch.name) : '';
-                const locationHtml = locationName ? `<span class="channel-ac-location">${this.escapeHtml(locationName)}</span>` : '';
-                const msgCountHtml = ch.messageCount > 0 ? `<span class="channel-ac-count">${ch.messageCount} msg${ch.messageCount !== 1 ? 's' : ''}</span>` : '';
-                const currentBadge = ch.isCurrent ? '<span class="channel-ac-badge">current</span>' : '';
-                const joinedClass = ch.isJoined ? ' joined' : '';
-                return `
-        <div class="autocomplete-item channel-ac-item${joinedClass} ${index === 0 ? 'selected' : ''}"
-                data-channel="${this.escapeHtml(ch.name)}"
-                data-channel-name="${this.escapeHtml(ch.name)}"
-                data-action="selectChannelAutocompleteItem">
-            <strong>#${this.escapeHtml(ch.name)}</strong>${currentBadge}${locationHtml}${msgCountHtml}
-        </div>
-    `;
-            }).join('');
+            this._renderChannelAutocompleteItems(dropdown, matches);
             dropdown.classList.add('active');
             this.channelAutocompleteIndex = 0;
-
-            // Add click handlers
-            dropdown.querySelectorAll('.autocomplete-item').forEach((item, index) => {
-                item.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this.channelAutocompleteIndex = index;
-                    dropdown.querySelectorAll('.autocomplete-item').forEach(i => i.classList.remove('selected'));
-                    item.classList.add('selected');
-                    this.selectChannelAutocomplete();
-                };
-            });
         } else {
             this.hideChannelAutocomplete();
         }
+    },
+
+    _renderChannelAutocompleteItems(dropdown, matches) {
+        const frag = document.createDocumentFragment();
+        matches.forEach((ch, index) => {
+            const item = document.createElement('div');
+            item.className = 'autocomplete-item channel-ac-item' +
+                (ch.isJoined ? ' joined' : '') + (index === 0 ? ' selected' : '');
+            item.dataset.channel = ch.name;
+            item.dataset.channelName = ch.name;
+            item.dataset.action = 'selectChannelAutocompleteItem';
+
+            const strong = document.createElement('strong');
+            strong.textContent = `#${ch.name}`;
+            item.appendChild(strong);
+
+            if (ch.isCurrent) {
+                const badge = document.createElement('span');
+                badge.className = 'channel-ac-badge';
+                badge.textContent = 'current';
+                item.appendChild(badge);
+            }
+
+            const locationName = this.isValidGeohash(ch.name) ? this.getGeohashLocation(ch.name) : '';
+            if (locationName) {
+                const loc = document.createElement('span');
+                loc.className = 'channel-ac-location';
+                loc.textContent = locationName;
+                item.appendChild(loc);
+            }
+
+            if (ch.messageCount > 0) {
+                const count = document.createElement('span');
+                count.className = 'channel-ac-count';
+                count.textContent = `${ch.messageCount} msg${ch.messageCount !== 1 ? 's' : ''}`;
+                item.appendChild(count);
+            }
+
+            frag.appendChild(item);
+        });
+        dropdown.replaceChildren(frag);
     },
 
     hideChannelAutocomplete() {

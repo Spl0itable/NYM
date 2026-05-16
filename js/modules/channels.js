@@ -952,7 +952,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const safeGeohash = this.escapeHtml(geohash);
 
             const pinButton = `
-    <span class="pin-btn ${isPinned ? 'pinned' : ''}" data-channel="${safeChannel}" data-geohash="${safeGeohash}">
+    <span class="pin-btn ${isPinned ? 'pinned' : ''}" data-channel="${safeChannel}" data-geohash="${safeGeohash}" data-action="channelTogglePin">
         <svg viewBox="0 0 24 24">
             <path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/>
         </svg>
@@ -960,7 +960,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 `;
 
             const hideButton = `
-    <span class="hide-btn" data-channel="${safeChannel}" data-geohash="${safeGeohash}" title="Hide channel">
+    <span class="hide-btn" data-channel="${safeChannel}" data-geohash="${safeGeohash}" title="Hide channel" data-action="channelToggleHide">
         <svg viewBox="0 0 24 24">
             <path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.8 11.8 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/>
         </svg>
@@ -975,26 +975,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         <span class="unread-badge" style="display:none">0</span>
     </div>
 `;
-
-            // Add pin button handler
-            const pinBtn = item.querySelector('.pin-btn');
-            if (pinBtn) {
-                pinBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    this.togglePin(channel, geohash);
-                });
-            }
-
-            // Add hide button handler
-            const hideBtn = item.querySelector('.hide-btn');
-            if (hideBtn) {
-                hideBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    this.toggleHideChannel(channel, geohash);
-                });
-            }
 
             // Insert before the view more button if it exists
             const viewMoreBtn = list.querySelector('.view-more-btn');

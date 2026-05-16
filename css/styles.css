@@ -2865,6 +2865,17 @@ body.chat-bubbles .edited-indicator-irc {
     font-weight: 100;
 }
 
+.autocomplete-item .user-avatar-wrap {
+    width: 18px;
+    height: 18px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.autocomplete-item .avatar-message {
+    margin-right: 0;
+}
+
 .autocomplete-item strong {
     color: var(--primary);
 }
@@ -7342,6 +7353,17 @@ body.light-mode .quick-context-item:active {
     z-index: 1;
 }
 
+.messages-container.has-long-press-highlight .message-group-avatar {
+    transition: opacity 0.15s ease, filter 0.15s ease;
+    opacity: 0.35;
+    filter: blur(0.5px);
+}
+
+.messages-container.has-long-press-highlight .message-group:has(.long-press-highlight) .message-group-avatar {
+    opacity: 1;
+    filter: none;
+}
+
 .avatar-upload-section {
     display: flex;
     align-items: center;
@@ -8730,6 +8752,10 @@ body.light-mode .poll-option-selected .poll-option-bar {
     transition: height 0.2s ease, opacity 0.2s ease, padding 0.2s ease;
     flex-shrink: 0;
     background-color: rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .typing-indicator {
+    background-color: rgba(0, 0, 0, 0.04);
 }
 
 .typing-indicator.active {

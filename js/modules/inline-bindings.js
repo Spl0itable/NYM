@@ -347,6 +347,9 @@ window.nymHapticTap = function (ms) {
         'selectSpecificAutocomplete': function (_e, t) {
             nym().selectSpecificAutocomplete(t.dataset.acNym, t.dataset.acPubkey);
         },
+        'selectSpecificEmojiAutocomplete': function (_e, t) {
+            nym().selectSpecificEmojiAutocomplete(t.dataset.emoji);
+        },
         'selectChannelAutocompleteItem': function (_e, t) {
             nym().selectChannelAutocompleteItem(t.dataset.channelName);
         },
@@ -354,6 +357,14 @@ window.nymHapticTap = function (ms) {
         // Channels (settings list buttons)
         'unblockChannelFromSettings': function (_e, t) { nym().unblockChannelFromSettings(t.dataset.channelKey); },
         'unhideChannelFromSettings':  function (_e, t) { nym().unhideChannelFromSettings(t.dataset.channelKey); },
+
+        // Channel sidebar list item buttons
+        'channelTogglePin':           function (_e, t) { nym().togglePin(t.dataset.channel, t.dataset.geohash); },
+        'channelToggleHide':          function (_e, t) { nym().toggleHideChannel(t.dataset.channel, t.dataset.geohash); },
+
+        // PM / group sidebar list items
+        'openPMItem':                 function (_e, t) { nym().openPM(t.dataset.nym, t.dataset.pubkey); },
+        'openGroupItem':              function (_e, t) { nym().openGroup(t.dataset.groupId); },
 
         // PMs dynamic
         'deletePMStop':               function (e, t) { e.stopPropagation(); nym().deletePM(t.dataset.pubkey); },

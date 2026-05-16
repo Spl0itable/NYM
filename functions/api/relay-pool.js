@@ -355,7 +355,7 @@ export async function onRequest(context) {
     return false;
   }
 
-  const RX_ZERO_WIDTH = /[​-‏‪-‮⁠-⁯﻿]/;
+  const RX_ZERO_WIDTH = /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/;
   const RARE_BIGRAMS = ['xw','xz','xj','xk','wx','wz','wj','wq','jq','jx','jz','kq','kx','kz','vq','vx','vz','zx','zk','zp','pq','pz','fq','fz','gq','gz','hq','hz'];
 
   function scoreSingleAlphanumWord(token) {
@@ -472,7 +472,11 @@ export async function onRequest(context) {
     if (/^(npub|nsec|note|nevent|naddr)1[a-z0-9]+$/i.test(trimmed)) return false;
     if (trimmed.includes('```') || trimmed.includes('`')) return false;
     if (trimmed.startsWith('data:image')) return false;
-    return spamScore(trimmed) >= 3;
+    const scrubbed = trimmed
+      .split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
+      .replace(/@\S+/g, ' ')
+      .trim();
+    return spamScore(scrubbed) >= 3;
   }
 
   function isSpamNym(nym) {

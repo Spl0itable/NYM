@@ -1735,7 +1735,7 @@ Object.assign(NYM.prototype, {
             item.dataset.groupId = groupId;
             item.dataset.lastMessageTime = timestamp;
             item.innerHTML = this._buildGroupItemHTML(groupId, name, allMembers);
-            item.onclick = () => this.openGroup(groupId);
+            item.dataset.action = 'openGroupItem';
             this.insertPMInOrder(item, pmList);
 
             // Apply active search filter
@@ -1834,11 +1834,8 @@ Object.assign(NYM.prototype, {
             const el = document.querySelector(`.group-readers[data-nym-msg-id="${msg.nymMessageId}"]`);
             if (!el) continue;
             const waterfallReaders = displayReaders.get(msg.nymMessageId);
-            const html = waterfallReaders && waterfallReaders.size > 0
-                ? this._buildGroupReadersHtmlFromMap(waterfallReaders)
-                : '';
-            el.innerHTML = html;
-            if (html && !el._readerLongPressBound) {
+            const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+            if (hasReaders && !el._readerLongPressBound) {
                 this._bindReaderLongPress(el, msg.nymMessageId);
                 el._readerLongPressBound = true;
             }
@@ -1849,9 +1846,9 @@ Object.assign(NYM.prototype, {
     _updateSingleGroupReaders(nymMessageId) {
         const el = document.querySelector(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
         if (!el) return;
-        const html = this._buildGroupReadersHtml(nymMessageId);
-        if (!html) return;
-        el.innerHTML = html;
+        const readers = this.groupMessageReaders.get(nymMessageId);
+        if (!readers || readers.size === 0) return;
+        this._syncReaderAvatars(el, readers);
         if (!el._readerLongPressBound) {
             this._bindReaderLongPress(el, nymMessageId);
             el._readerLongPressBound = true;
@@ -1873,6 +1870,56 @@ Object.assign(NYM.prototype, {
             ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
             : '';
         return avatarHtml + overflowHtml;
+    },
+
+    // Reconcile a .group-readers / .channel-readers element in place
+    _syncReaderAvatars(el, readersMap) {
+        const MAX_VISIBLE = 3;
+        const entries = readersMap ? Array.from(readersMap.entries()) : [];
+        const visible = entries.slice(0, MAX_VISIBLE);
+        const overflow = entries.length - MAX_VISIBLE;
+
+        const existing = new Map();
+        for (const img of el.querySelectorAll('img.group-reader-avatar')) {
+            if (img.dataset.avatarPubkey) existing.set(img.dataset.avatarPubkey, img);
+        }
+
+        let prev = null;
+        for (const [pk, name] of visible) {
+            const sk = this._safePubkey(pk);
+            let img = existing.get(sk);
+            if (img) {
+                existing.delete(sk);
+            } else {
+                img = document.createElement('img');
+                img.className = 'group-reader-avatar';
+                img.loading = 'lazy';
+                img.dataset.avatarPubkey = sk;
+            }
+            const src = this.getAvatarUrl(pk);
+            if (img.getAttribute('src') !== src) img.src = src;
+            const title = `Read by ${name}`;
+            if (img.title !== title) img.title = title;
+            const ref = prev ? prev.nextSibling : el.firstChild;
+            if (ref !== img) el.insertBefore(img, ref);
+            prev = img;
+        }
+        for (const img of existing.values()) img.remove();
+
+        let badge = el.querySelector('.group-reader-overflow');
+        if (overflow > 0) {
+            const text = `+${this.abbreviateNumber(overflow)}`;
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'group-reader-overflow';
+            }
+            if (badge.textContent !== text) badge.textContent = text;
+            const ref = prev ? prev.nextSibling : el.firstChild;
+            if (ref !== badge) el.insertBefore(badge, ref);
+        } else if (badge) {
+            badge.remove();
+        }
+        return visible.length > 0;
     },
 
     // Channel-message reader avatars (kind 20000 message IDs keyed in channelMessageReaders)
@@ -1913,11 +1960,8 @@ Object.assign(NYM.prototype, {
             const el = document.querySelector(`.channel-readers[data-msg-id="${msg.id}"]`);
             if (!el) continue;
             const waterfallReaders = displayReaders.get(msg.id);
-            const html = waterfallReaders && waterfallReaders.size > 0
-                ? this._buildGroupReadersHtmlFromMap(waterfallReaders)
-                : '';
-            el.innerHTML = html;
-            if (html && !el._readerLongPressBound) {
+            const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+            if (hasReaders && !el._readerLongPressBound) {
                 this._bindChannelReaderLongPress(el, msg.id);
                 el._readerLongPressBound = true;
             }
@@ -1929,7 +1973,7 @@ Object.assign(NYM.prototype, {
         if (!el) return;
         const readers = this.channelMessageReaders.get(messageId);
         if (!readers || readers.size === 0) return;
-        el.innerHTML = this._buildGroupReadersHtmlFromMap(readers);
+        this._syncReaderAvatars(el, readers);
         if (!el._readerLongPressBound) {
             this._bindChannelReaderLongPress(el, messageId);
             el._readerLongPressBound = true;
@@ -2068,7 +2112,7 @@ Object.assign(NYM.prototype, {
         const item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
         if (item) {
             item.innerHTML = this._buildGroupItemHTML(groupId, group.name, group.members);
-            item.onclick = () => this.openGroup(groupId);
+            item.dataset.action = 'openGroupItem';
         }
     },
 

@@ -1392,7 +1392,8 @@ Object.assign(NYM.prototype, {
 <span class="unread-badge" style="display:none">0</span>
 </div>
 `;
-            item.onclick = () => this.openPM(cleanBaseNym, pubkey);
+            item.dataset.action = 'openPMItem';
+            item.dataset.nym = cleanBaseNym;
 
             this.insertPMInOrder(item, pmList);
 

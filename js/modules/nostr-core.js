@@ -859,7 +859,7 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    _RX_ZERO_WIDTH: /[​-‏‪-‮⁠-⁯﻿]/,
+    _RX_ZERO_WIDTH: /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/,
     _RARE_BIGRAMS: ['xw','xz','xj','xk','wx','wz','wj','wq','jq','jx','jz','kq','kx','kz','vq','vx','vz','zx','zk','zp','pq','pz','fq','fz','gq','gz','hq','hz'],
 
     _scoreSingleAlphanumWord(token) {
@@ -975,7 +975,14 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        return this._spamScore(trimmed) >= 3;
+        // Score against the user's own text only: @mentions (whose digit-heavy
+        // #suffix would otherwise trip the heuristics) and quoted lines don't count.
+        const scrubbed = trimmed
+            .split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
+            .replace(/@\S+/g, ' ')
+            .trim();
+
+        return this._spamScore(scrubbed) >= 3;
     },
 
     // Detects a randomized / spam-bot nym
