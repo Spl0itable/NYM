@@ -383,9 +383,11 @@ export async function onRequest(context) {
       const hasLatin = /[A-Za-z]/.test(tok);
       const hasCyrillic = /[Ѐ-ӿ]/.test(tok);
       const hasGreek = /[Ͱ-Ͽ]/.test(tok);
-      if ((hasLatin && hasCyrillic) || (hasLatin && hasGreek) || (hasCyrillic && hasGreek)) {
-        return true;
-      }
+      const scripts = (hasLatin ? 1 : 0) + (hasCyrillic ? 1 : 0) + (hasGreek ? 1 : 0);
+      if (scripts < 2) continue;
+      const letterCount = (tok.match(/[A-Za-zЀ-ӿͰ-Ͽ]/g) || []).length;
+      if (letterCount / tok.length < 0.6) continue;
+      return true;
     }
     return false;
   }
@@ -433,7 +435,10 @@ export async function onRequest(context) {
     if (tokens.length === 1) {
       if (looksLikeRandomToken(tokens[0])) score += 3;
       score += scoreSingleAlphanumWord(tokens[0]);
-      if (tokens[0].length >= 12) score += 1;
+      if (tokens[0].length >= 12) {
+        const alnum = (tokens[0].match(/[A-Za-z0-9]/g) || []).length;
+        if (alnum / tokens[0].length >= 0.5) score += 1;
+      }
     } else {
       let gibberish = 0, analyzable = 0;
       for (const tok of tokens) {

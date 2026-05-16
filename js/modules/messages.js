@@ -877,16 +877,8 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            if (insertBefore) {
-                let ref = insertBefore;
-                if (ref.parentNode !== container) {
-                    ref = ref.closest('.message-group') || null;
-                }
-                if (ref && ref.parentNode === container) {
-                    container.insertBefore(messageEl, ref);
-                } else {
-                    container.appendChild(messageEl);
-                }
+            if (insertBefore && insertBefore.parentNode) {
+                insertBefore.parentNode.insertBefore(messageEl, insertBefore);
             } else {
                 container.appendChild(messageEl);
             }
