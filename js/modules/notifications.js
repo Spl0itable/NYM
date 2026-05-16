@@ -317,7 +317,7 @@ Object.assign(NYM.prototype, {
                         ${avatarHtml}
                         <div class="notification-item-meta">
                             <div class="notification-item-title">${authorHtml}</div>
-                            <div class="notification-item-body">${this.escapeHtml(displayBody)}</div>
+                            <div class="notification-item-body">${this.renderCustomEmojiInEscapedText(this.escapeHtml(displayBody))}</div>
                             <div class="notification-item-footer">${contextHtml} <span class="notification-item-time">${time}</span></div>
                         </div>
                     </div>

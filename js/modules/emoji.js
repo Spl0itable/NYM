@@ -210,4 +210,15 @@ Object.assign(NYM.prototype, {
         return html;
     },
 
+    // Replace :shortcode: tokens in already-HTML-escaped text with custom emoji
+    renderCustomEmojiInEscapedText(escapedText) {
+        if (!escapedText || !this.customEmojis || this.customEmojis.size === 0) return escapedText;
+        return escapedText.replace(/:([a-zA-Z0-9_]+):/g, (match, code) => {
+            if (this.customEmojis.has(code)) {
+                return this.renderCustomEmojiImg(code) || match;
+            }
+            return match;
+        });
+    },
+
 });
