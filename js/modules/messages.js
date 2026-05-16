@@ -201,6 +201,8 @@ Object.assign(NYM.prototype, {
     },
 
     _isPubkeyGated(pubkey) {
+        if (this.verifiedDeveloper && pubkey === this.verifiedDeveloper.pubkey) return false;
+        if (this.verifiedBotPubkeys && this.verifiedBotPubkeys.has(pubkey)) return false;
         return !this.trustedPubkeys.has(pubkey);
     },
 
