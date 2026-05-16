@@ -1609,6 +1609,7 @@ function closeModal(id) {
 
 function closeImageModal() {
     document.getElementById('imageModal').classList.remove('active');
+    if (window.resetImageModalZoom) window.resetImageModalZoom();
     const modalVid = document.getElementById('modalVideo');
     modalVid.pause();
     modalVid.removeAttribute('src');
@@ -1654,6 +1655,143 @@ function downloadModalMedia(event) {
             window.open(src, '_blank');
         });
 }
+
+// Image modal pinch-to-zoom and swipe-to-close gestures
+(function () {
+    const MIN_SCALE = 1;
+    const MAX_SCALE = 5;
+    let img, modal;
+    let scale = 1, tx = 0, ty = 0;
+    let startScale = 1, startTx = 0, startTy = 0;
+    let startDist = 0, startMidX = 0, startMidY = 0;
+    let startX = 0, startY = 0;
+    let mode = null;
+    let moved = false;
+    let lastTap = 0;
+
+    function apply(animate) {
+        img.classList.toggle('gesture-animating', !!animate);
+        img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    }
+
+    function reset(animate) {
+        scale = 1; tx = 0; ty = 0;
+        if (img) {
+            apply(animate);
+            modal.style.background = '';
+        }
+    }
+    window.resetImageModalZoom = function () { reset(false); };
+
+    function clampPan() {
+        const maxX = Math.max(0, (img.offsetWidth * scale - img.offsetWidth) / 2);
+        const maxY = Math.max(0, (img.offsetHeight * scale - img.offsetHeight) / 2);
+        tx = Math.min(maxX, Math.max(-maxX, tx));
+        ty = Math.min(maxY, Math.max(-maxY, ty));
+    }
+
+    function dist(t) {
+        return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    }
+
+    function onStart(e) {
+        const t = e.touches;
+        moved = false;
+        if (t.length === 2) {
+            mode = 'pinch';
+            startScale = scale;
+            startTx = tx; startTy = ty;
+            startDist = dist(t);
+            startMidX = (t[0].clientX + t[1].clientX) / 2;
+            startMidY = (t[0].clientY + t[1].clientY) / 2;
+        } else if (t.length === 1) {
+            startX = t[0].clientX;
+            startY = t[0].clientY;
+            startTx = tx; startTy = ty;
+            mode = scale > MIN_SCALE ? 'pan' : 'swipe';
+        }
+        img.classList.remove('gesture-animating');
+    }
+
+    function onMove(e) {
+        const t = e.touches;
+        if (mode === 'pinch' && t.length === 2) {
+            e.preventDefault();
+            moved = true;
+            scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, startScale * (dist(t) / startDist)));
+            const midX = (t[0].clientX + t[1].clientX) / 2;
+            const midY = (t[0].clientY + t[1].clientY) / 2;
+            tx = startTx + (midX - startMidX);
+            ty = startTy + (midY - startMidY);
+            apply(false);
+        } else if (mode === 'pan' && t.length === 1) {
+            e.preventDefault();
+            moved = true;
+            tx = startTx + (t[0].clientX - startX);
+            ty = startTy + (t[0].clientY - startY);
+            apply(false);
+        } else if (mode === 'swipe' && t.length === 1) {
+            const dx = t[0].clientX - startX;
+            const dy = t[0].clientY - startY;
+            if (Math.hypot(dx, dy) > 6) moved = true;
+            tx = dx; ty = dy;
+            const progress = Math.min(1, Math.hypot(dx, dy) / 300);
+            modal.style.background = `rgba(0, 0, 0, ${0.4 * (1 - progress)})`;
+            apply(false);
+        }
+    }
+
+    function onEnd(e) {
+        if (mode === 'swipe') {
+            if (Math.hypot(tx, ty) > 100) {
+                window.closeImageModal();
+                return;
+            }
+            reset(true);
+        } else if (mode === 'pinch' || mode === 'pan') {
+            if (scale <= MIN_SCALE) {
+                reset(true);
+            } else {
+                clampPan();
+                apply(true);
+            }
+        }
+        if (e.touches.length === 0) mode = null;
+    }
+
+    function onDoubleTap(e) {
+        const now = Date.now();
+        if (now - lastTap < 300 && e.changedTouches.length === 1) {
+            e.preventDefault();
+            if (scale > MIN_SCALE) reset(true);
+            else { scale = 2.5; apply(true); }
+        }
+        lastTap = now;
+    }
+
+    function setup() {
+        img = document.getElementById('modalImage');
+        modal = document.getElementById('imageModal');
+        if (!img || !modal) return;
+        img.addEventListener('touchstart', onStart, { passive: false });
+        img.addEventListener('touchmove', onMove, { passive: false });
+        img.addEventListener('touchend', onEnd);
+        img.addEventListener('touchcancel', onEnd);
+        img.addEventListener('touchend', onDoubleTap, { passive: false });
+        img.addEventListener('click', (e) => {
+            if (moved || scale > MIN_SCALE) {
+                e.stopPropagation();
+                moved = false;
+            }
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setup);
+    } else {
+        setup();
+    }
+})();
 
 function addPollOption() {
     const container = document.getElementById('pollOptionsContainer');
@@ -3237,7 +3375,7 @@ function initWallpaperUI() {
 function showAbout() {
     const connectedRelays = nym.relayPool.size;
     nym.displaySystemMessage(`
-═══ Nymchat v3.63.356 ═══<br/>
+═══ Nymchat v3.63.357 ═══<br/>
 Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
 Connected Relays: ${connectedRelays} relays<br/>
 Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
@@ -4436,48 +4574,7 @@ async function nostrSettingsSave() {
     if (!nym || !nym.pubkey) return;
 
     try {
-        const settingsPayload = nym._buildSettingsPayload();
-
-        // Include group conversations directly (entire event is encrypted)
-        try {
-            if (nym.groupConversations && nym.groupConversations.size > 0) {
-                const groupData = {};
-                for (const [groupId, group] of nym.groupConversations) {
-                    groupData[groupId] = {
-                        name: group.name,
-                        members: group.members,
-                        lastMessageTime: group.lastMessageTime,
-                        createdBy: group.createdBy
-                    };
-                }
-                settingsPayload.groupConversations = groupData;
-            }
-        } catch (_) { }
-
-        // Include chat history backup for new-device recovery
-        try {
-            if (nym.pmMessages && nym.pmMessages.size > 0) {
-                const historyData = {};
-                for (const [convKey, messages] of nym.pmMessages) {
-                    if (convKey.startsWith('group-') && messages.length > 0) {
-                        historyData[convKey] = messages.slice(-200).map(m => ({
-                            id: m.id,
-                            pubkey: m.pubkey,
-                            content: m.content,
-                            created_at: m.created_at,
-                            isOwn: m.isOwn,
-                            groupId: m.groupId,
-                            nymMessageId: m.nymMessageId
-                        }));
-                    }
-                }
-                if (Object.keys(historyData).length > 0) {
-                    settingsPayload.groupMessageHistory = historyData;
-                }
-            }
-        } catch (_) { }
-
-        await nym._publishEncryptedSettings(settingsPayload);
+        await nym._publishEncryptedSettings(nym._buildSettingsPayload());
     } catch (err) {
         console.warn('[NostrSync] Failed to save settings to relays:', err.message);
     }
@@ -4712,8 +4809,8 @@ function nostrSettingsLoad() {
     const filter = {
         kinds: [1059],
         '#p': [pubkey],
-        '#d': ['nymchat-settings', 'nymchat-keys'],
-        limit: 8
+        '#d': ['nymchat-settings', 'nymchat-keys', 'nymchat-groups', 'nymchat-history', 'nymchat-notifications'],
+        limit: 24
     };
 
     // Buffer settings events during the initial REQ

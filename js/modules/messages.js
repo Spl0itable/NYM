@@ -219,13 +219,20 @@ Object.assign(NYM.prototype, {
         const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
         this.messages.forEach((msgs, key) => {
             let hadGated = false;
+            let maxTime = 0;
             for (const m of msgs) {
                 if (m.pubkey === pubkey && m._spamGated) {
                     m._spamGated = false;
                     hadGated = true;
+                    const t = (m.created_at || 0) * 1000;
+                    if (t > maxTime) maxTime = t;
                 }
             }
             if (!hadGated) return;
+            // Newly revealed messages now count toward channel sort ordering
+            if (maxTime > (this.channelLastActivity.get(key) || 0)) {
+                this.channelLastActivity.set(key, maxTime);
+            }
             if (!this.inPMMode && key === currentKey) {
                 for (const m of msgs) {
                     if (m.pubkey === pubkey) this.displayMessage(m);
@@ -235,6 +242,10 @@ Object.assign(NYM.prototype, {
             }
             if (typeof this.updateUnreadCount === 'function') {
                 this.updateUnreadCount(key);
+            }
+            if (this.geohashMap && key.startsWith('#') &&
+                this.isValidGeohash && this.isValidGeohash(key.substring(1))) {
+                this._scheduleGeohashMapUpdate();
             }
         });
     },
@@ -305,6 +316,10 @@ Object.assign(NYM.prototype, {
             // Regular geohash channel message
             const storageKey = message.geohash ? `#${message.geohash}` : message.channel;
 
+            const isGated = !message.isOwn && !this.isFriend(message.pubkey) &&
+                !this.nymchatPubkeys.has(message.pubkey) &&
+                this._isPubkeyGated(message.pubkey);
+
             // Always store channel messages in memory regardless of current view
             if (!this.messages.has(storageKey)) {
                 this.messages.set(storageKey, []);
@@ -316,7 +331,7 @@ Object.assign(NYM.prototype, {
                 // Track most recent message time for channel sort ordering
                 const msgTime = (message.created_at || 0) * 1000;
                 const prevActivity = this.channelLastActivity.get(storageKey) || 0;
-                if (msgTime > prevActivity) {
+                if (!isGated && msgTime > prevActivity) {
                     this.channelLastActivity.set(storageKey, msgTime);
                     if (typeof this._persistUnreadCounts === 'function') {
                         this._persistUnreadCounts();
@@ -355,9 +370,7 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            if (!message.isOwn && !this.isFriend(message.pubkey) &&
-                !this.nymchatPubkeys.has(message.pubkey) &&
-                this._isPubkeyGated(message.pubkey)) {
+            if (isGated) {
                 message._spamGated = true;
                 return;
             }
@@ -1212,7 +1225,7 @@ Object.assign(NYM.prototype, {
             /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
             (match, url) => {
                 const proxiedUrl = this.getProxiedMediaUrl(url);
-                return `<img src="${proxiedUrl}" alt="Image" data-action="expandImageFromData" data-original-src="${url}" />`;
+                return `<img src="${proxiedUrl}" alt="Image" data-action="expandImageFromData" />`;
             }
         );
 
@@ -1332,6 +1345,7 @@ Object.assign(NYM.prototype, {
     expandImage(src) {
         const modalImg = document.getElementById('modalImage');
         const modalVid = document.getElementById('modalVideo');
+        if (window.resetImageModalZoom) window.resetImageModalZoom();
         modalImg.src = src;
         modalImg.style.display = '';
         modalVid.style.display = 'none';

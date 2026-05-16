@@ -353,11 +353,13 @@
                 }
 
                 // Channel messages
+                const loadedChannelKeys = [];
                 for (const c of channels) {
                     if (!c || !c.key || !Array.isArray(c.messages)) continue;
                     if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
                     const msgs = c.messages.map(m => this._hydrateMessage(m));
                     this.messages.set(c.key, msgs);
+                    loadedChannelKeys.push(c.key);
                     // Rebuild spam-gate counts from cache
                     if (typeof this._trackPubkeyMessage === 'function') {
                         for (const m of msgs) {
@@ -366,11 +368,23 @@
                             }
                         }
                     }
-                    if (msgs.length > 0) {
-                        const last = msgs[msgs.length - 1];
-                        const lastTs = (last.created_at || 0) * 1000;
-                        if (lastTs > 0) this.channelLastActivity.set(c.key, lastTs);
+                }
+
+                for (const key of loadedChannelKeys) {
+                    const msgs = this.messages.get(key);
+                    if (!msgs || !msgs.length) continue;
+                    let lastTs = 0;
+                    for (const m of msgs) {
+                        if (!m) continue;
+                        const gated = !m.isOwn && !this.isFriend(m.pubkey) &&
+                            !this.nymchatPubkeys.has(m.pubkey) &&
+                            this._isPubkeyGated(m.pubkey);
+                        m._spamGated = gated;
+                        if (gated) continue;
+                        const ts = (m.created_at || 0) * 1000;
+                        if (ts > lastTs) lastTs = ts;
                     }
+                    if (lastTs > 0) this.channelLastActivity.set(key, lastTs);
                 }
 
                 // PM/group messages

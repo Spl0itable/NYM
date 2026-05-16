@@ -39,51 +39,7 @@ Object.assign(NYM.prototype, {
         }
 
         try {
-            const settingsData = this._buildSettingsPayload();
-
-            // Include group conversations directly in the payload
-            try {
-                if (this.groupConversations && this.groupConversations.size > 0) {
-                    const groupData = {};
-                    for (const [groupId, group] of this.groupConversations) {
-                        groupData[groupId] = {
-                            name: group.name,
-                            members: group.members,
-                            lastMessageTime: group.lastMessageTime,
-                            createdBy: group.createdBy,
-                            mods: Array.isArray(group.mods) ? group.mods : [],
-                            banned: Array.isArray(group.banned) ? group.banned : [],
-                            modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
-                        };
-                    }
-                    settingsData.groupConversations = groupData;
-                }
-            } catch (_) { }
-
-            // Include group message history backup for new-device recovery
-            try {
-                if (this.pmMessages && this.pmMessages.size > 0) {
-                    const historyData = {};
-                    for (const [convKey, messages] of this.pmMessages) {
-                        if (convKey.startsWith('group-') && messages.length > 0) {
-                            historyData[convKey] = messages.slice(-200).map(m => ({
-                                id: m.id,
-                                pubkey: m.pubkey,
-                                content: m.content,
-                                created_at: m.created_at,
-                                isOwn: m.isOwn,
-                                groupId: m.groupId,
-                                nymMessageId: m.nymMessageId
-                            }));
-                        }
-                    }
-                    if (Object.keys(historyData).length > 0) {
-                        settingsData.groupMessageHistory = historyData;
-                    }
-                }
-            } catch (_) { }
-
-            await this._publishEncryptedSettings(settingsData);
+            await this._publishEncryptedSettings(this._buildSettingsPayload());
         } catch (error) {
         }
     },
@@ -111,7 +67,6 @@ Object.assign(NYM.prototype, {
     _buildSettingsPayload() {
         return {
             v: 2,
-            notificationHistory: this._serialiseNotificationsForSync(),
             theme: this.settings.theme,
             sound: this.settings.sound,
             autoscroll: this.settings.autoscroll,
@@ -149,7 +104,6 @@ Object.assign(NYM.prototype, {
             notificationsEnabled: this.notificationsEnabled !== false,
             groupNotifyMentionsOnly: this.groupNotifyMentionsOnly || false,
             notifyFriendsOnly: this.notifyFriendsOnly || false,
-            notificationLastReadTime: this.notificationLastReadTime || 0,
             closedPMs: Array.from(this.closedPMs || []),
             leftGroups: Array.from(this.leftGroups || []),
             acceptPMs: this.settings.acceptPMs || 'enabled',
@@ -185,14 +139,82 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Publishes group ephemeral keys to a dedicated nymchat-keys self-addressed encrypted giftwrap
+    // Serialize group conversation metadata for cross-device sync
+    _buildGroupConversationsSync() {
+        if (!this.groupConversations || this.groupConversations.size === 0) return null;
+        const data = {};
+        for (const [groupId, group] of this.groupConversations) {
+            data[groupId] = {
+                name: group.name,
+                members: group.members,
+                lastMessageTime: group.lastMessageTime,
+                createdBy: group.createdBy,
+                mods: Array.isArray(group.mods) ? group.mods : [],
+                banned: Array.isArray(group.banned) ? group.banned : [],
+                modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
+            };
+        }
+        return data;
+    },
+
+    // Serialize group message history for new-device recovery
+    _buildGroupHistorySync() {
+        if (!this.pmMessages || this.pmMessages.size === 0) return null;
+        const data = {};
+        for (const [convKey, messages] of this.pmMessages) {
+            if (convKey.startsWith('group-') && messages.length > 0) {
+                data[convKey] = messages.slice(-200).map(m => ({
+                    id: m.id,
+                    pubkey: m.pubkey,
+                    content: m.content,
+                    created_at: m.created_at,
+                    isOwn: m.isOwn,
+                    groupId: m.groupId,
+                    nymMessageId: m.nymMessageId
+                }));
+            }
+        }
+        return Object.keys(data).length > 0 ? data : null;
+    },
+
+    // Publish one data category as its own self-addressed gift wrap
+    async _publishCategoryWrap(payload, dTag, createdAt, trimFns) {
+        const RUMOR_OVERHEAD = 256;
+        const MAX_RUMOR_BYTES = Math.floor((65535 - 512) / 1.7);
+        const encoder = new TextEncoder();
+        const rumorByteSize = (p) => {
+            const json = JSON.stringify(p);
+            return encoder.encode(JSON.stringify(json)).length + RUMOR_OVERHEAD;
+        };
+
+        if (Array.isArray(trimFns) && trimFns.length) {
+            let guard = 0;
+            while (rumorByteSize(payload) > MAX_RUMOR_BYTES && guard++ < 500) {
+                let trimmed = false;
+                for (const fn of trimFns) {
+                    if (fn(payload)) { trimmed = true; break; }
+                }
+                if (!trimmed) break;
+            }
+        }
+
+        if (rumorByteSize(payload) > MAX_RUMOR_BYTES) {
+            console.warn(`[NostrSync] ${dTag} exceeds NIP-44 plaintext limit after trimming; skipping publish`);
+            return;
+        }
+
+        await this._publishWrappedNostrEvent(payload, dTag, createdAt);
+    },
+
     async _publishEncryptedSettings(settingsData) {
         const now = Math.floor(Date.now() / 1000);
-        // NIP-44 caps plaintext at 65535 bytes
-        const NIP44_MAX_PLAINTEXT = 65535;
-        const RUMOR_OVERHEAD = 256; // kind, created_at, tags, pubkey, id, JSON syntax
 
+        // Category data is published separately, never bundled into core settings
         delete settingsData.groupEphemeralKeys;
+        delete settingsData.groupConversations;
+        delete settingsData.groupMessageHistory;
+        delete settingsData.notificationHistory;
+        delete settingsData.notificationLastReadTime;
 
         // Bump the sync timestamp before publishing
         if (now > (this._lastSettingsSyncTs || 0)) {
@@ -200,40 +222,79 @@ Object.assign(NYM.prototype, {
             try { localStorage.setItem('nym_last_settings_sync_ts', String(now)); } catch (_) { }
         }
 
+        // Group ephemeral keys → nymchat-keys
         if (this.groupEphemeralKeys && this.groupEphemeralKeys.size > 0) {
             try {
                 const ekData = {};
                 for (const [groupId, ek] of this.groupEphemeralKeys) {
                     ekData[groupId] = this._serializeEphemeralKeys(ek);
                 }
-                await this._publishWrappedNostrEvent({ groupEphemeralKeys: ekData }, 'nymchat-keys', now);
+                await this._publishCategoryWrap({ groupEphemeralKeys: ekData }, 'nymchat-keys', now);
             } catch (_) { }
         }
 
-        // Measure the actual rumor plaintext byte size (what NIP-44 will
-        // encrypt), accounting for JSON-string escaping of the payload.
-        const encoder = new TextEncoder();
-        const rumorByteSize = (payload) => {
-            const payloadJson = JSON.stringify(payload);
-            // The payload is embedded as a JSON string inside the rumor, so
-            // its escaping cost is the byte length of JSON.stringify(string).
-            return encoder.encode(JSON.stringify(payloadJson)).length + RUMOR_OVERHEAD;
-        };
+        // Group conversation metadata → nymchat-groups
+        try {
+            const groupConversations = this._buildGroupConversationsSync();
+            if (groupConversations) {
+                const trimGroupModLogs = (p) => {
+                    let trimmed = false;
+                    for (const g of Object.values(p.groupConversations || {})) {
+                        if (g && Array.isArray(g.modLog) && g.modLog.length > 0) {
+                            g.modLog = g.modLog.slice(Math.ceil(g.modLog.length / 2));
+                            trimmed = true;
+                        }
+                    }
+                    return trimmed;
+                };
+                await this._publishCategoryWrap({ groupConversations }, 'nymchat-groups', now, [trimGroupModLogs]);
+            }
+        } catch (_) { }
 
-        const tooBig = () => rumorByteSize(settingsData) > NIP44_MAX_PLAINTEXT;
+        // Group message history → nymchat-history
+        try {
+            const groupMessageHistory = this._buildGroupHistorySync();
+            if (groupMessageHistory) {
+                // Drop the oldest 10% from whichever conversation is largest
+                const trimOldestHistory = (p) => {
+                    const hist = p.groupMessageHistory || {};
+                    let biggestKey = null, biggestLen = 0;
+                    for (const [k, arr] of Object.entries(hist)) {
+                        if (Array.isArray(arr) && arr.length > biggestLen) {
+                            biggestLen = arr.length;
+                            biggestKey = k;
+                        }
+                    }
+                    if (!biggestKey || biggestLen <= 1) return false;
+                    const next = hist[biggestKey].slice(Math.max(1, Math.ceil(biggestLen * 0.1)));
+                    if (next.length === 0) delete hist[biggestKey];
+                    else hist[biggestKey] = next;
+                    return true;
+                };
+                await this._publishCategoryWrap({ groupMessageHistory }, 'nymchat-history', now, [trimOldestHistory]);
+            }
+        } catch (_) { }
 
-        if (tooBig()) delete settingsData.groupMessageHistory;
-        if (tooBig()) delete settingsData.groupConversations;
-        if (tooBig()) delete settingsData.notificationHistory;
+        // Notification history → nymchat-notifications
+        try {
+            const notificationHistory = this._serialiseNotificationsForSync();
+            const lastRead = this.notificationLastReadTime || 0;
+            if (notificationHistory.length > 0 || lastRead > 0) {
+                // Drop the oldest 10% of notifications
+                const trimOldestNotifications = (p) => {
+                    const arr = p.notificationHistory;
+                    if (!Array.isArray(arr) || arr.length <= 1) return false;
+                    p.notificationHistory = arr.slice(Math.max(1, Math.ceil(arr.length * 0.1)));
+                    return true;
+                };
+                await this._publishCategoryWrap(
+                    { notificationHistory, notificationLastReadTime: lastRead },
+                    'nymchat-notifications', now, [trimOldestNotifications]);
+            }
+        } catch (_) { }
 
-        // Final guard: if even the trimmed payload is too large, bail out
-        // rather than asking nip44 to encrypt something it will reject.
-        if (tooBig()) {
-            console.warn('[NostrSync] Settings payload exceeds NIP-44 plaintext limit after truncation; skipping publish');
-            return;
-        }
-
-        await this._publishWrappedNostrEvent(settingsData, 'nymchat-settings', now);
+        // Core settings → nymchat-settings
+        await this._publishCategoryWrap(settingsData, 'nymchat-settings', now);
     },
 
     // Wrap an arbitrary settings payload as a NIP-59 self-addressed gift wrap
@@ -251,17 +312,31 @@ Object.assign(NYM.prototype, {
         };
         rumor.id = NT.getEventHash(rumor);
 
+        // NIP-44 caps each encryption stage at 65535 plaintext bytes. Skip
+        // rather than throw if the rumor or its sealed form exceeds the cap.
+        const enc = new TextEncoder();
+        const rumorJson = JSON.stringify(rumor);
+        if (enc.encode(rumorJson).length > 65535) {
+            console.warn(`[NostrSync] ${dTag} payload exceeds NIP-44 plaintext limit; skipping publish`);
+            return;
+        }
+
         const outerTags = [['p', this.pubkey], ['d', dTag]];
 
         if (this.privkey) {
             const ckSeal = NT.nip44.getConversationKey(this.privkey, this.pubkey);
-            const sealContent = NT.nip44.encrypt(JSON.stringify(rumor), ckSeal);
+            const sealContent = NT.nip44.encrypt(rumorJson, ckSeal);
             const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
             const seal = NT.finalizeEvent(sealUnsigned, this.privkey);
 
+            const sealJson = JSON.stringify(seal);
+            if (enc.encode(sealJson).length > 65535) {
+                console.warn(`[NostrSync] ${dTag} sealed payload exceeds NIP-44 plaintext limit; skipping publish`);
+                return;
+            }
             const ephSk = NT.generateSecretKey();
             const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
-            const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+            const wrapContent = NT.nip44.encrypt(sealJson, ckWrap);
             const wrapUnsigned = {
                 kind: 1059, content: wrapContent, created_at: this.randomNow(),
                 tags: outerTags
@@ -276,16 +351,21 @@ Object.assign(NYM.prototype, {
         if (!useExt && !useN46) return;
 
         const sealContent = useExt
-            ? await window.nostr.nip44.encrypt(this.pubkey, JSON.stringify(rumor))
-            : await _nip46Encrypt(this.pubkey, JSON.stringify(rumor));
+            ? await window.nostr.nip44.encrypt(this.pubkey, rumorJson)
+            : await _nip46Encrypt(this.pubkey, rumorJson);
         const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
         const seal = useExt
             ? await window.nostr.signEvent(sealUnsigned)
             : await _nip46SignEvent(sealUnsigned);
 
+        const sealJson = JSON.stringify(seal);
+        if (enc.encode(sealJson).length > 65535) {
+            console.warn(`[NostrSync] ${dTag} sealed payload exceeds NIP-44 plaintext limit; skipping publish`);
+            return;
+        }
         const ephSk = NT.generateSecretKey();
         const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
-        const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+        const wrapContent = NT.nip44.encrypt(sealJson, ckWrap);
         const wrapUnsigned = {
             kind: 1059, content: wrapContent, created_at: this.randomNow(),
             tags: outerTags

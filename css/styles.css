@@ -2740,6 +2740,13 @@ body.chat-bubbles .edited-indicator-irc {
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg);
+    touch-action: none;
+    transform-origin: center center;
+    will-change: transform;
+}
+
+.image-modal img.gesture-animating {
+    transition: transform 0.25s ease;
 }
 
 .image-modal-close {

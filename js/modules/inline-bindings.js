@@ -115,7 +115,7 @@ window.nymHapticTap = function (ms) {
             nym().closeContextMenu();
         },
         'expandImageFromSrc':         function (_e, t) { nym().expandImage(t.src); },
-        'expandImageFromData':        function (_e, t) { nym().expandImage(t.dataset.originalSrc || t.src); },
+        'expandImageFromData':        function (_e, t) { nym().expandImage(t.currentSrc || t.src); },
         'closeImageModal':            function () { window.closeImageModal(); },
         'downloadModalMedia':         function (e) { window.downloadModalMedia(e); },
 

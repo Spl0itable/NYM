@@ -763,9 +763,9 @@ Object.assign(NYM.prototype, {
                     try {
                         const s = JSON.parse(rumor.content);
                         const rumorTs = rumor.created_at || 0;
-                        const isKeysOnly = dTag === 'nymchat-keys';
+                        const isCoreSettings = dTag === 'nymchat-settings';
                         await applyNostrSettingsAdditive(s);
-                        if (!isKeysOnly) {
+                        if (isCoreSettings) {
                             const subId = opts && opts.settingsLoadSubId;
                             const buf = subId && this._settingsLoadBuffer && this._settingsLoadBuffer.get(subId);
                             if (buf) {

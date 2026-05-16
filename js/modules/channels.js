@@ -76,6 +76,7 @@ Object.assign(NYM.prototype, {
                 const allMsgs = this.messages.get(`#${geohash}`) || [];
                 let recentCount = 0;
                 for (const m of allMsgs) {
+                    if (m._spamGated) continue;
                     if ((m.created_at || 0) >= cutoffSec) recentCount++;
                 }
                 if (recentCount < 1) return;
