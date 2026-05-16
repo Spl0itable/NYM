@@ -1306,6 +1306,7 @@ ${code}
                 created_at: Math.floor(Date.now() / 1000),
                 tags: [
                     ['d', `nym-shop-transfer-${itemId}-${recipientPubkey}`],
+                    ['t', 'nym-shop-transfer'],
                     ['title', 'Nymchat Shop Item Transfer'],
                     ['p', recipientPubkey],
                     ['transfer-item', itemId],

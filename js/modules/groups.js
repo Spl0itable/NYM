@@ -1248,6 +1248,9 @@ Object.assign(NYM.prototype, {
         const nextEph = this._rotateSelfEphemeralKey(groupId);
         tags.push(['ephemeral_pk', nextEph.pk]);
 
+        // NIP-30: declare any custom emoji shortcodes used in the message
+        tags.push(...this.customEmojiTagsForContent(content));
+
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;

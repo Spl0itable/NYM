@@ -49,6 +49,13 @@ Object.assign(NYM.prototype, {
             });
         });
 
+        // Add NIP-30 custom emoji (inserted as :shortcode: tokens)
+        if (this.customEmojis) {
+            this.customEmojis.forEach((url, shortcode) => {
+                allEmojiEntries.push({ name: shortcode, emoji: `:${shortcode}:`, priority: 1, customUrl: url });
+            });
+        }
+
         // Filter based on search
         let matches = [];
         if (search === '') {
@@ -106,7 +113,17 @@ Object.assign(NYM.prototype, {
             item.dataset.action = 'selectSpecificEmojiAutocomplete';
             const emojiSpan = document.createElement('span');
             emojiSpan.className = 'emoji-item-emoji';
-            emojiSpan.textContent = emoji;
+            const cm = typeof emoji === 'string' && emoji.match(/^:([a-zA-Z0-9_]+):$/);
+            if (cm && this.customEmojis && this.customEmojis.has(cm[1])) {
+                const img = document.createElement('img');
+                img.className = 'custom-emoji';
+                img.src = this.getProxiedMediaUrl(this.customEmojis.get(cm[1]));
+                img.alt = emoji;
+                img.loading = 'lazy';
+                emojiSpan.appendChild(img);
+            } else {
+                emojiSpan.textContent = emoji;
+            }
             const nameSpan = document.createElement('span');
             nameSpan.className = 'emoji-item-name';
             nameSpan.textContent = `:${name}:`;

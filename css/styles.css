@@ -1786,6 +1786,43 @@ body.light-mode.chat-bubbles .read-more-btn {
     font-size: 2em;
 }
 
+.custom-emoji {
+    display: inline-block;
+    width: 1.4em;
+    height: 1.4em;
+    object-fit: contain;
+    vertical-align: -0.3em;
+    margin: 0 1px;
+}
+
+.emoji-only .custom-emoji {
+    width: 2.2em;
+    height: 2.2em;
+    vertical-align: middle;
+}
+
+.custom-emoji-reaction {
+    width: 1.15em;
+    height: 1.15em;
+    vertical-align: -0.2em;
+    margin: 0;
+}
+
+.emoji-option .custom-emoji,
+.emoji-btn .custom-emoji {
+    width: 24px;
+    height: 24px;
+    vertical-align: middle;
+    margin: 0;
+}
+
+.emoji-item-emoji .custom-emoji {
+    width: 20px;
+    height: 20px;
+    vertical-align: middle;
+    margin: 0;
+}
+
 .message-quote {
     background: rgba(255, 255, 255, 0.03);
     border-left: 3px solid rgb(from var(--primary) r g b / 0.4);
@@ -7202,6 +7239,13 @@ body.light-mode .ctx-full-pubkey {
 .quick-react-emoji:hover {
     transform: scale(1.3);
     background: rgba(255, 255, 255, 0.1);
+}
+
+.quick-react-emoji .custom-emoji {
+    width: 24px;
+    height: 24px;
+    vertical-align: middle;
+    margin: 0;
 }
 
 .quick-react-emoji:active {

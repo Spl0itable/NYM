@@ -233,7 +233,8 @@ Object.assign(NYM.prototype, {
             created_at: now,
             tags: [
                 ['p', recipientPubkey],
-                ['x', nymMessageId]  // Nymchat message ID for delivery receipts
+                ['x', nymMessageId],  // Nymchat message ID for delivery receipts
+                ...this.customEmojiTagsForContent(content)
             ],
             content,
             pubkey: this.pubkey
@@ -791,6 +792,9 @@ Object.assign(NYM.prototype, {
             if (!rumor.pubkey) {
                 return;
             }
+
+            // Register any NIP-30 custom emoji declared on this rumor
+            this.ingestEmojiTags(rumor.tags);
 
             const senderPubkey = rumor.pubkey;
             const isOwn = !!this.pubkey && senderPubkey === this.pubkey;

@@ -330,6 +330,9 @@ Object.assign(NYM.prototype, {
                 displayContent = userMessage ? `${quoteLine}\n\n${userMessage}` : quoteLine;
             }
 
+            // Register any NIP-30 custom emoji declared on this message
+            this.ingestEmojiTags(event.tags);
+
             const message = {
                 id: event.id,
                 author: nym,
@@ -669,6 +672,12 @@ Object.assign(NYM.prototype, {
         } else if (event.kind === 10000) {
             // Handle mute list of users/keywords
             this.handleMuteList(event);
+        } else if (event.kind === 30030) {
+            // NIP-30 custom emoji pack
+            this.handleEmojiPackEvent(event);
+        } else if (event.kind === 10030) {
+            // NIP-30 user emoji list
+            this.handleUserEmojiListEvent(event);
         } else if (event.kind === 0) {
             // Handle profile events (kind 0) for lightning addresses and avatars
             try {
@@ -2289,6 +2298,9 @@ Object.assign(NYM.prototype, {
                 wireContent = userMessage ? `@${quoteData.author} ${userMessage}` : `@${quoteData.author}`;
             }
 
+            // NIP-30: declare any custom emoji shortcodes used in the message
+            tags.push(...this.customEmojiTagsForContent(wireContent));
+
             let event = {
                 kind: kind,
                 created_at: now,
@@ -2410,6 +2422,9 @@ Object.assign(NYM.prototype, {
                 const userMessage = nonQuoteLines.join('\n').trim();
                 wireContent = userMessage ? `@${quoteData.author} ${userMessage}` : `@${quoteData.author}`;
             }
+
+            // NIP-30: declare any custom emoji shortcodes used in the message
+            tags.push(...this.customEmojiTagsForContent(wireContent));
 
             let event = {
                 kind: kind,

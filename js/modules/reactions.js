@@ -24,6 +24,8 @@ Object.assign(NYM.prototype, {
     },
 
     handleReaction(event) {
+        // Register any NIP-30 custom emoji declared on this reaction
+        this.ingestEmojiTags(event.tags);
         const reactionContent = event.content;
         const eTag = event.tags.find(t => t[0] === 'e');
         const kTag = event.tags.find(t => t[0] === 'k');
@@ -317,7 +319,7 @@ Object.assign(NYM.prototype, {
             badge.dataset.emoji = emoji;
             badge.dataset.messageId = messageId;
 
-            badge.innerHTML = `${this.escapeHtml(emoji)} ${this.abbreviateNumber(reactors.size)}`;
+            badge.innerHTML = `${this.renderReactionEmoji(emoji)} ${this.abbreviateNumber(reactors.size)}`;
 
             // No tooltip — long-press shows reactors modal instead
 
@@ -427,7 +429,7 @@ Object.assign(NYM.prototype, {
         const modal = document.createElement('div');
         modal.className = 'reactors-modal';
         modal.innerHTML = `
-            <div class="reactors-modal-header">${this.escapeHtml(emoji)} <span class="reactors-modal-count">${reactors.size}</span></div>
+            <div class="reactors-modal-header">${this.renderReactionEmoji(emoji)} <span class="reactors-modal-count">${reactors.size}</span></div>
             <div class="reactors-modal-list">${userItems}</div>
         `;
 
@@ -525,12 +527,11 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.map(emoji =>
-            `<button class="emoji-option" data-emoji="${emoji}" title="${emojiToNames[emoji] ? emojiToNames[emoji].join(', ') : ''}">${emoji}</button>`
-        ).join('')}
+            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
+${this.buildCustomEmojiSectionsHtml()}
 ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     <div class="emoji-section" data-category="${category}">
         <div class="emoji-section-title">${category.charAt(0).toUpperCase() + category.slice(1)}</div>
@@ -647,12 +648,11 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.map(emoji =>
-            `<button class="emoji-option" data-emoji="${emoji}" title="${emojiToNames[emoji] ? emojiToNames[emoji].join(', ') : ''}">${emoji}</button>`
-        ).join('')}
+            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
+${this.buildCustomEmojiSectionsHtml()}
 ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     <div class="emoji-section" data-category="${category}">
         <div class="emoji-section-title">${category.charAt(0).toUpperCase() + category.slice(1)}</div>
@@ -812,7 +812,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const reactionTags = [
                 ['e', messageId],
                 ['p', targetPubkey],
-                ['k', originalKind]
+                ['k', originalKind],
+                ...this.customEmojiTagsForContent(emoji)
             ];
             const reactionGeohash = (originalKind === '20000' && this.currentGeohash) ? this.currentGeohash : '';
             if (reactionGeohash) {
@@ -833,7 +834,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const group = this.groupConversations.get(groupId);
                 if (group) {
                     const now = Math.floor(Date.now() / 1000);
-                    const reactionTags = [['g', groupId], ['e', messageId], ['k', '14']];
+                    const reactionTags = [['g', groupId], ['e', messageId], ['k', '14'],
+                        ...this.customEmojiTagsForContent(emoji)];
                     const reactionRumor = {
                         kind: 7,
                         created_at: now,
@@ -853,7 +855,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const reactionRumor = {
                     kind: 7,
                     created_at: now,
-                    tags: [['e', messageId], ['p', targetPubkey], ['k', '1059']],
+                    tags: [['e', messageId], ['p', targetPubkey], ['k', '1059'],
+                        ...this.customEmojiTagsForContent(emoji)],
                     content: emoji,
                     pubkey: this.pubkey
                 };
@@ -926,7 +929,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 ['e', messageId],
                 ['p', targetPubkey],
                 ['k', originalKind],
-                ['action', 'remove']
+                ['action', 'remove'],
+                ...this.customEmojiTagsForContent(emoji)
             ];
             const removeGeohash = (originalKind === '20000' && this.currentGeohash) ? this.currentGeohash : '';
             if (removeGeohash) {
@@ -947,7 +951,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const group = this.groupConversations.get(groupId);
                 if (group) {
                     const now = Math.floor(Date.now() / 1000);
-                    const unreactTags = [['g', groupId], ['e', messageId], ['k', '14'], ['action', 'remove']];
+                    const unreactTags = [['g', groupId], ['e', messageId], ['k', '14'], ['action', 'remove'],
+                        ...this.customEmojiTagsForContent(emoji)];
                     const reactionRumor = {
                         kind: 7,
                         created_at: now,
@@ -966,7 +971,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 const reactionRumor = {
                     kind: 7,
                     created_at: now,
-                    tags: [['e', messageId], ['p', targetPubkey], ['k', '1059'], ['action', 'remove']],
+                    tags: [['e', messageId], ['p', targetPubkey], ['k', '1059'], ['action', 'remove'],
+                        ...this.customEmojiTagsForContent(emoji)],
                     content: emoji,
                     pubkey: this.pubkey
                 };
@@ -1029,13 +1035,18 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             html += `<div class="emoji-picker-section" data-category="recent">
                 <div class="emoji-picker-section-title">Recent</div>
                 <div class="emoji-picker-grid">
-                    ${this.recentEmojis.map(emoji => {
-                const names = emojiToNames[emoji] || [];
-                return `<button class="emoji-btn" data-emoji="${emoji}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
-            }).join('')}
+                    ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
                 </div>
             </div>`;
         }
+
+        // NIP-30 custom emoji packs
+        html += this.buildCustomEmojiSectionsHtml({
+            sectionClass: 'emoji-picker-section',
+            titleClass: 'emoji-picker-section-title',
+            gridClass: 'emoji-picker-grid',
+            btnClass: 'emoji-btn'
+        });
 
         // All category sections
         Object.entries(this.allEmojis).forEach(([category, emojis]) => {

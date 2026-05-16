@@ -1174,9 +1174,13 @@ Object.assign(NYM.prototype, {
             const popup = document.createElement('div');
             popup.className = 'quick-react-popup';
 
-            popup.innerHTML = quickEmojis.map(emoji =>
-                `<button class="quick-react-emoji" data-emoji="${emoji}">${emoji}</button>`
-            ).join('') +
+            popup.innerHTML = quickEmojis.map(emoji => {
+                const cm = typeof emoji === 'string' && emoji.match(/^:([a-zA-Z0-9_]+):$/);
+                if (cm && this.customEmojis && this.customEmojis.has(cm[1])) {
+                    return `<button class="quick-react-emoji" data-emoji=":${this.escapeHtml(cm[1])}:">${this.renderCustomEmojiImg(cm[1])}</button>`;
+                }
+                return `<button class="quick-react-emoji" data-emoji="${this.escapeHtml(emoji)}">${emoji}</button>`;
+            }).join('') +
                 `<button class="quick-react-expand" title="More reactions">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M4 6 L8 10 L12 6"/>
