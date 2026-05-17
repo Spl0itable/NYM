@@ -249,6 +249,12 @@ Object.assign(NYM.prototype, {
             '?changelog': { desc: 'Latest Nymchat release notes' },
             '?help': { desc: 'Show all Nymbot commands' },
         };
+        // PM-only Nymbot commands — surfaced only inside the Nymbot private chat
+        this.botPMCommands = {
+            '?buy': { desc: 'Buy Nymbot private message credits' },
+            '?balance': { desc: 'Check your Nymbot credit balance' },
+            '?gift': { desc: 'Gift Nymbot credits to another user' },
+        };
         this.commands = {
             '/help': { desc: 'Show available commands', fn: () => this.showHelp() },
             '/join': { desc: 'Join a channel', fn: (args) => this.cmdJoin(args) },
@@ -315,7 +321,12 @@ Object.assign(NYM.prototype, {
 
     showBotCommandPalette(input) {
         const palette = document.getElementById('commandPalette');
-        const matchingCommands = Object.entries(this.botCommands)
+        // Credit commands only work in the Nymbot private chat — list them there first
+        const inBotPM = this.inPMMode && this.currentPM && this.isVerifiedBot(this.currentPM);
+        const available = inBotPM
+            ? { ...this.botPMCommands, ...this.botCommands }
+            : this.botCommands;
+        const matchingCommands = Object.entries(available)
             .filter(([cmd]) => cmd.startsWith(input.toLowerCase()));
 
         if (matchingCommands.length > 0) {

@@ -1273,6 +1273,25 @@ Object.assign(NYM.prototype, {
         this.renderTypingIndicator();
     },
 
+    // Advance sent/read receipts for our messages in the Nymbot chat
+    _markBotPMReceipts(status) {
+        const convKey = this.getPMConversationKey(this.verifiedBot.pubkey);
+        const messages = this.pmMessages.get(convKey);
+        if (!messages) return;
+        const statusOrder = { sent: 0, delivered: 1, read: 2 };
+        let changed = false;
+        for (const msg of messages) {
+            if (!msg.isOwn || msg.deliveryStatus === 'failed') continue;
+            if ((statusOrder[status] || 0) > (statusOrder[msg.deliveryStatus] || 0)) {
+                msg.deliveryStatus = status;
+                this.pendingDMs.delete(msg.id);
+                this._updateDeliveryStatusEl(msg.nymMessageId || msg.id, status);
+                changed = true;
+            }
+        }
+        if (changed) this.channelDOMCache.delete(convKey);
+    },
+
     // Update the cached Nymbot credit count and the chat-header indicator
     _setBotCreditDisplay(balance) {
         if (typeof balance === 'number') this._lastBotCredits = balance;
@@ -1295,15 +1314,19 @@ Object.assign(NYM.prototype, {
     // Process a message the user sent to Nymbot in a private chat
     async _handleBotPM(content) {
         const trimmed = (content || '').trim();
+        this._markBotPMReceipts('delivered');
         if (/^\?balance\b/i.test(trimmed)) {
+            this._markBotPMReceipts('read');
             this._checkBotCredits(true);
             return;
         }
         if (/^\?buy\b/i.test(trimmed)) {
+            this._markBotPMReceipts('read');
             this.showBotCreditsModal();
             return;
         }
         if (/^\?gift\b/i.test(trimmed)) {
+            this._markBotPMReceipts('read');
             const arg = trimmed.replace(/^\?gift\b/i, '').trim().replace(/^@/, '');
             if (!arg) {
                 this.displaySystemMessage('Usage: ?gift @nym#xxxx — gift Nymbot credits to another user.');
@@ -1331,6 +1354,7 @@ Object.assign(NYM.prototype, {
             });
             const data = await resp.json().catch(() => ({}));
             this._setBotTyping(false);
+            this._markBotPMReceipts('read');
             if (data && data.noCredits) {
                 this.displaySystemMessage("You're out of Nymbot credits. Zap Nymbot or type ?buy to purchase more private messages.");
                 this.showBotCreditsModal();
@@ -1435,7 +1459,9 @@ Object.assign(NYM.prototype, {
             const suffix = this.getPubkeySuffix(pubkey);
             const verifiedBadge = this.isVerifiedDeveloper(pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
-                : '';
+                : this.isVerifiedBot(pubkey)
+                    ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
+                    : '';
             const sidebarFlair = this.getFlairForUser(pubkey);
             const sidebarFriendBadge = this.getFriendBadgeHtml(pubkey);
             const pmNameEl = item.querySelector('.pm-name');
@@ -1536,7 +1562,9 @@ Object.assign(NYM.prototype, {
             const suffix = this.getPubkeySuffix(pubkey);
             const verifiedBadge = this.isVerifiedDeveloper(pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
-                : '';
+                : this.isVerifiedBot(pubkey)
+                    ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
+                    : '';
 
             // Get user's shop items for flair
             const userShopItems = this.getUserShopItems(pubkey);

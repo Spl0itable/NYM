@@ -1443,7 +1443,8 @@ Object.assign(NYM.prototype, {
 
         // Build text
         if (typers.length === 1) {
-            textEl.textContent = `${typers[0][1].nym} is typing`;
+            const verb = this.isVerifiedBot(typers[0][0]) ? 'thinking' : 'typing';
+            textEl.textContent = `${typers[0][1].nym} is ${verb}`;
         } else if (typers.length === 2) {
             textEl.textContent = `${typers[0][1].nym} and ${typers[1][1].nym} are typing`;
         } else {

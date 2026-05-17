@@ -1210,6 +1210,20 @@ body.light-mode .channel-context-menu {
     color: var(--lightning);
 }
 
+.zap-amount-btn .credits {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.zap-credit-estimate {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--text-dim);
+    text-align: center;
+}
+
 .zap-custom-amount {
     display: flex;
     gap: 10px;

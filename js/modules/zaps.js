@@ -56,6 +56,9 @@ Object.assign(NYM.prototype, {
     // Fetch invoice from LNURL
     async fetchLightningInvoice(lnAddress, amountSats, comment) {
         try {
+            if (!lnAddress || typeof lnAddress !== 'string') {
+                throw new Error('No lightning address available');
+            }
             const [username, domain] = lnAddress.split('@');
             if (!username || !domain) {
                 throw new Error('Invalid lightning address format');
@@ -236,6 +239,7 @@ Object.assign(NYM.prototype, {
         };
 
         // Reset modal state
+        this._resetZapModalToDefault();
         document.getElementById('zapAmountSection').style.display = 'block';
         document.getElementById('zapInvoiceSection').style.display = 'none';
         document.getElementById('zapRecipientInfo').textContent = `Zapping @${recipientNym}`;
@@ -274,6 +278,7 @@ Object.assign(NYM.prototype, {
         };
 
         // Reset modal state
+        this._resetZapModalToDefault();
         document.getElementById('zapAmountSection').style.display = 'block';
         document.getElementById('zapInvoiceSection').style.display = 'none';
         document.getElementById('zapRecipientInfo').textContent = `Zapping @${recipientNym}'s profile`;
@@ -296,6 +301,85 @@ Object.assign(NYM.prototype, {
         document.getElementById('zapModal').classList.add('active');
     },
 
+    // Convert a sats amount to Nymbot message credits
+    _botCreditsForSats(sats) {
+        sats = Math.max(0, Math.floor(Number(sats) || 0));
+        let mult = 1;
+        if (sats >= 5000) mult = 1.4;
+        else if (sats >= 1000) mult = 1.3;
+        else if (sats >= 500) mult = 1.2;
+        return Math.floor((sats / 10) * mult);
+    },
+
+    // Preset purchase tiers for the Nymbot credit modal
+    _botCreditTiers: [100, 500, 1000, 2500, 5000, 10000],
+
+    // Capture the default sats buttons once so regular zaps can restore them
+    _captureDefaultZapAmounts() {
+        if (this._defaultZapAmountsHtml != null) return;
+        const c = document.querySelector('.zap-amounts');
+        if (c && !c.querySelector('.bot-credit-btn')) this._defaultZapAmountsHtml = c.innerHTML;
+    },
+
+    // Restore the regular sats buttons and hide the credit estimate line
+    _resetZapModalToDefault() {
+        const c = document.querySelector('.zap-amounts');
+        if (c && this._defaultZapAmountsHtml != null && c.querySelector('.bot-credit-btn')) {
+            c.innerHTML = this._defaultZapAmountsHtml;
+        }
+        const est = document.getElementById('botCreditEstimate');
+        if (est) est.style.display = 'none';
+        const input = document.getElementById('zapCustomAmount');
+        if (input) input.oninput = null;
+    },
+
+    // Render the 6 credit-purchase options, each showing sats and the messages bought
+    _renderBotCreditAmounts() {
+        const container = document.querySelector('.zap-amounts');
+        if (!container) return;
+        container.innerHTML = this._botCreditTiers.map(sats => {
+            const credits = this._botCreditsForSats(sats);
+            const satLabel = sats >= 1000 ? (sats / 1000) + 'K' : String(sats);
+            return `<button class="zap-amount-btn bot-credit-btn" data-amount="${sats}">
+                <span class="sats">${satLabel} sats</span>
+                <span class="credits">${credits} messages</span>
+            </button>`;
+        }).join('');
+    },
+
+    // Show/refresh a live "X sats = Y messages" estimate for the custom amount
+    _setupBotCreditEstimate() {
+        const input = document.getElementById('zapCustomAmount');
+        if (!input) return;
+        let est = document.getElementById('botCreditEstimate');
+        if (!est) {
+            est = document.createElement('div');
+            est.id = 'botCreditEstimate';
+            est.className = 'zap-credit-estimate';
+            const group = input.closest('.zap-custom-amount');
+            if (group) group.insertAdjacentElement('afterend', est);
+        }
+        est.style.display = 'block';
+        input.oninput = () => this._updateBotCreditEstimate();
+        this._updateBotCreditEstimate();
+    },
+
+    _updateBotCreditEstimate() {
+        const est = document.getElementById('botCreditEstimate');
+        if (!est) return;
+        const input = document.getElementById('zapCustomAmount');
+        const selected = document.querySelector('.zap-amount-btn.selected');
+        const sats = parseInt((input && input.value) || (selected ? selected.dataset.amount : ''), 10);
+        if (!sats || sats <= 0) {
+            est.textContent = 'Enter a custom amount to see how many messages you\'ll get.';
+            return;
+        }
+        const credits = this._botCreditsForSats(sats);
+        est.textContent = credits > 0
+            ? `${sats.toLocaleString()} sats = ${credits} private message${credits === 1 ? '' : 's'}`
+            : 'Amount too small to buy any credits.';
+    },
+
     // Open the zap modal in "buy Nymbot credits" mode
     showBotCreditsModal(giftRecipient) {
         const botPubkey = this.verifiedBot.pubkey;
@@ -309,6 +393,7 @@ Object.assign(NYM.prototype, {
             giftRecipientPubkey: isGift ? giftRecipient.pubkey : null,
             giftRecipientNym: isGift ? giftRecipient.nym : null
         };
+        this._captureDefaultZapAmounts();
         document.getElementById('zapAmountSection').style.display = 'block';
         document.getElementById('zapInvoiceSection').style.display = 'none';
         document.getElementById('zapRecipientInfo').textContent = isGift
@@ -316,6 +401,8 @@ Object.assign(NYM.prototype, {
             : 'Buy Nymbot private message credits';
         document.getElementById('zapCustomAmount').value = '';
         document.getElementById('zapComment').value = '';
+        this._renderBotCreditAmounts();
+        this._setupBotCreditEstimate();
         document.getElementById('zapSendBtn').textContent = 'Generate Invoice';
         document.getElementById('zapSendBtn').onclick = () => this.generateBotCreditInvoice();
         document.querySelectorAll('.zap-amount-btn').forEach(btn => {
@@ -324,10 +411,10 @@ Object.assign(NYM.prototype, {
                 document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
                 e.target.closest('.zap-amount-btn').classList.add('selected');
                 document.getElementById('zapCustomAmount').value = '';
+                this._updateBotCreditEstimate();
             };
         });
         document.getElementById('zapModal').classList.add('active');
-        this.displaySystemMessage("Tip: roughly 100 sats = 10 messages, 500 = 60, 1000 = 130, 5000 = 700. Credits are tied to your nym — save your nsec (click your nym > Reveal private key) so you don't lose them when this session ends.");
     },
 
     // Ask the bot worker to generate a credit-purchase invoice from Nymbot's
@@ -965,6 +1052,7 @@ Object.assign(NYM.prototype, {
         }
 
         // Reset modal state for regular zaps
+        this._resetZapModalToDefault();
         const zapAmountsContainer = document.querySelector('.zap-amounts');
         if (zapAmountsContainer) {
             zapAmountsContainer.style.display = 'grid';
@@ -994,7 +1082,7 @@ Object.assign(NYM.prototype, {
         if (modalActions) {
             modalActions.innerHTML = `
                 <button class="icon-btn" data-action="closeZapModal">Cancel</button>
-                <button class="send-btn" id="zapSendBtn" data-action="generateZapInvoice">Generate Invoice</button>
+                <button class="send-btn" id="zapSendBtn">Generate Invoice</button>
             `;
         }
 
