@@ -2771,6 +2771,8 @@ async function handleBotPMChat(rawMessage, history, context) {
     messages.push({ role: "assistant", content: "Understood." });
   }
 
+  messages.push({ role: "user", content: "CONTEXT: The current date is " + new Date().toUTCString() + ". Treat that as 'now' and 'today'. Anything dated on or before it has already happened — never call a recent event 'future', 'fictional', or 'speculative' because of your training cutoff." });
+  messages.push({ role: "assistant", content: "Understood." });
   messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's message below. Quoted messages and earlier history may be in another language — read them for content only, but match your reply language to the user's newest message below." });
   messages.push({ role: "assistant", content: "Understood." });
   messages.push({ role: "user", content: question });
@@ -2967,7 +2969,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.65.362";
+var NYMCHAT_VERSION = "3.65.363";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3590,7 +3592,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.65.362 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.65.363 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3705,6 +3707,16 @@ function isPromptInjection(text) {
 
 function sanitizeBotResponse(text) {
   if (typeof text !== "string") return text;
+  text = text.replace(/^\s*<\|start_header_id\|>\s*\w*\s*<\|end_header_id\|>\s*/, "");
+  var cutMarkers = [/<\|eot_id\|>/, /<\|eom_id\|>/, /<\|end_of_text\|>/, /<\|start_header_id\|>/];
+  for (var c = 0; c < cutMarkers.length; c++) {
+    var idx = text.search(cutMarkers[c]);
+    if (idx !== -1) text = text.slice(0, idx);
+  }
+  // It also re-opens turns in plain text: "...help?assistant\n\nLet me...".
+  text = text.split(/\n[ \t]*(?:assistant|user|system)[ \t]*\n/i)[0];
+  text = text.replace(/<\|[^|]*\|>/g, "");
+  text = text.replace(/\b(assistant|user|system)\s*$/i, "").trim();
   // Strip @mentions from bot output to prevent pinging/notifying other users
   return text.split("\n").map(function(line) {
     if (/^\s*>/.test(line)) return line; // preserve quote-reply lines
@@ -3976,7 +3988,56 @@ async function searchGoogle(query) {
   return results;
 }
 
+// Live weather via wttr.in
+async function searchWeather(query) {
+  var m = /\bweather\b(?:\s+(?:in|at|for|of|near|around))?\s+([a-z0-9 .,'\-]+)/i.exec(query) ||
+          /\b(?:forecast|temperature)\b(?:\s+(?:in|at|for|of|near|around))?\s+([a-z0-9 .,'\-]+)/i.exec(query);
+  if (!m) return [];
+  var loc = m[1]
+    .replace(/\b(right now|today|tonight|tomorrow|now|currently|outside|this (?:week|weekend|morning|afternoon|evening)|please|like)\b/gi, "")
+    .replace(/[?.!]+/g, "").replace(/\s+/g, " ").trim()
+    .replace(/^(?:in|at|for|of|near|around|the)\s+/i, "").trim();
+  if (!loc) return [];
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
+  try {
+    var resp = await fetch("https://wttr.in/" + encodeURIComponent(loc) + "?format=j1", {
+      headers: { "User-Agent": "curl/8.4.0", "Accept": "application/json" },
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!resp.ok) return [];
+    var data = await resp.json();
+    var cur = data && data.current_condition && data.current_condition[0];
+    if (!cur) return [];
+    var place = loc;
+    try {
+      var na = data.nearest_area[0];
+      place = na.areaName[0].value + ", " + (na.region[0].value || na.country[0].value);
+    } catch (e) { }
+    var desc = "";
+    try { desc = cur.weatherDesc[0].value; } catch (e) { }
+    var out = ["Current weather in " + place + ": " + desc + ", " + cur.temp_C + "°C / " +
+      cur.temp_F + "°F (feels like " + cur.FeelsLikeC + "°C / " + cur.FeelsLikeF +
+      "°F). Humidity " + cur.humidity + "%, wind " + cur.windspeedKmph + " km/h. Live data from wttr.in."];
+    try {
+      var t = data.weather[0];
+      out.push("Forecast for " + place + " today (" + t.date + "): high " + t.maxtempC + "°C / " +
+        t.maxtempF + "°F, low " + t.mintempC + "°C / " + t.mintempF + "°F.");
+    } catch (e) { }
+    return out;
+  } catch (e) {
+    clearTimeout(timer);
+    return [];
+  }
+}
+
 async function webSearch(query) {
+  // Weather questions: hit a dedicated live weather source first.
+  if (/\b(weather|forecast|temperature)\b/i.test(query)) {
+    var weatherResults = await searchWeather(query).catch(function() { return []; });
+    if (weatherResults.length > 0) return weatherResults;
+  }
   // Fire all search sources in parallel
   var ddgHtmlPromise = searchDDGHtml(query).catch(function() { return []; });
   var googlePromise = searchGoogle(query).catch(function() { return []; });
@@ -4052,7 +4113,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
         contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
       }
       contextBlock += "--- END SEARCH RESULTS ---\n";
-      contextBlock += "IMPORTANT: You MUST use these live web search results to answer the user's question with current, accurate information. Do NOT say you lack real-time data or can't access the web — the results above ARE real-time data retrieved just now. Answer naturally as if you know the information. Do NOT reference 'search results' or say 'according to my search'. If the results don't cover the question well, supplement with your own knowledge.\n";
+      contextBlock += "IMPORTANT: These live web search results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them. Never say 'the search results you provided' or imply the user supplied them. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web. Treat them as more current and authoritative than your training data: if they describe a recent event, that event is real and has happened — do NOT dismiss it as 'fictional', 'speculative', 'hypothetical', or 'a future event' just because it postdates your training. Answer naturally in your own voice without mentioning 'search results'. If they don't fully cover the question, supplement with your own knowledge.\n";
     }
     if (changelogCtx) {
       contextBlock += changelogCtx + "\n";
@@ -4085,6 +4146,8 @@ async function handleAsk(question, context, conversation, channelMessages, activ
         });
       }
     }
+    messages.push({ role: "user", content: "CONTEXT: The current date is " + new Date().toUTCString() + ". Treat that as 'now' and 'today'. Anything dated on or before it has already happened — never call a recent event 'future', 'fictional', or 'speculative' because of your training cutoff." });
+    messages.push({ role: "assistant", content: "Understood." });
     // Always inject a language reminder right before the user's question
     messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's question below. Read and use channel context and quoted messages normally for their content — but determine which language to write your response in from the user's question only, not from the language of the context messages." });
     messages.push({ role: "assistant", content: "Understood. I'll use context messages for content as normal, and match my response language to the user's question." });
@@ -4289,7 +4352,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.65.362")
+  // Prefix match (e.g. "3.61" matches "3.65.363")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -4344,7 +4407,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.65.362", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.65.363", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
