@@ -2620,8 +2620,11 @@ var NYMBOT_PM_ADDENDUM = [
   "",
   "=== PRIVATE CONVERSATION MODE ===",
   "You are now in a 1:1 end-to-end encrypted private message (NIP-17) with a single user. No one else can read this conversation.",
-  "The message history above is your private conversation with this user — use all of it as context.",
+  "The message history above is your private conversation with this user — use all of it as context. There is no channel context here; the only people in this chat are you and this one user.",
   "This is a paid feature: the user spent Bitcoin to message you privately, so be helpful, thorough, and conversational.",
+  "You have the SAME live web access here as in public channels. You can answer questions about current weather, news, prices, sports scores, and other up-to-date topics. NEVER tell the user to go check a weather website, a weather app, or a search engine themselves — answer the question directly with the live data you were given.",
+  "When you reply to a quoted message, the quoted text is shown to you as read-only context labeled QUOTED MESSAGE. Read it for meaning, but write your reply in the language of the user's newest message — never switch languages just because a quoted or earlier message was in another language.",
+  "FRESH-MESSAGE COMMAND: If the user's message starts with '!' (for example '!what is 2+2'), answer ONLY that message and completely ignore all earlier conversation history. Without a leading '!', use the full conversation as context. If a user asks how to reset context or get a clean answer, tell them to start their message with '!'.",
   "Do NOT append public-channel zap tip prompts here, and do NOT tell them to use ?ask or @Nymbot in a channel — they are already talking to you privately.",
   "If they ask about their credit balance, tell them to type ?balance (it's also shown in the chat header). If they want more messages, tell them to type ?buy. To gift credits to someone else, they can type ?gift @nym."
 ].join("\n");
@@ -2689,11 +2692,40 @@ async function botPutCredits(env, pubkey, data) {
   data.updatedAt = Date.now();
   await env.R2_BUCKET.put("credits/" + pubkey, JSON.stringify(data));
 }
-async function handleBotPMChat(message, history, context) {
+// Split a PM message into its leading quote-reply block
+function splitQuotedReply(raw) {
+  var lines = String(raw || "").split("\n");
+  var quoted = [];
+  var i = 0;
+  while (i < lines.length && /^\s*>/.test(lines[i])) {
+    quoted.push(lines[i].replace(/^\s*>\s?/, "").replace(/^@[^:]+:\s*/, ""));
+    i++;
+  }
+  while (i < lines.length && lines[i].trim() === "") i++;
+  return { quoted: quoted.join("\n").trim(), reply: lines.slice(i).join("\n").trim() };
+}
+
+async function handleBotPMChat(rawMessage, history, context) {
   var ai = context.env.AI || null;
   if (!ai) throw new Error("AI is not configured.");
+
+  // A leading "!" makes the bot ignore all prior history and answer only this message.
+  var freshOnly = false;
+  var message = String(rawMessage || "");
+  var bang = /^\s*!\s*/.exec(message);
+  if (bang && message.slice(bang[0].length).trim()) {
+    freshOnly = true;
+    message = message.slice(bang[0].length);
+  }
+
+  // Separate any quote-reply block so the answered question and the reply
+  var split = splitQuotedReply(message);
+  var question = sanitizeInput(split.reply || split.quoted || message);
+  if (!question) question = sanitizeInput(message);
+
   var messages = [{ role: "system", content: NYMBOT_SYSTEM_PROMPT + "\n" + NYMBOT_PM_ADDENDUM }];
-  if (Array.isArray(history) && history.length > 0) {
+
+  if (!freshOnly && Array.isArray(history) && history.length > 0) {
     var recent = history.slice(-MAX_CONVERSATION_HISTORY);
     for (var i = 0; i < recent.length; i++) {
       var entry = recent[i];
@@ -2703,15 +2735,16 @@ async function handleBotPMChat(message, history, context) {
       messages.push({ role: entry.isBot ? "assistant" : "user", content: text });
     }
   }
-  // Live web search
+
+  // Live web search / changelog lookup — same capability as public channels.
   var pmSearchResults = [];
   var pmChangelogCtx = "";
   try {
-    if (needsChangelogContext(message)) {
+    if (needsChangelogContext(question)) {
       var pmReleases = await fetchNymchatReleases(15);
       pmChangelogCtx = buildChangelogContext(pmReleases);
-    } else if (needsWebSearch(message)) {
-      pmSearchResults = await webSearch(message);
+    } else if (needsWebSearch(question)) {
+      pmSearchResults = await webSearch(question);
     }
   } catch (e) { }
   if (pmSearchResults.length > 0 || pmChangelogCtx) {
@@ -2722,18 +2755,25 @@ async function handleBotPMChat(message, history, context) {
         pmCtx += (r + 1) + ". " + pmSearchResults[r] + "\n";
       }
       pmCtx += "--- END SEARCH RESULTS ---\n";
-      pmCtx += "IMPORTANT: You MUST use these live web search results to answer with current, accurate information. Do NOT say you lack real-time data or can't access the web — the results above ARE real-time data retrieved just now. Answer naturally; do NOT reference 'search results'.\n";
+      pmCtx += "IMPORTANT: These live web search results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them. Never say 'the search results you provided' or imply the user supplied them. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web. Treat them as more current and authoritative than your training data: if they describe a recent event, that event is real and has happened — do NOT dismiss it as 'fictional', 'speculative', 'hypothetical', or 'a future event' just because it postdates your training. Answer naturally in your own voice without mentioning 'search results'. If they don't fully cover the question, supplement with your own knowledge.\n";
     }
     if (pmChangelogCtx) {
       pmCtx += pmChangelogCtx + "\n";
-      pmCtx += "IMPORTANT: The release notes above are pulled live from GitHub for Spl0itable/NYM. Use them to answer questions about Nymchat versions, changelogs, and what's new.\n";
+      pmCtx += "IMPORTANT: The release notes above are pulled live from GitHub for Spl0itable/NYM. Use them to answer questions about Nymchat versions, changelogs, and what's new. Do NOT invent features that aren't listed.\n";
     }
     messages.push({ role: "user", content: pmCtx });
     messages.push({ role: "assistant", content: "Understood." });
   }
-  messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's message below." });
+
+  // Surface the quoted message as read-only context when the user added new text.
+  if (!freshOnly && split.quoted && split.reply) {
+    messages.push({ role: "user", content: "--- QUOTED MESSAGE (the user is replying to this; read-only context) ---\n" + sanitizeInput(split.quoted) + "\n--- END QUOTED MESSAGE ---" });
+    messages.push({ role: "assistant", content: "Understood." });
+  }
+
+  messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's message below. Quoted messages and earlier history may be in another language — read them for content only, but match your reply language to the user's newest message below." });
   messages.push({ role: "assistant", content: "Understood." });
-  messages.push({ role: "user", content: message });
+  messages.push({ role: "user", content: question });
   var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
     messages: messages,
     max_tokens: 1024
@@ -2927,7 +2967,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.65.361";
+var NYMCHAT_VERSION = "3.65.362";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3550,7 +3590,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.65.361 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.65.362 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -4249,7 +4289,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.65.361")
+  // Prefix match (e.g. "3.61" matches "3.65.362")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -4304,7 +4344,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.65.361", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.65.362", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
