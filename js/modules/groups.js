@@ -466,7 +466,7 @@ Object.assign(NYM.prototype, {
         }
 
         // Drop all messages from blocked senders, including group invites.
-        if (!isOwn && (this.blockedUsers.has(senderPubkey) || this.isNymBlocked(this.getNymFromPubkey(senderPubkey)))) {
+        if (!isOwn && this.blockedUsers.has(senderPubkey)) {
             return;
         }
 
@@ -920,6 +920,7 @@ Object.assign(NYM.prototype, {
             content: messageContent,
             created_at: tsSec,
             _originalCreatedAt: originalGroupTsSec,
+            _ms: this._extractEventMs(rumor, tsSec),
             _seq: ++this._msgSeq,
             timestamp: new Date(tsSec * 1000),
             isOwn,
@@ -936,9 +937,7 @@ Object.assign(NYM.prototype, {
 
         list.push(msg);
         list.sort((a, b) => {
-            const dt = (a.created_at || 0) - (b.created_at || 0);
-            if (dt !== 0) return dt;
-            return (a._seq || 0) - (b._seq || 0);
+            return this._compareMessages(a, b);
         });
         if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
         this.pmMessages.set(groupConvKey, list);
@@ -961,7 +960,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        const senderBlocked = this.blockedUsers.has(senderPubkey) || this.isNymBlocked(msg.author) || this.hasBlockedKeyword(msg.content, msg.author);
+        const senderBlocked = this.blockedUsers.has(senderPubkey) || this.hasBlockedKeyword(msg.content, msg.author);
         if (this.inPMMode && this.currentGroup === groupId) {
             // displayMessage already filters blocked senders; no extra check needed here
             this.displayMessage(msg);
@@ -1234,7 +1233,8 @@ Object.assign(NYM.prototype, {
 
         const group = this.groupConversations.get(groupId);
         if (!group) return false;
-        const now = Math.floor(Date.now() / 1000);
+        const nowMs = Date.now();
+        const now = Math.floor(nowMs / 1000);
 
         const nymMessageId = this.generateUUID();
 
@@ -1247,6 +1247,7 @@ Object.assign(NYM.prototype, {
         // Recipients will encrypt future messages to this key instead of our real pubkey.
         const nextEph = this._rotateSelfEphemeralKey(groupId);
         tags.push(['ephemeral_pk', nextEph.pk]);
+        tags.push(['ms', String(nowMs)]);
 
         // NIP-30: declare any custom emoji shortcodes used in the message
         tags.push(...this.customEmojiTagsForContent(content));
@@ -1263,6 +1264,7 @@ Object.assign(NYM.prototype, {
             pubkey: this.pubkey,
             content,
             created_at: now,
+            _ms: nowMs,
             _seq: ++this._msgSeq,
             timestamp: new Date(now * 1000),
             isOwn: true,
@@ -1279,9 +1281,7 @@ Object.assign(NYM.prototype, {
         const groupList = this.pmMessages.get(groupConvKey);
         groupList.push(msg);
         groupList.sort((a, b) => {
-            const dt = (a.created_at || 0) - (b.created_at || 0);
-            if (dt !== 0) return dt;
-            return (a._seq || 0) - (b._seq || 0);
+            return this._compareMessages(a, b);
         });
         if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
         this.channelDOMCache.delete(groupConvKey);

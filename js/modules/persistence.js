@@ -155,6 +155,7 @@
                 content: m.content,
                 created_at: m.created_at,
                 _originalCreatedAt: m._originalCreatedAt,
+                _ms: m._ms,
                 _seq: m._seq,
                 timestamp: m.timestamp,
                 isOwn: m.isOwn,

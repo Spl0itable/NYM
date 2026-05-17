@@ -126,6 +126,16 @@
             Zap Bitcoin
         </div>
 
+        <div class="context-menu-item" id="ctxGiftCredits" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                style="vertical-align: middle; margin-right: 8px;">
+                <rect x="2" y="7" width="12" height="7" rx="1" />
+                <path d="M 2 7 L 8 7 L 8 14 M 8 7 L 14 7" />
+                <path d="M 8 7 C 8 4 6 3 5 4 C 4 5 6 7 8 7 C 8 4 10 3 11 4 C 12 5 10 7 8 7 Z" />
+            </svg>
+            Gift Nymbot Credits
+        </div>
+
         <div class="context-menu-item" id="ctxQuote">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"
                 style="vertical-align: middle; margin-right: 8px;">
@@ -1707,6 +1717,50 @@
             </div>
             <div class="modal-actions">
                 <button class="icon-btn" data-action="closeModal" data-modal-id="shareModal">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- About Modal -->
+    <div class="modal" id="aboutModal">
+        <div class="modal-content about-modal">
+            <button class="modal-close" data-action="closeModal" data-modal-id="aboutModal">✕</button>
+            <div class="modal-header">About Nymchat</div>
+            <div class="modal-body">
+                <div class="about-logo">Nymchat <span class="about-version" id="aboutVersion"></span></div>
+                <p class="about-desc">A decentralized, pseudonymous chat built on the <a href="https://nostr.com" target="_blank" rel="noopener">Nostr</a> protocol using kind 20000 geohash channels. Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener">Bitchat</a>.</p>
+                <div class="about-meta">
+                    <div class="about-meta-row"><span>Connected relays</span><span id="aboutRelayCount">—</span></div>
+                    <div class="about-meta-row"><span>Your nym</span><span id="aboutNym">—</span></div>
+                </div>
+                <div class="about-links">
+                    <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://nostrservices.com" target="_blank" rel="noopener">21 Million LLC</a>
+                    <a href="https://njump.me/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener">Developer</a>
+                    <a href="static/tos.html" target="_blank" rel="noopener">Terms of Service</a>
+                    <a href="static/pp.html" target="_blank" rel="noopener">Privacy Policy</a>
+                </div>
+                <div class="about-divider"></div>
+                <div class="about-contact-title">Contact the developer</div>
+                <div class="form-hint" style="margin-bottom: 14px;">Send feedback, a question, or a bug report. Your message is delivered as an encrypted private message to the Nymchat developer.</div>
+                <div class="form-group">
+                    <label class="form-label" for="aboutContactType">Topic</label>
+                    <select class="form-select" id="aboutContactType">
+                        <option value="General feedback">General feedback</option>
+                        <option value="Bug report">Bug report</option>
+                        <option value="Feature request">Feature request</option>
+                        <option value="Question">Question</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin-bottom: 8px;">
+                    <label class="form-label" for="aboutContactMessage">Message</label>
+                    <textarea class="form-textarea" id="aboutContactMessage" placeholder="Write your message..." maxlength="2000"></textarea>
+                </div>
+                <div class="form-hint" id="aboutContactStatus"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" data-action="closeModal" data-modal-id="aboutModal">Close</button>
+                <button class="send-btn" id="aboutContactSendBtn" data-action="sendAboutContact">Send Message</button>
             </div>
         </div>
     </div>

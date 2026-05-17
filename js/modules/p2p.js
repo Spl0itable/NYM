@@ -81,7 +81,9 @@ Object.assign(NYM.prototype, {
 
         let kind;
 
-        const now = Math.floor(Date.now() / 1000);
+        const nowMs = Date.now();
+        const now = Math.floor(nowMs / 1000);
+        tags.push(['ms', String(nowMs)]);
 
         if (this.currentGeohash) {
             kind = 20000; // Geohash channel kind
@@ -109,6 +111,7 @@ Object.assign(NYM.prototype, {
             pubkey: this.pubkey,
             content: event.content,
             created_at: event.created_at,
+            _ms: nowMs,
             _seq: ++this._msgSeq,
             timestamp: new Date(event.created_at * 1000),
             channel: this.currentChannel,
@@ -850,11 +853,13 @@ Object.assign(NYM.prototype, {
         this.p2pFileOffers.set(offerId, fileOffer);
 
         // Build tags for the Nostr event
-        const now = Math.floor(Date.now() / 1000);
+        const nowMs = Date.now();
+        const now = Math.floor(nowMs / 1000);
         const tags = [
             ['n', this.nym],
             ['offer', JSON.stringify(fileOffer)],
-            ['g', this.currentGeohash]
+            ['g', this.currentGeohash],
+            ['ms', String(nowMs)]
         ];
 
         // Create and broadcast the file offer event
@@ -873,6 +878,7 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey,
                 content: event.content,
                 created_at: event.created_at,
+                _ms: nowMs,
                 _seq: ++this._msgSeq,
                 timestamp: new Date(event.created_at * 1000),
                 channel: this.currentChannel,

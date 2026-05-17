@@ -98,6 +98,15 @@ Object.assign(NYM.prototype, {
             }
         });
 
+        // Gift Nymbot credits to this user
+        document.getElementById('ctxGiftCredits').addEventListener('click', () => {
+            if (this.contextMenuData) {
+                const { pubkey, nym } = this.contextMenuData;
+                this.closeContextMenu();
+                this.showBotCreditsModal({ pubkey, nym });
+            }
+        });
+
         // Add slap handler
         let slapOption = document.getElementById('ctxSlap');
         if (!slapOption) {
@@ -551,11 +560,15 @@ Object.assign(NYM.prototype, {
         } else {
             blockOption.style.display = 'block';
             const blockSvg = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align: middle; margin-right: 8px;"><circle cx="8" cy="8" r="6" /><line x1="3.75" y1="3.75" x2="12.25" y2="12.25" stroke-width="1.5" stroke-linecap="round" /></svg>';
-            blockOption.innerHTML = blockSvg + (this.blockedUsers.has(baseNym) ? 'Unblock User' : 'Block User');
+            blockOption.innerHTML = blockSvg + (this.blockedUsers.has(pubkey) ? 'Unblock User' : 'Block User');
         }
 
-        // Hide PM option if it's yourself or the bot (bot only lives in channels)
-        document.getElementById('ctxPM').style.display = (pubkey === this.pubkey || this.isVerifiedBot(pubkey)) ? 'none' : 'block';
+        // Hide PM option only for your own messages (Nymbot accepts private chats)
+        document.getElementById('ctxPM').style.display = (pubkey === this.pubkey) ? 'none' : 'block';
+
+        // Gift Nymbot credits — for other users, not yourself or Nymbot itself
+        document.getElementById('ctxGiftCredits').style.display =
+            (pubkey === this.pubkey || this.isVerifiedBot(pubkey)) ? 'none' : 'block';
 
         // Show "Edit Profile" only for own messages
         const editProfileOption = document.getElementById('ctxEditProfile');

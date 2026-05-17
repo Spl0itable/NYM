@@ -1889,6 +1889,20 @@ body.light-mode.chat-bubbles .read-more-btn {
     border-color: rgba(255, 255, 255, 0.15);
 }
 
+.message-content img.custom-emoji {
+    display: inline-block;
+    max-width: none;
+    max-height: none;
+    margin: 0 1px;
+    border: none;
+    border-radius: 0;
+}
+
+.message-content img.custom-emoji:hover {
+    transform: none;
+    box-shadow: none;
+}
+
 .message-content .video-container {
     position: relative;
     display: inline-block;
@@ -2704,6 +2718,73 @@ body.chat-bubbles .edited-indicator-irc {
     display: flex;
     gap: 10px;
     justify-content: center;
+}
+
+.about-logo {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.about-version {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+}
+
+.about-desc {
+    margin: 10px 0 16px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-dim);
+}
+
+.about-modal a {
+    color: var(--secondary);
+    text-decoration: none;
+}
+
+.about-modal a:hover {
+    text-decoration: underline;
+}
+
+.about-meta {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    padding: 6px 12px;
+    margin-bottom: 14px;
+}
+
+.about-meta-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 3px 0;
+}
+
+.about-meta-row span:first-child {
+    color: var(--text-dim);
+}
+
+.about-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    font-size: 12px;
+}
+
+.about-divider {
+    height: 1px;
+    background: var(--glass-border);
+    margin: 20px 0;
+}
+
+.about-contact-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
 }
 
 .blocked-list,
@@ -4951,7 +5032,7 @@ body.light-mode .message.style-satoshi .message-content {
     background-color: rgba(196, 122, 21, 0.1);
 }
 
-body.light-mode .message.style-satoshi .message-content>*:not(.truncated-inner):not(.read-more-btn) {
+body.light-mode .message.style-satoshi .message-content>*:not(.truncated-inner):not(.read-more-btn):not(.msg-hover-buttons):not(.bubble-time-inner) {
     color: #c47a15;
 }
 
@@ -5811,7 +5892,6 @@ body.light-mode .color-mode-btn.active {
     padding: 10px 15px;
     color: #FFFFFF !important;
     background-color: rgba(247, 147, 26, 0.2);
-    overflow: hidden;
 }
 
 .message.style-satoshi .message-content::before {
@@ -5821,13 +5901,14 @@ body.light-mode .color-mode-btn.active {
     left: 0;
     width: 100%;
     height: 100%;
+    border-radius: inherit;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='50' height='40'%3E%3Ctext x='0' y='30' font-size='32' fill='%23f7931a' fill-opacity='0.2'%3E₿%3C/text%3E%3C/svg%3E");
     background-repeat: repeat;
     pointer-events: none;
     z-index: 0;
 }
 
-.message.style-satoshi .message-content>*:not(.truncated-inner):not(.read-more-btn) {
+.message.style-satoshi .message-content>*:not(.truncated-inner):not(.read-more-btn):not(.msg-hover-buttons):not(.bubble-time-inner) {
     position: relative;
     z-index: 1;
     color: #f7931a;
@@ -8156,12 +8237,18 @@ body.chat-bubbles .message-content {
 }
 
 body.chat-bubbles .message .msg-hover-buttons {
-    align-self: flex-end;
+    top: 50%;
+    transform: translateY(-50%);
+    right: auto;
+    left: 100%;
+    margin-left: 6px;
 }
 
 body.chat-bubbles .message.self .msg-hover-buttons {
-    right: auto;
-    left: 10px;
+    left: auto;
+    right: 100%;
+    margin-left: 0;
+    margin-right: 6px;
 }
 
 body.chat-bubbles .message.self {

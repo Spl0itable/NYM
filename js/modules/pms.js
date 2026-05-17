@@ -223,7 +223,8 @@ Object.assign(NYM.prototype, {
 
     // Send PM using NIP-17 (GiftWrap 1059) and optional forward secrecy
     async sendNIP17PM(content, recipientPubkey) {
-        const now = Math.floor(Date.now() / 1000);
+        const nowMs = Date.now();
+        const now = Math.floor(nowMs / 1000);
 
         // Generate message ID for delivery receipts (Nymchat format)
         const nymMessageId = this.generateUUID();
@@ -234,6 +235,7 @@ Object.assign(NYM.prototype, {
             tags: [
                 ['p', recipientPubkey],
                 ['x', nymMessageId],  // Nymchat message ID for delivery receipts
+                ['ms', String(nowMs)],  // Millisecond send time for sub-second ordering
                 ...this.customEmojiTagsForContent(content)
             ],
             content,
@@ -309,6 +311,7 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey,
                 content,
                 created_at: now,
+                _ms: nowMs,
                 _seq: ++this._msgSeq,
                 timestamp: new Date(now * 1000),
                 isOwn: true,
@@ -321,9 +324,7 @@ Object.assign(NYM.prototype, {
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
             pmList.sort((a, b) => {
-                const dt = (a.created_at || 0) - (b.created_at || 0);
-                if (dt !== 0) return dt;
-                return (a._seq || 0) - (b._seq || 0);
+                return this._compareMessages(a, b);
             });
             // Cap PM conversations at pmStorageLimit messages
             if (pmList.length > this.pmStorageLimit) {
@@ -431,6 +432,7 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey,
                 content,
                 created_at: now,
+                _ms: nowMs,
                 _seq: ++this._msgSeq,
                 timestamp: new Date(now * 1000),
                 isOwn: true,
@@ -442,9 +444,7 @@ Object.assign(NYM.prototype, {
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
             extPmList.sort((a, b) => {
-                const dt = (a.created_at || 0) - (b.created_at || 0);
-                if (dt !== 0) return dt;
-                return (a._seq || 0) - (b._seq || 0);
+                return this._compareMessages(a, b);
             });
             // Cap PM conversations at pmStorageLimit messages
             if (extPmList.length > this.pmStorageLimit) {
@@ -1068,6 +1068,7 @@ Object.assign(NYM.prototype, {
                 content: messageContent,
                 created_at: tsSec,
                 _originalCreatedAt: originalTsSec,
+                _ms: this._extractEventMs(rumor, tsSec),
                 _seq: ++this._msgSeq,
                 timestamp: new Date(tsSec * 1000),
                 isOwn,
@@ -1082,9 +1083,7 @@ Object.assign(NYM.prototype, {
 
             list.push(msg);
             list.sort((a, b) => {
-                const dt = (a.created_at || 0) - (b.created_at || 0);
-                if (dt !== 0) return dt;
-                return (a._seq || 0) - (b._seq || 0);
+                return this._compareMessages(a, b);
             });
             // Cap PM conversations at pmStorageLimit messages to prevent memory bloat
             if (list.length > this.pmStorageLimit) {
@@ -1146,7 +1145,7 @@ Object.assign(NYM.prototype, {
                 // appends the trailing new messages to the cached fragment,
                 // avoiding a full re-render of long PM threads.
                 if (!isOwn) {
-                    const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.isNymBlocked(msg.author) || this.hasBlockedKeyword(msg.content, msg.author);
+                    const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author);
                     if (!msg.isHistorical) {
                         // Live message: full notification with sound/popup
                         this.updateUnreadCount(conversationKey);
@@ -1189,6 +1188,9 @@ Object.assign(NYM.prototype, {
 
             const wrapped = await this.sendNIP17PM(content, recipientPubkey);
             this.recordOwnActivity();
+            if (this.isVerifiedBot(recipientPubkey)) {
+                this._handleBotPM(content);
+            }
             return !!wrapped;
         } catch (error) {
             // Store the failed message in pmMessages so it persists across navigation
@@ -1202,6 +1204,7 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey,
                 content,
                 created_at: _nowFail,
+                _ms: Date.now(),
                 _seq: ++this._msgSeq,
                 timestamp: new Date(_nowFail * 1000),
                 isOwn: true,
@@ -1214,9 +1217,7 @@ Object.assign(NYM.prototype, {
             const failList = this.pmMessages.get(conversationKey);
             failList.push(failedMsg);
             failList.sort((a, b) => {
-                const dt = (a.created_at || 0) - (b.created_at || 0);
-                if (dt !== 0) return dt;
-                return (a._seq || 0) - (b._seq || 0);
+                return this._compareMessages(a, b);
             });
             // Invalidate cached DOM for this conversation
             this.channelDOMCache.delete(conversationKey);
@@ -1226,6 +1227,160 @@ Object.assign(NYM.prototype, {
                 this.displayMessage(failedMsg);
             }
             return false;
+        }
+    },
+
+    // Sign a short-lived NIP-98-style auth event so the bot worker can verify
+    // that the caller actually controls the pubkey it claims (prevents draining
+    // someone else's credits or reading their balance).
+    async _signBotAuth() {
+        const event = {
+            kind: 27235,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [['domain', 'nymbot-pm']],
+            content: 'nymbot-pm-auth',
+            pubkey: this.pubkey
+        };
+        return await this.signEvent(event);
+    },
+
+    // Recent Nymbot conversation history sent to the worker as AI context
+    _getBotPMHistory() {
+        const key = this.getPMConversationKey(this.verifiedBot.pubkey);
+        const msgs = this.pmMessages.get(key) || [];
+        return msgs.slice(-30)
+            .filter(m => m && m.content && m.deliveryStatus !== 'failed')
+            .map(m => ({
+                text: String(m.content).slice(0, 1000),
+                isBot: m.pubkey === this.verifiedBot.pubkey
+            }));
+    },
+
+    // Show/clear a synthetic "Nymbot is typing" indicator in the bot PM
+    _setBotTyping(on) {
+        const convKey = this.getPMConversationKey(this.verifiedBot.pubkey);
+        if (!this.typingUsers.has(convKey)) this.typingUsers.set(convKey, new Map());
+        const typers = this.typingUsers.get(convKey);
+        const botPk = this.verifiedBot.pubkey;
+        const existing = typers.get(botPk);
+        if (existing && existing.timeout) clearTimeout(existing.timeout);
+        if (on) {
+            const timeout = setTimeout(() => { typers.delete(botPk); this.renderTypingIndicator(); }, 30000);
+            typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: Date.now() });
+        } else {
+            typers.delete(botPk);
+        }
+        this.renderTypingIndicator();
+    },
+
+    // Update the cached Nymbot credit count and the chat-header indicator
+    _setBotCreditDisplay(balance) {
+        if (typeof balance === 'number') this._lastBotCredits = balance;
+        const el = document.getElementById('botCreditMeta');
+        if (el && typeof this._lastBotCredits === 'number') {
+            el.textContent = `${this._lastBotCredits} credit${this._lastBotCredits === 1 ? '' : 's'} left`;
+        }
+    },
+
+    // Paint the header credit indicator for the open Nymbot chat, then refresh it
+    async _refreshBotCreditMeta() {
+        this._setBotCreditDisplay();
+        const bal = await this._checkBotCredits(false);
+        if (bal === null && typeof this._lastBotCredits !== 'number') {
+            const el = document.getElementById('botCreditMeta');
+            if (el) el.textContent = 'credits unavailable';
+        }
+    },
+
+    // Process a message the user sent to Nymbot in a private chat
+    async _handleBotPM(content) {
+        const trimmed = (content || '').trim();
+        if (/^\?balance\b/i.test(trimmed)) {
+            this._checkBotCredits(true);
+            return;
+        }
+        if (/^\?buy\b/i.test(trimmed)) {
+            this.showBotCreditsModal();
+            return;
+        }
+        if (/^\?gift\b/i.test(trimmed)) {
+            const arg = trimmed.replace(/^\?gift\b/i, '').trim().replace(/^@/, '');
+            if (!arg) {
+                this.displaySystemMessage('Usage: ?gift @nym#xxxx — gift Nymbot credits to another user.');
+                return;
+            }
+            const giftPubkey = this.resolvePubkeyFromNym(arg);
+            if (!giftPubkey) {
+                this.displaySystemMessage(`Could not find user "${arg}". Try ?gift with their full nym (e.g. ?gift @cyber_wolf#a3f2).`);
+                return;
+            }
+            const giftNym = this.stripPubkeySuffix(this.getNymFromPubkey(giftPubkey));
+            this.showBotCreditsModal({ pubkey: giftPubkey, nym: giftNym });
+            return;
+        }
+        this._setBotTyping(true);
+        try {
+            const apiHost = this._getApiHost();
+            if (!apiHost) { this._setBotTyping(false); return; }
+            const auth = await this._signBotAuth();
+            const history = this._getBotPMHistory();
+            const resp = await fetch(`https://${apiHost}/api/bot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'pm', pubkey: this.pubkey, auth, message: content, history })
+            });
+            const data = await resp.json().catch(() => ({}));
+            this._setBotTyping(false);
+            if (data && data.noCredits) {
+                this.displaySystemMessage("You're out of Nymbot credits. Zap Nymbot or type ?buy to purchase more private messages.");
+                this.showBotCreditsModal();
+                return;
+            }
+            if (!resp.ok || !data || data.error) {
+                this.displaySystemMessage('Nymbot: ' + ((data && data.error) || 'request failed'));
+                return;
+            }
+            if (data.event) {
+                this.sendDMToRelays(['EVENT', data.event]);
+                this.handleGiftWrapDM(data.event, {});
+            }
+            if (typeof data.balance === 'number') {
+                this._setBotCreditDisplay(data.balance);
+                if (data.lowBalance) {
+                    this.displaySystemMessage(`Nymbot credits running low: ${data.balance} message${data.balance === 1 ? '' : 's'} left. Type ?buy to top up.`);
+                }
+            }
+        } catch (e) {
+            this._setBotTyping(false);
+            this.displaySystemMessage('Nymbot is unavailable right now. Please try again.');
+        }
+    },
+
+    // Check the user's Nymbot credit balance; optionally show it as a message
+    async _checkBotCredits(display) {
+        try {
+            const apiHost = this._getApiHost();
+            if (!apiHost) return null;
+            const auth = await this._signBotAuth();
+            const resp = await fetch(`https://${apiHost}/api/bot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'balance', pubkey: this.pubkey, auth })
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data || data.error) {
+                if (display) this.displaySystemMessage('Nymbot: ' + ((data && data.error) || 'could not check balance'));
+                return null;
+            }
+            this._setBotCreditDisplay(data.balance);
+            if (display) {
+                const b = data.balance || 0;
+                this.displaySystemMessage(`Nymbot credit balance: ${b} private message${b === 1 ? '' : 's'} remaining.` + (b <= 0 ? ' Type ?buy to purchase more.' : ''));
+            }
+            return data.balance;
+        } catch (e) {
+            if (display) this.displaySystemMessage('Could not reach Nymbot to check your balance.');
+            return null;
         }
     },
 
@@ -1335,7 +1490,12 @@ Object.assign(NYM.prototype, {
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
             const flairHtml = this.getFlairForUser(pubkey);
             const friendBadge = this.getFriendBadgeHtml(pubkey);
-            const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${friendBadge}`;
+            const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+                ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+                : this.isVerifiedBot(pubkey)
+                    ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
+                    : '';
+            const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
             const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
             const channelEl = document.getElementById('currentChannel');
             if (channelEl) channelEl.innerHTML = pmHeaderHtml;
@@ -1553,13 +1713,24 @@ Object.assign(NYM.prototype, {
         const safePk = this._safePubkey(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
         const friendBadge = this.getFriendBadgeHtml(pubkey);
-        const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${friendBadge}`;
+        const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+            : this.isVerifiedBot(pubkey)
+                ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
+                : '';
+        const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
         const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
 
         // Update UI with formatted nym
         document.getElementById('currentChannel').innerHTML = pmHeaderHtml;
         const lockSvgPM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
-        document.getElementById('channelMeta').innerHTML = `${lockSvgPM}End-to-end encrypted private message`;
+        if (this.isVerifiedBot(pubkey)) {
+            document.getElementById('channelMeta').innerHTML =
+                `${lockSvgPM}E2E encrypted · <span id="botCreditMeta">checking credits…</span>`;
+            this._refreshBotCreditMeta();
+        } else {
+            document.getElementById('channelMeta').innerHTML = `${lockSvgPM}End-to-end encrypted private message`;
+        }
 
         // Hide share button in PM mode
         const shareBtn = document.getElementById('shareChannelBtn');
@@ -1639,6 +1810,10 @@ Object.assign(NYM.prototype, {
         if (filteredMessages.length === 0) {
             container.innerHTML = '';
             this.displaySystemMessage('Start of private message');
+            if (this.isVerifiedBot(this.currentPM)) {
+                this.displaySystemMessage("This is a private, end-to-end encrypted chat with Nymbot. It's a paid feature — each reply costs 1 credit. Your balance shows in the header; type ?buy to purchase more, ?balance to recheck, or ?gift @nym to gift credits. Credits are tied to your nym, so save your nsec to keep them.");
+                this._checkBotCredits(false);
+            }
             return;
         }
 
@@ -1650,12 +1825,6 @@ Object.assign(NYM.prototype, {
         // Don't open PM with yourself
         if (pubkey === this.pubkey) {
             this.displaySystemMessage("You can't send private messages to yourself");
-            return;
-        }
-
-        // Don't open PM with the bot — it only lives in channels
-        if (this.isVerifiedBot(pubkey)) {
-            this.displaySystemMessage("Nymbot doesn't accept private messages. Use ?ask or @Nymbot in a channel instead.");
             return;
         }
 
@@ -1914,7 +2083,7 @@ Object.assign(NYM.prototype, {
             if (!user || !user.nym) return;
             if (pubkey === this.pubkey) return;
             if (this.isVerifiedBot && this.isVerifiedBot(pubkey)) return;
-            if (this.blockedUsers && this.blockedUsers.has(user.nym)) return;
+            if (this.blockedUsers && this.blockedUsers.has(pubkey)) return;
             if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
             const name = this.stripPubkeySuffix(user.nym);
             if (query && !name.toLowerCase().includes(query)) return;
@@ -2028,8 +2197,13 @@ Object.assign(NYM.prototype, {
 
     addNewPMRecipient(pubkey, nym) {
         if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
-        if (this.isVerifiedBot(pubkey)) {
-            this.displaySystemMessage("Nymbot doesn't accept private messages or group chats. Use ?ask or @Nymbot in a channel instead.");
+        // Nymbot can be messaged 1:1 but never added to a group chat
+        if (this.isVerifiedBot(pubkey) && this._newPMRecipients.length > 0) {
+            this.displaySystemMessage("Nymbot can only be messaged 1:1, not added to a group chat.");
+            return;
+        }
+        if (!this.isVerifiedBot(pubkey) && this._newPMRecipients.some(r => this.isVerifiedBot(r.pubkey))) {
+            this.displaySystemMessage("Nymbot can only be messaged 1:1, not added to a group chat.");
             return;
         }
         this._newPMRecipients.push({ pubkey, nym });
@@ -2112,11 +2286,7 @@ Object.assign(NYM.prototype, {
             // multiple senders so skip this check for them.
             if (!msg.isGroup && msg.pubkey !== this.pubkey && msg.pubkey !== this.currentPM) return false;
             return true;
-        }).sort((a, b) => {
-            const dt = (a.created_at || 0) - (b.created_at || 0);
-            if (dt !== 0) return dt;
-            return (a._seq || 0) - (b._seq || 0);
-        });
+        }).sort((a, b) => this._compareMessages(a, b));
     },
 
     // Load older PM/group messages when user scrolls to top

@@ -92,6 +92,7 @@ window.nymHapticTap = function (ms) {
         'signOutAndCloseSidebar':     function () { window.signOut(); nym().closeSidebar(); },
         'showSettings':               function () { window.showSettings(); },
         'showAbout':                  function () { window.showAbout(); },
+        'sendAboutContact':           function () { window.sendAboutContact(); },
         'signOut':                    function () { window.signOut(); },
         'openNostrLogin':             function () { window.openNostrLogin(); },
         'editNick':                   function () { window.editNick(); },

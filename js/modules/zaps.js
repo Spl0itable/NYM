@@ -259,6 +259,11 @@ Object.assign(NYM.prototype, {
     },
 
     showProfileZapModal(recipientPubkey, recipientNym, lnAddress) {
+        // Zapping Nymbot's profile means buying private-message credits
+        if (this.isVerifiedBot(recipientPubkey)) {
+            this.showBotCreditsModal();
+            return;
+        }
         // Store target info for profile zap (no messageId)
         this.currentZapTarget = {
             messageId: null, // No message ID for profile zaps
@@ -289,6 +294,167 @@ Object.assign(NYM.prototype, {
 
         // Show modal
         document.getElementById('zapModal').classList.add('active');
+    },
+
+    // Open the zap modal in "buy Nymbot credits" mode
+    showBotCreditsModal(giftRecipient) {
+        const botPubkey = this.verifiedBot.pubkey;
+        const isGift = !!(giftRecipient && giftRecipient.pubkey);
+        this.currentZapTarget = {
+            messageId: null,
+            recipientPubkey: botPubkey,
+            recipientNym: 'Nymbot',
+            isProfileZap: true,
+            isBotCreditPurchase: true,
+            giftRecipientPubkey: isGift ? giftRecipient.pubkey : null,
+            giftRecipientNym: isGift ? giftRecipient.nym : null
+        };
+        document.getElementById('zapAmountSection').style.display = 'block';
+        document.getElementById('zapInvoiceSection').style.display = 'none';
+        document.getElementById('zapRecipientInfo').textContent = isGift
+            ? `Gift Nymbot credits to @${giftRecipient.nym}`
+            : 'Buy Nymbot private message credits';
+        document.getElementById('zapCustomAmount').value = '';
+        document.getElementById('zapComment').value = '';
+        document.getElementById('zapSendBtn').textContent = 'Generate Invoice';
+        document.getElementById('zapSendBtn').onclick = () => this.generateBotCreditInvoice();
+        document.querySelectorAll('.zap-amount-btn').forEach(btn => {
+            btn.classList.remove('selected');
+            btn.onclick = (e) => {
+                document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
+                e.target.closest('.zap-amount-btn').classList.add('selected');
+                document.getElementById('zapCustomAmount').value = '';
+            };
+        });
+        document.getElementById('zapModal').classList.add('active');
+        this.displaySystemMessage("Tip: roughly 100 sats = 10 messages, 500 = 60, 1000 = 130, 5000 = 700. Credits are tied to your nym — save your nsec (click your nym > Reveal private key) so you don't lose them when this session ends.");
+    },
+
+    // Ask the bot worker to generate a credit-purchase invoice from Nymbot's
+    // own Lightning address, then display and poll it via the normal zap UI.
+    async generateBotCreditInvoice() {
+        if (!this.currentZapTarget || !this.currentZapTarget.isBotCreditPurchase) return;
+        if (this.zapCheckInterval) { clearInterval(this.zapCheckInterval); this.zapCheckInterval = null; }
+        this.currentZapInvoice = null;
+
+        const selectedBtn = document.querySelector('.zap-amount-btn.selected');
+        const customAmount = document.getElementById('zapCustomAmount').value;
+        const amount = parseInt(customAmount || (selectedBtn ? selectedBtn.dataset.amount : ''), 10);
+        if (!amount || amount <= 0) {
+            this.displaySystemMessage('Please select or enter an amount');
+            return;
+        }
+
+        document.getElementById('zapAmountSection').style.display = 'none';
+        document.getElementById('zapInvoiceSection').style.display = 'block';
+        document.getElementById('zapStatus').className = 'zap-status checking';
+        document.getElementById('zapStatus').innerHTML = '<span class="loader"></span> Generating invoice...';
+
+        try {
+            const apiHost = this._getApiHost();
+            if (!apiHost) throw new Error('Bot API unavailable');
+            const auth = await this._signBotAuth();
+            let zapRequest = null;
+            try { zapRequest = await this.createZapRequest(amount, ''); } catch (e) { }
+            const reqBody = { action: 'create-invoice', pubkey: this.pubkey, auth, amountSats: amount, zapRequest };
+            const giftPk = this.currentZapTarget.giftRecipientPubkey;
+            if (giftPk && giftPk !== this.pubkey) reqBody.recipientPubkey = giftPk;
+            const resp = await fetch(`https://${apiHost}/api/bot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(reqBody)
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data || data.error || !data.pr) {
+                throw new Error((data && data.error) || 'Failed to generate invoice');
+            }
+            const invoice = { pr: data.pr, verify: data.verify, amount, invoiceId: data.invoiceId };
+            this.currentZapInvoice = invoice;
+            this.displayZapInvoice(invoice);
+            if (invoice.verify) {
+                // LUD-21: poll the verify URL
+                this.checkZapPayment(invoice);
+            } else {
+                // No LUD-21 verify URL — wait for the NIP-57 zap receipt instead
+                this._listenForBotCreditReceipt(invoice);
+            }
+        } catch (error) {
+            document.getElementById('zapStatus').className = 'zap-status';
+            document.getElementById('zapStatus').textContent = `Failed: ${error.message}`;
+        }
+    },
+
+    // Fallback payment detection when the bot wallet has no LUD-21 verify URL:
+    // subscribe for the NIP-57 zap receipt (kind 9735) and match it to this
+    // invoice by its bolt11 tag. handleZapReceipt picks up the match.
+    _listenForBotCreditReceipt(invoice) {
+        if (this._botCreditReceiptWait && this._botCreditReceiptWait.subId) {
+            this.sendToRelay(["CLOSE", this._botCreditReceiptWait.subId]);
+            if (this._botCreditReceiptWait.timer) clearTimeout(this._botCreditReceiptWait.timer);
+        }
+        const subId = 'botcredit-' + Math.random().toString(36).slice(2, 9);
+        const wait = { subId, pr: invoice.pr, amount: invoice.amount, timer: null };
+        this._botCreditReceiptWait = wait;
+        this.sendToRelay(["REQ", subId, {
+            kinds: [9735],
+            "#p": [this.verifiedBot.pubkey],
+            since: Math.floor(Date.now() / 1000) - 60,
+            limit: 25
+        }]);
+        wait.timer = setTimeout(() => {
+            if (this._botCreditReceiptWait === wait) {
+                this.sendToRelay(["CLOSE", subId]);
+                this._botCreditReceiptWait = null;
+                const el = document.getElementById('zapStatus');
+                if (el) {
+                    el.style.display = 'block';
+                    el.className = 'zap-status';
+                    el.innerHTML = 'Payment not detected yet — if you paid, run ?balance shortly.';
+                }
+            }
+        }, 180000);
+    },
+
+    // After a Nymbot credit invoice is paid, ask the worker to verify the
+    // payment (server-side, against the invoice it issued) and add credits.
+    // receipt is the NIP-57 zap receipt, used when the wallet has no LUD-21
+    // verify URL.
+    async _claimBotCredits(invoiceId, recipientNym, receipt) {
+        if (!invoiceId) {
+            this.displaySystemMessage('Nymbot credit purchase: payment received but the invoice reference was lost. Run ?balance shortly — if credits are missing, contact support.');
+            return;
+        }
+        try {
+            const apiHost = this._getApiHost();
+            if (!apiHost) return;
+            const auth = await this._signBotAuth();
+            const reqBody = { action: 'claim-credits', pubkey: this.pubkey, auth, invoiceId };
+            if (receipt) reqBody.receipt = receipt;
+            let data = null;
+            for (let attempt = 0; attempt < 5; attempt++) {
+                const resp = await fetch(`https://${apiHost}/api/bot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(reqBody)
+                });
+                data = await resp.json().catch(() => ({}));
+                if (resp.ok && data && !data.error) break;
+                if (resp.status === 402) { await new Promise(r => setTimeout(r, 2000)); continue; }
+                break;
+            }
+            if (data && typeof data.credited === 'number') {
+                if (data.gift) {
+                    this.displaySystemMessage(`Gifted +${data.credited} Nymbot credits to @${recipientNym || 'user'}.`);
+                } else {
+                    this._setBotCreditDisplay(data.balance);
+                    this.displaySystemMessage(`Nymbot credits added: +${data.credited}. New balance: ${data.balance} private message${data.balance === 1 ? '' : 's'}.`);
+                }
+            } else {
+                this.displaySystemMessage('Nymbot credit purchase: ' + ((data && data.error) || 'could not confirm credit'));
+            }
+        } catch (e) {
+            this.displaySystemMessage('Nymbot credit purchase failed to confirm. Your payment went through — run ?balance shortly.');
+        }
     },
 
     cleanupOldLightningAddress() {
@@ -530,6 +696,12 @@ Object.assign(NYM.prototype, {
     handleZapPaymentSuccess(amount) {
         if (!this.currentZapTarget) return;
 
+        // Capture credit-purchase details before closeZapModal clears state
+        const isBotCreditPurchase = !!this.currentZapTarget.isBotCreditPurchase;
+        const botCreditInvoiceId = this.currentZapInvoice && this.currentZapInvoice.invoiceId;
+        const botCreditReceipt = (this.currentZapInvoice && this.currentZapInvoice.receipt) || null;
+        const botCreditGiftNym = this.currentZapTarget.giftRecipientNym || null;
+
         window.nymHapticTap && window.nymHapticTap();
 
         // Clear check interval
@@ -548,6 +720,10 @@ Object.assign(NYM.prototype, {
 <div style="font-size: 20px; margin-top: 10px;">${amount} sats</div>
 `;
 
+        if (isBotCreditPurchase) {
+            this._claimBotCredits(botCreditInvoiceId, botCreditGiftNym, botCreditReceipt);
+        }
+
         // Close modal after 2 seconds
         setTimeout(() => {
             this.closeZapModal();
@@ -563,6 +739,19 @@ Object.assign(NYM.prototype, {
         const pTag = event.tags.find(t => t[0] === 'p');
         const boltTag = event.tags.find(t => t[0] === 'bolt11');
         const descriptionTag = event.tags.find(t => t[0] === 'description');
+
+        // Nymbot credit purchase (no LUD-21 verify): match the receipt to the
+        // pending invoice by bolt11. This is a profile zap, so it has no e tag.
+        if (this._botCreditReceiptWait && boltTag && boltTag[1] &&
+            String(boltTag[1]).toLowerCase() === String(this._botCreditReceiptWait.pr).toLowerCase()) {
+            const wait = this._botCreditReceiptWait;
+            this._botCreditReceiptWait = null;
+            if (wait.timer) clearTimeout(wait.timer);
+            if (wait.subId) this.sendToRelay(["CLOSE", wait.subId]);
+            if (this.currentZapInvoice) this.currentZapInvoice.receipt = event;
+            this.handleZapPaymentSuccess(wait.amount);
+            return;
+        }
 
         if (!eTag || !boltTag) return;
 

@@ -224,7 +224,7 @@ Object.assign(NYM.prototype, {
             }
 
             // Check if user is blocked or message/nickname contains blocked keywords
-            if (this.isNymBlocked(nym) || this.hasBlockedKeyword(event.content, nym)) {
+            if (this.blockedUsers.has(event.pubkey) || this.hasBlockedKeyword(event.content, nym)) {
                 return;
             }
 
@@ -340,6 +340,7 @@ Object.assign(NYM.prototype, {
                 content: displayContent,
                 created_at: correctedCreatedAt,
                 _originalCreatedAt: eventCreatedAt,
+                _ms: this._extractEventMs(event, correctedCreatedAt),
                 _seq: ++this._msgSeq,
                 timestamp: new Date(correctedCreatedAt * 1000),
                 channel: geohash,
@@ -367,7 +368,7 @@ Object.assign(NYM.prototype, {
                 const shouldNotify = !message.isOwn &&
                     !message._spamGated &&
                     this.isMentioned(message.content) &&
-                    !this.isNymBlocked(nym) &&
+                    !this.blockedUsers.has(event.pubkey) &&
                     !isHistorical &&
                     !alreadyNotified &&
                     (document.hidden || !_isViewingChannel);
@@ -388,7 +389,7 @@ Object.assign(NYM.prototype, {
 
                 // Silently track historical mentions in notification history
                 if (isHistorical && !message.isOwn && !message._spamGated &&
-                    this.isMentioned(message.content) && !this.isNymBlocked(nym)) {
+                    this.isMentioned(message.content) && !this.blockedUsers.has(event.pubkey)) {
                     this._addNotificationToHistory(nym, message.content, {
                         type: 'geohash',
                         channel: geohash,
@@ -790,6 +791,9 @@ Object.assign(NYM.prototype, {
                         if (typeof this.updateGroupMembershipDisplay === 'function') {
                             this.updateGroupMembershipDisplay(pubkey);
                         }
+                    }
+                    if (typeof this.updateNotificationModalProfile === 'function') {
+                        this.updateNotificationModalProfile(pubkey, truncatedName);
                     }
                 }
 
@@ -1556,7 +1560,7 @@ Object.assign(NYM.prototype, {
         }
         if (!status || !geohash) return;
         const displayNym = this.stripPubkeySuffix(rawNym || this.getNymFromPubkey(event.pubkey));
-        if (this.isNymBlocked(displayNym) || this.blockedUsers.has(event.pubkey)) return;
+        if (this.blockedUsers.has(event.pubkey)) return;
 
         const convKey = `channel-${geohash}`;
         if (!this.typingUsers.has(convKey)) this.typingUsers.set(convKey, new Map());
@@ -1626,7 +1630,7 @@ Object.assign(NYM.prototype, {
         }
         if (!messageId || !geohash) return;
         const readerName = this.stripPubkeySuffix(rawNym || this.getNymFromPubkey(event.pubkey));
-        if (this.isNymBlocked(readerName) || this.blockedUsers.has(event.pubkey)) return;
+        if (this.blockedUsers.has(event.pubkey)) return;
 
         this._markNymchatPubkey(event.pubkey);
 
@@ -2210,6 +2214,9 @@ Object.assign(NYM.prototype, {
                             if (typeof this.updateGroupMembershipDisplay === 'function') {
                                 this.updateGroupMembershipDisplay(event.pubkey);
                             }
+                            if (typeof this.updateNotificationModalProfile === 'function') {
+                                this.updateNotificationModalProfile(event.pubkey, profileName);
+                            }
                         }
 
                         // Get lightning address
@@ -2271,9 +2278,11 @@ Object.assign(NYM.prototype, {
                 throw new Error('Not connected to relay');
             }
 
-            const now = Math.floor(Date.now() / 1000);
+            const nowMs = Date.now();
+            const now = Math.floor(nowMs / 1000);
             const tags = [
-                ['n', this.nym]
+                ['n', this.nym],
+                ['ms', String(nowMs)]
             ];
 
             const kind = 20000; // Geohash channels use kind 20000
@@ -2323,6 +2332,7 @@ Object.assign(NYM.prototype, {
                 author: this.nym,
                 pubkey: this.pubkey,
                 created_at: signedEvent.created_at,
+                _ms: nowMs,
                 _seq: ++this._msgSeq,
                 timestamp: new Date(signedEvent.created_at * 1000),
                 channel: channel,
@@ -2398,9 +2408,11 @@ Object.assign(NYM.prototype, {
                 anonNym = `${adj}_${noun}`;
             }
 
-            const now = Math.floor(Date.now() / 1000);
+            const nowMs = Date.now();
+            const now = Math.floor(nowMs / 1000);
             const tags = [
-                ['n', anonNym]
+                ['n', anonNym],
+                ['ms', String(nowMs)]
             ];
 
             const kind = 20000;
@@ -2448,6 +2460,7 @@ Object.assign(NYM.prototype, {
                 author: anonNym,
                 pubkey: ephPk,
                 created_at: signedEvent.created_at,
+                _ms: nowMs,
                 _seq: ++this._msgSeq,
                 timestamp: new Date(signedEvent.created_at * 1000),
                 channel: channel,

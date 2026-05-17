@@ -10,8 +10,6 @@ Object.assign(NYM.prototype, {
         // Skip notifications from blocked users
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
-        if (this.isNymBlocked(baseTitle)) return;
-
         // Skip notifications from non-friends if friends-only is enabled
         if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
 
@@ -105,8 +103,6 @@ Object.assign(NYM.prototype, {
         // Skip notifications from blocked users
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
-        if (this.isNymBlocked(baseTitle)) return;
-
         // Skip notifications from non-friends if friends-only is enabled
         if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
 
@@ -197,7 +193,6 @@ Object.assign(NYM.prototype, {
             if (n.timestamp <= (this.notificationLastReadTime || 0)) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
-            if (n.senderNym && this.isNymBlocked(n.senderNym)) return false;
             return true;
         }).length;
 
@@ -252,7 +247,6 @@ Object.assign(NYM.prototype, {
             if (n.timestamp <= cutoff24h) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
-            if (n.senderNym && this.isNymBlocked(n.senderNym)) return false;
             return true;
         }).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
@@ -289,7 +283,7 @@ Object.assign(NYM.prototype, {
                         : this.isVerifiedBot(pubkey)
                             ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
                             : '';
-                    authorHtml = `<span class="notification-item-author">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>&gt;${flairHtml} ${verifiedBadge}</span>`;
+                    authorHtml = `<span class="notification-item-author" data-notif-pubkey="${this.escapeHtml(pubkey)}">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>&gt;${flairHtml} ${verifiedBadge}</span>`;
                 }
 
                 // Channel/context label
@@ -348,6 +342,25 @@ Object.assign(NYM.prototype, {
         }
 
         modal.classList.add('active');
+    },
+
+    // Refresh author name/avatar in the notifications modal when a kind 0 profile arrives
+    updateNotificationModalProfile(pubkey, profileName) {
+        const modal = document.getElementById('notificationsModal');
+        if (!modal || !modal.classList.contains('active')) return;
+        const baseNym = this.parseNymFromDisplay(
+            profileName || this.getNymFromPubkey(pubkey)
+        ).substring(0, 20);
+        const suffix = this.getPubkeySuffix(pubkey);
+        const flairHtml = this.getFlairForUser(pubkey);
+        const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+            : this.isVerifiedBot(pubkey)
+                ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
+                : '';
+        modal.querySelectorAll(`.notification-item-author[data-notif-pubkey="${this.escapeHtml(pubkey)}"]`).forEach(el => {
+            el.innerHTML = `&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>&gt;${flairHtml} ${verifiedBadge}`;
+        });
     },
 
     closeNotificationsModal() {

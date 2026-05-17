@@ -202,6 +202,7 @@ Object.assign(NYM.prototype, {
         const displayTimestamp = timestamp > now ? now : timestamp;
         messageEl.dataset.timestamp = displayTimestamp.getTime();
         messageEl.dataset.createdAt = pollCreatedAt;
+        messageEl.dataset.ms = pollCreatedAt * 1000; // no millisecond stamp; sort at the second boundary
         messageEl.dataset.seq = 0; // polls have no arrival sequence; use 0 for consistent tiebreaking
 
         const timeStr = displayTimestamp.toLocaleTimeString([], {
@@ -294,11 +295,12 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Insert in correct chronological order using created_at (integer seconds),
-        // consistent with regular message DOM insertion in displayMessage().
+        // Insert in correct chronological order, consistent with regular message
+        // DOM insertion in displayMessage(): created_at seconds, then 'ms', then seq.
         {
             const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
             const msgCreatedAt = pollCreatedAt;
+            const msgMs = pollCreatedAt * 1000;
 
             let insertBefore = null;
             for (const existing of existingMessages) {
@@ -308,11 +310,18 @@ Object.assign(NYM.prototype, {
                     break;
                 }
                 if (msgCreatedAt === existingCreatedAt) {
-                    const existingSeq = parseInt(existing.dataset.seq) || 0;
-                    // Polls use seq=0, so they sort before same-second messages
-                    if (0 < existingSeq) {
+                    const existingMs = parseInt(existing.dataset.ms) || (existingCreatedAt * 1000);
+                    if (msgMs < existingMs) {
                         insertBefore = existing;
                         break;
+                    }
+                    if (msgMs === existingMs) {
+                        const existingSeq = parseInt(existing.dataset.seq) || 0;
+                        // Polls use seq=0, so they sort before same-second messages
+                        if (0 < existingSeq) {
+                            insertBefore = existing;
+                            break;
+                        }
                     }
                 }
             }

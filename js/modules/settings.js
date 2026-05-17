@@ -658,28 +658,19 @@ Object.assign(NYM.prototype, {
     },
 
     reapplyImageBlur() {
-        const blurOn = this.blurOthersImages === true || this.blurOthersImages === 'friends';
         document.querySelectorAll('.message img').forEach(img => {
             if (img.classList.contains('custom-emoji')) return;
             const messageEl = img.closest('.message');
             if (!messageEl) return;
-            const inQuote = !!img.closest('blockquote');
             const isSelfMessage = messageEl.classList.contains('self');
             const pubkey = messageEl.dataset.pubkey;
-            // Always blur quoted images when blur is enabled at all
-            if (inQuote && blurOn) {
+            const shouldBlur = !isSelfMessage && (
+                this.blurOthersImages === true ||
+                (this.blurOthersImages === 'friends' && !this.isFriend(pubkey))
+            );
+            if (shouldBlur) {
                 img.classList.add('blurred');
-                return;
-            }
-            if (!isSelfMessage) {
-                const shouldBlur = this.blurOthersImages === true ||
-                    (this.blurOthersImages === 'friends' && !this.isFriend(pubkey));
-                if (shouldBlur) {
-                    img.classList.add('blurred');
-                } else {
-                    img.classList.remove('blurred');
-                }
-            } else if (!inQuote) {
+            } else {
                 img.classList.remove('blurred');
             }
         });

@@ -3376,21 +3376,77 @@ function initWallpaperUI() {
     }
 }
 
+const NYMCHAT_VERSION = 'v3.65.360';
+
 function showAbout() {
-    const connectedRelays = nym.relayPool.size;
-    nym.displaySystemMessage(`
-═══ Nymchat v3.64.360 ═══<br/>
-Protocol: <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a> (kind 20000 geohash channels)<br/>
-Connected Relays: ${connectedRelays} relays<br/>
-Your nym: ${nym.escapeHtml(nym.nym || 'Not set')}<br/>
-<br/>
-Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener" style="color: var(--secondary)">Bitchat</a><br/>
-<br/>
-Nymchat is FOSS code on <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener" style="color: var(--secondary)">GitHub</a><br/>
-Made with ♥ by <a href="https://nostrservices.com" target="_blank" rel="noopener" style="color: var(--secondary)">21 Million LLC</a><br/>
-Lead developer: <a href="https://njump.me/npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" target="_blank" rel="noopener" style="color: var(--secondary)">Luxas#a8df</a><br/>
-<a href="static/tos.html" target="_blank" rel="noopener" style="color: var(--secondary)">Terms of Service</a> | <a href="static/pp.html" target="_blank" rel="noopener" style="color: var(--secondary)">Privacy Policy</a><br/>
-`, 'system', { html: true });
+    const modal = document.getElementById('aboutModal');
+    if (!modal) return;
+
+    const verEl = document.getElementById('aboutVersion');
+    if (verEl) verEl.textContent = NYMCHAT_VERSION;
+
+    const relayEl = document.getElementById('aboutRelayCount');
+    if (relayEl) relayEl.textContent = String(nym.relayPool.size);
+
+    const nymEl = document.getElementById('aboutNym');
+    if (nymEl) nymEl.textContent = nym.nym || 'Not set';
+
+    const status = document.getElementById('aboutContactStatus');
+    if (status) {
+        status.textContent = '';
+        status.style.color = '';
+    }
+
+    modal.classList.add('active');
+}
+
+async function sendAboutContact() {
+    const btn = document.getElementById('aboutContactSendBtn');
+    const typeEl = document.getElementById('aboutContactType');
+    const msgEl = document.getElementById('aboutContactMessage');
+    const status = document.getElementById('aboutContactStatus');
+
+    const setStatus = (text, ok) => {
+        if (!status) return;
+        status.textContent = text;
+        status.style.color = ok ? 'var(--secondary)' : 'var(--danger)';
+    };
+
+    const text = (msgEl?.value || '').trim();
+    if (!text) {
+        setStatus('Please enter a message.', false);
+        return;
+    }
+    if (!nym.connected) {
+        setStatus('Not connected to relay. Try again once connected.', false);
+        return;
+    }
+
+    const topic = typeEl?.value || 'General feedback';
+    const body = `[Nymchat contact — ${topic}]\n\n${text}`;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+    }
+    setStatus('', true);
+
+    try {
+        const ok = await nym.sendPM(body, nym.verifiedDeveloper.pubkey);
+        if (ok) {
+            setStatus('Message sent. Thanks for reaching out!', true);
+            if (msgEl) msgEl.value = '';
+        } else {
+            setStatus('Failed to send. Please try again.', false);
+        }
+    } catch (e) {
+        setStatus('Failed to send. Please try again.', false);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Send Message';
+        }
+    }
 }
 
 // Function to check for saved connection on page load
@@ -4917,7 +4973,6 @@ async function applyNostrSettingsAdditive(s) {
                 // Skip notifications from blocked users / nyms on this device.
                 const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
                 if (pk && nym.blockedUsers && nym.blockedUsers.has(pk)) continue;
-                if (n.senderNym && typeof nym.isNymBlocked === 'function' && nym.isNymBlocked(n.senderNym)) continue;
                 nym.notificationHistory.push({
                     title: n.title || '',
                     body: n.body || '',
@@ -5035,11 +5090,7 @@ async function applyNostrSettingsAdditive(s) {
                 if (newMsgs.length === 0) continue;
 
                 const merged = [...existing, ...newMsgs];
-                merged.sort((a, b) => {
-                    const dt = (a.created_at || 0) - (b.created_at || 0);
-                    if (dt !== 0) return dt;
-                    return (a._seq || 0) - (b._seq || 0);
-                });
+                merged.sort((a, b) => nym._compareMessages(a, b));
                 const capped = merged.length > nym.pmStorageLimit
                     ? merged.slice(-nym.pmStorageLimit)
                     : merged;
@@ -5434,11 +5485,7 @@ async function applyNostrSettings(s) {
                 if (newMsgs.length === 0) continue; // nothing to merge
 
                 const merged = [...existing, ...newMsgs];
-                merged.sort((a, b) => {
-                    const dt = (a.created_at || 0) - (b.created_at || 0);
-                    if (dt !== 0) return dt;
-                    return (a._seq || 0) - (b._seq || 0);
-                });
+                merged.sort((a, b) => nym._compareMessages(a, b));
                 // Cap to storage limit after merge
                 const capped = merged.length > nym.pmStorageLimit
                     ? merged.slice(-nym.pmStorageLimit)

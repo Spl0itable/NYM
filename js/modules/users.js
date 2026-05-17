@@ -140,6 +140,9 @@ Object.assign(NYM.prototype, {
                 }
             });
 
+            this._userListSig = '';
+            this.updateUserList();
+
             this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         }
@@ -155,7 +158,7 @@ Object.assign(NYM.prototype, {
             const author = msg.dataset.author || '';
             const content = msg.querySelector('.message-content');
 
-            if (content && !this.blockedUsers.has(author)) {
+            if (content && !this.blockedUsers.has(msg.dataset.pubkey)) {
                 const contentText = content.textContent.toLowerCase();
                 const cleanNick = this.parseNymFromDisplay(author).toLowerCase();
                 const hasBlockedKeyword = Array.from(this.blockedKeywords).some(kw =>
@@ -167,6 +170,9 @@ Object.assign(NYM.prototype, {
                 }
             }
         });
+
+        this._userListSig = '';
+        this.updateUserList();
 
         this.displaySystemMessage(`Unblocked keyword: "${keyword}"`);
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -751,10 +757,10 @@ Object.assign(NYM.prototype, {
 
     async uploadImage(file) {
         const isVideo = file.type.startsWith('video/');
-        const MAX_VIDEO_SIZE = 50 * 1024 * 1024; // 50MB
+        const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
 
-        if (isVideo && file.size > MAX_VIDEO_SIZE) {
-            this.displaySystemMessage('Video files must be under 50MB. Your file is ' + (file.size / (1024 * 1024)).toFixed(1) + 'MB.');
+        if (file.size > MAX_UPLOAD_SIZE) {
+            this.displaySystemMessage((isVideo ? 'Video' : 'Image') + ' files must be under 50MB. Your file is ' + (file.size / (1024 * 1024)).toFixed(1) + 'MB.');
             return;
         }
 
@@ -1029,7 +1035,8 @@ Object.assign(NYM.prototype, {
 
         this.users.forEach((user, pubkey) => {
             if (!user || !user.nym) return;
-            if (blockedUsers.has(user.nym)) return;
+            if (blockedUsers.has(pubkey)) return;
+            if (this.blockedKeywords.size && this.hasBlockedKeyword('', user.nym)) return;
             if (pmOnlyPubkeys && !pmOnlyPubkeys.has(pubkey)) return;
             if (pubkey !== this.pubkey && !this.isFriend?.(pubkey) &&
                 typeof this.isGibberishNym === 'function' &&
@@ -1399,13 +1406,6 @@ Object.assign(NYM.prototype, {
         this.updateUserList();
         this.updateBlockedList();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-    },
-
-    isNymBlocked(nym) {
-        const cleanNym = this.parseNymFromDisplay(nym);
-        return Array.from(this.blockedUsers).some(blockedNym =>
-            this.parseNymFromDisplay(blockedNym) === cleanNym
-        );
     },
 
     loadBlockedUsers() {

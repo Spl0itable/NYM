@@ -515,7 +515,7 @@ Object.assign(NYM.prototype, {
         const users = Array.from(channelUserSet)
             .map(pubkey => this.users.get(pubkey))
             .filter(u => u && Date.now() - u.lastSeen < 300000)
-            .filter(u => !this.blockedUsers.has(u.nym))
+            .filter(u => !this.blockedUsers.has(u.pubkey))
             .map(u => {
                 const baseNym = this.stripPubkeySuffix(u.nym);
                 const suffix = this.getPubkeySuffix(u.pubkey);

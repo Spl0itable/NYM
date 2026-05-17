@@ -200,7 +200,7 @@ Object.assign(NYM.prototype, {
             const suffix = this.getPubkeySuffix(pubkey);
             const searchableNym = `${baseNym}#${suffix}`;
 
-            if (!this.blockedUsers.has(user.nym) &&
+            if (!this.blockedUsers.has(pubkey) &&
                 searchableNym.toLowerCase().includes(search.toLowerCase())) {
 
                 // Compute effective status matching sidebar logic

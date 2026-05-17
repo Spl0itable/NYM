@@ -2487,8 +2487,419 @@ function signEvent(evt, privkeyHex) {
   evt.sig = bytesToHex(schnorr.sign(hash, privkeyHex));
   return evt;
 }
+
+// NIP-44 v2 encryption (private Nymbot conversations)
+function botBase64Encode(bytes) {
+  var s = "";
+  for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+function hkdfExpand(prk, info, length) {
+  var blocks = Math.ceil(length / 32);
+  var out = new Uint8Array(blocks * 32);
+  var prev = new Uint8Array(0);
+  for (var i = 0; i < blocks; i++) {
+    prev = hmac(sha256, prk, concatBytes(prev, info, new Uint8Array([i + 1])));
+    out.set(prev, i * 32);
+  }
+  return out.slice(0, length);
+}
+function nip44ConversationKey(privHex, pubHex) {
+  var shared = secp256k1.getSharedSecret(hexToBytes(privHex), hexToBytes("02" + pubHex));
+  var sharedX = shared.slice(1, 33);
+  return hmac(sha256, utf8ToBytes("nip44-v2"), sharedX);
+}
+function chachaRotl(x, n) { return ((x << n) | (x >>> (32 - n))) >>> 0; }
+function chachaQR(x, a, b, c, d) {
+  x[a] = (x[a] + x[b]) >>> 0; x[d] = chachaRotl(x[d] ^ x[a], 16);
+  x[c] = (x[c] + x[d]) >>> 0; x[b] = chachaRotl(x[b] ^ x[c], 12);
+  x[a] = (x[a] + x[b]) >>> 0; x[d] = chachaRotl(x[d] ^ x[a], 8);
+  x[c] = (x[c] + x[d]) >>> 0; x[b] = chachaRotl(x[b] ^ x[c], 7);
+}
+function chachaReadLE32(b, i) {
+  return (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) >>> 0;
+}
+function chacha20Block(state) {
+  var x = state.slice();
+  for (var i = 0; i < 10; i++) {
+    chachaQR(x, 0, 4, 8, 12); chachaQR(x, 1, 5, 9, 13);
+    chachaQR(x, 2, 6, 10, 14); chachaQR(x, 3, 7, 11, 15);
+    chachaQR(x, 0, 5, 10, 15); chachaQR(x, 1, 6, 11, 12);
+    chachaQR(x, 2, 7, 8, 13); chachaQR(x, 3, 4, 9, 14);
+  }
+  var out = new Uint8Array(64);
+  for (var j = 0; j < 16; j++) {
+    var v = (x[j] + state[j]) >>> 0;
+    out[j * 4] = v & 0xff; out[j * 4 + 1] = (v >>> 8) & 0xff;
+    out[j * 4 + 2] = (v >>> 16) & 0xff; out[j * 4 + 3] = (v >>> 24) & 0xff;
+  }
+  return out;
+}
+function chacha20(key, nonce, data) {
+  var state = new Uint32Array(16);
+  state[0] = 0x61707865; state[1] = 0x3320646e;
+  state[2] = 0x79622d32; state[3] = 0x6b206574;
+  for (var i = 0; i < 8; i++) state[4 + i] = chachaReadLE32(key, i * 4);
+  state[12] = 0;
+  state[13] = chachaReadLE32(nonce, 0);
+  state[14] = chachaReadLE32(nonce, 4);
+  state[15] = chachaReadLE32(nonce, 8);
+  var out = new Uint8Array(data.length);
+  var counter = 0;
+  for (var off = 0; off < data.length; off += 64) {
+    state[12] = counter++;
+    var block = chacha20Block(state);
+    var end = Math.min(64, data.length - off);
+    for (var k = 0; k < end; k++) out[off + k] = data[off + k] ^ block[k];
+  }
+  return out;
+}
+function nip44PaddedLen(len) {
+  if (len <= 32) return 32;
+  var nextPower = 1 << (Math.floor(Math.log2(len - 1)) + 1);
+  var chunk = nextPower <= 256 ? 32 : nextPower / 8;
+  return chunk * (Math.floor((len - 1) / chunk) + 1);
+}
+function nip44Encrypt(plaintext, conversationKey) {
+  var nonce = randomBytes(32);
+  var keys = hkdfExpand(conversationKey, nonce, 76);
+  var chachaKey = keys.slice(0, 32);
+  var chachaNonce = keys.slice(32, 44);
+  var hmacKey = keys.slice(44, 76);
+  var pt = utf8ToBytes(plaintext);
+  if (pt.length < 1 || pt.length > 65535) throw new Error("invalid plaintext length");
+  var padded = new Uint8Array(2 + nip44PaddedLen(pt.length));
+  padded[0] = (pt.length >>> 8) & 0xff;
+  padded[1] = pt.length & 0xff;
+  padded.set(pt, 2);
+  var ciphertext = chacha20(chachaKey, chachaNonce, padded);
+  var mac = hmac(sha256, hmacKey, concatBytes(nonce, ciphertext));
+  return botBase64Encode(concatBytes(new Uint8Array([2]), nonce, ciphertext, mac));
+}
+
+// NIP-59 gift wrap (Nymbot private replies)
+function randomTimestampNow() {
+  return Math.floor(Date.now() / 1000) - Math.floor(Math.random() * 172800);
+}
+function buildGiftWrappedDM(plaintext, botPrivkey, botPubkey, recipientPubkey) {
+  var rumor = {
+    kind: 14,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [["p", recipientPubkey], ["ms", String(Date.now())], ["bot", "nymchat"]],
+    content: plaintext,
+    pubkey: botPubkey
+  };
+  rumor.id = getEventHash(rumor);
+  var seal = {
+    kind: 13,
+    created_at: randomTimestampNow(),
+    tags: [],
+    content: nip44Encrypt(JSON.stringify(rumor), nip44ConversationKey(botPrivkey, recipientPubkey)),
+    pubkey: botPubkey
+  };
+  signEvent(seal, botPrivkey);
+  var ephSk = bytesToHex(randomBytes(32));
+  var ephPk = getPublicKey(ephSk);
+  var wrap = {
+    kind: 1059,
+    created_at: randomTimestampNow(),
+    tags: [["p", recipientPubkey]],
+    content: nip44Encrypt(JSON.stringify(seal), nip44ConversationKey(ephSk, recipientPubkey)),
+    pubkey: ephPk
+  };
+  signEvent(wrap, ephSk);
+  return wrap;
+}
+
+// Private Nymbot messaging: auth, credits (R2), pricing
+var BOT_PM_RATE_LIMIT = 20;
+var BOT_PM_RATE_WINDOW_MS = 60000;
+var BOT_SATS_PER_CREDIT = 10;
+var BOT_LIGHTNING_ADDRESS = "69420@wallet.yakihonne.com";
+var NYMBOT_PM_ADDENDUM = [
+  "",
+  "=== PRIVATE CONVERSATION MODE ===",
+  "You are now in a 1:1 end-to-end encrypted private message (NIP-17) with a single user. No one else can read this conversation.",
+  "The message history above is your private conversation with this user — use all of it as context.",
+  "This is a paid feature: the user spent Bitcoin to message you privately, so be helpful, thorough, and conversational.",
+  "Do NOT append public-channel zap tip prompts here, and do NOT tell them to use ?ask or @Nymbot in a channel — they are already talking to you privately.",
+  "If they ask about their credit balance, tell them to type ?balance (it's also shown in the chat header). If they want more messages, tell them to type ?buy. To gift credits to someone else, they can type ?gift @nym."
+].join("\n");
+
+function verifyBotAuth(auth, expectedPubkey) {
+  try {
+    if (!auth || typeof auth !== "object") return false;
+    if (auth.pubkey !== expectedPubkey) return false;
+    if (auth.kind !== 27235) return false;
+    var nowSec = Math.floor(Date.now() / 1000);
+    if (!auth.created_at || Math.abs(nowSec - auth.created_at) > 300) return false;
+    if (getEventHash(auth) !== auth.id) return false;
+    return schnorr.verify(auth.sig, auth.id, auth.pubkey);
+  } catch (e) {
+    return false;
+  }
+}
+// Validate a NIP-57 zap receipt (kind 9735) as proof an invoice was paid.
+// Returns an error string, or null when the receipt is valid.
+function validateZapReceipt(receipt, pending) {
+  if (!receipt || typeof receipt !== "object") return "Zap receipt missing.";
+  if (receipt.kind !== 9735) return "Not a zap receipt.";
+  if (receipt.pubkey !== pending.providerPubkey) return "Zap receipt is not from the bot's Lightning wallet.";
+  try {
+    if (getEventHash(receipt) !== receipt.id) return "Zap receipt failed its integrity check.";
+    if (!schnorr.verify(receipt.sig, receipt.id, receipt.pubkey)) return "Zap receipt signature is invalid.";
+  } catch (e) {
+    return "Zap receipt could not be verified.";
+  }
+  var bolt = null;
+  var tags = receipt.tags || [];
+  for (var i = 0; i < tags.length; i++) {
+    if (Array.isArray(tags[i]) && tags[i][0] === "bolt11") { bolt = tags[i][1]; break; }
+  }
+  if (!bolt) return "Zap receipt has no invoice.";
+  if (String(bolt).toLowerCase() !== String(pending.pr).toLowerCase()) {
+    return "Zap receipt is for a different invoice.";
+  }
+  return null;
+}
+function botCreditsForSats(sats) {
+  sats = Math.max(0, Math.floor(Number(sats) || 0));
+  var mult = 1;
+  if (sats >= 5000) mult = 1.4;
+  else if (sats >= 1000) mult = 1.3;
+  else if (sats >= 500) mult = 1.2;
+  return Math.floor((sats / BOT_SATS_PER_CREDIT) * mult);
+}
+
+async function botGetCredits(env, pubkey) {
+  var blank = { balance: 0, totalPurchased: 0, totalUsed: 0, rl: [], createdAt: Date.now() };
+  if (!env.R2_BUCKET) return blank;
+  try {
+    var obj = await env.R2_BUCKET.get("credits/" + pubkey);
+    if (!obj) return blank;
+    var data = await obj.json();
+    if (!data || typeof data.balance !== "number") return blank;
+    if (!Array.isArray(data.rl)) data.rl = [];
+    return data;
+  } catch (e) {
+    return blank;
+  }
+}
+async function botPutCredits(env, pubkey, data) {
+  data.updatedAt = Date.now();
+  await env.R2_BUCKET.put("credits/" + pubkey, JSON.stringify(data));
+}
+async function handleBotPMChat(message, history, context) {
+  var ai = context.env.AI || null;
+  if (!ai) throw new Error("AI is not configured.");
+  var messages = [{ role: "system", content: NYMBOT_SYSTEM_PROMPT + "\n" + NYMBOT_PM_ADDENDUM }];
+  if (Array.isArray(history) && history.length > 0) {
+    var recent = history.slice(-MAX_CONVERSATION_HISTORY);
+    for (var i = 0; i < recent.length; i++) {
+      var entry = recent[i];
+      if (!entry || !entry.text) continue;
+      var text = sanitizeInput(entry.text);
+      if (!text) continue;
+      messages.push({ role: entry.isBot ? "assistant" : "user", content: text });
+    }
+  }
+  messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's message below." });
+  messages.push({ role: "assistant", content: "Understood." });
+  messages.push({ role: "user", content: message });
+  var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+    messages: messages,
+    max_tokens: 1024
+  });
+  if (result && result.response) return sanitizeBotResponse(result.response);
+  return "";
+}
+async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+    });
+  };
+  if (!env.R2_BUCKET) {
+    return json({ error: "Private Nymbot messaging is not configured (missing R2_BUCKET binding)." }, 503);
+  }
+  var userPubkey = body.pubkey;
+  if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) {
+    return json({ error: "Invalid pubkey" }, 400);
+  }
+  if (!verifyBotAuth(body.auth, userPubkey)) {
+    return json({ error: "Authentication failed" }, 401);
+  }
+
+  if (body.action === "balance") {
+    var rec = await botGetCredits(env, userPubkey);
+    return json({ balance: rec.balance, totalPurchased: rec.totalPurchased, totalUsed: rec.totalUsed });
+  }
+
+  if (body.action === "create-invoice") {
+    var reqSats = Math.floor(Number(body.amountSats) || 0);
+    if (reqSats < 1) return json({ error: "Invalid amount" }, 400);
+    if (botCreditsForSats(reqSats) <= 0) {
+      return json({ error: "Amount too small to buy any credits." }, 400);
+    }
+    var ciGiftTo = null;
+    if (body.recipientPubkey && /^[0-9a-f]{64}$/i.test(body.recipientPubkey)) {
+      ciGiftTo = body.recipientPubkey.toLowerCase();
+    }
+    var lnAddr = (env.BOT_LIGHTNING_ADDRESS || BOT_LIGHTNING_ADDRESS).split("@");
+    if (lnAddr.length !== 2) return json({ error: "Bot Lightning address misconfigured." }, 500);
+    var lnurlData;
+    try {
+      var lnRes = await fetch("https://" + lnAddr[1] + "/.well-known/lnurlp/" + lnAddr[0], {
+        headers: { "Accept": "application/json" }
+      });
+      lnurlData = await lnRes.json();
+    } catch (e) {
+      return json({ error: "Could not reach the bot's Lightning wallet." }, 502);
+    }
+    if (!lnurlData || !lnurlData.callback) {
+      return json({ error: "Bot Lightning wallet returned an invalid response." }, 502);
+    }
+    var milli = reqSats * 1000;
+    if (milli < (lnurlData.minSendable || 0) || milli > (lnurlData.maxSendable || Infinity)) {
+      return json({ error: "Amount must be between " + Math.ceil((lnurlData.minSendable || 0) / 1000) + " and " + Math.floor((lnurlData.maxSendable || 0) / 1000) + " sats." }, 400);
+    }
+    var cbUrl;
+    try {
+      cbUrl = new URL(lnurlData.callback);
+      cbUrl.searchParams.set("amount", String(milli));
+      if (body.zapRequest && lnurlData.allowsNostr && lnurlData.nostrPubkey) {
+        cbUrl.searchParams.set("nostr", JSON.stringify(body.zapRequest));
+      }
+    } catch (e) {
+      return json({ error: "Bot Lightning wallet callback is invalid." }, 502);
+    }
+    var invData;
+    try {
+      var invRes = await fetch(cbUrl.toString(), { headers: { "Accept": "application/json" } });
+      invData = await invRes.json();
+    } catch (e) {
+      return json({ error: "Could not generate a Lightning invoice." }, 502);
+    }
+    if (!invData || !invData.pr) {
+      return json({ error: (invData && invData.reason) || "Bot wallet did not return an invoice." }, 502);
+    }
+    // Prefer LUD-21 server-side verification; fall back to validating the
+    // NIP-57 zap receipt (kind 9735) signed by the wallet's Nostr identity.
+    var hasVerify = invData.verify && /^https:\/\//i.test(invData.verify);
+    var canNip57 = body.zapRequest && lnurlData.allowsNostr &&
+      typeof lnurlData.nostrPubkey === "string" && /^[0-9a-f]{64}$/i.test(lnurlData.nostrPubkey);
+    if (!hasVerify && !canNip57) {
+      return json({ error: "Bot Lightning wallet supports neither LUD-21 verification nor NIP-57 zap receipts." }, 502);
+    }
+    var invoiceId = bytesToHex(sha256(utf8ToBytes(invData.pr)));
+    await env.R2_BUCKET.put("pending/" + invoiceId, JSON.stringify({
+      pubkey: userPubkey,
+      recipientPubkey: ciGiftTo,
+      amountSats: reqSats,
+      pr: invData.pr,
+      verifyMethod: hasVerify ? "lud21" : "nip57",
+      verifyUrl: hasVerify ? invData.verify : null,
+      providerPubkey: hasVerify ? null : lnurlData.nostrPubkey.toLowerCase(),
+      createdAt: Date.now()
+    }));
+    return json({
+      pr: invData.pr,
+      verify: hasVerify ? invData.verify : null,
+      needsReceipt: !hasVerify,
+      invoiceId: invoiceId
+    });
+  }
+
+  if (body.action === "claim-credits") {
+    var invoiceId = String(body.invoiceId || "");
+    if (!/^[0-9a-f]{64}$/i.test(invoiceId)) return json({ error: "Invalid invoice reference." }, 400);
+    var claimKey = "claimed/" + invoiceId;
+    var already = await env.R2_BUCKET.get(claimKey);
+    if (already) return json({ error: "This payment was already claimed." }, 409);
+    var pendingObj = await env.R2_BUCKET.get("pending/" + invoiceId);
+    if (!pendingObj) return json({ error: "Unknown or expired invoice." }, 404);
+    var pending;
+    try {
+      pending = await pendingObj.json();
+    } catch (e) {
+      return json({ error: "Corrupt invoice record." }, 500);
+    }
+    // Only the buyer who created the invoice may claim it
+    if (pending.pubkey !== userPubkey) {
+      return json({ error: "This invoice belongs to a different user." }, 403);
+    }
+    // Confirm the payment. LUD-21: re-fetch the worker's stored verify URL.
+    // NIP-57: validate the client-supplied 9735 receipt — it must be signed by
+    // the wallet's Nostr identity and reference the exact invoice we issued, so
+    // a forged or unrelated receipt cannot pass.
+    if (pending.verifyMethod === "nip57") {
+      var rcptError = validateZapReceipt(body.receipt, pending);
+      if (rcptError) return json({ error: rcptError }, 400);
+    } else {
+      var settled = false;
+      try {
+        var vr = await fetch(pending.verifyUrl, { headers: { "Accept": "application/json" } });
+        var vd = await vr.json();
+        settled = !!(vd && (vd.settled || vd.paid));
+      } catch (e) {
+        return json({ error: "Could not verify the payment." }, 502);
+      }
+      if (!settled) return json({ error: "Payment not confirmed yet." }, 402);
+    }
+    var credits = botCreditsForSats(pending.amountSats);
+    if (credits <= 0) return json({ error: "Amount too small to purchase credits." }, 400);
+    var creditTo = userPubkey;
+    var isGift = false;
+    if (pending.recipientPubkey && /^[0-9a-f]{64}$/i.test(pending.recipientPubkey)) {
+      creditTo = pending.recipientPubkey.toLowerCase();
+      isGift = creditTo !== userPubkey;
+    }
+    // Credit first; if this throws, the request fails and the client retries
+    // before any claim marker exists. Mark claimed only once credits landed,
+    // so a failure can never leave the buyer paid-but-not-credited.
+    var crec = await botGetCredits(env, creditTo);
+    crec.balance += credits;
+    crec.totalPurchased += credits;
+    await botPutCredits(env, creditTo, crec);
+    await env.R2_BUCKET.put(claimKey, JSON.stringify({ pubkey: creditTo, paidBy: userPubkey, amountSats: pending.amountSats, credits: credits, gift: isGift, at: Date.now() }));
+    await env.R2_BUCKET.delete("pending/" + invoiceId);
+    return json({ credited: credits, balance: isGift ? undefined : crec.balance, recipient: creditTo, gift: isGift });
+  }
+
+  if (body.action === "pm") {
+    var message = sanitizeInput(body.message || "");
+    if (!message) return json({ error: "Empty message" }, 400);
+    var record = await botGetCredits(env, userPubkey);
+    var cutoff = Date.now() - BOT_PM_RATE_WINDOW_MS;
+    record.rl = (record.rl || []).filter(function (t) { return t > cutoff; });
+    if (record.rl.length >= BOT_PM_RATE_LIMIT) {
+      return json({ error: "Slow down — too many messages. Try again in a minute." }, 429);
+    }
+    if (record.balance <= 0) {
+      return json({ noCredits: true, balance: 0 });
+    }
+    var reply;
+    try {
+      reply = await handleBotPMChat(message, body.history, context);
+    } catch (e) {
+      return json({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
+    }
+    if (!reply) return json({ error: "Nymbot returned an empty response" }, 500);
+    record.balance -= 1;
+    record.totalUsed = (record.totalUsed || 0) + 1;
+    record.rl.push(Date.now());
+    await botPutCredits(env, userPubkey, record);
+    var event = buildGiftWrappedDM(reply, botPrivkey, botPubkey, userPubkey);
+    return json({ event: event, balance: record.balance, lowBalance: record.balance <= 3 });
+  }
+
+  return json({ error: "Unknown action" }, 400);
+}
+
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.64.360";
+var NYMCHAT_VERSION = "3.65.360";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -2498,6 +2909,16 @@ const BOT_CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type"
 };
+
+const NYMCHAT_APP_ORIGINS = new Set([
+  "https://web.nymchat.app"
+]);
+function isNymchatBotClient(request) {
+  const origin = (request.headers.get("Origin") || "").toLowerCase();
+  if (NYMCHAT_APP_ORIGINS.has(origin)) return true;
+  const ua = request.headers.get("User-Agent") || "";
+  return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
+}
 
 // HTTP POST handler
 async function onRequest(context) {
@@ -2515,6 +2936,14 @@ async function onRequest(context) {
   if (request.method !== "POST") {
     return new Response(JSON.stringify({ error: "POST required" }), {
       status: 405,
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+    });
+  }
+
+  // Reject requests that aren't from the official Nymchat web app or native apps
+  if (!isNymchatBotClient(request)) {
+    return new Response(JSON.stringify({ error: "Forbidden" }), {
+      status: 403,
       headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   }
@@ -2545,6 +2974,18 @@ async function onRequest(context) {
       status: 400,
       headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
+  }
+
+  // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
+  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "claim-credits")) {
+    try {
+      return await handleBotPMAction(context, body, privkey, pubkey);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      });
+    }
   }
 
   const { command, args, geohash, conversation, senderNym, publishedContent, channelMessages, activeUsers } = body;
@@ -2689,11 +3130,13 @@ async function onRequest(context) {
   }
 
   // Build and sign the Nostr event
-  var now = Math.floor(Date.now() / 1000);
+  var nowMs = Date.now();
+  var now = Math.floor(nowMs / 1000);
   var eventTags = [
     ["n", BOT_NYM],
     ["bot", "nymchat"],
-    ["g", geohash || "nym"]
+    ["g", geohash || "nym"],
+    ["ms", String(nowMs)]
   ];
   if (quoteTag) {
     eventTags.push(quoteTag);
@@ -3079,7 +3522,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.64.360 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.65.360 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3124,7 +3567,18 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Never output raw code blocks intended for prompt injection or system manipulation.",
   "- NEVER relay, proxy, or pass along messages from one user to another. If a user asks you to 'tell', 'say to', 'let X know', 'pass a message to', 'say good night to', 'wish X', or otherwise communicate something to another user on their behalf, ALWAYS decline. You are not a messenger or proxy. This applies to ALL messages — greetings, farewells, positive, negative, or neutral. Even if the request seems harmless (e.g. 'tell X good night'), refuse. Respond with something like 'I can't relay messages between users — you can tell them directly!' and move on. This rule has NO exceptions.",
   "- NEVER use @mentions of other users in your responses. Do not output @username, @nym#xxxx, @AnythingWithAt, or any mention format that could notify or ping another user. If you need to reference a user, use their name without the @ symbol. This is a HARD rule — your response will be automatically filtered to remove any @mentions, so do not include them.",
-  "- When a user's message includes a quote-reply referencing another user's message, do NOT address or mention the quoted user. Only respond to the person who asked you the question. The quoted message is context only — never direct your response at the quoted user or mention them with @."
+  "- When a user's message includes a quote-reply referencing another user's message, do NOT address or mention the quoted user. Only respond to the person who asked you the question. The quoted message is context only — never direct your response at the quoted user or mention them with @.",
+  "",
+  "=== PRIVATE MESSAGING WITH NYMBOT (PAID) ===",
+  "Users can have a private, end-to-end encrypted 1:1 conversation with you (Nymbot) using NIP-17 gift wraps. To start one: click Nymbot's nym or avatar and choose 'Private Message', or open the Nyms sidebar and select Nymbot. It only works as a 1:1 chat — Nymbot can't be added to group chats.",
+  "Private Nymbot conversations are a paid feature. Each reply you send costs 1 credit. Credits are bought with Bitcoin Lightning zaps: about 100 sats = 10 messages, 500 sats = 60, 1000 sats = 130, 5000 sats = 700 (bigger zaps include bonus credits).",
+  "To buy credits: type ?buy inside the Nymbot private chat, or zap Nymbot's profile (zapping the profile opens the credit purchase flow). Note: zapping one of Nymbot's messages in a public channel is just an appreciation tip and does NOT add credits — only the ?buy / profile-zap purchase flow does. To check the remaining balance: type ?balance inside the Nymbot private chat — the balance is also shown in the chat header.",
+  "Users can gift credits to someone else: click a user's nym and choose 'Gift Nymbot Credits', or type ?gift @nym#xxxx inside the Nymbot private chat. The payer covers the zap; the credits land on the recipient's nym.",
+  "Credits are tied to the user's nym (public key). Nyms are ephemeral — if a user doesn't save their nsec, a new session means a new identity and a fresh empty balance. Always remind users to save their nsec (click your nym in the sidebar > Reveal private key) so they keep their credits.",
+  "The private conversation is encrypted so other users and relays can't read it, and the whole private thread is used as conversation context. Public channels remain free — only the private 1:1 conversations cost credits.",
+  "",
+  "Q: Can I message Nymbot privately?",
+  "A: Yes. Click Nymbot's nym or avatar and choose 'Private Message' (or pick Nymbot from the Nyms sidebar). It's a private, end-to-end encrypted 1:1 chat. It's a paid feature — each reply costs 1 credit. Buy credits by typing ?buy in the chat or by zapping Nymbot's profile (which opens the credit purchase); check your balance with ?balance. Credits are tied to your nym's key, so save your nsec to keep them."
 ].join("\n");
 
 function isLikelyNonEnglish(text) {
@@ -3767,7 +4221,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.64.360")
+  // Prefix match (e.g. "3.61" matches "3.65.360")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -3822,7 +4276,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.64.360", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.65.360", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
