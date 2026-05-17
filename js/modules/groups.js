@@ -2154,6 +2154,10 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
 
+        const prevChannelKey = this.currentGeohash || this.currentChannel;
+        if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
+            this.closeChannelSubscription(prevChannelKey);
+        }
         this.inPMMode = true;
         this.currentPM = null;
         this.currentGroup = groupId;

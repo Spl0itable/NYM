@@ -1521,6 +1521,10 @@ Object.assign(NYM.prototype, {
     },
 
     openPM(nym, pubkey) {
+        const prevChannelKey = this.currentGeohash || this.currentChannel;
+        if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
+            this.closeChannelSubscription(prevChannelKey);
+        }
         this.inPMMode = true;
         this.currentPM = pubkey;
         this.currentGroup = null;
@@ -2225,6 +2229,10 @@ Object.assign(NYM.prototype, {
     },
 
     showPMOnlyEmptyState() {
+        const prevChannelKey = this.currentGeohash || this.currentChannel;
+        if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
+            this.closeChannelSubscription(prevChannelKey);
+        }
         this.inPMMode = true;
         this.currentPM = null;
         this.currentGroup = null;
