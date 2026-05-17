@@ -660,6 +660,7 @@ Object.assign(NYM.prototype, {
     reapplyImageBlur() {
         const blurOn = this.blurOthersImages === true || this.blurOthersImages === 'friends';
         document.querySelectorAll('.message img').forEach(img => {
+            if (img.classList.contains('custom-emoji')) return;
             const messageEl = img.closest('.message');
             if (!messageEl) return;
             const inQuote = !!img.closest('blockquote');

@@ -415,8 +415,12 @@ Object.assign(NYM.prototype, {
         const reactors = reactions.get(emoji);
         if (!reactors || reactors.size === 0) return;
 
-        // Build user list
-        const userItems = Array.from(reactors.entries()).map(([pubkey, nym]) => {
+        // Build user list, capping the rendered rows so a large reactor list
+        // doesn't blow out the modal — overflow is summarised as "+N more".
+        const MAX_ROWS = 50;
+        const entries = Array.from(reactors.entries());
+        const shown = entries.slice(0, MAX_ROWS);
+        const userItems = shown.map(([pubkey, nym]) => {
             const isYou = pubkey === this.pubkey;
             const baseNym = this.parseNymFromDisplay(nym);
             const suffix = this.getPubkeySuffix(pubkey);
@@ -425,12 +429,16 @@ Object.assign(NYM.prototype, {
                 ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
             </div>`;
         }).join('');
+        const overflow = entries.length - shown.length;
+        const overflowItem = overflow > 0
+            ? `<div class="reactors-modal-more">+${overflow} more</div>`
+            : '';
 
         const modal = document.createElement('div');
         modal.className = 'reactors-modal';
         modal.innerHTML = `
-            <div class="reactors-modal-header">${this.renderReactionEmoji(emoji)} <span class="reactors-modal-count">${reactors.size}</span></div>
-            <div class="reactors-modal-list">${userItems}</div>
+            <div class="reactors-modal-header"><span class="reactors-modal-emoji">${this.renderReactionEmoji(emoji)}</span> <span class="reactors-modal-count">${reactors.size}</span></div>
+            <div class="reactors-modal-list">${userItems}${overflowItem}</div>
         `;
 
         document.body.appendChild(modal);

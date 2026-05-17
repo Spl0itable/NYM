@@ -2124,7 +2124,7 @@ Object.assign(NYM.prototype, {
         const originalHandler = this.handleRelayMessage.bind(this);
         const foundPubkeys = new Set();
 
-        this.handleRelayMessage = (msg) => {
+        this.handleRelayMessage = (msg, relayUrl) => {
             if (!Array.isArray(msg)) return;
 
             const [type, ...data] = msg;
@@ -2237,7 +2237,7 @@ Object.assign(NYM.prototype, {
                 });
             }
 
-            originalHandler(msg);
+            originalHandler(msg, relayUrl);
         };
 
         const subscription = [

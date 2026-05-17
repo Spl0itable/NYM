@@ -187,68 +187,45 @@ Object.assign(NYM.prototype, {
             await this._geoRelaysReady;
         }
 
-        // Multiplexed pool mode: add geo relays to the pool config
-        if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            const closestRelays = this.getClosestRelaysForGeohash(geohash, this.geoRelayCount);
-            if (closestRelays.length > 0) {
-                const geoRelayUrls = new Set(closestRelays.map(r => r.url));
-                const prev = this.geoRelayConnections.get(geohash);
-                const changed = !prev || prev.size !== geoRelayUrls.size ||
-                    [...geoRelayUrls].some(u => !prev.has(u));
-                this.geoRelayConnections.set(geohash, geoRelayUrls);
-                for (const r of closestRelays) {
-                    this.currentGeoRelays.add(r.url);
-                }
-                if (changed) {
-                    this._poolSendRelayConfig();
-                    this.channelLoadedFromRelays.delete(geohash);
-                    this.subscribeToChannelTargeted(geohash, 'geohash');
-                }
-            }
-            return;
-        }
-
-        // Check if we already have cached geo relays for this geohash
-        if (this.geoRelayConnections.has(geohash)) {
-            const cachedRelays = this.geoRelayConnections.get(geohash);
-            // Verify connections are still alive
-            let activeCount = 0;
-            for (const url of cachedRelays) {
-                const relay = this.relayPool.get(url);
-                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    activeCount++;
-                }
-            }
-            // If we have at least half of our target connections, don't reconnect
-            if (activeCount >= Math.floor(this.geoRelayCount / 2)) {
-                return;
-            }
-        }
-
-        // Find closest relays for this geohash
         const closestRelays = this.getClosestRelaysForGeohash(geohash, this.geoRelayCount);
         if (closestRelays.length === 0) {
             return;
         }
-
-        // Store which relays are for this geohash
         const geoRelayUrls = new Set(closestRelays.map(r => r.url));
+
+        // Multiplexed pool mode: keep geo relays in the pool config
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            const prev = this.geoRelayConnections.get(geohash);
+            const changed = !prev || prev.size !== geoRelayUrls.size ||
+                [...geoRelayUrls].some(u => !prev.has(u));
+            this.geoRelayConnections.set(geohash, geoRelayUrls);
+            for (const url of geoRelayUrls) this.currentGeoRelays.add(url);
+
+            // Verify the mapped relays are actually connected in the pool
+            const present = new Set(this.poolConnectedRelays || []);
+            const anyMissing = [...geoRelayUrls].some(u => !present.has(u));
+
+            if (changed || anyMissing) {
+                this._poolSendRelayConfig();
+                this._ensureAllShardsConnected();
+                this.channelLoadedFromRelays.delete(geohash);
+                this.subscribeToChannelTargeted(geohash, 'geohash');
+            }
+            return;
+        }
+
+        // Direct connection mode
         this.geoRelayConnections.set(geohash, geoRelayUrls);
 
-        // Connect to each geo relay with staggered timing
         const connectionPromises = [];
         let newlyConnected = 0;
-        for (let i = 0; i < closestRelays.length; i++) {
-            const relayUrl = closestRelays[i].url;
-
-            // Skip if already connected — but ensure it has the channel subscription
-            if (this.relayPool.has(relayUrl)) {
-                const existing = this.relayPool.get(relayUrl);
-                if (existing.ws && existing.ws.readyState === WebSocket.OPEN) {
-                    this.currentGeoRelays.add(relayUrl);
-                    this.subscribeRelayToChannel(existing, relayUrl, geohash);
-                    continue;
-                }
+        for (const { url: relayUrl } of closestRelays) {
+            // Already connected — ensure it has the standing kind-20000 sub
+            const existing = this.relayPool.get(relayUrl);
+            if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
+                this.currentGeoRelays.add(relayUrl);
+                this._ensureGeoRelayLiveSub(existing, relayUrl);
+                continue;
             }
 
             // Skip if blacklisted or recently failed
@@ -260,16 +237,17 @@ Object.assign(NYM.prototype, {
             }
 
             // Connect concurrently — only 5 geo relays, no stagger needed
-            const connectionPromise = this.connectToRelayWithTimeout(relayUrl, 'relay', 3000).then(() => {
-                const relay = this.relayPool.get(relayUrl);
-                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    this.currentGeoRelays.add(relayUrl);
-                    this.subscribeRelayToChannel(relay, relayUrl, geohash);
-                    this.updateConnectionStatus();
-                    newlyConnected++;
-                }
-            });
-            connectionPromises.push(connectionPromise);
+            connectionPromises.push(
+                this.connectToRelayWithTimeout(relayUrl, 'relay', 3000).then(() => {
+                    const relay = this.relayPool.get(relayUrl);
+                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                        this.currentGeoRelays.add(relayUrl);
+                        this._ensureGeoRelayLiveSub(relay, relayUrl);
+                        this.updateConnectionStatus();
+                        newlyConnected++;
+                    }
+                })
+            );
         }
 
         // Wait for all connection attempts to complete
@@ -278,8 +256,6 @@ Object.assign(NYM.prototype, {
         // Update network stats to reflect newly connected geo relays
         this.updateRelayStatus();
 
-        // Only re-subscribe the channel if we actually opened new geo relay
-        // connections — otherwise the existing channel sub is still alive
         if (newlyConnected > 0) {
             this.channelLoadedFromRelays.delete(geohash);
             this.loadChannelFromRelays(geohash, 'geohash');
@@ -289,27 +265,12 @@ Object.assign(NYM.prototype, {
         this.ensureDefaultRelaysConnected();
     },
 
-    // Send a channel-backfill REQ directly to a single relay. The REQ
-    // auto-closes on EOSE so it doesn't accumulate as a persistent sub.
-    subscribeRelayToChannel(relay, relayUrl, channelKeyOverride) {
-        if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
-        const channelKey = channelKeyOverride || this.currentGeohash || this.currentChannel;
-        if (!channelKey) return;
-
-        const since24h = Math.floor(Date.now() / 1000) - 86400;
-        const filters = [
-            { kinds: [20000], '#g': [channelKey], since: since24h, limit: this.channelMessageLimit },
-            { kinds: [30078], '#t': ['nym-poll', 'nym-poll-vote'], '#g': [channelKey], since: since24h, limit: 50 },
-            { kinds: [7], '#k': ['20000'], since: since24h, limit: this.channelMessageLimit },
-            { kinds: [5], since: since24h, limit: 50 }
-        ];
-
-        const subId = Math.random().toString(36).substring(2);
-        this._registerBackfillSub(subId);
-
-        if (!relay.subscriptions) relay.subscriptions = new Set();
-        relay.subscriptions.add(subId);
-        this._safeWsSend(relay.ws, JSON.stringify(this._normalizeReqPayload(['REQ', subId, ...filters])), { critical: true });
+    // Give a geo relay the kind-20000 subscription once
+    _ensureGeoRelayLiveSub(relay, relayUrl) {
+        if (!relay || relay._geoLiveSub) return;
+        relay._geoLiveSub = true;
+        if (relay.subscriptions && relay.subscriptions.size > 0) return;
+        this.subscribeToSingleRelay(relayUrl);
     },
 
     // Force the app relay (wss://relay.nymchat.app) to be connected
@@ -443,7 +404,7 @@ Object.assign(NYM.prototype, {
                             this.connectToRelayWithTimeout(relayUrl, 'relay', 3000).then(() => {
                                 const r = this.relayPool.get(relayUrl);
                                 if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                    this.subscribeRelayToChannel(r, relayUrl);
+                                    this.subscribeToSingleRelay(relayUrl);
                                     this.updateConnectionStatus();
                                 }
                             });
@@ -1318,7 +1279,7 @@ Object.assign(NYM.prototype, {
                             this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
                                 const r = this.relayPool.get(relayUrl);
                                 if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                    this.subscribeRelayToChannel(r, relayUrl);
+                                    this.subscribeToSingleRelay(relayUrl);
                                     this.updateConnectionStatus();
                                 }
                             });
@@ -1373,7 +1334,7 @@ Object.assign(NYM.prototype, {
                                 this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
                                     const r = this.relayPool.get(relayUrl);
                                     if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        this.subscribeRelayToChannel(r, relayUrl);
+                                        this.subscribeToSingleRelay(relayUrl);
                                         this.updateConnectionStatus();
                                     }
                                 });
@@ -2213,8 +2174,6 @@ Object.assign(NYM.prototype, {
                         // Merge connected relays from ALL workers
                         this._mergePoolStatus();
                     } else if (msgType === 'EVENT') {
-                        this.relayStats.totalEvents++;
-                        this.relayStats.eventsThisSecond++;
                         this.handleRelayMessage(msg, 'relay-pool');
                     } else {
                         this.handleRelayMessage(msg, 'relay-pool');
@@ -2823,8 +2782,6 @@ Object.assign(NYM.prototype, {
                         this.relayStats.bytesReceived += dataLen;
                         const msg = JSON.parse(event.data);
                         if (Array.isArray(msg) && msg[0] === 'EVENT') {
-                            this.relayStats.totalEvents++;
-                            this.relayStats.eventsThisSecond++;
                             const prev = this.relayStats.eventsPerRelay.get(relayUrl) || 0;
                             this.relayStats.eventsPerRelay.set(relayUrl, prev + 1);
                         }
@@ -3214,7 +3171,7 @@ Object.assign(NYM.prototype, {
                 this.connectToRelayWithTimeout(relayUrl, 'relay', this.relayTimeout).then(() => {
                     const r = this.relayPool.get(relayUrl);
                     if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                        this.subscribeRelayToChannel(r, relayUrl);
+                        this.subscribeToSingleRelay(relayUrl);
                         this.updateConnectionStatus();
                     }
                 });
@@ -3602,6 +3559,10 @@ Object.assign(NYM.prototype, {
 
                     // Mark event as seen
                     this.eventDeduplication.set(event.id, true);
+
+                    // Count unique events only
+                    this.relayStats.totalEvents++;
+                    this.relayStats.eventsThisSecond++;
 
                     // Clean up old events periodically (keep last 10000)
                     if (this.eventDeduplication.size > 10000) {

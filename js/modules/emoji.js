@@ -105,6 +105,10 @@ Object.assign(NYM.prototype, {
             this.userEmojiPackRefs.has(`30030:${pack.pubkey}:${pack.identifier || ''}`));
     },
 
+    isEmojiPackOwn(pack) {
+        return !!(pack && this.pubkey && pack.pubkey === this.pubkey);
+    },
+
     customEmojiUrl(shortcode) {
         return this.customEmojis ? this.customEmojis.get(shortcode) : null;
     },
@@ -184,10 +188,11 @@ Object.assign(NYM.prototype, {
         const gridClass = opts.gridClass || 'emoji-grid';
         const btnClass = opts.btnClass || 'emoji-option';
 
+        const rank = (p) => this.isEmojiPackOwn(p) ? 0 : (this.isEmojiPackSubscribed(p) ? 1 : 2);
         const packs = Array.from(this.customEmojiPacks.values()).sort((a, b) => {
-            const sa = this.isEmojiPackSubscribed(a) ? 0 : 1;
-            const sb = this.isEmojiPackSubscribed(b) ? 0 : 1;
-            if (sa !== sb) return sa - sb;
+            const ra = rank(a);
+            const rb = rank(b);
+            if (ra !== rb) return ra - rb;
             return (b.created_at || 0) - (a.created_at || 0);
         });
 
@@ -201,7 +206,7 @@ Object.assign(NYM.prototype, {
             if (emojis.length === 0) continue;
             shown++;
             const title = this.escapeHtml(pack.title || 'Emoji pack') +
-                (this.isEmojiPackSubscribed(pack) ? ' ★' : '');
+                ((this.isEmojiPackOwn(pack) || this.isEmojiPackSubscribed(pack)) ? ' ★' : '');
             html += `<div class="${sectionClass}" data-category="custom">` +
                 `<div class="${titleClass}">${title}</div><div class="${gridClass}">` +
                 emojis.map(e => this.emojiOptionHtml(`:${e.shortcode}:`, null, btnClass)).join('') +
