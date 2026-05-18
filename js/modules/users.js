@@ -919,6 +919,13 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        // Handle shop update: drop cached active items and re-fetch so the
+        // user's new flair/style shows up immediately for everyone.
+        const shopUpdateTag = event.tags.find(t => t[0] === 'shop-update');
+        if (shopUpdateTag && typeof this.invalidateShopCache === 'function') {
+            this.invalidateShopCache(pubkey);
+        }
+
         // Track users who have opted to hide their status indicator
         if (!this.statusHiddenUsers) this.statusHiddenUsers = new Set();
         if (status === 'hidden') {

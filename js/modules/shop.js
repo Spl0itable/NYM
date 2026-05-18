@@ -56,6 +56,25 @@ Object.assign(NYM.prototype, {
         } catch (e) { /* ignore */ }
     },
 
+    // Drop the cached active-items record for a user and re-fetch, so a flair
+    // or style change shows up before the 10-minute cache would expire.
+    invalidateShopCache(pubkey) {
+        if (!pubkey || pubkey === this.pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
+        if (this.shopItemsCache) this.shopItemsCache.delete(pubkey);
+        if (this._shopStatusInFlight) this._shopStatusInFlight.delete(pubkey);
+        try {
+            const raw = localStorage.getItem('nym_shop_active_cache');
+            if (raw) {
+                const cache = JSON.parse(raw);
+                if (cache[pubkey]) {
+                    delete cache[pubkey];
+                    localStorage.setItem('nym_shop_active_cache', JSON.stringify(cache));
+                }
+            }
+        } catch (e) { /* ignore */ }
+        this._queueShopStatusFetch(pubkey);
+    },
+
     // Persist the current user's own record so the shop renders instantly
     _cacheShopRecord() {
         try {
@@ -163,6 +182,7 @@ Object.assign(NYM.prototype, {
         if (!this.pubkey) return;
         try {
             await this._shopApiRequest('shop-set-active', { active: this._buildActiveItemsPayload() });
+            this.publishShopUpdate();
         } catch (e) { /* ignore */ }
     },
 
@@ -413,6 +433,16 @@ Object.assign(NYM.prototype, {
         </div>`;
     },
 
+    // Owned-item footer; keeps GIFT available when allowGift so an owned
+    // item can still be purchased as a gift for another user.
+    _shopItemOwnedHtml(item, allowGift) {
+        return `
+        <div class="shop-item-price">
+            <span class="shop-price-amount">Owned</span>
+            ${allowGift ? `<button class="shop-buy-btn shop-gift-btn" data-action="promptGiftShopItem" data-item-id="${item.id}">GIFT</button>` : ''}
+        </div>`;
+    },
+
     renderStylesTab(container) {
         let html = '<div class="shop-category-title">Message Styles</div>';
         html += '<div class="shop-items">';
@@ -447,7 +477,7 @@ Object.assign(NYM.prototype, {
         <div class="shop-item-preview">
             <span>Your_Nick <span class="flair-badge ${item.id}">${item.icon}</span></span>
         </div>
-        ${isPurchased ? '<div class="shop-item-price"><span class="shop-price-amount">Owned</span></div>' : this._shopItemActionsHtml(item, false)}
+        ${isPurchased ? this._shopItemOwnedHtml(item, true) : this._shopItemActionsHtml(item, false)}
     </div>
 `;
         });
@@ -646,13 +676,10 @@ TRANSFER TO PUBKEY
         if (customAmountInput) customAmountInput.style.display = 'none';
 
         const sendBtn = document.getElementById('zapSendBtn');
-        if (sendBtn) {
-            sendBtn.textContent = 'Generate Invoice';
-            sendBtn.style.display = 'block';
-            sendBtn.onclick = () => this.generateShopPaymentInvoice();
-        }
+        if (sendBtn) sendBtn.style.display = 'none';
 
         zapModal.classList.add('active');
+        this.generateShopPaymentInvoice();
     },
 
     async generateShopPaymentInvoice() {

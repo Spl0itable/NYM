@@ -2369,4 +2369,33 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Broadcast that our active shop items changed so other clients drop their
+    // cached record for us and re-fetch, instead of waiting out the cache.
+    async publishShopUpdate() {
+        try {
+            if (!this.connected) return;
+
+            const tags = [
+                ['d', 'nym-presence'],
+                ['t', 'nym-presence'],
+                ['n', this.nym],
+                ['status', 'online'],
+                ['shop-update', '1']
+            ];
+
+            let event = {
+                kind: 30078,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: tags,
+                content: '',
+                pubkey: this.pubkey
+            };
+
+            const signedEvent = await this.signEvent(event);
+            this.sendToRelay(["EVENT", signedEvent]);
+        } catch (error) {
+            // Silently fail - shop update broadcast is best-effort
+        }
+    },
+
 });

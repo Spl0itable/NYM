@@ -223,7 +223,6 @@ window.nymHapticTap = function (ms) {
         'closeZapModal':              function () { nym().closeZapModal(); },
         'copyZapInvoice':             function () { nym().copyZapInvoice(); },
         'openInWallet':               function () { nym().openInWallet(); },
-        'generateZapInvoice':         function () { nym().generateZapInvoice(); },
 
         // Share modal
         'copyShareUrl':               function () { nym().copyShareUrl(); },

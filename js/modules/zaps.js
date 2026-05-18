@@ -245,18 +245,7 @@ Object.assign(NYM.prototype, {
         document.getElementById('zapRecipientInfo').textContent = `Zapping @${recipientNym}`;
         document.getElementById('zapCustomAmount').value = '';
         document.getElementById('zapComment').value = '';
-        document.getElementById('zapSendBtn').textContent = 'Generate Invoice';
-        document.getElementById('zapSendBtn').onclick = () => this.generateZapInvoice();
-
-        // Clear selected amounts
-        document.querySelectorAll('.zap-amount-btn').forEach(btn => {
-            btn.classList.remove('selected');
-            btn.onclick = (e) => {
-                document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
-                e.target.closest('.zap-amount-btn').classList.add('selected');
-                document.getElementById('zapCustomAmount').value = '';
-            };
-        });
+        this._wireZapAutoGenerate(() => this.generateZapInvoice());
 
         // Show modal
         document.getElementById('zapModal').classList.add('active');
@@ -284,18 +273,7 @@ Object.assign(NYM.prototype, {
         document.getElementById('zapRecipientInfo').textContent = `Zapping @${recipientNym}'s profile`;
         document.getElementById('zapCustomAmount').value = '';
         document.getElementById('zapComment').value = '';
-        document.getElementById('zapSendBtn').textContent = 'Generate Invoice';
-        document.getElementById('zapSendBtn').onclick = () => this.generateZapInvoice();
-
-        // Clear selected amounts
-        document.querySelectorAll('.zap-amount-btn').forEach(btn => {
-            btn.classList.remove('selected');
-            btn.onclick = (e) => {
-                document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
-                e.target.closest('.zap-amount-btn').classList.add('selected');
-                document.getElementById('zapCustomAmount').value = '';
-            };
-        });
+        this._wireZapAutoGenerate(() => this.generateZapInvoice());
 
         // Show modal
         document.getElementById('zapModal').classList.add('active');
@@ -331,6 +309,31 @@ Object.assign(NYM.prototype, {
         if (est) est.style.display = 'none';
         const input = document.getElementById('zapCustomAmount');
         if (input) input.oninput = null;
+    },
+
+    // Picking an amount (a preset button or the custom field + Enter) generates the invoice
+    _wireZapAutoGenerate(generate, onAmountSelected) {
+        const sendBtn = document.getElementById('zapSendBtn');
+        if (sendBtn) sendBtn.style.display = 'none';
+        document.querySelectorAll('.zap-amount-btn').forEach(btn => {
+            btn.classList.remove('selected');
+            btn.onclick = (e) => {
+                document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
+                e.target.closest('.zap-amount-btn').classList.add('selected');
+                document.getElementById('zapCustomAmount').value = '';
+                if (onAmountSelected) onAmountSelected();
+                generate();
+            };
+        });
+        const custom = document.getElementById('zapCustomAmount');
+        if (custom) {
+            custom.onkeydown = (e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
+                generate();
+            };
+        }
     },
 
     // Render the 6 credit-purchase options, each showing sats and the messages bought
@@ -403,17 +406,10 @@ Object.assign(NYM.prototype, {
         document.getElementById('zapComment').value = '';
         this._renderBotCreditAmounts();
         this._setupBotCreditEstimate();
-        document.getElementById('zapSendBtn').textContent = 'Generate Invoice';
-        document.getElementById('zapSendBtn').onclick = () => this.generateBotCreditInvoice();
-        document.querySelectorAll('.zap-amount-btn').forEach(btn => {
-            btn.classList.remove('selected');
-            btn.onclick = (e) => {
-                document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
-                e.target.closest('.zap-amount-btn').classList.add('selected');
-                document.getElementById('zapCustomAmount').value = '';
-                this._updateBotCreditEstimate();
-            };
-        });
+        this._wireZapAutoGenerate(
+            () => this.generateBotCreditInvoice(),
+            () => this._updateBotCreditEstimate()
+        );
         document.getElementById('zapModal').classList.add('active');
     },
 
@@ -703,8 +699,10 @@ Object.assign(NYM.prototype, {
         }
 
         // Update button
-        document.getElementById('zapSendBtn').textContent = 'Close';
-        document.getElementById('zapSendBtn').onclick = () => this.closeZapModal();
+        const sendBtn = document.getElementById('zapSendBtn');
+        sendBtn.style.display = '';
+        sendBtn.textContent = 'Close';
+        sendBtn.onclick = () => this.closeZapModal();
     },
 
     // Check if payment was made
@@ -1095,7 +1093,7 @@ Object.assign(NYM.prototype, {
         if (modalActions) {
             modalActions.innerHTML = `
                 <button class="icon-btn" data-action="closeZapModal">Cancel</button>
-                <button class="send-btn" id="zapSendBtn">Generate Invoice</button>
+                <button class="send-btn" id="zapSendBtn" style="display: none;"></button>
             `;
         }
 
