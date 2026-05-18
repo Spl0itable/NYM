@@ -844,6 +844,19 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        // Shop purchase (no LUD-21 verify): match the receipt to the pending
+        // shop invoice by bolt11, then confirm the purchase server-side.
+        if (this._shopReceiptWait && boltTag && boltTag[1] &&
+            String(boltTag[1]).toLowerCase() === String(this._shopReceiptWait.pr).toLowerCase()) {
+            const wait = this._shopReceiptWait;
+            this._shopReceiptWait = null;
+            if (wait.timer) clearTimeout(wait.timer);
+            if (wait.subId) this.sendToRelay(["CLOSE", wait.subId]);
+            if (this.currentShopInvoice) this.currentShopInvoice.receipt = event;
+            this.handleShopPaymentSuccess();
+            return;
+        }
+
         if (!eTag || !boltTag) return;
 
         const messageId = eTag[1];

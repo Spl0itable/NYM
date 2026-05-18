@@ -3084,7 +3084,7 @@ function shopGenerateCode() {
   return "NYM-" + bytesToHex(randomBytes(16)).toUpperCase();
 }
 // Generate a BOLT11 invoice from the bot's Lightning address (LUD-21).
-async function botGenerateInvoice(env, sats) {
+async function botGenerateInvoice(env, sats, zapRequest) {
   var lnAddr = (env.BOT_LIGHTNING_ADDRESS || BOT_LIGHTNING_ADDRESS).split("@");
   if (lnAddr.length !== 2) return { error: "Bot Lightning address misconfigured.", status: 500 };
   var lnurlData;
@@ -3103,6 +3103,9 @@ async function botGenerateInvoice(env, sats) {
   try {
     cbUrl = new URL(lnurlData.callback);
     cbUrl.searchParams.set("amount", String(milli));
+    if (zapRequest && lnurlData.allowsNostr && lnurlData.nostrPubkey) {
+      cbUrl.searchParams.set("nostr", JSON.stringify(zapRequest));
+    }
   } catch (e) {
     return { error: "Bot Lightning wallet callback is invalid.", status: 502 };
   }
@@ -3114,10 +3117,20 @@ async function botGenerateInvoice(env, sats) {
     return { error: "Could not generate a Lightning invoice.", status: 502 };
   }
   if (!invData || !invData.pr) return { error: (invData && invData.reason) || "Bot wallet did not return an invoice.", status: 502 };
-  if (!invData.verify || !/^https:\/\//i.test(invData.verify)) {
-    return { error: "Bot Lightning wallet does not support LUD-21 payment verification.", status: 502 };
+  // Prefer LUD-21 server-side verification; fall back to the NIP-57 zap
+  // receipt (kind 9735) signed by the wallet's Nostr identity.
+  var hasVerify = invData.verify && /^https:\/\//i.test(invData.verify);
+  var canNip57 = zapRequest && lnurlData.allowsNostr &&
+    typeof lnurlData.nostrPubkey === "string" && /^[0-9a-f]{64}$/i.test(lnurlData.nostrPubkey);
+  if (!hasVerify && !canNip57) {
+    return { error: "Bot Lightning wallet supports neither LUD-21 verification nor NIP-57 zap receipts.", status: 502 };
   }
-  return { pr: invData.pr, verifyUrl: invData.verify };
+  return {
+    pr: invData.pr,
+    verifyMethod: hasVerify ? "lud21" : "nip57",
+    verifyUrl: hasVerify ? invData.verify : null,
+    providerPubkey: hasVerify ? null : lnurlData.nostrPubkey.toLowerCase()
+  };
 }
 
 async function handleShopAction(context, body, botPrivkey, botPubkey) {
@@ -3133,15 +3146,17 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   // Public: look up other users' active items so clients can show their
   // flair/style without a Nostr REQ. No auth — read-only and non-sensitive.
   if (body.action === "shop-status") {
-    var pks = Array.isArray(body.pubkeys) ? body.pubkeys.slice(0, 100) : [];
-    var statuses = {};
-    for (var i = 0; i < pks.length; i++) {
-      var pk = pks[i];
-      if (typeof pk !== "string" || !/^[0-9a-f]{64}$/i.test(pk)) continue;
-      pk = pk.toLowerCase();
-      var srec = await shopGetRecord(env, pk);
-      statuses[pk] = { active: srec.active, updatedAt: srec.updatedAt };
+    var rawPks = Array.isArray(body.pubkeys) ? body.pubkeys.slice(0, 100) : [];
+    var pks = [];
+    for (var i = 0; i < rawPks.length; i++) {
+      var pk = rawPks[i];
+      if (typeof pk === "string" && /^[0-9a-f]{64}$/i.test(pk)) pks.push(pk.toLowerCase());
     }
+    var recs = await Promise.all(pks.map(function (pk) { return shopGetRecord(env, pk); }));
+    var statuses = {};
+    pks.forEach(function (pk, idx) {
+      statuses[pk] = { active: recs[idx].active, updatedAt: recs[idx].updatedAt };
+    });
     return json({ statuses: statuses });
   }
 
@@ -3187,7 +3202,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (body.recipientPubkey && /^[0-9a-f]{64}$/i.test(body.recipientPubkey)) {
       giftTo = body.recipientPubkey.toLowerCase();
     }
-    var inv = await botGenerateInvoice(env, cat.price);
+    var inv = await botGenerateInvoice(env, cat.price, body.zapRequest);
     if (inv.error) return json({ error: inv.error }, inv.status || 502);
     var invoiceId = bytesToHex(sha256(utf8ToBytes(inv.pr)));
     await env.R2_BUCKET.put("shop-pending/" + invoiceId, JSON.stringify({
@@ -3196,10 +3211,17 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       itemId: itemId,
       amountSats: cat.price,
       pr: inv.pr,
+      verifyMethod: inv.verifyMethod,
       verifyUrl: inv.verifyUrl,
+      providerPubkey: inv.providerPubkey,
       createdAt: Date.now()
     }));
-    return json({ pr: inv.pr, verify: inv.verifyUrl, invoiceId: invoiceId });
+    return json({
+      pr: inv.pr,
+      verify: inv.verifyMethod === "lud21" ? inv.verifyUrl : null,
+      needsReceipt: inv.verifyMethod === "nip57",
+      invoiceId: invoiceId
+    });
   }
 
   if (body.action === "shop-claim") {
@@ -3223,15 +3245,20 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       return json({ error: "Corrupt invoice record." }, 500);
     }
     if (pending.pubkey !== userPubkey) return json({ error: "This invoice belongs to a different user." }, 403);
-    var settled = false;
-    try {
-      var vr = await fetch(pending.verifyUrl, { headers: { "Accept": "application/json" } });
-      var vd = await vr.json();
-      settled = !!(vd && (vd.settled || vd.paid));
-    } catch (e) {
-      return json({ error: "Could not verify the payment." }, 502);
+    if (pending.verifyMethod === "nip57") {
+      var rcptError = validateZapReceipt(body.receipt, pending);
+      if (rcptError) return json({ error: rcptError }, 400);
+    } else {
+      var settled = false;
+      try {
+        var vr = await fetch(pending.verifyUrl, { headers: { "Accept": "application/json" } });
+        var vd = await vr.json();
+        settled = !!(vd && (vd.settled || vd.paid));
+      } catch (e) {
+        return json({ error: "Could not verify the payment." }, 502);
+      }
+      if (!settled) return json({ error: "Payment not confirmed yet." }, 402);
     }
-    if (!settled) return json({ error: "Payment not confirmed yet." }, 402);
     if (!SHOP_CATALOG[pending.itemId]) return json({ error: "Unknown shop item." }, 400);
     var recipient = userPubkey;
     var isGift = false;
@@ -3332,7 +3359,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.66.363";
+var NYMCHAT_VERSION = "3.66.364";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3967,7 +3994,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.363 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.364 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -4738,7 +4765,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.66.363")
+  // Prefix match (e.g. "3.61" matches "3.66.364")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -4793,7 +4820,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.66.363", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.66.364", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

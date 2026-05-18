@@ -676,20 +676,28 @@ TRANSFER TO PUBKEY
             if (ctx.recipientPubkey && ctx.recipientPubkey !== this.pubkey) {
                 extra.recipientPubkey = ctx.recipientPubkey;
             }
+            const zapRequest = await this._buildShopZapRequest(ctx.amount);
+            if (zapRequest) extra.zapRequest = zapRequest;
             const data = await this._shopApiRequest('shop-buy-invoice', extra);
-            if (!data.pr || !data.verify) throw new Error('Invoice unavailable');
+            if (!data.pr) throw new Error('Invoice unavailable');
 
             this.currentShopInvoice = {
                 pr: data.pr,
-                verify: data.verify,
+                verify: data.verify || null,
                 invoiceId: data.invoiceId,
                 itemId: ctx.itemId,
                 item: ctx.item,
-                isGift: !!extra.recipientPubkey
+                isGift: !!extra.recipientPubkey,
+                receipt: null
             };
             this.currentZapInvoice = { pr: data.pr };
             this.displayZapInvoice({ pr: data.pr });
-            this.checkShopPayment(data.verify);
+            // LUD-21: poll the verify URL. Otherwise wait for the NIP-57 receipt.
+            if (data.verify) {
+                this.checkShopPayment(data.verify);
+            } else {
+                this._listenForShopReceipt();
+            }
         } catch (error) {
             document.getElementById('zapStatus').className = 'zap-status error';
             document.getElementById('zapStatus').textContent = `Failed: ${error.message}`;
@@ -732,11 +740,71 @@ TRANSFER TO PUBKEY
         }, 1000);
     },
 
+    async _buildShopZapRequest(amountSats) {
+        try {
+            const evt = {
+                kind: 9734,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [
+                    ['p', this.verifiedBot.pubkey],
+                    ['amount', String(parseInt(amountSats, 10) * 1000)],
+                    ['relays', ...this.defaultRelays.slice(0, 5)]
+                ],
+                content: '',
+                pubkey: this.pubkey
+            };
+            return await this.signEvent(evt);
+        } catch (e) {
+            return null;
+        }
+    },
+
+    // Fallback payment detection when the bot wallet has no LUD-21 verify URL:
+    // wait for the NIP-57 zap receipt and match it by bolt11 (handleZapReceipt).
+    _listenForShopReceipt() {
+        const inv = this.currentShopInvoice;
+        if (!inv) return;
+        if (this._shopReceiptWait && this._shopReceiptWait.subId) {
+            this.sendToRelay(['CLOSE', this._shopReceiptWait.subId]);
+            if (this._shopReceiptWait.timer) clearTimeout(this._shopReceiptWait.timer);
+        }
+        const subId = 'shopreceipt-' + Math.random().toString(36).slice(2, 9);
+        const wait = { subId, pr: inv.pr, timer: null };
+        this._shopReceiptWait = wait;
+        this.sendToRelay(['REQ', subId, {
+            kinds: [9735],
+            '#p': [this.verifiedBot.pubkey],
+            since: Math.floor(Date.now() / 1000) - 60,
+            limit: 25
+        }]);
+        wait.timer = setTimeout(() => {
+            if (this._shopReceiptWait === wait) {
+                this.sendToRelay(['CLOSE', subId]);
+                this._shopReceiptWait = null;
+                const el = document.getElementById('zapStatus');
+                if (el) {
+                    el.style.display = 'block';
+                    el.className = 'zap-status';
+                    el.innerHTML = 'Payment not detected yet — if you paid, reopen the shop shortly.';
+                }
+            }
+        }, 180000);
+    },
+
+    _clearShopReceiptWait() {
+        if (this._shopReceiptWait) {
+            if (this._shopReceiptWait.subId) this.sendToRelay(['CLOSE', this._shopReceiptWait.subId]);
+            if (this._shopReceiptWait.timer) clearTimeout(this._shopReceiptWait.timer);
+            this._shopReceiptWait = null;
+        }
+    },
+
     async handleShopPaymentSuccess() {
         const inv = this.currentShopInvoice;
         if (!inv) return;
         this.currentShopInvoice = null;
         this.currentPurchaseContext = null;
+        this._clearShopReceiptWait();
         if (this.shopPaymentCheckInterval) {
             clearInterval(this.shopPaymentCheckInterval);
             this.shopPaymentCheckInterval = null;
@@ -754,6 +822,7 @@ TRANSFER TO PUBKEY
 
         try {
             const extra = { invoiceId: inv.invoiceId };
+            if (inv.receipt) extra.receipt = inv.receipt;
             if (this.nym) extra.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
             let data = null;
             for (let attempt = 0; attempt < 6; attempt++) {
