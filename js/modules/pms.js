@@ -1256,6 +1256,45 @@ Object.assign(NYM.prototype, {
             }));
     },
 
+    // Welcome message shown when a user first opens the premium Nymbot chat
+    _botWelcomeHtml() {
+        return [
+            '<strong>Welcome to Nymbot Premium</strong> — your private, end-to-end encrypted 1:1 AI chat.',
+            '',
+            'This premium chat is smarter than the free public-channel bot. It reads each message, figures out the type of task (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best AI model for that job — so answers are sharper.',
+            '',
+            '<strong>Tips &amp; commands:</strong>',
+            '• Just type normally — your whole conversation is used as context.',
+            '• Start a message with <code>!</code> to get a one-off answer that ignores all earlier chat history (e.g. <code>!what is 2+2</code>).',
+            '• Quote-reply any message to ask a follow-up about it — Nymbot sees what you\'re replying to.',
+            '• <code>?clear</code> — wipe this chat and start fresh.',
+            '• <code>?balance</code> — check your credit balance (also shown in the header).',
+            '• <code>?buy</code> — purchase more credits. <code>?gift @nym#xxxx</code> — gift credits to someone.',
+            '',
+            'It\'s a paid feature — each reply costs 1 credit. Credits are tied to your nym, so save your nsec to keep them.'
+        ].join('<br>');
+    },
+
+    // Wipe the Nymbot conversation and start fresh (premium ?clear command)
+    _clearBotPMHistory() {
+        const pubkey = this.verifiedBot && this.verifiedBot.pubkey;
+        if (!pubkey) return;
+        const conversationKey = this.getPMConversationKey(pubkey);
+        this.pmMessages.set(conversationKey, []);
+        this.channelDOMCache.delete(conversationKey);
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
+        this.persistPMMessages(conversationKey);
+        if (this.inPMMode && this.currentPM === pubkey) {
+            const container = document.getElementById('messagesContainer');
+            if (container) {
+                container.innerHTML = '';
+                container.dataset.lastChannel = '';
+            }
+            this.loadPMMessages(conversationKey, true);
+        }
+        this.displaySystemMessage('Nymbot chat cleared — starting fresh. Earlier messages are no longer used as context.');
+    },
+
     // Show/clear a synthetic "Nymbot is typing" indicator in the bot PM
     _setBotTyping(on) {
         const convKey = this.getPMConversationKey(this.verifiedBot.pubkey);
@@ -1323,6 +1362,11 @@ Object.assign(NYM.prototype, {
         if (/^\?buy\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
             this.showBotCreditsModal();
+            return;
+        }
+        if (/^\?clear\b/i.test(trimmed)) {
+            this._markBotPMReceipts('read');
+            this._clearBotPMHistory();
             return;
         }
         if (/^\?gift\b/i.test(trimmed)) {
@@ -1803,7 +1847,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    loadPMMessages(conversationKey) {
+    loadPMMessages(conversationKey, skipBotWelcome = false) {
         const container = document.getElementById('messagesContainer');
 
         // Skip reload if already viewing this PM conversation,
@@ -1839,7 +1883,9 @@ Object.assign(NYM.prototype, {
             container.innerHTML = '';
             this.displaySystemMessage('Start of private message');
             if (this.isVerifiedBot(this.currentPM)) {
-                this.displaySystemMessage("This is a private, end-to-end encrypted chat with Nymbot. It's a paid feature — each reply costs 1 credit. Your balance shows in the header; type ?buy to purchase more, ?balance to recheck, or ?gift @nym to gift credits. Credits are tied to your nym, so save your nsec to keep them.");
+                if (!skipBotWelcome) {
+                    this.displaySystemMessage(this._botWelcomeHtml(), 'system', { html: true });
+                }
                 this._checkBotCredits(false);
             }
             return;

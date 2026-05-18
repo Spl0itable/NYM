@@ -1023,9 +1023,7 @@ class NYM {
         this.profileFetchBatchDelay = 100;
         this.pendingProfileResolvers = new Map();
         this.localActiveStyle = null;
-        this.localActiveFlair = null;
         this.shopItemsLoaded = false;
-        this.shopPurchasesTimestamp = 0;
         this.zaps = new Map();
         this._zapReceiptEventIds = new Set();
         this._zapResubscribeTimer = null;
@@ -1455,27 +1453,13 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
         this.userPurchases = new Map();
         this.activeShopTab = 'styles';
         this.activeMessageStyle = null;
-        this.activeFlair = null;
+        this.activeFlairs = new Set();
         this.otherUsersShopItems = new Map();
         this.shopItemsCache = new Map();
         this.activeCosmetics = new Set();
-        this.supporterBadgeActive = localStorage.getItem('nym_supporter_active') !== 'false';
+        this.supporterBadgeActive = true;
         this.loadShopActiveCache();
-        this._restorePurchasesFromCache();
-        setTimeout(() => {
-            const cachedStyle = localStorage.getItem('nym_active_style');
-            const cachedFlair = localStorage.getItem('nym_active_flair');
-
-            if (cachedStyle && cachedStyle !== '' && !this.activeMessageStyle) {
-                this.activeMessageStyle = cachedStyle;
-                this.localActiveStyle = cachedStyle;
-            }
-
-            if (cachedFlair && cachedFlair !== '' && !this.activeFlair) {
-                this.activeFlair = cachedFlair;
-                this.localActiveFlair = cachedFlair;
-            }
-        }, 0);
+        this._restoreShopRecordFromCache();
     }
 
 }
@@ -3376,7 +3360,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.65.363';
+const NYMCHAT_VERSION = 'v3.66.363';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -4581,9 +4565,9 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // events for this identity flow through the main event handler
     nym.resubscribeAllRelays();
 
-    // Load settings and purchases from relays for this identity
+    // Load settings from relays and shop purchases from R2 for this identity
     nostrSettingsLoad();
-    nostrPurchasesLoad();
+    nym.loadShopFromServer();
 }
 
 function nostrLogout() {
@@ -4638,225 +4622,6 @@ async function nostrSettingsSave() {
     } catch (err) {
         console.warn('[NostrSync] Failed to save settings to relays:', err.message);
     }
-}
-
-// Load shop purchases from Nostr relays on login
-function nostrPurchasesLoad() {
-    if (!isNostrLoggedIn()) return;
-    const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
-    if (!pubkey) return;
-
-    // Collect any pre-existing localStorage purchases (from ephemeral sessions)
-    // so we can merge them after loading from relays
-    let localPurchases = null;
-    try {
-        const raw = localStorage.getItem('nym_purchases_cache');
-        if (raw) {
-            const cache = JSON.parse(raw);
-            if (cache && cache.purchases && cache.purchases.length > 0) {
-                localPurchases = cache;
-            }
-        }
-    } catch (_) { }
-
-    const subId = Math.random().toString(36).substring(2);
-    const filter = {
-        kinds: [30078],
-        authors: [pubkey],
-        '#d': ['nym-shop-purchases'],
-        limit: 1
-    };
-
-    let received = false;
-
-    // Pool mode: send REQ through the multiplexed pool workers
-    if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
-        const handler = (evt) => {
-            try {
-                const msg = JSON.parse(evt.data);
-                if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
-                    if (received) return;
-                    received = true;
-                    try {
-                        const data = JSON.parse(msg[2].content);
-                        applyNostrPurchases(data, localPurchases, msg[2].created_at);
-                    } catch (_) { }
-                }
-                if (msg[0] === 'EOSE' && msg[1] === subId) {
-                    nym._poolRemoveMessageListener(handler);
-                    try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
-
-                    if (!received && localPurchases) {
-                        received = true;
-                        applyLocalPurchasesToNostr(localPurchases);
-                    }
-                }
-            } catch (_) { }
-        };
-        nym._poolAddMessageListener(handler);
-        nym._poolSend(['REQ', subId, filter]);
-
-        // Cleanup after 10s
-        setTimeout(() => {
-            nym._poolRemoveMessageListener(handler);
-            try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
-        }, 10000);
-        return;
-    }
-
-    // Direct relay mode: send REQ to each relay individually
-    nym.relayPool.forEach((relay, url) => {
-        if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
-
-        const handler = (evt) => {
-            try {
-                const msg = JSON.parse(evt.data);
-                if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
-                    if (received) return;
-                    received = true;
-                    try {
-                        const data = JSON.parse(msg[2].content);
-                        applyNostrPurchases(data, localPurchases, msg[2].created_at);
-                    } catch (_) { }
-                }
-                if (msg[0] === 'EOSE' && msg[1] === subId) {
-                    relay.ws.removeEventListener('message', handler);
-                    try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) { }
-
-                    // If no relay had purchases but we have local ones, push them up
-                    if (!received && localPurchases) {
-                        received = true;
-                        applyLocalPurchasesToNostr(localPurchases);
-                    }
-                }
-            } catch (_) { }
-        };
-        relay.ws.addEventListener('message', handler);
-        relay.ws.send(JSON.stringify(['REQ', subId, filter]));
-
-        // Cleanup after 10s
-        setTimeout(() => {
-            relay.ws.removeEventListener('message', handler);
-            try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) { }
-        }, 10000);
-    });
-}
-
-function applyNostrPurchases(data, localPurchases, eventCreatedAt) {
-    if (!data || typeof data !== 'object') return;
-
-    // Use created_at to only apply if this is newer than our current state
-    const lastPurchaseSync = nym._lastPurchaseSyncTimestamp || 0;
-    if (eventCreatedAt && eventCreatedAt <= lastPurchaseSync) return;
-    if (eventCreatedAt) nym._lastPurchaseSyncTimestamp = eventCreatedAt;
-
-    const relayPurchaseIds = new Set();
-
-    // Apply purchases from relay
-    if (data.purchases && Array.isArray(data.purchases)) {
-        data.purchases.forEach(p => {
-            nym.userPurchases.set(p.id, p);
-            relayPurchaseIds.add(p.id);
-        });
-    }
-
-    // Merge local purchases that aren't already in relay data
-    let hasNewLocal = false;
-    if (localPurchases && localPurchases.purchases) {
-        localPurchases.purchases.forEach(([id, purchase]) => {
-            if (!relayPurchaseIds.has(id)) {
-                nym.userPurchases.set(id, purchase);
-                hasNewLocal = true;
-            }
-        });
-    }
-
-    // Apply active style/flair from relay (relay takes priority)
-    if (data.activeStyle) {
-        nym.activeMessageStyle = data.activeStyle;
-        nym.localActiveStyle = data.activeStyle;
-        localStorage.setItem('nym_active_style', data.activeStyle);
-    }
-
-    if (data.activeFlair) {
-        nym.activeFlair = data.activeFlair;
-        nym.localActiveFlair = data.activeFlair;
-        localStorage.setItem('nym_active_flair', data.activeFlair);
-    }
-
-    if (data.activeCosmetics !== undefined) {
-        nym.activeCosmetics = new Set(Array.isArray(data.activeCosmetics) ? data.activeCosmetics : []);
-    }
-
-    if (data.supporterActive !== undefined) {
-        nym.supporterBadgeActive = data.supporterActive;
-        localStorage.setItem('nym_supporter_active', data.supporterActive ? 'true' : 'false');
-    }
-
-    // Restore recovery codes from relay data
-    if (data.recoveryCodes && typeof data.recoveryCodes === 'object') {
-        Object.entries(data.recoveryCodes).forEach(([code, payload]) => {
-            const key = 'nym_shop_recovery_' + code;
-            if (!localStorage.getItem(key)) {
-                try {
-                    localStorage.setItem(key, JSON.stringify(payload));
-                } catch (_) { }
-            }
-        });
-    }
-
-    // Cache locally
-    nym._cachePurchases();
-
-    // If we merged new local purchases, push the combined set back to relays
-    if (hasNewLocal) {
-        nym.savePurchaseToNostr();
-    }
-
-    // Apply to messages and broadcast
-    nym.publishActiveShopItems();
-    nym.applyShopStylesToOwnMessages();
-
-    // Refresh the shop UI if it's currently open
-    if (document.getElementById('shopModal').classList.contains('active') && nym.activeShopTab) {
-        nym.switchShopTab(nym.activeShopTab);
-    }
-
-    if (nym.userPurchases.size > 0) {
-        nym.displaySystemMessage('Shop purchases synced from Nostr relays.');
-    }
-}
-
-// Push local ephemeral purchases to Nostr relays when no relay data exists
-function applyLocalPurchasesToNostr(localCache) {
-    if (!localCache || !localCache.purchases || localCache.purchases.length === 0) return;
-
-    // Restore from local cache
-    localCache.purchases.forEach(([id, purchase]) => {
-        nym.userPurchases.set(id, purchase);
-    });
-
-    if (localCache.activeStyle) {
-        nym.activeMessageStyle = localCache.activeStyle;
-        nym.localActiveStyle = localCache.activeStyle;
-        localStorage.setItem('nym_active_style', localCache.activeStyle);
-    }
-
-    if (localCache.activeFlair) {
-        nym.activeFlair = localCache.activeFlair;
-        nym.localActiveFlair = localCache.activeFlair;
-        localStorage.setItem('nym_active_flair', localCache.activeFlair);
-    }
-
-    if (localCache.activeCosmetics) {
-        nym.activeCosmetics = new Set(localCache.activeCosmetics);
-    }
-
-    // Cache and push to relays under the Nostr login pubkey
-    nym._cachePurchases();
-    nym.savePurchaseToNostr();
-    nym.publishActiveShopItems();
-    nym.applyShopStylesToOwnMessages();
 }
 
 function nostrSettingsLoad() {

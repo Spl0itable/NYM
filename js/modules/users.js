@@ -1305,7 +1305,8 @@ Object.assign(NYM.prototype, {
 
     _userFlairKey(pubkey) {
         const items = this.getUserShopItems && this.getUserShopItems(pubkey);
-        return items && items.flair ? items.flair : '';
+        if (!items || !items.flair) return '';
+        return Array.isArray(items.flair) ? items.flair.join(',') : items.flair;
     },
 
     _evictStaleUsers() {

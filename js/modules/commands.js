@@ -155,7 +155,7 @@ Object.assign(NYM.prototype, {
                         activeUsers.push({
                             nym: user.nym + '#' + pubkey.slice(-4),
                             pubkey: pubkey,
-                            flair: shopItems?.flair ? shopItems.flair.replace('flair-', '') : null,
+                            flair: (shopItems?.flair && shopItems.flair.length) ? shopItems.flair.map(f => f.replace('flair-', '')).join(',') : null,
                             style: shopItems?.style ? shopItems.style.replace('style-', '') : null
                         });
                     }

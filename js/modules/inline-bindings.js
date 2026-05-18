@@ -332,6 +332,8 @@ window.nymHapticTap = function (ms) {
         'activateSupporter':          function () { nym().activateSupporter(); },
         'promptTransferShopItem':     function (_e, t) { nym().promptTransferShopItem(t.dataset.itemId); },
         'executeTransferShopItem':    function (_e, t) { nym().executeTransferShopItem(t.dataset.itemId); },
+        'promptGiftShopItem':         function (_e, t) { nym().promptGiftShopItem(t.dataset.itemId); },
+        'executeGiftShopItem':        function (_e, t) { nym().executeGiftShopItem(t.dataset.itemId); },
         'copyTextFromData':           function (_e, t) {
             try {
                 navigator.clipboard.writeText(t.dataset.copyText || '').then(function () {

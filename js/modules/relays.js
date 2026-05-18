@@ -2441,7 +2441,6 @@ Object.assign(NYM.prototype, {
 
         filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
         filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
-        filters.push({ kinds: [30078], "#d": ["nym-shop-active"], limit: 100 });
 
         // NIP-30 custom emoji packs from across Nostr
         filters.push({ kinds: [30030], limit: 300 });
@@ -2455,8 +2454,6 @@ Object.assign(NYM.prototype, {
             filters.push(
                 { kinds: [1059], "#p": [this.pubkey], limit: 500 },
                 { kinds: [7], "#p": [this.pubkey], "#k": ["20000"], limit: 100 },
-                { kinds: [30078], authors: [this.pubkey], "#d": ["nym-shop-purchases", "nym-shop-active"], limit: 100 },
-                { kinds: [30078], "#p": [this.pubkey], "#t": ["nym-shop-transfer"], limit: 50 },
                 { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
                 { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 },
                 { kinds: [10030], authors: [this.pubkey], limit: 1 }

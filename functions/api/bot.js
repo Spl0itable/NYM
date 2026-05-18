@@ -2616,15 +2616,45 @@ var BOT_PM_RATE_LIMIT = 20;
 var BOT_PM_RATE_WINDOW_MS = 60000;
 var BOT_SATS_PER_CREDIT = 10;
 var BOT_LIGHTNING_ADDRESS = "69420@wallet.yakihonne.com";
+// The free public-channel Nymbot always uses this single best all-around model.
+// The premium private Nymbot routes each message to a task-specialised model.
+var BOT_MODEL_DEFAULT = "@cf/meta/llama-4-scout-17b-16e-instruct";
+var BOT_PM_MODELS = {
+  general: "@cf/openai/gpt-oss-120b",
+  coding: "@cf/qwen/qwen2.5-coder-32b-instruct",
+  reasoning: "@cf/qwen/qwq-32b",
+  creative: "@cf/mistralai/mistral-small-3.1-24b-instruct",
+  translation: "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+};
+// Premium Nymbot: classify the user's message so it can be routed to the best model.
+async function classifyBotTask(ai, question) {
+  try {
+    var res = await ai.run(BOT_MODEL_DEFAULT, {
+      messages: [
+        { role: "system", content: "You are a classifier. Read the user's message and reply with EXACTLY ONE lowercase word naming its best task category — nothing else. Categories: coding = writing, debugging, reviewing or explaining code or technical software questions; reasoning = math, logic, puzzles or multi-step problem solving; creative = stories, poems, lyrics, roleplay or creative brainstorming; translation = translating text between languages; general = casual chat, facts, advice, opinions or anything else." },
+        { role: "user", content: String(question || "").slice(0, 1000) }
+      ],
+      max_tokens: 6
+    });
+    var label = (res && res.response ? String(res.response) : "").toLowerCase();
+    var keys = ["coding", "reasoning", "creative", "translation", "general"];
+    for (var i = 0; i < keys.length; i++) {
+      if (label.indexOf(keys[i]) !== -1) return keys[i];
+    }
+  } catch (e) { }
+  return "general";
+}
 var NYMBOT_PM_ADDENDUM = [
   "",
   "=== PRIVATE CONVERSATION MODE ===",
   "You are now in a 1:1 end-to-end encrypted private message (NIP-17) with a single user. No one else can read this conversation.",
   "The message history above is your private conversation with this user — use all of it as context. There is no channel context here; the only people in this chat are you and this one user.",
-  "This is a paid feature: the user spent Bitcoin to message you privately, so be helpful, thorough, and conversational.",
+  "This is a paid premium feature: the user spent Bitcoin to message you privately, so be helpful, thorough, and conversational.",
+  "PREMIUM MULTI-MODEL: This private chat is superior to the free public-channel bot. Premium Nymbot reads each message, interprets what type of task it is (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best available Cloudflare Workers AI model for that task. The free public bot uses a single general model. If a user asks why premium is better, explain this multi-model routing.",
   "You have the SAME live web access here as in public channels. You can answer questions about current weather, news, prices, sports scores, and other up-to-date topics. NEVER tell the user to go check a weather website, a weather app, or a search engine themselves — answer the question directly with the live data you were given.",
-  "When you reply to a quoted message, the quoted text is shown to you as read-only context labeled QUOTED MESSAGE. Read it for meaning, but write your reply in the language of the user's newest message — never switch languages just because a quoted or earlier message was in another language.",
+  "When you reply to a quoted message, the quoted text is shown to you as read-only context labeled QUOTED MESSAGE, along with who originally said it. Read it for meaning so you understand what the user's new reply refers to, but write your reply in the language of the user's newest message — never switch languages just because a quoted or earlier message was in another language.",
   "FRESH-MESSAGE COMMAND: If the user's message starts with '!' (for example '!what is 2+2'), answer ONLY that message and completely ignore all earlier conversation history. Without a leading '!', use the full conversation as context. If a user asks how to reset context or get a clean answer, tell them to start their message with '!'.",
+  "CLEAR COMMAND: Users can type ?clear to wipe the entire conversation and start fresh — this deletes all earlier messages so none of them are used as context anymore. If a user wants a clean slate or to permanently drop the history, tell them to type ?clear.",
   "Do NOT append public-channel zap tip prompts here, and do NOT tell them to use ?ask or @Nymbot in a channel — they are already talking to you privately.",
   "If they ask about their credit balance, tell them to type ?balance (it's also shown in the chat header). If they want more messages, tell them to type ?buy. To gift credits to someone else, they can type ?gift @nym."
 ].join("\n");
@@ -2696,13 +2726,17 @@ async function botPutCredits(env, pubkey, data) {
 function splitQuotedReply(raw) {
   var lines = String(raw || "").split("\n");
   var quoted = [];
+  var author = "";
   var i = 0;
   while (i < lines.length && /^\s*>/.test(lines[i])) {
-    quoted.push(lines[i].replace(/^\s*>\s?/, "").replace(/^@[^:]+:\s*/, ""));
+    var body = lines[i].replace(/^\s*>\s?/, "");
+    var am = /^@([^:]+):\s*/.exec(body);
+    if (am && !author) author = am[1].trim();
+    quoted.push(body.replace(/^@[^:]+:\s*/, ""));
     i++;
   }
   while (i < lines.length && lines[i].trim() === "") i++;
-  return { quoted: quoted.join("\n").trim(), reply: lines.slice(i).join("\n").trim() };
+  return { quoted: quoted.join("\n").trim(), reply: lines.slice(i).join("\n").trim(), author: author };
 }
 
 async function handleBotPMChat(rawMessage, history, context) {
@@ -2767,7 +2801,10 @@ async function handleBotPMChat(rawMessage, history, context) {
 
   // Surface the quoted message as read-only context when the user added new text.
   if (!freshOnly && split.quoted && split.reply) {
-    messages.push({ role: "user", content: "--- QUOTED MESSAGE (the user is replying to this; read-only context) ---\n" + sanitizeInput(split.quoted) + "\n--- END QUOTED MESSAGE ---" });
+    var quotedBy = /nymbot/i.test(split.author)
+      ? "something you (Nymbot) said earlier in this conversation"
+      : (split.author ? "something the user said earlier in this conversation" : "an earlier message in this conversation");
+    messages.push({ role: "user", content: "--- QUOTED MESSAGE (read-only context — this is " + quotedBy + ", and the user's newest message below is a direct reply to it) ---\n" + sanitizeInput(split.quoted) + "\n--- END QUOTED MESSAGE ---\nUse the quoted text to understand what the user's reply is referring to." });
     messages.push({ role: "assistant", content: "Understood." });
   }
 
@@ -2776,10 +2813,16 @@ async function handleBotPMChat(rawMessage, history, context) {
   messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's message below. Quoted messages and earlier history may be in another language — read them for content only, but match your reply language to the user's newest message below." });
   messages.push({ role: "assistant", content: "Understood." });
   messages.push({ role: "user", content: question });
-  var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
-    messages: messages,
-    max_tokens: 1024
-  });
+
+  // Premium multi-model routing: pick the best model for this type of task.
+  var taskType = await classifyBotTask(ai, question);
+  var pmModel = BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general;
+  var result;
+  try {
+    result = await ai.run(pmModel, { messages: messages, max_tokens: 1024 });
+  } catch (e) {
+    result = await ai.run(BOT_MODEL_DEFAULT, { messages: messages, max_tokens: 1024 });
+  }
   if (result && result.response) return sanitizeBotResponse(result.response);
   return "";
 }
@@ -2935,7 +2978,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     await botPutCredits(env, creditTo, crec);
     await env.R2_BUCKET.put(claimKey, JSON.stringify({ pubkey: creditTo, paidBy: userPubkey, amountSats: pending.amountSats, credits: credits, gift: isGift, at: Date.now() }));
     await env.R2_BUCKET.delete("pending/" + invoiceId);
-    return json({ credited: credits, balance: isGift ? undefined : crec.balance, recipient: creditTo, gift: isGift });
+    var giftEvent = null;
+    if (isGift) {
+      var gifterName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
+      var msgWord = credits === 1 ? "credit" : "credits";
+      var pmWord = "private message" + (credits === 1 ? "" : "s");
+      var giftMsg = (gifterName ? gifterName + " gifted you " : "You've been gifted ") +
+        credits + " Nymbot " + msgWord + " — that's " + credits + " " + pmWord +
+        " with me. Type ?balance to check your balance anytime.";
+      try {
+        giftEvent = buildGiftWrappedDM(giftMsg, botPrivkey, botPubkey, creditTo);
+      } catch (e) {
+        giftEvent = null;
+      }
+    }
+    return json({ credited: credits, balance: isGift ? undefined : crec.balance, recipient: creditTo, gift: isGift, giftEvent: giftEvent });
   }
 
   if (body.action === "pm") {
@@ -2968,8 +3025,314 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   return json({ error: "Unknown action" }, 400);
 }
 
+// Shop: message styles, nickname flair, cosmetics and the supporter badge
+var SHOP_CATALOG = {
+  "style-satoshi": { price: 21420, type: "message-style" },
+  "style-glitch": { price: 10101, type: "message-style" },
+  "style-aurora": { price: 2424, type: "message-style" },
+  "style-neon": { price: 1984, type: "message-style" },
+  "style-ghost": { price: 666, type: "message-style" },
+  "style-matrix": { price: 1337, type: "message-style" },
+  "style-fire": { price: 911, type: "message-style" },
+  "style-ice": { price: 777, type: "message-style" },
+  "style-rainbow": { price: 2222, type: "message-style" },
+  "flair-crown": { price: 5000, type: "nickname-flair" },
+  "flair-diamond": { price: 10000, type: "nickname-flair" },
+  "flair-skull": { price: 1666, type: "nickname-flair" },
+  "flair-star": { price: 2500, type: "nickname-flair" },
+  "flair-lightning": { price: 2100, type: "nickname-flair" },
+  "flair-heart": { price: 1111, type: "nickname-flair" },
+  "flair-mask": { price: 4200, type: "nickname-flair" },
+  "flair-rocket": { price: 2300, type: "nickname-flair" },
+  "flair-shield": { price: 1900, type: "nickname-flair" },
+  "supporter-badge": { price: 42069, type: "supporter" },
+  "cosmetic-aura-gold": { price: 3500, type: "cosmetic" },
+  "cosmetic-redacted": { price: 2800, type: "cosmetic" }
+};
+
+function shopBlankRecord() {
+  return { owned: {}, active: { style: null, flair: [], cosmetics: [], supporter: false }, updatedAt: 0 };
+}
+async function shopGetRecord(env, pubkey) {
+  if (!env.R2_BUCKET) return shopBlankRecord();
+  try {
+    var obj = await env.R2_BUCKET.get("shop/" + pubkey);
+    if (!obj) return shopBlankRecord();
+    var d = await obj.json();
+    if (!d || typeof d !== "object" || typeof d.owned !== "object" || !d.owned) return shopBlankRecord();
+    if (!d.active || typeof d.active !== "object") d.active = { style: null, flair: [], cosmetics: [], supporter: false };
+    if (!Array.isArray(d.active.flair)) d.active.flair = [];
+    if (!Array.isArray(d.active.cosmetics)) d.active.cosmetics = [];
+    return d;
+  } catch (e) {
+    return shopBlankRecord();
+  }
+}
+async function shopPutRecord(env, pubkey, data) {
+  data.updatedAt = Date.now();
+  await env.R2_BUCKET.put("shop/" + pubkey, JSON.stringify(data));
+}
+// Drop active selections that point at items the user no longer owns.
+function shopPruneActive(rec) {
+  var a = rec.active;
+  if (a.style && !rec.owned[a.style]) a.style = null;
+  a.flair = a.flair.filter(function (id) { return !!rec.owned[id]; });
+  a.cosmetics = a.cosmetics.filter(function (id) { return !!rec.owned[id]; });
+  if (a.supporter && !rec.owned["supporter-badge"]) a.supporter = false;
+}
+function shopGenerateCode() {
+  return "NYM-" + bytesToHex(randomBytes(16)).toUpperCase();
+}
+// Generate a BOLT11 invoice from the bot's Lightning address (LUD-21).
+async function botGenerateInvoice(env, sats) {
+  var lnAddr = (env.BOT_LIGHTNING_ADDRESS || BOT_LIGHTNING_ADDRESS).split("@");
+  if (lnAddr.length !== 2) return { error: "Bot Lightning address misconfigured.", status: 500 };
+  var lnurlData;
+  try {
+    var lnRes = await fetch("https://" + lnAddr[1] + "/.well-known/lnurlp/" + lnAddr[0], { headers: { "Accept": "application/json" } });
+    lnurlData = await lnRes.json();
+  } catch (e) {
+    return { error: "Could not reach the bot's Lightning wallet.", status: 502 };
+  }
+  if (!lnurlData || !lnurlData.callback) return { error: "Bot Lightning wallet returned an invalid response.", status: 502 };
+  var milli = sats * 1000;
+  if (milli < (lnurlData.minSendable || 0) || milli > (lnurlData.maxSendable || Infinity)) {
+    return { error: "Item price is outside the bot wallet's accepted range.", status: 400 };
+  }
+  var cbUrl;
+  try {
+    cbUrl = new URL(lnurlData.callback);
+    cbUrl.searchParams.set("amount", String(milli));
+  } catch (e) {
+    return { error: "Bot Lightning wallet callback is invalid.", status: 502 };
+  }
+  var invData;
+  try {
+    var invRes = await fetch(cbUrl.toString(), { headers: { "Accept": "application/json" } });
+    invData = await invRes.json();
+  } catch (e) {
+    return { error: "Could not generate a Lightning invoice.", status: 502 };
+  }
+  if (!invData || !invData.pr) return { error: (invData && invData.reason) || "Bot wallet did not return an invoice.", status: 502 };
+  if (!invData.verify || !/^https:\/\//i.test(invData.verify)) {
+    return { error: "Bot Lightning wallet does not support LUD-21 payment verification.", status: 502 };
+  }
+  return { pr: invData.pr, verifyUrl: invData.verify };
+}
+
+async function handleShopAction(context, body, botPrivkey, botPubkey) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+    });
+  };
+  if (!env.R2_BUCKET) return json({ error: "Shop is not configured (missing R2_BUCKET binding)." }, 503);
+
+  // Public: look up other users' active items so clients can show their
+  // flair/style without a Nostr REQ. No auth — read-only and non-sensitive.
+  if (body.action === "shop-status") {
+    var pks = Array.isArray(body.pubkeys) ? body.pubkeys.slice(0, 100) : [];
+    var statuses = {};
+    for (var i = 0; i < pks.length; i++) {
+      var pk = pks[i];
+      if (typeof pk !== "string" || !/^[0-9a-f]{64}$/i.test(pk)) continue;
+      pk = pk.toLowerCase();
+      var srec = await shopGetRecord(env, pk);
+      statuses[pk] = { active: srec.active, updatedAt: srec.updatedAt };
+    }
+    return json({ statuses: statuses });
+  }
+
+  var userPubkey = body.pubkey;
+  if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
+  userPubkey = userPubkey.toLowerCase();
+  if (!verifyBotAuth(body.auth, userPubkey)) return json({ error: "Authentication failed" }, 401);
+
+  if (body.action === "shop-get") {
+    var rec = await shopGetRecord(env, userPubkey);
+    return json({ owned: rec.owned, active: rec.active, updatedAt: rec.updatedAt });
+  }
+
+  if (body.action === "shop-set-active") {
+    var rec = await shopGetRecord(env, userPubkey);
+    var want = (body.active && typeof body.active === "object") ? body.active : {};
+    var nextStyle = null;
+    if (typeof want.style === "string" && rec.owned[want.style] &&
+      SHOP_CATALOG[want.style] && SHOP_CATALOG[want.style].type === "message-style") {
+      nextStyle = want.style;
+    }
+    var nextFlair = Array.isArray(want.flair) ? want.flair.filter(function (id) {
+      return rec.owned[id] && SHOP_CATALOG[id] && SHOP_CATALOG[id].type === "nickname-flair";
+    }) : [];
+    var nextCos = Array.isArray(want.cosmetics) ? want.cosmetics.filter(function (id) {
+      return rec.owned[id] && SHOP_CATALOG[id] && SHOP_CATALOG[id].type === "cosmetic";
+    }) : [];
+    rec.active = {
+      style: nextStyle,
+      flair: nextFlair,
+      cosmetics: nextCos,
+      supporter: !!want.supporter && !!rec.owned["supporter-badge"]
+    };
+    await shopPutRecord(env, userPubkey, rec);
+    return json({ active: rec.active, updatedAt: rec.updatedAt });
+  }
+
+  if (body.action === "shop-buy-invoice") {
+    var itemId = String(body.itemId || "");
+    var cat = SHOP_CATALOG[itemId];
+    if (!cat) return json({ error: "Unknown shop item." }, 400);
+    var giftTo = null;
+    if (body.recipientPubkey && /^[0-9a-f]{64}$/i.test(body.recipientPubkey)) {
+      giftTo = body.recipientPubkey.toLowerCase();
+    }
+    var inv = await botGenerateInvoice(env, cat.price);
+    if (inv.error) return json({ error: inv.error }, inv.status || 502);
+    var invoiceId = bytesToHex(sha256(utf8ToBytes(inv.pr)));
+    await env.R2_BUCKET.put("shop-pending/" + invoiceId, JSON.stringify({
+      pubkey: userPubkey,
+      recipientPubkey: giftTo,
+      itemId: itemId,
+      amountSats: cat.price,
+      pr: inv.pr,
+      verifyUrl: inv.verifyUrl,
+      createdAt: Date.now()
+    }));
+    return json({ pr: inv.pr, verify: inv.verifyUrl, invoiceId: invoiceId });
+  }
+
+  if (body.action === "shop-claim") {
+    var invoiceId = String(body.invoiceId || "");
+    if (!/^[0-9a-f]{64}$/i.test(invoiceId)) return json({ error: "Invalid invoice reference." }, 400);
+    var claimKey = "shop-claimed/" + invoiceId;
+    var already = await env.R2_BUCKET.get(claimKey);
+    if (already) {
+      var prevClaim = await already.json().catch(function () { return null; });
+      if (prevClaim) {
+        return json({ itemId: prevClaim.itemId, code: prevClaim.code, gift: prevClaim.gift, recipient: prevClaim.pubkey, alreadyClaimed: true });
+      }
+      return json({ error: "This payment was already claimed." }, 409);
+    }
+    var pendingObj = await env.R2_BUCKET.get("shop-pending/" + invoiceId);
+    if (!pendingObj) return json({ error: "Unknown or expired invoice." }, 404);
+    var pending;
+    try {
+      pending = await pendingObj.json();
+    } catch (e) {
+      return json({ error: "Corrupt invoice record." }, 500);
+    }
+    if (pending.pubkey !== userPubkey) return json({ error: "This invoice belongs to a different user." }, 403);
+    var settled = false;
+    try {
+      var vr = await fetch(pending.verifyUrl, { headers: { "Accept": "application/json" } });
+      var vd = await vr.json();
+      settled = !!(vd && (vd.settled || vd.paid));
+    } catch (e) {
+      return json({ error: "Could not verify the payment." }, 502);
+    }
+    if (!settled) return json({ error: "Payment not confirmed yet." }, 402);
+    if (!SHOP_CATALOG[pending.itemId]) return json({ error: "Unknown shop item." }, 400);
+    var recipient = userPubkey;
+    var isGift = false;
+    if (pending.recipientPubkey && /^[0-9a-f]{64}$/i.test(pending.recipientPubkey) &&
+      pending.recipientPubkey !== userPubkey) {
+      recipient = pending.recipientPubkey.toLowerCase();
+      isGift = true;
+    }
+    var code = shopGenerateCode();
+    var crec = await shopGetRecord(env, recipient);
+    crec.owned[pending.itemId] = { at: Date.now(), amountSats: pending.amountSats, gift: isGift, code: code };
+    await shopPutRecord(env, recipient, crec);
+    await env.R2_BUCKET.put("shop-code/" + code, JSON.stringify({ itemId: pending.itemId, owner: recipient, createdAt: Date.now() }));
+    await env.R2_BUCKET.put(claimKey, JSON.stringify({ itemId: pending.itemId, pubkey: recipient, paidBy: userPubkey, gift: isGift, code: code, at: Date.now() }));
+    await env.R2_BUCKET.delete("shop-pending/" + invoiceId);
+    var giftEvent = null;
+    if (isGift) {
+      var gifterName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
+      var giftMsg = (gifterName ? gifterName + " gifted you " : "You've been gifted ") +
+        "a Nymchat shop item. Open the Flair Shop to find it in your inventory.";
+      try {
+        giftEvent = buildGiftWrappedDM(giftMsg, botPrivkey, botPubkey, recipient);
+      } catch (e) {
+        giftEvent = null;
+      }
+    }
+    return json({
+      itemId: pending.itemId, code: code, gift: isGift, recipient: recipient, giftEvent: giftEvent,
+      owned: isGift ? undefined : crec.owned, active: isGift ? undefined : crec.active
+    });
+  }
+
+  if (body.action === "shop-transfer") {
+    var itemId = String(body.itemId || "");
+    var toPubkey = String(body.toPubkey || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(toPubkey)) return json({ error: "Invalid recipient pubkey." }, 400);
+    if (toPubkey === userPubkey) return json({ error: "Cannot transfer to yourself." }, 400);
+    var fromRec = await shopGetRecord(env, userPubkey);
+    var entry = fromRec.owned[itemId];
+    if (!entry) return json({ error: "You do not own this item." }, 403);
+    delete fromRec.owned[itemId];
+    shopPruneActive(fromRec);
+    var toRec = await shopGetRecord(env, toPubkey);
+    toRec.owned[itemId] = { at: Date.now(), amountSats: entry.amountSats || 0, gift: true, code: entry.code, transferredFrom: userPubkey };
+    await shopPutRecord(env, userPubkey, fromRec);
+    await shopPutRecord(env, toPubkey, toRec);
+    if (entry.code) {
+      try {
+        await env.R2_BUCKET.put("shop-code/" + entry.code, JSON.stringify({ itemId: itemId, owner: toPubkey, createdAt: Date.now() }));
+      } catch (e) { }
+    }
+    var transferEvent = null;
+    try {
+      var tName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
+      var tMsg = (tName ? tName + " transferred you " : "You've been transferred ") +
+        "a Nymchat shop item. Open the Flair Shop to find it in your inventory.";
+      transferEvent = buildGiftWrappedDM(tMsg, botPrivkey, botPubkey, toPubkey);
+    } catch (e) {
+      transferEvent = null;
+    }
+    return json({ ok: true, itemId: itemId, owned: fromRec.owned, active: fromRec.active, giftEvent: transferEvent });
+  }
+
+  if (body.action === "shop-redeem") {
+    var code = String(body.code || "").trim().toUpperCase();
+    if (!/^NYM-[0-9A-F]{32}$/.test(code)) return json({ error: "Invalid recovery code." }, 400);
+    var codeObj = await env.R2_BUCKET.get("shop-code/" + code);
+    if (!codeObj) return json({ error: "Unknown recovery code." }, 404);
+    var codeData;
+    try {
+      codeData = await codeObj.json();
+    } catch (e) {
+      return json({ error: "Corrupt code record." }, 500);
+    }
+    var redeemItem = codeData.itemId;
+    if (!SHOP_CATALOG[redeemItem]) return json({ error: "Unknown shop item." }, 400);
+    var prevOwner = (codeData.owner || "").toLowerCase();
+    if (prevOwner === userPubkey) {
+      var ownRec = await shopGetRecord(env, userPubkey);
+      return json({ itemId: redeemItem, owned: ownRec.owned, active: ownRec.active, alreadyOwner: true });
+    }
+    if (prevOwner && /^[0-9a-f]{64}$/.test(prevOwner)) {
+      var prevRec = await shopGetRecord(env, prevOwner);
+      if (prevRec.owned[redeemItem]) {
+        delete prevRec.owned[redeemItem];
+        shopPruneActive(prevRec);
+        await shopPutRecord(env, prevOwner, prevRec);
+      }
+    }
+    var rrec = await shopGetRecord(env, userPubkey);
+    rrec.owned[redeemItem] = { at: Date.now(), amountSats: 0, gift: false, code: code, redeemed: true };
+    await shopPutRecord(env, userPubkey, rrec);
+    await env.R2_BUCKET.put("shop-code/" + code, JSON.stringify({ itemId: redeemItem, owner: userPubkey, createdAt: codeData.createdAt || Date.now() }));
+    return json({ itemId: redeemItem, owned: rrec.owned, active: rrec.active });
+  }
+
+  return json({ error: "Unknown action" }, 400);
+}
+
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.65.363";
+var NYMCHAT_VERSION = "3.66.363";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3050,6 +3413,18 @@ async function onRequest(context) {
   if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "claim-credits")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      });
+    }
+  }
+
+  // Shop actions (R2-backed purchases, transfers, recovery codes, active items)
+  if (body && typeof body.action === "string" && body.action.indexOf("shop-") === 0) {
+    try {
+      return await handleShopAction(context, body, privkey, pubkey);
     } catch (e) {
       return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
         status: 500,
@@ -3592,7 +3967,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.65.363 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.363 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3639,16 +4014,23 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- NEVER use @mentions of other users in your responses. Do not output @username, @nym#xxxx, @AnythingWithAt, or any mention format that could notify or ping another user. If you need to reference a user, use their name without the @ symbol. This is a HARD rule — your response will be automatically filtered to remove any @mentions, so do not include them.",
   "- When a user's message includes a quote-reply referencing another user's message, do NOT address or mention the quoted user. Only respond to the person who asked you the question. The quoted message is context only — never direct your response at the quoted user or mention them with @.",
   "",
-  "=== PRIVATE MESSAGING WITH NYMBOT (PAID) ===",
+  "=== PRIVATE MESSAGING WITH NYMBOT (PAID PREMIUM) ===",
   "Users can have a private, end-to-end encrypted 1:1 conversation with you (Nymbot) using NIP-17 gift wraps. To start one: click Nymbot's nym or avatar and choose 'Private Message', or open the Nyms sidebar and select Nymbot. It only works as a 1:1 chat — Nymbot can't be added to group chats.",
+  "PREMIUM IS A SMARTER NYMBOT: The free public-channel bot (?ask / @Nymbot) runs a single general-purpose AI model. The paid private Nymbot runs a MULTI-MODEL setup — it reads each message, interprets the type of task (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best-suited Cloudflare Workers AI model for that task. That makes premium answers noticeably sharper and more capable than the free public bot. Both versions otherwise share the same knowledge, live web search, and changelog access.",
   "Private Nymbot conversations are a paid feature. Each reply you send costs 1 credit. Credits are bought with Bitcoin Lightning zaps: about 100 sats = 10 messages, 500 sats = 60, 1000 sats = 130, 5000 sats = 700 (bigger zaps include bonus credits).",
   "To buy credits: type ?buy inside the Nymbot private chat, or zap Nymbot's profile (zapping the profile opens the credit purchase flow). Note: zapping one of Nymbot's messages in a public channel is just an appreciation tip and does NOT add credits — only the ?buy / profile-zap purchase flow does. To check the remaining balance: type ?balance inside the Nymbot private chat — the balance is also shown in the chat header.",
   "Users can gift credits to someone else: click a user's nym and choose 'Gift Nymbot Credits', or type ?gift @nym#xxxx inside the Nymbot private chat. The payer covers the zap; the credits land on the recipient's nym.",
+  "PREMIUM PRIVATE-CHAT COMMANDS & FEATURES (these only apply inside the 1:1 Nymbot private chat, not public channels):",
+  "- ?clear — wipes the entire private conversation and starts fresh, so none of the earlier messages are used as context anymore.",
+  "- ?balance — shows the remaining credit balance (also shown in the chat header). ?buy — purchase more credits. ?gift @nym#xxxx — gift credits to another user.",
+  "- Leading '!' — starting a message with '!' (e.g. '!what is 2+2') makes Nymbot answer ONLY that message and ignore all earlier conversation history, without clearing the chat.",
+  "- Quote-reply — replying to an earlier message (yours or Nymbot's) gives Nymbot that quoted message as context so it understands what the follow-up refers to.",
+  "- Opening the chat shows a welcome message explaining these abilities and commands.",
   "Credits are tied to the user's nym (public key). Nyms are ephemeral — if a user doesn't save their nsec, a new session means a new identity and a fresh empty balance. Always remind users to save their nsec (click your nym in the sidebar > Reveal private key) so they keep their credits.",
   "The private conversation is encrypted so other users and relays can't read it, and the whole private thread is used as conversation context. Public channels remain free — only the private 1:1 conversations cost credits.",
   "",
   "Q: Can I message Nymbot privately?",
-  "A: Yes. Click Nymbot's nym or avatar and choose 'Private Message' (or pick Nymbot from the Nyms sidebar). It's a private, end-to-end encrypted 1:1 chat. It's a paid feature — each reply costs 1 credit. Buy credits by typing ?buy in the chat or by zapping Nymbot's profile (which opens the credit purchase); check your balance with ?balance. Credits are tied to your nym's key, so save your nsec to keep them."
+  "A: Yes. Click Nymbot's nym or avatar and choose 'Private Message' (or pick Nymbot from the Nyms sidebar). It's a private, end-to-end encrypted 1:1 chat and a paid premium feature — each reply costs 1 credit. Premium Nymbot is smarter than the free public bot: it routes each message to the best AI model for the task. Inside the private chat you can use ?clear to start fresh, start a message with '!' for a one-off answer that ignores history, ?balance to check credits, ?buy to top up, and ?gift @nym to gift credits. Credits are tied to your nym's key, so save your nsec to keep them."
 ].join("\n");
 
 function isLikelyNonEnglish(text) {
@@ -3707,6 +4089,10 @@ function isPromptInjection(text) {
 
 function sanitizeBotResponse(text) {
   if (typeof text !== "string") return text;
+  // Reasoning models (e.g. QwQ) emit a <think>...</think> block — drop it.
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  var thinkOpen = text.search(/<think>/i);
+  if (thinkOpen !== -1) text = text.slice(0, thinkOpen);
   text = text.replace(/^\s*<\|start_header_id\|>\s*\w*\s*<\|end_header_id\|>\s*/, "");
   var cutMarkers = [/<\|eot_id\|>/, /<\|eom_id\|>/, /<\|end_of_text\|>/, /<\|start_header_id\|>/];
   for (var c = 0; c < cutMarkers.length; c++) {
@@ -4352,7 +4738,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.65.363")
+  // Prefix match (e.g. "3.61" matches "3.66.363")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -4407,7 +4793,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.65.363", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.66.363", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

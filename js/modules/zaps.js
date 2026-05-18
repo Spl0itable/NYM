@@ -517,6 +517,7 @@ Object.assign(NYM.prototype, {
             const auth = await this._signBotAuth();
             const reqBody = { action: 'claim-credits', pubkey: this.pubkey, auth, invoiceId };
             if (receipt) reqBody.receipt = receipt;
+            if (this.nym) reqBody.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
             let data = null;
             for (let attempt = 0; attempt < 5; attempt++) {
                 const resp = await fetch(`https://${apiHost}/api/bot`, {
@@ -531,6 +532,9 @@ Object.assign(NYM.prototype, {
             }
             if (data && typeof data.credited === 'number') {
                 if (data.gift) {
+                    if (data.giftEvent) {
+                        try { this.sendDMToRelays(['EVENT', data.giftEvent]); } catch (e) { }
+                    }
                     this.displaySystemMessage(`Gifted +${data.credited} Nymbot credits to @${recipientNym || 'user'}.`);
                 } else {
                     this._setBotCreditDisplay(data.balance);
@@ -1042,10 +1046,6 @@ Object.assign(NYM.prototype, {
         }
 
         // Close any zap receipt subscriptions
-        if (this.shopZapReceiptSubId) {
-            this.sendToRelay(["CLOSE", this.shopZapReceiptSubId]);
-            this.shopZapReceiptSubId = null;
-        }
         if (this.zapReceiptSubId) {
             this.sendToRelay(["CLOSE", this.zapReceiptSubId]);
             this.zapReceiptSubId = null;
