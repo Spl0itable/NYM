@@ -1412,6 +1412,13 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Determine if a relay URL is a geo or discovered relay (not a default/DM relay)
+    _isGeoOrDiscoveredRelay(relayUrl) {
+        const defaultSet = new Set(this.defaultRelays || []);
+        const dmSet = new Set(this.bitchatDMRelays || []);
+        return !defaultSet.has(relayUrl) && !dmSet.has(relayUrl);
+    },
+
     subscribeToSingleRelay(relayUrl) {
         const relay = this.relayPool.get(relayUrl);
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
@@ -1421,6 +1428,18 @@ Object.assign(NYM.prototype, {
 
         const ws = relay.ws;
         const since24h = Math.floor(Date.now() / 1000) - 86400;
+        const isGeo = this._isGeoOrDiscoveredRelay(relayUrl);
+
+        // Geo/discovered relays only get kind 20000
+        if (isGeo) {
+            const subId = Math.random().toString(36).substring(2);
+            if (!relay.subscriptions) relay.subscriptions = new Set();
+            relay.subscriptions.add(subId);
+            const filters = this._buildGeoFilters(since24h);
+            this._safeWsSend(ws, JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters])), { critical: true });
+            return;
+        }
+
         const subId = Math.random().toString(36).substring(2);
 
         if (!relay.subscriptions) {
@@ -1429,7 +1448,7 @@ Object.assign(NYM.prototype, {
         relay.subscriptions.add(subId);
 
         const filters = this._buildCriticalFilters(since24h);
-        this._safeWsSend(ws, JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters])), { critical: true });
+        this._safeWsSend(ws, JSON.stringify(["REQ", subId, ...filters]), { critical: true });
     },
 
     _sendChannelReq(subId, filters, channelKey, channelType) {
@@ -2384,8 +2403,11 @@ Object.assign(NYM.prototype, {
 
         const since24h = Math.floor(Date.now() / 1000) - 86400;
 
-        // Every shard gets the full subscription set for complete coverage
-        const filters = this._buildCriticalFilters(since24h);
+        // Geo/discovered shards only get kind 20000
+        const isGeoOrDiscovered = p.role === 'geo' || p.role === 'discovered';
+        const filters = isGeoOrDiscovered
+            ? this._buildGeoFilters(since24h)
+            : this._buildCriticalFilters(since24h);
 
         const subId = Math.random().toString(36).substring(2);
         p._lastSubId = subId;
@@ -2393,7 +2415,18 @@ Object.assign(NYM.prototype, {
         const msg = JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters]));
         this._safeWsSend(p.ws, msg, { critical: true });
 
-        this._refreshEphemeralSubscriptions();
+        // Also subscribe to ephemeral pubkeys on critical shards
+        if (!isGeoOrDiscovered) {
+            this._refreshEphemeralSubscriptions();
+        }
+    },
+
+    _buildGeoFilters(since24h) {
+        const filters = [];
+        if (!this.settings.groupChatPMOnlyMode) {
+            filters.push({ kinds: [20000], since: since24h });
+        }
+        return filters;
     },
 
     _buildCriticalFilters(since24h) {
@@ -2471,17 +2504,18 @@ Object.assign(NYM.prototype, {
         }
         const since24h = Math.floor(Date.now() / 1000) - 86400;
 
-        // Every shard gets the full subscription set for complete coverage
-        const criticalFilters = this._buildCriticalFilters(since24h);
-
+        // Critical shards (default + DM relays): full subscription set
         const criticalSubId = Math.random().toString(36).substring(2);
         this._lastCriticalSubId = criticalSubId;
+        const criticalFilters = this._buildCriticalFilters(since24h);
         this._poolSendToRole('critical', ["REQ", criticalSubId, ...criticalFilters]);
 
+        // Geo + discovered shards: only kind 20000
         const geoSubId = Math.random().toString(36).substring(2);
         this._lastGeoSubId = geoSubId;
-        this._poolSendToRole('geo', ["REQ", geoSubId, ...criticalFilters]);
-        this._poolSendToRole('discovered', ["REQ", geoSubId, ...criticalFilters]);
+        const geoFilters = this._buildGeoFilters(since24h);
+        this._poolSendToRole('geo', ["REQ", geoSubId, ...geoFilters]);
+        this._poolSendToRole('discovered', ["REQ", geoSubId, ...geoFilters]);
 
         // Subscribe to ephemeral pubkeys as independent REQs (metadata separation)
         this._refreshEphemeralSubscriptions();
@@ -2503,7 +2537,7 @@ Object.assign(NYM.prototype, {
         this._registerBackfillSub(subId);
 
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            this._poolSend(['REQ', subId, filter]);
+            this._poolSendToRole('critical', ['REQ', subId, filter]);
         } else {
             const req = JSON.stringify(this._normalizeReqPayload(['REQ', subId, filter]));
             this.relayPool.forEach(relay => {
@@ -2523,7 +2557,7 @@ Object.assign(NYM.prototype, {
         try {
             for (const oldSubId of (this._ephemeralSubIds || [])) {
                 if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                    this._poolSend(['CLOSE', oldSubId]);
+                    this._poolSendToRole('critical', ['CLOSE', oldSubId]);
                 } else {
                     const closeMsg = JSON.stringify(['CLOSE', oldSubId]);
                     this.relayPool.forEach(relay => {
@@ -2544,7 +2578,7 @@ Object.assign(NYM.prototype, {
             const filter = { kinds: [1059], "#p": ephPks, since, limit: 200 * ephPks.length };
 
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                this._poolSend(['REQ', subId, filter]);
+                this._poolSendToRole('critical', ['REQ', subId, filter]);
             } else {
                 const msg = JSON.stringify(this._normalizeReqPayload(['REQ', subId, filter]));
                 this.relayPool.forEach((relay) => {
@@ -3304,31 +3338,53 @@ Object.assign(NYM.prototype, {
         this._broadcastAsync(targets, msg, { critical: true });
     },
 
-    sendRequestToAllRelays(message) {
+    sendRequestToFewRelays(message, maxRelays = 5) {
+        // Multiplexed pool mode: route to critical shards only (profiles don't need geo/discovered)
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            this._poolSend(message);
+            this._poolSendToRole('critical', message);
             return;
         }
 
         const msg = JSON.stringify(message);
+        let sent = 0;
         const subId = Array.isArray(message) && message[0] === 'REQ' ? message[1] : null;
 
-        this.relayPool.forEach((relay) => {
+        const sendTo = (relay, url) => {
             if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
-                if (this._safeWsSend(relay.ws, msg, { critical: true }) && subId) {
-                    if (!relay.subscriptions) relay.subscriptions = new Set();
-                    relay.subscriptions.add(subId);
+                if (this._safeWsSend(relay.ws, msg, { critical: true })) {
+                    if (subId) {
+                        if (!relay.subscriptions) relay.subscriptions = new Set();
+                        relay.subscriptions.add(subId);
+                    }
+                    sent++;
+                    return true;
                 }
             }
-        });
+            return false;
+        };
+
+        for (const url of this.defaultRelays) {
+            if (sent >= maxRelays) break;
+            const relay = this.relayPool.get(url);
+            if (relay) sendTo(relay, url);
+        }
+
+        if (sent < maxRelays) {
+            for (const [url, relay] of this.relayPool) {
+                if (sent >= maxRelays) break;
+                if (this.defaultRelays.includes(url)) continue;
+                sendTo(relay, url);
+            }
+        }
     },
 
-    // Close a sub that was opened via sendRequestToAllRelays. Routes CLOSE only
-    // to relays that received the REQ so we don't trigger "No such subscription".
-    closeAllRelaysSub(subId) {
+    // Close a sub that was opened via sendRequestToFewRelays. Routes through
+    // the same destinations the REQ used so we don't send CLOSE to relays
+    // that never received the REQ (which would respond "No such subscription").
+    closeFewRelaysSub(subId) {
         if (!subId) return;
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            this._poolSend(["CLOSE", subId]);
+            this._poolSendToRole('critical', ["CLOSE", subId]);
             return;
         }
         const closeMsg = JSON.stringify(["CLOSE", subId]);
@@ -3376,29 +3432,41 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        // Every event goes to every relay; geo-tagged events prioritize the
-        // closest geo relays first.
-        const sent = new Set();
-        const geoTargets = [];
-        const otherTargets = [];
-        const geohashTag = evt && evt.tags && evt.tags.find(t => t[0] === 'g');
-        if (geohashTag && geohashTag[1]) {
-            const closestRelays = this.getClosestRelaysForGeohash(geohashTag[1]);
-            for (const r of closestRelays) {
-                const relay = this.relayPool.get(r.url);
-                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    geoTargets.push(relay);
-                    sent.add(r.url);
+        const is30078Fanout = evt && evt.kind === 30078 && evt.tags && evt.tags.some(t => t[0] === 't' && ['nym-poll', 'nym-poll-vote'].includes(t[1]));
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
+
+        if (wideFanout) {
+            const sent = new Set();
+            const geoTargets = [];
+            const otherTargets = [];
+            const geohashTag = evt && evt.tags && evt.tags.find(t => t[0] === 'g');
+            if (geohashTag && geohashTag[1]) {
+                const closestRelays = this.getClosestRelaysForGeohash(geohashTag[1]);
+                for (const r of closestRelays) {
+                    const relay = this.relayPool.get(r.url);
+                    if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                        geoTargets.push(relay);
+                        sent.add(r.url);
+                    }
                 }
             }
+            this.relayPool.forEach((relay, url) => {
+                if (!sent.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                    otherTargets.push(relay);
+                }
+            });
+            this._broadcastAsync(geoTargets, msg, { critical: true });
+            this._broadcastAsync(otherTargets, msg, { critical: true });
+        } else {
+            const targets = [];
+            this.defaultRelays.forEach(relayUrl => {
+                const relay = this.relayPool.get(relayUrl);
+                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) targets.push(relay);
+            });
+            const nosflare = this.relayPool.get('wss://sendit.nosflare.com');
+            if (nosflare && nosflare.ws && nosflare.ws.readyState === WebSocket.OPEN) targets.push(nosflare);
+            this._broadcastAsync(targets, msg, { critical: true });
         }
-        this.relayPool.forEach((relay, url) => {
-            if (!sent.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                otherTargets.push(relay);
-            }
-        });
-        this._broadcastAsync(geoTargets, msg, { critical: true });
-        this._broadcastAsync(otherTargets, msg, { critical: true });
     },
 
     subscribeToAllRelays() {

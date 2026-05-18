@@ -1636,10 +1636,10 @@ Object.assign(NYM.prototype, {
         const run = () => {
             const subId = 'batch-profile-' + Math.random().toString(36).slice(2);
             const req = ["REQ", subId, { kinds: [0], authors: pubkeys, limit: pubkeys.length }];
-            try { this.sendRequestToAllRelays(req); } catch (_) { }
+            try { this.sendRequestToFewRelays(req); } catch (_) { }
 
             setTimeout(() => {
-                try { this.closeAllRelaysSub(subId); } catch (_) { }
+                try { this.closeFewRelaysSub(subId); } catch (_) { }
                 if (typeof this._oneShotReqDone === 'function') this._oneShotReqDone();
             }, 2500);
         };
@@ -2021,9 +2021,9 @@ Object.assign(NYM.prototype, {
 
         if (this.connected) {
             const run = () => {
-                this.sendRequestToAllRelays(subscription);
+                this.sendRequestToFewRelays(subscription);
                 setTimeout(() => {
-                    try { this.closeAllRelaysSub(subId); } catch (_) { }
+                    try { this.closeFewRelaysSub(subId); } catch (_) { }
                     if (typeof this._oneShotReqDone === 'function') this._oneShotReqDone();
                 }, 2500);
             };
