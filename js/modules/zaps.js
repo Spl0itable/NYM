@@ -437,9 +437,14 @@ Object.assign(NYM.prototype, {
             const apiHost = this._getApiHost();
             if (!apiHost) throw new Error('Bot API unavailable');
             const auth = await this._signBotAuth();
+            const credits = this._botCreditsForSats(amount);
+            const giftNym = this.currentZapTarget.giftRecipientNym;
+            const purchaseComment = giftNym
+                ? `Nymbot credits gift for @${giftNym} — ${credits} message${credits === 1 ? '' : 's'}`
+                : `Nymbot credits — ${credits} message${credits === 1 ? '' : 's'}`;
             let zapRequest = null;
-            try { zapRequest = await this.createZapRequest(amount, ''); } catch (e) { }
-            const reqBody = { action: 'create-invoice', pubkey: this.pubkey, auth, amountSats: amount, zapRequest };
+            try { zapRequest = await this.createZapRequest(amount, purchaseComment); } catch (e) { }
+            const reqBody = { action: 'create-invoice', pubkey: this.pubkey, auth, amountSats: amount, zapRequest, comment: purchaseComment };
             const giftPk = this.currentZapTarget.giftRecipientPubkey;
             if (giftPk && giftPk !== this.pubkey) reqBody.recipientPubkey = giftPk;
             const resp = await fetch(`https://${apiHost}/api/bot`, {
@@ -618,7 +623,11 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const comment = document.getElementById('zapComment').value || '';
+        let comment = (document.getElementById('zapComment').value || '').trim();
+        if (!comment) {
+            // Label the payment so the recipient knows what it was for
+            comment = this.currentZapTarget.messageId ? 'Zap for your message' : 'Profile zap';
+        }
 
         // Show loading state
         document.getElementById('zapAmountSection').style.display = 'none';

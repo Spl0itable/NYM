@@ -456,7 +456,7 @@ Object.assign(NYM.prototype, {
         <div class="shop-item-preview">
             <span class="${item.preview}">Preview Message</span>
         </div>
-        ${isPurchased ? '<div class="shop-item-price"><span class="shop-price-amount">Owned</span></div>' : this._shopItemActionsHtml(item, false)}
+        ${isPurchased ? this._shopItemOwnedHtml(item, true) : this._shopItemActionsHtml(item, false)}
     </div>
 `;
         });
@@ -500,7 +500,7 @@ Object.assign(NYM.prototype, {
                 ${item.benefits.map(b => `• ${b}`).join('<br>')}
             </div>
         ` : ''}
-        ${isPurchased ? '<div class="shop-item-price"><span class="shop-price-amount">Owned</span></div>' : this._shopItemActionsHtml(item, false)}
+        ${isPurchased ? this._shopItemOwnedHtml(item, true) : this._shopItemActionsHtml(item, false)}
     </div>
 `;
         });
@@ -699,7 +699,7 @@ TRANSFER TO PUBKEY
         document.getElementById('zapStatus').innerHTML = '<span class="loader"></span> Generating invoice...';
 
         try {
-            const extra = { itemId: ctx.itemId };
+            const extra = { itemId: ctx.itemId, comment: this._shopPurchaseComment(ctx) };
             if (ctx.recipientPubkey && ctx.recipientPubkey !== this.pubkey) {
                 extra.recipientPubkey = ctx.recipientPubkey;
             }
@@ -767,6 +767,20 @@ TRANSFER TO PUBKEY
         }, 1000);
     },
 
+    // Human-readable description of a shop purchase, used as the invoice/zap comment
+    _shopPurchaseComment(ctx) {
+        if (!ctx || !ctx.item) return 'Nymchat shop purchase';
+        const item = ctx.item;
+        const kind = item.type === 'message-style' ? 'Message style'
+            : item.type === 'nickname-flair' ? 'Nickname flair'
+            : item.type === 'supporter' ? 'Supporter badge'
+            : item.type === 'cosmetic' ? 'Cosmetic'
+            : 'Shop item';
+        let label = `${kind}: ${item.name}`;
+        if (ctx.recipientPubkey && ctx.recipientPubkey !== this.pubkey) label += ' (gift)';
+        return label;
+    },
+
     async _buildShopZapRequest(amountSats) {
         try {
             const evt = {
@@ -777,7 +791,7 @@ TRANSFER TO PUBKEY
                     ['amount', String(parseInt(amountSats, 10) * 1000)],
                     ['relays', ...this.defaultRelays.slice(0, 5)]
                 ],
-                content: '',
+                content: this._shopPurchaseComment(this.currentPurchaseContext),
                 pubkey: this.pubkey
             };
             return await this.signEvent(evt);

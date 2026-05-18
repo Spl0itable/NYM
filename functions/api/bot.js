@@ -2885,6 +2885,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       if (body.zapRequest && lnurlData.allowsNostr && lnurlData.nostrPubkey) {
         cbUrl.searchParams.set("nostr", JSON.stringify(body.zapRequest));
       }
+      if (body.comment && lnurlData.commentAllowed) {
+        cbUrl.searchParams.set("comment", String(body.comment).slice(0, lnurlData.commentAllowed));
+      }
     } catch (e) {
       return json({ error: "Bot Lightning wallet callback is invalid." }, 502);
     }
@@ -3084,7 +3087,7 @@ function shopGenerateCode() {
   return "NYM-" + bytesToHex(randomBytes(16)).toUpperCase();
 }
 // Generate a BOLT11 invoice from the bot's Lightning address (LUD-21).
-async function botGenerateInvoice(env, sats, zapRequest) {
+async function botGenerateInvoice(env, sats, zapRequest, comment) {
   var lnAddr = (env.BOT_LIGHTNING_ADDRESS || BOT_LIGHTNING_ADDRESS).split("@");
   if (lnAddr.length !== 2) return { error: "Bot Lightning address misconfigured.", status: 500 };
   var lnurlData;
@@ -3105,6 +3108,9 @@ async function botGenerateInvoice(env, sats, zapRequest) {
     cbUrl.searchParams.set("amount", String(milli));
     if (zapRequest && lnurlData.allowsNostr && lnurlData.nostrPubkey) {
       cbUrl.searchParams.set("nostr", JSON.stringify(zapRequest));
+    }
+    if (comment && lnurlData.commentAllowed) {
+      cbUrl.searchParams.set("comment", String(comment).slice(0, lnurlData.commentAllowed));
     }
   } catch (e) {
     return { error: "Bot Lightning wallet callback is invalid.", status: 502 };
@@ -3202,7 +3208,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (body.recipientPubkey && /^[0-9a-f]{64}$/i.test(body.recipientPubkey)) {
       giftTo = body.recipientPubkey.toLowerCase();
     }
-    var inv = await botGenerateInvoice(env, cat.price, body.zapRequest);
+    var inv = await botGenerateInvoice(env, cat.price, body.zapRequest, body.comment);
     if (inv.error) return json({ error: inv.error }, inv.status || 502);
     var invoiceId = bytesToHex(sha256(utf8ToBytes(inv.pr)));
     await env.R2_BUCKET.put("shop-pending/" + invoiceId, JSON.stringify({
@@ -3359,7 +3365,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.66.366";
+var NYMCHAT_VERSION = "3.66.368";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3994,7 +4000,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.366 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.368 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -4765,7 +4771,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.66.366")
+  // Prefix match (e.g. "3.61" matches "3.66.368")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -4820,7 +4826,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.66.366", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.66.368", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
