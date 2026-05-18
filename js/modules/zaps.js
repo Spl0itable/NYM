@@ -31,19 +31,18 @@ Object.assign(NYM.prototype, {
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             // Close previous zap subscription
             if (this._zapReceiptSubId) {
-                this._poolSendToRole('critical', ["CLOSE", this._zapReceiptSubId]);
+                this._poolSend(["CLOSE", this._zapReceiptSubId]);
             }
             this._zapReceiptSubId = newSubId;
-            this._poolSendToRole('critical', ["REQ", newSubId, zapFilter]);
+            this._poolSend(["REQ", newSubId, zapFilter]);
         } else {
-            // Direct mode: send to default + DM relays only
             const msg = JSON.stringify(["REQ", newSubId, zapFilter]);
             const closeMsg = this._zapReceiptSubId ? JSON.stringify(["CLOSE", this._zapReceiptSubId]) : null;
             this._zapReceiptSubId = newSubId;
 
-            this.relayPool.forEach((relay, url) => {
+            this.relayPool.forEach((relay) => {
                 if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                    relay.type !== 'write' && !this._isGeoOrDiscoveredRelay(url)) {
+                    relay.type !== 'write') {
                     if (closeMsg) try { relay.ws.send(closeMsg); } catch (_) { }
                     if (!relay.subscriptions) relay.subscriptions = new Set();
                     relay.subscriptions.add(newSubId);
