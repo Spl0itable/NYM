@@ -1256,23 +1256,64 @@ Object.assign(NYM.prototype, {
             }));
     },
 
-    // Welcome message shown when a user first opens the premium Nymbot chat
+    // First-person Nymbot introduction shown when a user first opens the premium chat
     _botWelcomeHtml() {
         return [
-            '<strong>Welcome to Nymbot Premium</strong> — your private, end-to-end encrypted 1:1 AI chat.',
+            'Hey, I\'m <strong>Nymbot</strong> 👋 — your private, end-to-end encrypted 1:1 AI assistant.',
             '',
-            'This premium chat is smarter than the free public-channel bot. It reads each message, figures out the type of task (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best AI model for that job — so answers are sharper.',
+            'I\'m smarter than the free public-channel bot. I read each message, figure out the type of task (coding, reasoning/math, creative writing, translation, or general chat) and route it to the best AI model for the job — so my answers are sharper.',
             '',
-            '<strong>Tips &amp; commands:</strong>',
-            '• Just type normally — your whole conversation is used as context.',
+            '<strong>Here\'s how to get the most out of me:</strong>',
+            '• Just type normally — I use our whole conversation as context.',
             '• Start a message with <code>!</code> to get a one-off answer that ignores all earlier chat history (e.g. <code>!what is 2+2</code>).',
-            '• Quote-reply any message to ask a follow-up about it — Nymbot sees what you\'re replying to.',
+            '• Quote-reply any message to ask a follow-up about it — I\'ll see what you\'re replying to.',
             '• <code>?clear</code> — wipe this chat and start fresh.',
             '• <code>?balance</code> — check your credit balance (also shown in the header).',
             '• <code>?buy</code> — purchase more credits. <code>?gift @nym#xxxx</code> — gift credits to someone.',
             '',
-            'It\'s a paid feature — each reply costs 1 credit. Credits are tied to your nym, so save your nsec to keep them.'
+            'I\'m a paid feature — each reply costs 1 credit. Credits are tied to your nym, so save your nsec to keep them.',
+            '',
+            'So, what can I help you with?'
         ].join('<br>');
+    },
+
+    // Render the Nymbot welcome as a message bubble from Nymbot itself
+    _displayBotWelcomeMessage() {
+        const container = document.getElementById('messagesContainer');
+        if (!container || !this.verifiedBot) return;
+        const pubkey = this.verifiedBot.pubkey;
+        const botNym = this.parseNymFromDisplay(this.getNymFromPubkey(pubkey));
+        const suffix = this.getPubkeySuffix(pubkey);
+        const avatarSrc = this.getAvatarUrl(pubkey);
+        const safePk = this._safePubkey(pubkey);
+        const userColorClass = this.getUserColorClass(pubkey);
+        const now = new Date();
+        const fullTimestamp = now.toLocaleString('en-US', {
+            year: 'numeric', month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: this.settings.timeFormat === '12hr'
+        });
+        const bubbleTime = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', hour12: this.settings.timeFormat === '12hr'
+        });
+        const time = this.settings.showTimestamps ? bubbleTime : '';
+        const verifiedBadge = '<span class="verified-badge" title="Nymchat Bot">✓</span>';
+        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">&lt;${this.escapeHtml(botNym)}<span class="nym-suffix">#${suffix}</span>`;
+
+        const el = document.createElement('div');
+        el.className = 'message pm';
+        el.dataset.pubkey = pubkey;
+        el.dataset.messageId = 'nymbot-welcome';
+        el.dataset.author = botNym;
+        el.dataset.timestamp = now.getTime();
+        el.innerHTML = `
+    ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
+    <span class="message-author ${userColorClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}</span>&gt;</span>
+    <span class="message-content ${userColorClass}">${this._botWelcomeHtml()}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span></span>
+`;
+        container.appendChild(el);
+        this._updateBubbleGrouping(el);
+        this._scheduleScrollToBottom();
     },
 
     // Wipe the Nymbot conversation and start fresh (premium ?clear command)
@@ -1884,7 +1925,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Start of private message');
             if (this.isVerifiedBot(this.currentPM)) {
                 if (!skipBotWelcome) {
-                    this.displaySystemMessage(this._botWelcomeHtml(), 'system', { html: true });
+                    this._displayBotWelcomeMessage();
                 }
                 this._checkBotCredits(false);
             }
