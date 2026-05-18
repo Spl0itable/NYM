@@ -1564,7 +1564,7 @@ Object.assign(NYM.prototype, {
                 }
             ];
 
-            const fire = () => this.sendRequestToAllRelays(subscription);
+            const fire = () => this.sendRequestToFewRelays(subscription);
             if (typeof this._oneShotReqAcquire === 'function') this._oneShotReqAcquire(fire);
             else fire();
         });
