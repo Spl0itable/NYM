@@ -65,6 +65,8 @@ Object.assign(NYM.prototype, {
                 throw new Error('nostr-tools not loaded');
             }
 
+            this._appInitTime = Date.now();
+
             // Setup event listeners
             this.setupEventListeners();
             this.setupCommands();

@@ -288,7 +288,7 @@ Object.assign(NYM.prototype, {
         if (!messageEl) return false;
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed
-        const container = document.getElementById('messagesContainer');
+        const container = document.getElementById('messagesScroller');
         const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
 
         const reactions = this.reactions.get(messageId);

@@ -713,6 +713,8 @@ Object.assign(NYM.prototype, {
             if (response.ok) {
                 const data = await response.json();
                 if (data.url) {
+                    await this._persistWallpaperBlob(file, data.url);
+                    this._setWallpaperBlobUrl(file);
                     return data.url;
                 }
             }
@@ -738,14 +740,17 @@ Object.assign(NYM.prototype, {
 
         if (presets.includes(type)) {
             layer.classList.add(`wallpaper-pattern-${type}`);
-        } else if (type === 'custom' && customUrl) {
+        } else if (type === 'custom' && (this.wallpaperBlobUrl || customUrl)) {
             layer.classList.add('has-custom-wallpaper');
             // Layer a semi-transparent overlay on top of the image for readability
             const isLight = document.body.classList.contains('light-mode');
             const overlay = isLight
                 ? 'rgba(245, 245, 242, 0.85)'
                 : 'rgba(10, 10, 15, 0.82)';
-            layer.style.backgroundImage = `linear-gradient(${overlay}, ${overlay}), url('${customUrl}')`;
+            // Prefer the locally cached blob so the wallpaper renders without
+            // an external fetch on every load.
+            const src = this.wallpaperBlobUrl || customUrl;
+            layer.style.backgroundImage = `linear-gradient(${overlay}, ${overlay}), url('${src}')`;
         }
     },
 
@@ -755,6 +760,7 @@ Object.assign(NYM.prototype, {
             localStorage.setItem('nym_wallpaper_custom_url', customUrl);
         } else {
             localStorage.removeItem('nym_wallpaper_custom_url');
+            this._clearWallpaperCache();
         }
     },
 
@@ -762,7 +768,50 @@ Object.assign(NYM.prototype, {
         const type = localStorage.getItem('nym_wallpaper_type') || 'geometric';
         const customUrl = localStorage.getItem('nym_wallpaper_custom_url') || '';
         this.applyWallpaper(type, customUrl);
+        if (type === 'custom' && customUrl) {
+            this._ensureWallpaperCached(customUrl);
+        }
         return { type, customUrl };
+    },
+
+    async _persistWallpaperBlob(blob, url) {
+        try {
+            await this._cachePut('meta', { key: 'customWallpaper', blob, url });
+        } catch (_) { }
+    },
+
+    _setWallpaperBlobUrl(blob) {
+        if (this.wallpaperBlobUrl) URL.revokeObjectURL(this.wallpaperBlobUrl);
+        this.wallpaperBlobUrl = URL.createObjectURL(blob);
+    },
+
+    _clearWallpaperCache() {
+        try { this._cacheDelete('meta', 'customWallpaper'); } catch (_) { }
+        if (this.wallpaperBlobUrl) {
+            URL.revokeObjectURL(this.wallpaperBlobUrl);
+            this.wallpaperBlobUrl = null;
+        }
+    },
+
+    // Render the custom wallpaper from a local blob. If none is cached for
+    // this URL, fetch it once and store it so later loads stay offline.
+    async _ensureWallpaperCached(customUrl) {
+        try {
+            const meta = await this._cacheGetAll('meta');
+            const entry = meta.find(m => m.key === 'customWallpaper');
+            if (entry && entry.blob && entry.url === customUrl) {
+                this._setWallpaperBlobUrl(entry.blob);
+            } else {
+                const res = await fetch(customUrl);
+                if (!res.ok) return;
+                const blob = await res.blob();
+                await this._persistWallpaperBlob(blob, customUrl);
+                this._setWallpaperBlobUrl(blob);
+            }
+            if ((localStorage.getItem('nym_wallpaper_type') || '') === 'custom') {
+                this.applyWallpaper('custom', customUrl);
+            }
+        } catch (_) { }
     },
 
     async uploadImage(file) {

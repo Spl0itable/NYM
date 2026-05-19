@@ -470,6 +470,20 @@ Object.assign(NYM.prototype, {
     },
 
     // Receive NIP-17 (GiftWrap 1059): unwrap, verify, store
+    _isGiftWrapBacklog() {
+        if (this._giftWrapInitialSyncDone) return false;
+        if (this._appInitTime && Date.now() - this._appInitTime > 20000) {
+            this._giftWrapInitialSyncDone = true;
+            return false;
+        }
+        if (!this._giftWrapSyncTimer) {
+            this._giftWrapSyncTimer = setTimeout(() => {
+                this._giftWrapInitialSyncDone = true;
+            }, 12000);
+        }
+        return true;
+    },
+
     async handleGiftWrapDM(event, opts) {
         try {
             const NT = window.NostrTools;
@@ -1096,7 +1110,7 @@ Object.assign(NYM.prototype, {
                 conversationKey,
                 conversationPubkey: peerPubkey,
                 eventKind: 1059,
-                isHistorical: (Math.floor(Date.now() / 1000) - tsSec) > 10,
+                isHistorical: this._isGiftWrapBacklog(),
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
                 nymMessageId: nymMsgId  // For sending Nymchat read receipts
             };
@@ -2433,7 +2447,8 @@ Object.assign(NYM.prototype, {
     // Load older PM/group messages when user scrolls to top
     loadOlderPMMessages(conversationKey) {
         const container = document.getElementById('messagesContainer');
-        if (!container) return false;
+        const scroller = this._getMessagesScroller();
+        if (!container || !scroller) return false;
 
         const currentStart = this.pmRenderedStart.get(conversationKey);
         if (currentStart === undefined || currentStart <= 0) return false;
@@ -2444,9 +2459,7 @@ Object.assign(NYM.prototype, {
         const newStart = Math.max(0, currentStart - this.pmLoadMoreSize);
         if (newStart === currentStart) return false;
 
-        // Remember scroll position before re-rendering
-        const prevScrollHeight = container.scrollHeight;
-        const prevScrollTop = container.scrollTop;
+        const prevScrollTop = scroller.scrollTop;
 
         // Update start index and invalidate DOM cache
         this.pmRenderedStart.set(conversationKey, newStart);
@@ -2483,10 +2496,37 @@ Object.assign(NYM.prototype, {
 
         // Restore scroll position so user stays at the same place
         requestAnimationFrame(() => {
-            const newScrollHeight = container.scrollHeight;
-            container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+            scroller.scrollTop = prevScrollTop;
         });
 
+        return true;
+    },
+
+    collapsePMToLatest(conversationKey) {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return false;
+        const msgEls = container.querySelectorAll('.message');
+        const excess = msgEls.length - this.pmPageSize;
+        if (excess <= 0) return false;
+        for (let i = 0; i < excess; i++) {
+            msgEls[i].remove();
+        }
+
+        const messages = this.getFilteredPMMessages(conversationKey);
+        const newStart = Math.max(0, messages.length - this.pmPageSize);
+        this.pmRenderedStart.set(conversationKey, newStart);
+        this.channelDOMCache.delete(conversationKey);
+
+        let notice = container.querySelector('.pm-load-older, .pm-history-start');
+        if (newStart > 0) {
+            if (!notice) {
+                notice = document.createElement('div');
+                container.insertBefore(notice, container.firstChild);
+            }
+            notice.className = 'system-message pm-load-older';
+            notice.textContent = `Scroll up to load older messages (${newStart} more)`;
+        }
+        this._recomputeAllBubbleGrouping(container);
         return true;
     },
 

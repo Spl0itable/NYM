@@ -1507,8 +1507,8 @@ function clearSearch(inputId) {
 }
 
 function scrollToBottom() {
-    const container = document.getElementById('messagesContainer');
-    if (!container) return;
+    const scroller = document.getElementById('messagesScroller');
+    if (!scroller) return;
 
     // User explicitly wants to go to the bottom — clear the scrolled-up flag
     nym.userScrolledUp = false;
@@ -1519,9 +1519,7 @@ function scrollToBottom() {
         nym._scrollRAF = null;
     }
 
-    // Force scroll to bottom immediately, then again on next frame to handle
-    // any pending layout changes (images loading, animations, etc.)
-    container.scrollTop = container.scrollHeight;
+    scroller.scrollTop = 0;
     nym._scheduleScrollToBottom(true);
 }
 
@@ -3314,7 +3312,7 @@ async function handleWallpaperUpload(event) {
     if (url) {
         // Update the custom preview thumbnail
         customPreview.innerHTML = '';
-        customPreview.style.backgroundImage = `url('${url}')`;
+        customPreview.style.backgroundImage = `url('${nym.wallpaperBlobUrl || url}')`;
 
         // Select custom wallpaper
         document.querySelectorAll('.wallpaper-option').forEach(opt => {
@@ -3346,12 +3344,12 @@ function initWallpaperUI() {
         const customPreview = document.getElementById('customWallpaperPreview');
         if (customPreview) {
             customPreview.innerHTML = '';
-            customPreview.style.backgroundImage = `url('${customUrl}')`;
+            customPreview.style.backgroundImage = `url('${nym.wallpaperBlobUrl || customUrl}')`;
         }
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.371';
+const NYMCHAT_VERSION = 'v3.66.372';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -4972,6 +4970,7 @@ async function applyNostrSettings(s) {
         if (s.wallpaperType === 'custom' && s.wallpaperCustomUrl) {
             nym.applyWallpaper('custom', s.wallpaperCustomUrl);
             nym.saveWallpaper('custom', s.wallpaperCustomUrl);
+            nym._ensureWallpaperCached(s.wallpaperCustomUrl);
         } else if (typeof selectWallpaper === 'function') {
             selectWallpaper(s.wallpaperType);
         }
@@ -5585,13 +5584,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Scroll-to-bottom button and mobile input-buttons hide on scroll
     const messageInput = document.getElementById('messageInput');
     const messagesContainer = document.getElementById('messagesContainer');
+    const messagesScroller = document.getElementById('messagesScroller');
     const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
-    if (messagesContainer && scrollToBottomBtn) {
-        messagesContainer.addEventListener('scroll', () => {
-            const distanceFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
+    if (messagesScroller && scrollToBottomBtn) {
+        messagesScroller.addEventListener('scroll', () => {
+            // Reverse-column container: scrollTop is 0 at the bottom (newest)
+            // and negative scrolling up. Math.abs gives distance from bottom.
+            const distanceFromBottom = Math.abs(messagesScroller.scrollTop);
+            const distanceFromTop = (messagesScroller.scrollHeight - messagesScroller.clientHeight) - distanceFromBottom;
 
             // When scrolled to the very top, load older messages or show history limit
-            if (messagesContainer.scrollTop <= 5) {
+            if (distanceFromTop <= 5) {
                 if (nym.inPMMode) {
                     // PM/group pagination: load older messages on scroll-to-top
                     const convKey = nym.currentGroup
@@ -5607,7 +5610,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             });
                         }
                     }
-                } else {
+                } else if (messagesContainer) {
                     // Channel mode: show history limit notice
                     const storageKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
                     const channelMessages = nym.messages.get(storageKey) || [];
@@ -5621,10 +5624,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             // Track whether user has intentionally scrolled away from the bottom
-            if (distanceFromBottom > 150) {
-                nym.userScrolledUp = true;
-            } else {
-                nym.userScrolledUp = false;
+            nym.userScrolledUp = distanceFromBottom > 150;
+
+            // Once the user rests back at the latest messages, prune the older
+            // messages that lazy-loading appended so PMs/groups don't bloat the DOM.
+            if (distanceFromBottom < 50 && nym.inPMMode) {
+                const collapseKey = nym.currentGroup
+                    ? nym.getGroupConversationKey(nym.currentGroup)
+                    : (nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null);
+                if (collapseKey) {
+                    clearTimeout(nym._pmCollapseTimer);
+                    nym._pmCollapseTimer = setTimeout(() => {
+                        if (Math.abs(messagesScroller.scrollTop) < 50) nym.collapsePMToLatest(collapseKey);
+                    }, 600);
+                }
             }
 
             // Show/hide scroll-to-bottom button
@@ -5637,7 +5650,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // Auto-scroll to bottom when input is focused on mobile (only if near bottom)
-    if (messageInput && messagesContainer) {
+    if (messageInput && messagesScroller) {
         messageInput.addEventListener('focus', function () {
             if (window.innerWidth <= 768 && !nym.userScrolledUp) {
                 setTimeout(() => {

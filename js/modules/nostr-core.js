@@ -723,7 +723,8 @@ Object.assign(NYM.prototype, {
         if (trimmed.includes('://') || trimmed.startsWith('www.')) return false;
         if (/^ln(bc|tb|ts)/i.test(trimmed)) return false;
         if (/^cashu/i.test(trimmed)) return false;
-        if (/^(npub|nsec|note|nevent|naddr)1[a-z0-9]+$/i.test(trimmed)) return false;
+        if (/^(npub|nsec|note|nevent|naddr|nprofile)1[a-z0-9]+$/i.test(trimmed)) return false;
+        if (/^[0-9a-fA-F]{64}$/.test(trimmed)) return false;
         if (trimmed.includes('```') || trimmed.includes('`')) return false;
         if (trimmed.startsWith('data:image')) return false;
 
@@ -754,6 +755,8 @@ Object.assign(NYM.prototype, {
         const scrubbed = trimmed
             .split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
             .replace(/@\S+/g, ' ')
+            .replace(/(nostr:)?(npub|nsec|note|nevent|naddr|nprofile)1[a-z0-9]+/gi, ' ')
+            .replace(/\b[0-9a-fA-F]{64}\b/g, ' ')
             .trim();
 
         return this._spamScore(scrubbed) >= 3;

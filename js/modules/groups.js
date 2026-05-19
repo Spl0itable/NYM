@@ -579,7 +579,7 @@ Object.assign(NYM.prototype, {
                 const inviterName = this.getNymFromPubkey(senderPubkey);
                 const inviteBody = rumor.content || `You've been added to group "${groupName}"`;
                 const inviteTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-                const isHistorical = (Math.floor(Date.now() / 1000) - inviteTsSec) > 10;
+                const isHistorical = this._isGiftWrapBacklog();
                 const groupConvKeyForNotif = this.getGroupConversationKey(groupId);
                 if (!isHistorical) {
                     this.showNotification(`Group invite: ${groupName}`, inviteBody, {
@@ -930,7 +930,7 @@ Object.assign(NYM.prototype, {
             conversationKey: groupConvKey,
             conversationPubkey: null,
             eventKind: 1059,
-            isHistorical: (Math.floor(Date.now() / 1000) - tsSec) > 10,
+            isHistorical: this._isGiftWrapBacklog(),
             nymMessageId: nymMsgId,
             deliveryStatus: isOwn ? 'sent' : undefined
         };
