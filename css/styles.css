@@ -1580,6 +1580,11 @@ body.light-mode .channel-context-menu {
     min-height: 14px;
 }
 
+.group-readers:empty,
+.channel-readers:empty {
+    display: none;
+}
+
 .group-reader-avatar {
     width: 14px;
     height: 14px;

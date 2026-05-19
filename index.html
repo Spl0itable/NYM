@@ -1130,6 +1130,17 @@
                     Policy</a>.</span>
         </div>
     </div>
+    <script>
+        (function () {
+            try {
+                var loggedIn = localStorage.getItem('nym_nostr_login_method') !== null
+                    || localStorage.getItem('nym_auto_ephemeral') === 'true';
+                if (loggedIn) {
+                    document.getElementById('setupModal').classList.remove('active');
+                }
+            } catch (e) { }
+        })();
+    </script>
 
     <!-- Settings Modal -->
     <div class="modal" id="settingsModal">

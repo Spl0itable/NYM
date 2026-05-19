@@ -3351,7 +3351,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.369';
+const NYMCHAT_VERSION = 'v3.66.370';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -3709,7 +3709,8 @@ async function checkSavedConnection() {
             return;
         }
     }
-    // If no saved connection, the setup modal remains visible (default).
+    // No saved connection (or restoration failed) — show the setup modal.
+    document.getElementById('setupModal').classList.add('active');
 }
 
 async function initializeNym() {

@@ -830,6 +830,8 @@ Object.assign(NYM.prototype, {
                     const receiptId = nymReceipt.messageId.toUpperCase();
                     const receiptType = nymReceipt.receiptType;
 
+                    if (receiptType === 'read') this.recordUserActivity(senderPubkey);
+
                     for (const [convKey, messages] of this.pmMessages) {
                         const msg = messages.find(m => m.nymMessageId?.toUpperCase() === receiptId);
                         if (msg && msg.isOwn) {
@@ -869,6 +871,8 @@ Object.assign(NYM.prototype, {
                 if (parsedEarly.type === 0x02 || parsedEarly.type === 0x03) {
                     const receiptType = parsedEarly.type === 0x02 ? 'read' : 'delivered';
                     const receiptId = parsedEarly.messageId?.toUpperCase();
+
+                    if (receiptType === 'read') this.recordUserActivity(senderPubkey);
 
                     if (receiptId) {
                         for (const [, messages] of this.pmMessages) {
@@ -1154,6 +1158,7 @@ Object.assign(NYM.prototype, {
                         sent = true;
                     }
                     if (sent) msg.readReceiptSent = true;
+                    this.recordOwnActivity();
                 }
             } else {
                 // Not viewing this conversation — leave the cached DOM in
@@ -1897,6 +1902,7 @@ Object.assign(NYM.prototype, {
             }
             if (sent) msg.readReceiptSent = true;
         }
+        this.recordOwnActivity();
 
         // Close mobile sidebar on mobile
         if (window.innerWidth <= 768) {

@@ -318,14 +318,37 @@ Object.assign(NYM.prototype, {
             dot.className = `user-status-dot status-${user.effectiveStatus}`;
 
             const strong = item.querySelector('strong');
-            const label = `@${user.baseNym}#${user.suffix}`;
+            const flairHtml = this.getFlairForUser(user.pubkey) || '';
+            const isDev = this.isVerifiedDeveloper(user.pubkey);
+            const isBot = this.isVerifiedBot(user.pubkey);
+            const friendHtml = this.getFriendBadgeHtml(user.pubkey) || '';
+            const label = `@${user.baseNym}#${user.suffix}|${flairHtml}|${isDev ? 'd' : ''}${isBot ? 'b' : ''}|${friendHtml ? 'f' : ''}`;
             if (strong.dataset.label !== label) {
                 strong.dataset.label = label;
-                strong.textContent = `@${user.baseNym}`;
+                strong.textContent = '';
+                strong.appendChild(document.createTextNode(`@${user.baseNym}`));
                 const sfx = document.createElement('span');
                 sfx.className = 'nym-suffix';
                 sfx.textContent = `#${user.suffix}`;
                 strong.appendChild(sfx);
+                if (flairHtml) {
+                    const tmpl = document.createElement('template');
+                    tmpl.innerHTML = flairHtml;
+                    strong.appendChild(tmpl.content);
+                }
+                if (isDev || isBot) {
+                    strong.appendChild(document.createTextNode(' '));
+                    const badge = document.createElement('span');
+                    badge.className = 'verified-badge';
+                    badge.title = isDev ? this.verifiedDeveloper.title : 'Nymchat Bot';
+                    badge.textContent = '✓';
+                    strong.appendChild(badge);
+                }
+                if (friendHtml) {
+                    const tmpl = document.createElement('template');
+                    tmpl.innerHTML = friendHtml;
+                    strong.appendChild(tmpl.content);
+                }
             }
 
             const ref = prev ? prev.nextSibling : dropdown.firstChild;

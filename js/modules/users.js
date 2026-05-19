@@ -1013,6 +1013,29 @@ Object.assign(NYM.prototype, {
         this.updateUserList();
     },
 
+    // Mark a remote user as recently active without an explicit message —
+    // e.g. after receiving a "read" receipt, so lurkers who only view
+    // messages still appear online.
+    recordUserActivity(pubkey) {
+        if (!pubkey || pubkey === this.pubkey) return;
+        if (this.awayMessages && this.awayMessages.has(pubkey)) return;
+        const now = Date.now();
+        const user = this.users.get(pubkey);
+        if (user) {
+            user.lastSeen = now;
+            if (user.status !== 'away') user.status = 'online';
+        } else {
+            this.users.set(pubkey, {
+                nym: this.getNymFromPubkey(pubkey),
+                pubkey: pubkey,
+                lastSeen: now,
+                status: 'online',
+                channels: new Set()
+            });
+        }
+        this.updateUserList();
+    },
+
     updateUserList() {
         if (this._userListRafPending) return;
         this._userListRafPending = true;
