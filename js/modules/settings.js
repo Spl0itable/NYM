@@ -101,6 +101,8 @@ Object.assign(NYM.prototype, {
             lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
             groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false,
             translateLanguage: this.settings.translateLanguage || '',
+            translateFavoriteLanguages: this._getTranslateFavorites(),
+            sidebarSectionOrder: this._getSidebarSectionOrder(),
             notificationsEnabled: this.notificationsEnabled !== false,
             groupNotifyMentionsOnly: this.groupNotifyMentionsOnly || false,
             notifyFriendsOnly: this.notifyFriendsOnly || false,

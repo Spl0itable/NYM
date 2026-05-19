@@ -1,59 +1,133 @@
 // translate.js - Message and input translation (auto-detect, language selection)
 
+// Full set of languages supported by Google Translate.
+const NYM_TRANSLATE_LANGUAGES = [
+    { code: 'af', name: 'Afrikaans' }, { code: 'sq', name: 'Albanian' },
+    { code: 'am', name: 'Amharic' }, { code: 'ar', name: 'Arabic' },
+    { code: 'hy', name: 'Armenian' }, { code: 'as', name: 'Assamese' },
+    { code: 'ay', name: 'Aymara' }, { code: 'az', name: 'Azerbaijani' },
+    { code: 'bm', name: 'Bambara' }, { code: 'eu', name: 'Basque' },
+    { code: 'be', name: 'Belarusian' }, { code: 'bn', name: 'Bengali' },
+    { code: 'bho', name: 'Bhojpuri' }, { code: 'bs', name: 'Bosnian' },
+    { code: 'bg', name: 'Bulgarian' }, { code: 'ca', name: 'Catalan' },
+    { code: 'ceb', name: 'Cebuano' }, { code: 'ny', name: 'Chichewa' },
+    { code: 'zh', name: 'Chinese (Simplified)' }, { code: 'zh-TW', name: 'Chinese (Traditional)' },
+    { code: 'co', name: 'Corsican' }, { code: 'hr', name: 'Croatian' },
+    { code: 'cs', name: 'Czech' }, { code: 'da', name: 'Danish' },
+    { code: 'dv', name: 'Dhivehi' }, { code: 'doi', name: 'Dogri' },
+    { code: 'nl', name: 'Dutch' }, { code: 'en', name: 'English' },
+    { code: 'eo', name: 'Esperanto' }, { code: 'et', name: 'Estonian' },
+    { code: 'ee', name: 'Ewe' }, { code: 'fil', name: 'Filipino' },
+    { code: 'fi', name: 'Finnish' }, { code: 'fr', name: 'French' },
+    { code: 'fy', name: 'Frisian' }, { code: 'gl', name: 'Galician' },
+    { code: 'ka', name: 'Georgian' }, { code: 'de', name: 'German' },
+    { code: 'el', name: 'Greek' }, { code: 'gn', name: 'Guarani' },
+    { code: 'gu', name: 'Gujarati' }, { code: 'ht', name: 'Haitian Creole' },
+    { code: 'ha', name: 'Hausa' }, { code: 'haw', name: 'Hawaiian' },
+    { code: 'he', name: 'Hebrew' }, { code: 'hi', name: 'Hindi' },
+    { code: 'hmn', name: 'Hmong' }, { code: 'hu', name: 'Hungarian' },
+    { code: 'is', name: 'Icelandic' }, { code: 'ig', name: 'Igbo' },
+    { code: 'ilo', name: 'Ilocano' }, { code: 'id', name: 'Indonesian' },
+    { code: 'ga', name: 'Irish' }, { code: 'it', name: 'Italian' },
+    { code: 'ja', name: 'Japanese' }, { code: 'jv', name: 'Javanese' },
+    { code: 'kn', name: 'Kannada' }, { code: 'kk', name: 'Kazakh' },
+    { code: 'km', name: 'Khmer' }, { code: 'rw', name: 'Kinyarwanda' },
+    { code: 'gom', name: 'Konkani' }, { code: 'ko', name: 'Korean' },
+    { code: 'kri', name: 'Krio' }, { code: 'ku', name: 'Kurdish (Kurmanji)' },
+    { code: 'ckb', name: 'Kurdish (Sorani)' }, { code: 'ky', name: 'Kyrgyz' },
+    { code: 'lo', name: 'Lao' }, { code: 'la', name: 'Latin' },
+    { code: 'lv', name: 'Latvian' }, { code: 'ln', name: 'Lingala' },
+    { code: 'lt', name: 'Lithuanian' }, { code: 'lg', name: 'Luganda' },
+    { code: 'lb', name: 'Luxembourgish' }, { code: 'mk', name: 'Macedonian' },
+    { code: 'mai', name: 'Maithili' }, { code: 'mg', name: 'Malagasy' },
+    { code: 'ms', name: 'Malay' }, { code: 'ml', name: 'Malayalam' },
+    { code: 'mt', name: 'Maltese' }, { code: 'mi', name: 'Maori' },
+    { code: 'mr', name: 'Marathi' }, { code: 'mni-Mtei', name: 'Meiteilon (Manipuri)' },
+    { code: 'lus', name: 'Mizo' }, { code: 'mn', name: 'Mongolian' },
+    { code: 'my', name: 'Myanmar (Burmese)' }, { code: 'ne', name: 'Nepali' },
+    { code: 'no', name: 'Norwegian' }, { code: 'or', name: 'Odia (Oriya)' },
+    { code: 'om', name: 'Oromo' }, { code: 'ps', name: 'Pashto' },
+    { code: 'fa', name: 'Persian' }, { code: 'pl', name: 'Polish' },
+    { code: 'pt', name: 'Portuguese' }, { code: 'pa', name: 'Punjabi' },
+    { code: 'qu', name: 'Quechua' }, { code: 'ro', name: 'Romanian' },
+    { code: 'ru', name: 'Russian' }, { code: 'sm', name: 'Samoan' },
+    { code: 'sa', name: 'Sanskrit' }, { code: 'gd', name: 'Scots Gaelic' },
+    { code: 'nso', name: 'Sepedi' }, { code: 'sr', name: 'Serbian' },
+    { code: 'st', name: 'Sesotho' }, { code: 'sn', name: 'Shona' },
+    { code: 'sd', name: 'Sindhi' }, { code: 'si', name: 'Sinhala' },
+    { code: 'sk', name: 'Slovak' }, { code: 'sl', name: 'Slovenian' },
+    { code: 'so', name: 'Somali' }, { code: 'es', name: 'Spanish' },
+    { code: 'su', name: 'Sundanese' }, { code: 'sw', name: 'Swahili' },
+    { code: 'sv', name: 'Swedish' }, { code: 'tg', name: 'Tajik' },
+    { code: 'ta', name: 'Tamil' }, { code: 'tt', name: 'Tatar' },
+    { code: 'te', name: 'Telugu' }, { code: 'th', name: 'Thai' },
+    { code: 'ti', name: 'Tigrinya' }, { code: 'ts', name: 'Tsonga' },
+    { code: 'tr', name: 'Turkish' }, { code: 'tk', name: 'Turkmen' },
+    { code: 'ak', name: 'Twi' }, { code: 'uk', name: 'Ukrainian' },
+    { code: 'ur', name: 'Urdu' }, { code: 'ug', name: 'Uyghur' },
+    { code: 'uz', name: 'Uzbek' }, { code: 'vi', name: 'Vietnamese' },
+    { code: 'cy', name: 'Welsh' }, { code: 'xh', name: 'Xhosa' },
+    { code: 'yi', name: 'Yiddish' }, { code: 'yo', name: 'Yoruba' },
+    { code: 'zu', name: 'Zulu' },
+];
+
+// Lookup from language code (case-insensitive) to display name.
+const NYM_TRANSLATE_LANG_NAMES = (() => {
+    const map = {};
+    for (const l of NYM_TRANSLATE_LANGUAGES) map[l.code.toLowerCase()] = l.name;
+    map['zh-cn'] = 'Chinese (Simplified)';
+    map['iw'] = 'Hebrew';
+    map['jw'] = 'Javanese';
+    return map;
+})();
+
 Object.assign(NYM.prototype, {
+
+    // Resolve a language code (e.g. "en", "zh-CN") to its full display name.
+    _languageName(code) {
+        if (!code) return '';
+        return NYM_TRANSLATE_LANG_NAMES[String(code).toLowerCase()] || code;
+    },
+
+    // Favorite languages are kept at the top of the translate input dropdown.
+    _getTranslateFavorites() {
+        if (!this._translateFavorites) {
+            let stored = [];
+            try { stored = JSON.parse(localStorage.getItem('nym_translate_favorites') || '[]'); } catch (_) { }
+            this._translateFavorites = Array.isArray(stored) ? stored : [];
+        }
+        return this._translateFavorites;
+    },
+
+    _toggleTranslateFavorite(code) {
+        const favs = this._getTranslateFavorites();
+        const idx = favs.indexOf(code);
+        if (idx === -1) favs.push(code);
+        else favs.splice(idx, 1);
+        localStorage.setItem('nym_translate_favorites', JSON.stringify(favs));
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    },
+
+    // Languages sorted with favorites first, the rest alphabetically.
+    _sortedTranslateLanguages() {
+        const favs = this._getTranslateFavorites();
+        const favSet = new Set(favs);
+        const favList = favs
+            .map(code => NYM_TRANSLATE_LANGUAGES.find(l => l.code === code))
+            .filter(Boolean);
+        const rest = NYM_TRANSLATE_LANGUAGES
+            .filter(l => !favSet.has(l.code))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        return favList.concat(rest);
+    },
 
     // Show a language-picker popup when the user tries to translate without a language set.
     // Returns the chosen language code, or '' if cancelled.
     _promptTranslateLanguage() {
         return new Promise((resolve) => {
-            const languages = [
-                { code: 'en', name: 'English' },
-                { code: 'es', name: 'Spanish' },
-                { code: 'fr', name: 'French' },
-                { code: 'de', name: 'German' },
-                { code: 'it', name: 'Italian' },
-                { code: 'pt', name: 'Portuguese' },
-                { code: 'ru', name: 'Russian' },
-                { code: 'zh', name: 'Chinese' },
-                { code: 'ja', name: 'Japanese' },
-                { code: 'ko', name: 'Korean' },
-                { code: 'ar', name: 'Arabic' },
-                { code: 'hi', name: 'Hindi' },
-                { code: 'tr', name: 'Turkish' },
-                { code: 'nl', name: 'Dutch' },
-                { code: 'pl', name: 'Polish' },
-                { code: 'uk', name: 'Ukrainian' },
-                { code: 'vi', name: 'Vietnamese' },
-                { code: 'th', name: 'Thai' },
-                { code: 'id', name: 'Indonesian' },
-                { code: 'sv', name: 'Swedish' },
-                { code: 'af', name: 'Afrikaans' },
-                { code: 'bg', name: 'Bulgarian' },
-                { code: 'bn', name: 'Bengali' },
-                { code: 'ca', name: 'Catalan' },
-                { code: 'cs', name: 'Czech' },
-                { code: 'da', name: 'Danish' },
-                { code: 'el', name: 'Greek' },
-                { code: 'et', name: 'Estonian' },
-                { code: 'fa', name: 'Persian' },
-                { code: 'fi', name: 'Finnish' },
-                { code: 'fil', name: 'Filipino' },
-                { code: 'he', name: 'Hebrew' },
-                { code: 'hr', name: 'Croatian' },
-                { code: 'hu', name: 'Hungarian' },
-                { code: 'lt', name: 'Lithuanian' },
-                { code: 'lv', name: 'Latvian' },
-                { code: 'ms', name: 'Malay' },
-                { code: 'no', name: 'Norwegian' },
-                { code: 'ro', name: 'Romanian' },
-                { code: 'sk', name: 'Slovak' },
-                { code: 'sl', name: 'Slovenian' },
-                { code: 'sr', name: 'Serbian' },
-                { code: 'sw', name: 'Swahili' },
-                { code: 'ta', name: 'Tamil' },
-                { code: 'te', name: 'Telugu' },
-                { code: 'ur', name: 'Urdu' },
-            ];
+            const languages = NYM_TRANSLATE_LANGUAGES
+                .slice()
+                .sort((a, b) => a.name.localeCompare(b.name));
 
             const overlay = document.createElement('div');
             overlay.className = 'modal active';
@@ -61,9 +135,13 @@ Object.assign(NYM.prototype, {
             overlay.innerHTML = `
                 <div class="modal-content" style="max-width:360px;padding:24px;">
                     <h3 style="margin:0 0 6px;font-size:1.1em;color:var(--text-bright);">Select Your Language</h3>
-                    <p style="margin:0 0 16px;font-size:0.85em;color:var(--text-dim);">Choose the language you'd like messages translated into. This will be saved to your settings.</p>
+                    <p style="margin:0 0 12px;font-size:0.85em;color:var(--text-dim);">Choose the language you'd like messages translated into. This will be saved to your settings.</p>
+                    <input type="text" class="translate-lang-search" placeholder="Search languages..." style="
+                        width:100%;box-sizing:border-box;margin:0 0 12px;padding:9px 12px;border-radius:var(--radius-sm);
+                        border:1px solid var(--glass-border);background:rgba(255,255,255,0.05);color:var(--text);
+                        font-size:0.9em;outline:none;">
                     <div class="translate-lang-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:320px;overflow-y:auto;padding-right:4px;">
-                        ${languages.map(l => `<button class="translate-lang-option" data-lang="${l.code}" style="
+                        ${languages.map(l => `<button class="translate-lang-option" data-lang="${l.code}" data-name="${l.name.toLowerCase()}" style="
                             padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--glass-border);
                             background:rgba(255,255,255,0.04);color:var(--text);cursor:pointer;font-size:0.9em;
                             transition:background 0.12s,border-color 0.12s;text-align:left;
@@ -76,6 +154,15 @@ Object.assign(NYM.prototype, {
                 overlay.remove();
                 resolve(langCode);
             };
+
+            // Filter the grid as the user types
+            const search = overlay.querySelector('.translate-lang-search');
+            search.addEventListener('input', () => {
+                const q = search.value.trim().toLowerCase();
+                overlay.querySelectorAll('.translate-lang-option').forEach(btn => {
+                    btn.style.display = (!q || btn.dataset.name.includes(q)) ? '' : 'none';
+                });
+            });
 
             // Click on a language option
             overlay.querySelectorAll('.translate-lang-option').forEach(btn => {
@@ -107,6 +194,7 @@ Object.assign(NYM.prototype, {
             });
 
             document.body.appendChild(overlay);
+            setTimeout(() => search.focus(), 50);
         });
     },
 
@@ -169,14 +257,14 @@ Object.assign(NYM.prototype, {
                     contentEl.after(translationEl);
                 }
                 if (isNoop) {
-                    translationEl.innerHTML = `<span class="translation-icon">🌐</span> <span class="translation-error">Already in ${this.escapeHtml(targetLang)} (nothing to translate)</span>`;
+                    translationEl.innerHTML = `<span class="translation-icon">🌐</span> <span class="translation-error">Already in ${this.escapeHtml(this._languageName(targetLang))} (nothing to translate)</span>`;
                 } else {
                     const langLabel = detectedLang !== 'auto' && detectedLang !== targetLang
-                        ? `<span class="translation-lang">${detectedLang} → ${targetLang}</span>` : '';
+                        ? `<span class="translation-lang">${this.escapeHtml(this._languageName(detectedLang))} → ${this.escapeHtml(this._languageName(targetLang))}</span>` : '';
                     translationEl.innerHTML = `<span class="translation-icon">🌐</span> ${this.escapeHtml(translatedText).replace(/\n/g, '<br>')} ${langLabel}`;
                 }
             } else if (isNoop) {
-                this.displaySystemMessage(`Nothing to translate (already in ${targetLang}).`);
+                this.displaySystemMessage(`Nothing to translate (already in ${this._languageName(targetLang)}).`);
             } else {
                 this.displaySystemMessage(`Translation: ${translatedText}`);
             }
@@ -358,24 +446,83 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Populate the settings-modal translation language select with the full list.
+    populateTranslateLanguageSelect() {
+        const select = document.getElementById('translateLanguageSelect');
+        if (!select) return;
+        const current = this.settings.translateLanguage || '';
+        const sorted = NYM_TRANSLATE_LANGUAGES
+            .slice()
+            .sort((a, b) => a.name.localeCompare(b.name));
+        select.innerHTML = `<option value="">Disabled</option>` +
+            sorted.map(l => `<option value="${l.code}">${this.escapeHtml(l.name)}</option>`).join('');
+        select.value = current;
+    },
+
+    // Render the language list inside the translate input dropdown, applying
+    // the search filter and keeping favorites pinned to the top.
+    _renderTranslateDropdownList(filter = '') {
+        const list = document.getElementById('translateDropdownList');
+        if (!list) return;
+        const favs = new Set(this._getTranslateFavorites());
+        const q = filter.trim().toLowerCase();
+        const langs = this._sortedTranslateLanguages()
+            .filter(l => !q || l.name.toLowerCase().includes(q));
+        const starSvg = (filled) => `<svg viewBox="0 0 24 24" width="14" height="14" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
+        list.innerHTML = langs.map(l => {
+            const fav = favs.has(l.code);
+            return `<div class="translate-dropdown-item" data-lang="${l.code}">
+                <span class="translate-dropdown-name">${this.escapeHtml(l.name)}</span>
+                <button class="translate-dropdown-star${fav ? ' favorited' : ''}" data-fav-lang="${l.code}" title="${fav ? 'Unfavorite' : 'Favorite'}" aria-label="Favorite ${this.escapeHtml(l.name)}">${starSvg(fav)}</button>
+            </div>`;
+        }).join('') || `<div class="translate-dropdown-empty">No languages found</div>`;
+    },
+
     // Set up the translate input button and dropdown in the message input area.
     setupTranslateInput() {
         const btn = document.getElementById('translateInputBtn');
         const dropdown = document.getElementById('translateInputDropdown');
         if (!btn || !dropdown) return;
 
+        dropdown.innerHTML = `
+            <div class="translate-dropdown-search">
+                <input type="text" id="translateDropdownSearch" placeholder="Search languages..." autocomplete="off">
+            </div>
+            <div class="translate-dropdown-list" id="translateDropdownList"></div>
+        `;
+        this._renderTranslateDropdownList();
+
+        const searchInput = dropdown.querySelector('#translateDropdownSearch');
+
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
+            const willOpen = !dropdown.classList.contains('active');
             dropdown.classList.toggle('active');
+            if (willOpen) {
+                searchInput.value = '';
+                this._renderTranslateDropdownList();
+                setTimeout(() => searchInput.focus(), 30);
+            }
         });
 
-        dropdown.querySelectorAll('.translate-dropdown-item').forEach(item => {
-            item.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const lang = item.dataset.lang;
+        searchInput.addEventListener('input', () => {
+            this._renderTranslateDropdownList(searchInput.value);
+        });
+        searchInput.addEventListener('click', (e) => e.stopPropagation());
+
+        dropdown.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const star = e.target.closest('.translate-dropdown-star');
+            if (star) {
+                this._toggleTranslateFavorite(star.dataset.favLang);
+                this._renderTranslateDropdownList(searchInput.value);
+                return;
+            }
+            const item = e.target.closest('.translate-dropdown-item');
+            if (item) {
                 dropdown.classList.remove('active');
-                this.translateInputText(lang);
-            });
+                this.translateInputText(item.dataset.lang);
+            }
         });
 
         // Close dropdown when clicking outside

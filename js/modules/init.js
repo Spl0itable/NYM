@@ -73,6 +73,8 @@ Object.assign(NYM.prototype, {
             this.setupContextMenu();
             this.setupMobileGestures();
             this.setupTranslateInput();
+            this.populateTranslateLanguageSelect();
+            this.setupSidebarSectionReorder();
 
             // Load saved preferences
             this.applyColorMode();

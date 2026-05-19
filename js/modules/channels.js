@@ -761,7 +761,41 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         titleEl.replaceChildren(...nodes);
     },
 
+    // Identifies the active conversation so unsent input can be kept per place.
+    _getInputContextKey() {
+        if (this.inPMMode && this.currentGroup) return 'g:' + this.currentGroup;
+        if (this.inPMMode && this.currentPM) return 'p:' + this.currentPM;
+        return 'c:' + (this.currentGeohash || this.currentChannel || '');
+    },
+
+    // Stash whatever is in the message input under the current conversation key.
+    _saveCurrentDraft() {
+        const input = document.getElementById('messageInput');
+        if (!input || !input._richInit || !this._activeDraftKey) return;
+        if (!this._inputDrafts) this._inputDrafts = new Map();
+        const v = input.value || '';
+        if (v.trim()) this._inputDrafts.set(this._activeDraftKey, v);
+        else this._inputDrafts.delete(this._activeDraftKey);
+    },
+
+    // Load the saved draft for the conversation now in view (empty if none).
+    _restoreDraftForContext() {
+        const input = document.getElementById('messageInput');
+        if (!input || !input._richInit) return;
+        if (!this._inputDrafts) this._inputDrafts = new Map();
+        const key = this._getInputContextKey();
+        this._activeDraftKey = key;
+        const draft = this._inputDrafts.get(key) || '';
+        if ((input.value || '') === draft) return;
+        input.value = draft;
+        if (typeof this.autoResizeTextarea === 'function') this.autoResizeTextarea(input);
+        if (typeof this.updateTranslateInputBtn === 'function') this.updateTranslateInputBtn();
+        if (typeof this.handleInputChange === 'function') this.handleInputChange(draft);
+    },
+
     switchChannel(channel, geohash = '') {
+        // Keep the current conversation's unsent input before switching away
+        this._saveCurrentDraft();
         // Store previous state
         const previousChannel = this.currentChannel;
         const previousGeohash = this.currentGeohash;
@@ -896,6 +930,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 geohash: geohash
             }));
         }
+
+        // Restore any unsent input previously typed for this channel
+        this._restoreDraftForContext();
 
         // Close mobile sidebar on mobile
         if (window.innerWidth <= 768) {

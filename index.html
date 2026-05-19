@@ -408,8 +408,16 @@
                 </button>
             </div>
 
-            <div class="nav-section">
+            <div class="nav-section" data-section="channels">
                 <div class="nav-title">
+                    <span class="section-reorder-arrows" aria-hidden="true">
+                        <button class="section-reorder-btn" data-section-move="up" title="Move section up" aria-label="Move section up">
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                        </button>
+                        <button class="section-reorder-btn" data-section-move="down" title="Move section down" aria-label="Move section down">
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </button>
+                    </span>
                     <span class="nav-title-text">Public Channels</span>
                     <span class="discover-icon" style="padding-right:30px;" data-action="showGeohashExplorer"
                         title="Explore geohash channels globally">
@@ -444,8 +452,16 @@
                 </div>
             </div>
 
-            <div class="nav-section">
+            <div class="nav-section" data-section="pms">
                 <div class="nav-title">
+                    <span class="section-reorder-arrows" aria-hidden="true">
+                        <button class="section-reorder-btn" data-section-move="up" title="Move section up" aria-label="Move section up">
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                        </button>
+                        <button class="section-reorder-btn" data-section-move="down" title="Move section down" aria-label="Move section down">
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </button>
+                    </span>
                     <span class="nav-title-text">Private Messages</span>
                     <span class="search-icon new-pm-btn" data-action="openNewPMModal" title="New message">
                         <svg viewBox="0 0 24 24">
@@ -468,8 +484,16 @@
                 <div class="pm-list" id="pmList"></div>
             </div>
 
-            <div class="user-list" id="userList">
+            <div class="user-list" id="userList" data-section="nyms">
                 <div class="nav-title">
+                    <span class="section-reorder-arrows" aria-hidden="true">
+                        <button class="section-reorder-btn" data-section-move="up" title="Move section up" aria-label="Move section up">
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                        </button>
+                        <button class="section-reorder-btn" data-section-move="down" title="Move section down" aria-label="Move section down">
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </button>
+                    </span>
                     <span class="nav-title-text">Online Nyms</span>
                     <span class="search-icon" data-action="toggleSearch" data-search-target="userSearch">
                         <svg viewBox="0 0 24 24">
@@ -605,52 +629,6 @@
                             </svg>
                         </button>
                         <div class="translate-input-dropdown" id="translateInputDropdown">
-                            <div class="translate-dropdown-item" data-lang="en">English</div>
-                            <div class="translate-dropdown-item" data-lang="es">Spanish</div>
-                            <div class="translate-dropdown-item" data-lang="fr">French</div>
-                            <div class="translate-dropdown-item" data-lang="de">German</div>
-                            <div class="translate-dropdown-item" data-lang="it">Italian</div>
-                            <div class="translate-dropdown-item" data-lang="pt">Portuguese</div>
-                            <div class="translate-dropdown-item" data-lang="ru">Russian</div>
-                            <div class="translate-dropdown-item" data-lang="zh">Chinese</div>
-                            <div class="translate-dropdown-item" data-lang="ja">Japanese</div>
-                            <div class="translate-dropdown-item" data-lang="ko">Korean</div>
-                            <div class="translate-dropdown-item" data-lang="ar">Arabic</div>
-                            <div class="translate-dropdown-item" data-lang="hi">Hindi</div>
-                            <div class="translate-dropdown-item" data-lang="tr">Turkish</div>
-                            <div class="translate-dropdown-item" data-lang="nl">Dutch</div>
-                            <div class="translate-dropdown-item" data-lang="pl">Polish</div>
-                            <div class="translate-dropdown-item" data-lang="uk">Ukrainian</div>
-                            <div class="translate-dropdown-item" data-lang="vi">Vietnamese</div>
-                            <div class="translate-dropdown-item" data-lang="th">Thai</div>
-                            <div class="translate-dropdown-item" data-lang="id">Indonesian</div>
-                            <div class="translate-dropdown-item" data-lang="sv">Swedish</div>
-                            <div class="translate-dropdown-item" data-lang="af">Afrikaans</div>
-                            <div class="translate-dropdown-item" data-lang="bg">Bulgarian</div>
-                            <div class="translate-dropdown-item" data-lang="bn">Bengali</div>
-                            <div class="translate-dropdown-item" data-lang="ca">Catalan</div>
-                            <div class="translate-dropdown-item" data-lang="cs">Czech</div>
-                            <div class="translate-dropdown-item" data-lang="da">Danish</div>
-                            <div class="translate-dropdown-item" data-lang="el">Greek</div>
-                            <div class="translate-dropdown-item" data-lang="et">Estonian</div>
-                            <div class="translate-dropdown-item" data-lang="fa">Persian</div>
-                            <div class="translate-dropdown-item" data-lang="fi">Finnish</div>
-                            <div class="translate-dropdown-item" data-lang="fil">Filipino</div>
-                            <div class="translate-dropdown-item" data-lang="he">Hebrew</div>
-                            <div class="translate-dropdown-item" data-lang="hr">Croatian</div>
-                            <div class="translate-dropdown-item" data-lang="hu">Hungarian</div>
-                            <div class="translate-dropdown-item" data-lang="lt">Lithuanian</div>
-                            <div class="translate-dropdown-item" data-lang="lv">Latvian</div>
-                            <div class="translate-dropdown-item" data-lang="ms">Malay</div>
-                            <div class="translate-dropdown-item" data-lang="no">Norwegian</div>
-                            <div class="translate-dropdown-item" data-lang="ro">Romanian</div>
-                            <div class="translate-dropdown-item" data-lang="sk">Slovak</div>
-                            <div class="translate-dropdown-item" data-lang="sl">Slovenian</div>
-                            <div class="translate-dropdown-item" data-lang="sr">Serbian</div>
-                            <div class="translate-dropdown-item" data-lang="sw">Swahili</div>
-                            <div class="translate-dropdown-item" data-lang="ta">Tamil</div>
-                            <div class="translate-dropdown-item" data-lang="te">Telugu</div>
-                            <div class="translate-dropdown-item" data-lang="ur">Urdu</div>
                         </div>
                     </div>
                 </div>
@@ -1832,6 +1810,7 @@
     <script defer src="js/modules/zaps.js"></script>
     <script defer src="js/modules/p2p.js"></script>
     <script defer src="js/modules/translate.js"></script>
+    <script defer src="js/modules/sidebar-sections.js"></script>
     <script defer src="js/modules/polls.js"></script>
     <script defer src="js/modules/geohash-globe.js"></script>
     <script defer src="js/modules/notifications.js"></script>

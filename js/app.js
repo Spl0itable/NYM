@@ -3351,7 +3351,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.370';
+const NYMCHAT_VERSION = 'v3.66.371';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -5125,6 +5125,19 @@ async function applyNostrSettings(s) {
     if (typeof s.translateLanguage === 'string') {
         nym.settings.translateLanguage = s.translateLanguage;
         localStorage.setItem('nym_translate_language', s.translateLanguage);
+        if (typeof nym.populateTranslateLanguageSelect === 'function') nym.populateTranslateLanguageSelect();
+    }
+
+    // Favorite translation languages
+    if (Array.isArray(s.translateFavoriteLanguages)) {
+        nym._translateFavorites = s.translateFavoriteLanguages.slice();
+        localStorage.setItem('nym_translate_favorites', JSON.stringify(nym._translateFavorites));
+        if (typeof nym._renderTranslateDropdownList === 'function') nym._renderTranslateDropdownList();
+    }
+
+    // Sidebar section order
+    if (Array.isArray(s.sidebarSectionOrder) && typeof nym._applySidebarSectionOrder === 'function') {
+        nym._applySidebarSectionOrder(s.sidebarSectionOrder);
     }
 
     // Cache PMs & group chats on device

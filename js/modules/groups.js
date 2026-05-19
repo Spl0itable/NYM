@@ -2155,6 +2155,7 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
 
+        this._saveCurrentDraft();
         const prevChannelKey = this.currentGeohash || this.currentChannel;
         if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
             this.closeChannelSubscription(prevChannelKey);
@@ -2202,6 +2203,9 @@ Object.assign(NYM.prototype, {
         const groupConvKey = this.getGroupConversationKey(groupId);
         this.clearUnreadCount(groupConvKey);
         this.loadPMMessages(groupConvKey);
+
+        // Restore any unsent input previously typed for this conversation
+        this._restoreDraftForContext();
 
         if (window.innerWidth <= 768) this.closeSidebar();
     },

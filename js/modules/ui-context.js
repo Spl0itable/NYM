@@ -1885,33 +1885,55 @@ Object.assign(NYM.prototype, {
 
     _setupGifPickerKeyboardResize() {
         const gifPicker = document.getElementById('gifPicker');
-        if (!gifPicker || !window.visualViewport) return;
+        if (!gifPicker) return;
 
         const apply = () => {
             if (!gifPicker.classList.contains('active')) return;
-            const vv = window.visualViewport;
-            // Only adjust on narrow viewports (mobile) where the picker is fixed
-            if (window.innerWidth > 600) {
+            // Only adjust where the picker is fixed-positioned (mobile layout,
+            // matching the <=768px CSS media query).
+            if (window.innerWidth > 768 || !window.visualViewport) {
                 gifPicker.style.bottom = '';
                 gifPicker.style.maxHeight = '';
                 return;
             }
-            const keyboardOffset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-            // Sit above the keyboard with a small gap, and cap the height so the
-            // search field stays visible.
-            const reservedTop = 80;
-            const available = Math.max(180, vv.height - reservedTop);
-            gifPicker.style.bottom = (keyboardOffset + 12) + 'px';
-            gifPicker.style.maxHeight = available + 'px';
+            const vv = window.visualViewport;
+            // Keyboard height is the slice of the layout viewport the visual
+            // viewport lost — independent of how far the page has scrolled
+            // (vv.offsetTop), so it stays correct after the focused field
+            // scrolls into view.
+            const keyboardOffset = Math.max(0, window.innerHeight - vv.height);
+            if (keyboardOffset < 80) {
+                // Keyboard closed — fall back to the CSS-defined placement.
+                gifPicker.style.bottom = '';
+                gifPicker.style.maxHeight = '';
+                return;
+            }
+            // Sit just above the keyboard and cap the height to the visible area.
+            gifPicker.style.bottom = (keyboardOffset + 8) + 'px';
+            gifPicker.style.maxHeight = Math.max(180, vv.height - 24) + 'px';
         };
 
-        if (this._gifViewportHandler) {
+        if (this._gifViewportHandler && window.visualViewport) {
             window.visualViewport.removeEventListener('resize', this._gifViewportHandler);
             window.visualViewport.removeEventListener('scroll', this._gifViewportHandler);
         }
         this._gifViewportHandler = apply;
-        window.visualViewport.addEventListener('resize', apply);
-        window.visualViewport.addEventListener('scroll', apply);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', apply);
+            window.visualViewport.addEventListener('scroll', apply);
+        }
+
+        // The keyboard animation may not have settled when the first resize
+        // event fires, so re-apply shortly after the search field is focused.
+        const searchInput = gifPicker.querySelector('#gifSearchInput');
+        if (searchInput) {
+            searchInput.addEventListener('focus', () => {
+                setTimeout(apply, 100);
+                setTimeout(apply, 350);
+            });
+            searchInput.addEventListener('blur', () => setTimeout(apply, 100));
+        }
+
         apply();
     },
 

@@ -1815,6 +1815,7 @@ Object.assign(NYM.prototype, {
     },
 
     openPM(nym, pubkey) {
+        this._saveCurrentDraft();
         const prevChannelKey = this.currentGeohash || this.currentChannel;
         if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
             this.closeChannelSubscription(prevChannelKey);
@@ -1903,6 +1904,9 @@ Object.assign(NYM.prototype, {
             if (sent) msg.readReceiptSent = true;
         }
         this.recordOwnActivity();
+
+        // Restore any unsent input previously typed for this conversation
+        this._restoreDraftForContext();
 
         // Close mobile sidebar on mobile
         if (window.innerWidth <= 768) {
