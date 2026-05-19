@@ -411,6 +411,19 @@
                     if (emojiMap.size > 0) this.reactions.set(r.messageId, emojiMap);
                 }
 
+                // PM/group bubbles render keyed by nymMessageId. Migrate any
+                // reactions still cached under the event ID so they reappear.
+                if (typeof this._migrateReactionKey === 'function') {
+                    for (const msgs of this.pmMessages.values()) {
+                        if (!Array.isArray(msgs)) continue;
+                        for (const m of msgs) {
+                            if (m && m.id && m.nymMessageId && m.id !== m.nymMessageId) {
+                                this._migrateReactionKey(m.id, m.nymMessageId);
+                            }
+                        }
+                    }
+                }
+
                 await this._hydrateDedupSets();
 
                 this._populateSidebarFromHydration();

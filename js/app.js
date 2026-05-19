@@ -524,15 +524,6 @@ class NYM {
         this.currentGeoRelays = new Set();
         this.geoRelayCount = 5;
         this._geoRelaysReady = this.fetchGeoRelays();
-        this.bitchatDMRelays = [
-            'wss://relay.nymchat.app',
-            'wss://relay.damus.io',
-            'wss://nos.lol',
-            'wss://relay.primal.net',
-            'wss://offchain.pub',
-            'wss://relay.0xchat.com',
-            'wss://nostr21.com'
-        ];
         this.allRelayUrls = new Set(this.defaultRelays);
         this.pendingConnections = new Map();
         this.relayList = [];
@@ -3360,7 +3351,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.368';
+const NYMCHAT_VERSION = 'v3.66.369';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');

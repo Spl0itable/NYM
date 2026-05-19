@@ -61,6 +61,24 @@ window.nymHapticTap = function (ms) {
             t.src = fallback;
             return;
         }
+        // Custom emoji failed to load — retry a couple of times so a transient
+        // miss gets a chance to re-fetch and populate the long-lived edge cache.
+        if (t.classList && t.classList.contains('custom-emoji')) {
+            if (t.complete && t.naturalHeight > 0) return;
+            var tries = parseInt(t.dataset.emojiRetry || '0', 10);
+            if (tries < 2) {
+                t.dataset.emojiRetry = String(tries + 1);
+                if (!t.dataset.emojiBaseSrc) {
+                    t.dataset.emojiBaseSrc = t.src.split('&_r=')[0].split('?_r=')[0];
+                }
+                var baseSrc = t.dataset.emojiBaseSrc;
+                var sep = baseSrc.indexOf('?') === -1 ? '?' : '&';
+                setTimeout(function () {
+                    t.src = baseSrc + sep + '_r=' + (tries + 1);
+                }, 800 * (tries + 1));
+            }
+            return;
+        }
         if (t.dataset && t.dataset.errorAction) {
             var fn = ACTIONS[t.dataset.errorAction];
             if (typeof fn === 'function') {

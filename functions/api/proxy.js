@@ -19,6 +19,9 @@ const ALLOWED_MEDIA_TYPES = new Set([
 // No hard size limit — rely on Cloudflare's streaming and Range request support
 // to handle large files without buffering the entire response into memory.
 
+// Custom emoji images are effectively immutable, so cache them for 30 days.
+const EMOJI_CACHE_TTL = 2592000;
+
 // Max size for unfurl HTML fetch (512 KB)
 const MAX_UNFURL_SIZE = 512 * 1024;
 
@@ -68,7 +71,7 @@ export async function onRequest(context) {
     } else if (action === 'json') {
       return await handleJsonProxy(url.searchParams.get('url'), request);
     } else {
-      return await handleMediaProxy(url.searchParams.get('url'), request);
+      return await handleMediaProxy(url.searchParams.get('url'), request, url.searchParams.get('emoji') === '1');
     }
   } catch (err) {
     return jsonResponse({ error: err.message || 'Internal error' }, 500);
@@ -253,7 +256,7 @@ async function handleBlossomUpload(request) {
 }
 
 // Media Proxy — supports Range requests for video/audio streaming
-async function handleMediaProxy(targetUrl, request) {
+async function handleMediaProxy(targetUrl, request, isEmoji = false) {
   if (!targetUrl) {
     return jsonResponse({ error: 'Missing url parameter' }, 400);
   }
@@ -287,7 +290,16 @@ async function handleMediaProxy(targetUrl, request) {
     redirect: 'follow',
   };
   if (!rangeHeader) {
-    fetchInit.cf = { cacheTtl: 604800, cacheEverything: true };
+    if (isEmoji) {
+      // Long-lived edge cache for custom emoji. cacheTtlByStatus keeps failed
+      // fetches uncached so a missing image is retried until it delivers.
+      fetchInit.cf = {
+        cacheEverything: true,
+        cacheTtlByStatus: { '200-299': EMOJI_CACHE_TTL, '300-399': 0, '400-599': 0 },
+      };
+    } else {
+      fetchInit.cf = { cacheTtl: 604800, cacheEverything: true };
+    }
   }
   const resp = await fetch(targetUrl, fetchInit);
 
@@ -311,7 +323,11 @@ async function handleMediaProxy(targetUrl, request) {
 
   const headers = new Headers(CORS_HEADERS);
   headers.set('Content-Type', resp.headers.get('content-type') || 'application/octet-stream');
-  headers.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
+  if (isEmoji) {
+    headers.set('Cache-Control', `public, max-age=${EMOJI_CACHE_TTL}, s-maxage=${EMOJI_CACHE_TTL}, immutable`);
+  } else {
+    headers.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
+  }
   headers.set('Accept-Ranges', 'bytes');
 
   if (resp.headers.has('content-length')) {

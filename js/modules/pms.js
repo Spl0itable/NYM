@@ -931,6 +931,7 @@ Object.assign(NYM.prototype, {
                             if (msgReactions.get(emoji).size === 0) msgReactions.delete(emoji);
                             if (msgReactions.size === 0) this.reactions.delete(reactionMessageId);
                         }
+                        this.persistReactions(reactionMessageId);
                         this.updateMessageReactions(reactionMessageId);
                     } else {
                         const reactorNym = this.getNymFromPubkey(senderPubkey);
@@ -938,7 +939,18 @@ Object.assign(NYM.prototype, {
                         const msgReactions = this.reactions.get(reactionMessageId);
                         if (!msgReactions.has(emoji)) msgReactions.set(emoji, new Map());
                         msgReactions.get(emoji).set(senderPubkey, reactorNym);
+                        this.persistReactions(reactionMessageId);
                         this.updateMessageReactions(reactionMessageId);
+                    }
+                    // If the target bubble isn't in the current DOM, drop its
+                    // cached render so the reaction shows after channel switch.
+                    if (!document.querySelector(`[data-message-id="${CSS.escape(reactionMessageId)}"]`)) {
+                        for (const [key, msgs] of this.pmMessages.entries()) {
+                            if (msgs.some(m => m.id === reactionMessageId || m.nymMessageId === reactionMessageId)) {
+                                this.channelDOMCache.delete(key);
+                                break;
+                            }
+                        }
                     }
                 }
                 return;
@@ -1020,12 +1032,16 @@ Object.assign(NYM.prototype, {
             if (dupMsg) {
                 let needsRerender = false;
                 if (!dupMsg.nymMessageId && nymMsgIdFromRumor) {
+                    // Reactions stored under the event ID must follow the message
+                    // to its nymMessageId, which is the ID the DOM renders with.
+                    this._migrateReactionKey(dupMsg.id, nymMsgIdFromRumor);
                     dupMsg.nymMessageId = nymMsgIdFromRumor;
                     // Update the DOM element's data-message-id to use nymMessageId
                     const oldEl = document.querySelector(`[data-message-id="${dupMsg.id}"]`);
                     if (oldEl) {
                         oldEl.dataset.messageId = nymMsgIdFromRumor;
                     }
+                    this.updateMessageReactions(nymMsgIdFromRumor);
                     needsRerender = true;
                 }
                 // If the duplicate carries longer content, prefer it — the existing

@@ -117,7 +117,7 @@ Object.assign(NYM.prototype, {
             if (cm && this.customEmojis && this.customEmojis.has(cm[1])) {
                 const img = document.createElement('img');
                 img.className = 'custom-emoji';
-                img.src = this.getProxiedMediaUrl(this.customEmojis.get(cm[1]));
+                img.src = this.getProxiedEmojiUrl(this.customEmojis.get(cm[1]));
                 img.alt = emoji;
                 img.loading = 'lazy';
                 emojiSpan.appendChild(img);
@@ -126,7 +126,9 @@ Object.assign(NYM.prototype, {
             }
             const nameSpan = document.createElement('span');
             nameSpan.className = 'emoji-item-name';
-            nameSpan.textContent = `:${name}:`;
+            // `name` may already be a :shortcode: token (custom emoji recents) —
+            // strip wrapping colons so the label isn't shown as ::shortcode::.
+            nameSpan.textContent = `:${String(name).replace(/^:+|:+$/g, '')}:`;
             item.appendChild(emojiSpan);
             item.appendChild(nameSpan);
             frag.appendChild(item);

@@ -2358,6 +2358,41 @@ body.chat-bubbles .edited-indicator-irc {
     box-shadow: 0 0 0 3px rgb(from var(--primary) r g b / 0.06);
 }
 
+div.message-input {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-y: auto;
+    cursor: text;
+    line-height: 1.4;
+}
+
+div.message-input.input-disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+div.message-input:empty::before {
+    content: attr(data-placeholder);
+    color: rgba(255, 255, 255, 0.4);
+    pointer-events: none;
+}
+
+body.light-mode div.message-input:empty::before {
+    color: rgba(0, 0, 0, 0.4);
+}
+
+body.light-mode div.message-input {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+body.light-mode div.message-input:focus {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+div.message-input .custom-emoji {
+    cursor: text;
+}
+
 .message-input-row {
     position: relative;
     display: flex;
@@ -4330,6 +4365,12 @@ body.light-mode .verified-badge::before {
         width: 100%;
         text-align: right;
         margin-top: 4px;
+        flex-basis: auto;
+    }
+
+    .group-readers,
+    .channel-readers {
+        width: 100%;
         flex-basis: auto;
     }
 

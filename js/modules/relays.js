@@ -335,9 +335,7 @@ Object.assign(NYM.prototype, {
         // Pool mode: proxy manages all connections
         if (this.useRelayProxy) return;
 
-        // Check defaults AND DM relays so PMs/groups stay reachable
-        const essentialRelays = [...new Set([...this.defaultRelays, ...(this.bitchatDMRelays || [])])];
-        for (const relayUrl of essentialRelays) {
+        for (const relayUrl of this.defaultRelays) {
             const relay = this.relayPool.get(relayUrl);
             const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
@@ -366,12 +364,6 @@ Object.assign(NYM.prototype, {
                     keepRelays.add(url);
                 }
                 keepRelays.add('wss://sendit.nosflare.com');
-                // Add DM relays so PMs still work
-                if (this.bitchatDMRelays) {
-                    for (const url of this.bitchatDMRelays) {
-                        keepRelays.add(url);
-                    }
-                }
                 for (const [url, relay] of this.relayPool) {
                     if (!keepRelays.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                         relay.ws.close();
@@ -434,10 +426,6 @@ Object.assign(NYM.prototype, {
 
         // Build set of relays that should never be disconnected
         const keepRelays = new Set(this.defaultRelays);
-        for (const url of this.defaultRelays) keepRelays.add(url);
-        if (this.bitchatDMRelays) {
-            for (const url of this.bitchatDMRelays) keepRelays.add(url);
-        }
         keepRelays.add('wss://sendit.nosflare.com');
 
         for (const url of previousGeoRelays) {
@@ -713,9 +701,8 @@ Object.assign(NYM.prototype, {
             // We have some connections, but update status to reflect actual count
             this.updateConnectionStatus();
 
-            // If we're missing default or DM relays, try to restore them
-            const essentialRelays = [...new Set([...this.defaultRelays, ...(this.bitchatDMRelays || [])])];
-            const missingEssential = essentialRelays.filter(url => !this.relayPool.has(url));
+            // If we're missing default relays, try to restore them
+            const missingEssential = this.defaultRelays.filter(url => !this.relayPool.has(url));
             if (missingEssential.length > 0) {
                 this.reconnectToBroadcastRelays();
             }
@@ -754,8 +741,8 @@ Object.assign(NYM.prototype, {
 
         let connectedCount = 0;
 
-        // Always reconnect defaults + DM relays so PMs/groups stay reachable
-        const relaysToConnect = [...new Set([...this.defaultRelays, ...(this.bitchatDMRelays || [])])];
+        // Always reconnect default relays so PMs/groups stay reachable
+        const relaysToConnect = [...this.defaultRelays];
         if (this.previouslyConnectedRelays && this.previouslyConnectedRelays.size > 0) {
             relaysToConnect.sort((a, b) => {
                 const aWasConnected = this.previouslyConnectedRelays.has(a);
@@ -1269,7 +1256,7 @@ Object.assign(NYM.prototype, {
                 }
             });
 
-            // GEO relays, then DM relays
+            // GEO relays
             if (!this.settings.lowDataMode) {
                 (this._geoRelaysReady || Promise.resolve()).then(() => {
                     // Connect GEO relays (second priority after defaults)
@@ -1285,37 +1272,7 @@ Object.assign(NYM.prototype, {
                             });
                         }
                     }
-
-                    // Connect bitchatDMRelays (third priority)
-                    if (this.bitchatDMRelays) {
-                        this.bitchatDMRelays.forEach(relayUrl => {
-                            if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                                this.connectToRelay(relayUrl, 'relay').then(() => {
-                                    const r = this.relayPool.get(relayUrl);
-                                    if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                        this.subscribeToSingleRelay(relayUrl);
-                                        this.updateConnectionStatus();
-                                    }
-                                });
-                            }
-                        });
-                    }
                 });
-            } else {
-                // In low data mode, connect to DM relays so PMs work
-                if (this.bitchatDMRelays) {
-                    this.bitchatDMRelays.forEach(relayUrl => {
-                        if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
-                            this.connectToRelay(relayUrl, 'relay').then(() => {
-                                const r = this.relayPool.get(relayUrl);
-                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
-                                    this.subscribeToSingleRelay(relayUrl);
-                                    this.updateConnectionStatus();
-                                }
-                            });
-                        }
-                    });
-                }
             }
 
             // Discover additional relays via NIP-66 and connect to them
@@ -1412,11 +1369,10 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Determine if a relay URL is a geo or discovered relay (not a default/DM relay)
+    // Determine if a relay URL is a geo or discovered relay (not a default relay)
     _isGeoOrDiscoveredRelay(relayUrl) {
         const defaultSet = new Set(this.defaultRelays || []);
-        const dmSet = new Set(this.bitchatDMRelays || []);
-        return !defaultSet.has(relayUrl) && !dmSet.has(relayUrl);
+        return !defaultSet.has(relayUrl);
     },
 
     subscribeToSingleRelay(relayUrl) {
@@ -1750,8 +1706,8 @@ Object.assign(NYM.prototype, {
         // Categorize relays by role
         const geoSet = new Set(geoRelayUrls || []);
 
-        // Critical = defaults + DM relays (deduplicated)
-        const critical = [...new Set([...this.defaultRelays, ...(dmRelays || this.bitchatDMRelays || [])])]
+        // Critical = default relays (deduplicated)
+        const critical = [...new Set([...this.defaultRelays, ...(dmRelays || [])])]
             .filter(isValid);
 
         // Geo = CSV relays not already in critical
@@ -1779,7 +1735,7 @@ Object.assign(NYM.prototype, {
                 id: `critical-${i}`,
                 role: 'critical',
                 relays: chunk,
-                dmRelays: i === 0 ? (dmRelays || this.bitchatDMRelays || []) : []
+                dmRelays: i === 0 ? (dmRelays || []) : []
             });
         });
 
@@ -1956,7 +1912,7 @@ Object.assign(NYM.prototype, {
                 if (!geoRelayUrls.includes(url)) geoRelayUrls.unshift(url);
             }
         }
-        return this._shardRelaysByRole([...this.allRelayUrls], geoRelayUrls, this.bitchatDMRelays);
+        return this._shardRelaysByRole([...this.allRelayUrls], geoRelayUrls, this.defaultRelays);
     },
 
     // Reconnect any expected shard that's missing or not in OPEN state.
@@ -2014,7 +1970,7 @@ Object.assign(NYM.prototype, {
         const shards = this._shardRelaysByRole(
             [...this.allRelayUrls],
             geoRelayUrls,
-            this.bitchatDMRelays
+            this.defaultRelays
         );
 
         // Close any existing pool sockets (mark as intentional to prevent reconnect loops)
@@ -2652,7 +2608,7 @@ Object.assign(NYM.prototype, {
         const shards = this._shardRelaysByRole(
             [...this.allRelayUrls],
             geoRelayUrls,
-            this.bitchatDMRelays
+            this.defaultRelays
         );
 
         // Determine which shards are new vs existing
@@ -3288,7 +3244,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Send DM events (kind 1059) with priority to bitchat's hardcoded relays
+    // Send DM events (kind 1059) with priority to the default relays
     sendDMToRelays(message) {
         // Multiplexed pool mode: proxy handles DM relay prioritization
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
@@ -3302,7 +3258,7 @@ Object.assign(NYM.prototype, {
         const priority = [];
         const rest = [];
 
-        for (const url of this.bitchatDMRelays) {
+        for (const url of this.defaultRelays) {
             const relay = this.relayPool.get(url);
             if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                 priority.push(relay);

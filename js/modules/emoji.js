@@ -13,6 +13,17 @@ Object.assign(NYM.prototype, {
     },
 
     _loadCustomEmojiCache() {
+        // Loose shortcode→url map: covers emoji seen via message `emoji` tags
+        // that aren't part of any saved pack, so old messages still render
+        // their custom emoji after a reload.
+        try {
+            const map = JSON.parse(localStorage.getItem('nym_custom_emojis') || '[]');
+            if (Array.isArray(map)) {
+                for (const entry of map) {
+                    if (Array.isArray(entry)) this.registerCustomEmoji(entry[0], entry[1]);
+                }
+            }
+        } catch (_) { }
         try {
             const cached = JSON.parse(localStorage.getItem('nym_custom_emoji_packs') || '[]');
             for (const pack of cached) this._storeEmojiPack(pack, false);
@@ -32,12 +43,86 @@ Object.assign(NYM.prototype, {
         }, 2000);
     },
 
+    _saveCustomEmojiMap() {
+        if (this._emojiMapSaveTimer) clearTimeout(this._emojiMapSaveTimer);
+        this._emojiMapSaveTimer = setTimeout(() => {
+            this._emojiMapSaveTimer = null;
+            try {
+                const entries = Array.from(this.customEmojis.entries()).slice(-800);
+                localStorage.setItem('nym_custom_emojis', JSON.stringify(entries));
+            } catch (_) { }
+        }, 2000);
+    },
+
     registerCustomEmoji(shortcode, url) {
         if (!shortcode || !url || !this.customEmojis) return;
         if (!_RX_EMOJI_SHORTCODE.test(shortcode) || !_RX_EMOJI_URL.test(url)) return;
         // Don't let custom emoji shadow built-in unicode shortcodes
         if (this.emojiMap && this.emojiMap[shortcode.toLowerCase()]) return;
+        if (this.customEmojis.get(shortcode) === url) return;
         this.customEmojis.set(shortcode, url);
+        this._saveCustomEmojiMap();
+        this._scheduleEmojiDomRefresh();
+    },
+
+    // A custom emoji can register after messages have already rendered (packs
+    // and emoji lists arrive from relays asynchronously). Re-scan rendered
+    // message text so newly-known :shortcode: tokens become inline images.
+    _scheduleEmojiDomRefresh() {
+        if (this._emojiDomRefreshTimer) return;
+        this._emojiDomRefreshTimer = setTimeout(() => {
+            this._emojiDomRefreshTimer = null;
+            this._refreshCustomEmojiInDom();
+        }, 300);
+    },
+
+    _refreshCustomEmojiInDom() {
+        if (!this.customEmojis || this.customEmojis.size === 0) return;
+        const roots = document.querySelectorAll('.message-content, .notification-item-body');
+        if (roots.length === 0) return;
+        const skip = (node, root) => {
+            let p = node.parentNode;
+            while (p && p !== root) {
+                const tag = p.tagName;
+                if (tag === 'A' || tag === 'CODE' || tag === 'PRE') return true;
+                if (p.classList && (p.classList.contains('bubble-time') ||
+                    p.classList.contains('bubble-time-inner') ||
+                    p.classList.contains('message-time'))) return true;
+                p = p.parentNode;
+            }
+            return false;
+        };
+        for (const root of roots) {
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            const textNodes = [];
+            let tn;
+            while ((tn = walker.nextNode())) {
+                if (tn.nodeValue && tn.nodeValue.indexOf(':') !== -1 && !skip(tn, root)) {
+                    textNodes.push(tn);
+                }
+            }
+            for (const node of textNodes) {
+                const text = node.nodeValue;
+                const matches = [...text.matchAll(/:([a-zA-Z0-9_]+):/g)]
+                    .filter(mm => this.customEmojis.has(mm[1]));
+                if (matches.length === 0) continue;
+                const frag = document.createDocumentFragment();
+                let last = 0;
+                for (const mm of matches) {
+                    if (mm.index > last) {
+                        frag.appendChild(document.createTextNode(text.slice(last, mm.index)));
+                    }
+                    const tmp = document.createElement('span');
+                    tmp.innerHTML = this.renderCustomEmojiImg(mm[1]) || '';
+                    frag.appendChild(tmp.firstChild || document.createTextNode(mm[0]));
+                    last = mm.index + mm[0].length;
+                }
+                if (last < text.length) {
+                    frag.appendChild(document.createTextNode(text.slice(last)));
+                }
+                if (node.parentNode) node.parentNode.replaceChild(frag, node);
+            }
+        }
     },
 
     // Ingest NIP-30 "emoji" tags from any incoming event
@@ -117,10 +202,10 @@ Object.assign(NYM.prototype, {
     renderCustomEmojiImg(shortcode, extraClass = '') {
         const url = this.customEmojiUrl(shortcode);
         if (!url) return null;
-        const safeUrl = this.escapeHtml(this.getProxiedMediaUrl(url));
+        const safeUrl = this.escapeHtml(this.getProxiedEmojiUrl(url));
         const safeCode = this.escapeHtml(shortcode);
         const cls = 'custom-emoji' + (extraClass ? ' ' + extraClass : '');
-        return `<img class="${cls}" src="${safeUrl}" alt=":${safeCode}:" title=":${safeCode}:" loading="lazy" draggable="false">`;
+        return `<img class="${cls}" src="${safeUrl}" alt=":${safeCode}:" title=":${safeCode}:" data-emoji-code="${safeCode}" loading="lazy" draggable="false">`;
     },
 
     // Build NIP-30 emoji tags for every known custom shortcode used in content

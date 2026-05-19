@@ -23,6 +23,48 @@ Object.assign(NYM.prototype, {
         this.saveRecentEmojis();
     },
 
+    // Move reaction state from oldId to newId so reaction keys always match the
+    // ID the DOM renders with. A message's nymMessageId can be assigned after
+    // reactions were already stored under its event ID; without this migration
+    // those reactions vanish once the bubble redraws keyed by nymMessageId.
+    _migrateReactionKey(oldId, newId) {
+        if (!oldId || !newId || oldId === newId) return false;
+        let changed = false;
+
+        const old = this.reactions.get(oldId);
+        if (old) {
+            const target = this.reactions.get(newId);
+            if (!target) {
+                this.reactions.set(newId, old);
+            } else {
+                for (const [emoji, reactors] of old) {
+                    if (!target.has(emoji)) target.set(emoji, new Map());
+                    const merged = target.get(emoji);
+                    for (const [pk, nym] of reactors) merged.set(pk, nym);
+                }
+            }
+            this.reactions.delete(oldId);
+            changed = true;
+        }
+
+        // Rekey timestamp-tracking entries (`${id}:${emoji}:${pubkey}`)
+        if (this.reactionLastAction) {
+            const prefix = oldId + ':';
+            for (const [k, v] of Array.from(this.reactionLastAction.entries())) {
+                if (k.startsWith(prefix)) {
+                    this.reactionLastAction.delete(k);
+                    this.reactionLastAction.set(newId + k.slice(oldId.length), v);
+                }
+            }
+        }
+
+        if (changed && typeof this.persistReactions === 'function') {
+            this.persistReactions(oldId);
+            this.persistReactions(newId);
+        }
+        return changed;
+    },
+
     handleReaction(event) {
         // Register any NIP-30 custom emoji declared on this reaction
         this.ingestEmojiTags(event.tags);
@@ -611,9 +653,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.closeEnhancedEmojiModal();
             };
         });
-
-        // Focus search
-        searchInput.focus();
     },
 
     toggleEmojiPicker() {
@@ -728,9 +767,6 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 this.closeEnhancedEmojiModal();
             };
         });
-
-        // Focus search
-        searchInput.focus();
     },
 
     closeEnhancedEmojiModal() {

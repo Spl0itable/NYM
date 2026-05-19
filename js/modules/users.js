@@ -473,6 +473,22 @@ Object.assign(NYM.prototype, {
         return `${base}?url=${encodeURIComponent(originalUrl)}`;
     },
 
+    // Proxied URL for a custom emoji image. The emoji flag tells the proxy to
+    // apply a long edge-cache TTL so emoji render instantly on repeat views.
+    getProxiedEmojiUrl(originalUrl) {
+        const base = this._getProxyBaseUrl();
+        if (!base) return originalUrl;
+        return `${base}?emoji=1&url=${encodeURIComponent(originalUrl)}`;
+    },
+
+    // Blob upload endpoint. Routes through the Cloudflare proxy when available
+    // (hides the user's IP); falls back to a direct blossom.band PUT when
+    // running locally / in direct mode so uploads still work.
+    _getBlossomUploadUrl() {
+        const base = this._getProxyBaseUrl();
+        return base ? `${base}?action=upload` : 'https://blossom.band/upload';
+    },
+
     // Update already-rendered message avatars when a kind 0 profile picture arrives
     updateRenderedAvatars(pubkey, avatarUrl) {
         const safePk = this._safePubkey(pubkey);
@@ -518,9 +534,7 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(uploadEvent);
             const eventBase64 = btoa(JSON.stringify(signedEvent));
 
-            const base = this._getProxyBaseUrl();
-            if (!base) throw new Error('Upload proxy unavailable');
-            const response = await fetch(`${base}?action=upload`, {
+            const response = await fetch(this._getBlossomUploadUrl(), {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -602,9 +616,7 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(uploadEvent);
             const eventBase64 = btoa(JSON.stringify(signedEvent));
 
-            const base = this._getProxyBaseUrl();
-            if (!base) throw new Error('Upload proxy unavailable');
-            const response = await fetch(`${base}?action=upload`, {
+            const response = await fetch(this._getBlossomUploadUrl(), {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -689,9 +701,7 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(uploadEvent);
             const eventBase64 = btoa(JSON.stringify(signedEvent));
 
-            const base = this._getProxyBaseUrl();
-            if (!base) throw new Error('Upload proxy unavailable');
-            const response = await fetch(`${base}?action=upload`, {
+            const response = await fetch(this._getBlossomUploadUrl(), {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,
@@ -806,9 +816,7 @@ Object.assign(NYM.prototype, {
             progressFill.style.width = '80%';
 
             // Upload to blossom.band
-            const base = this._getProxyBaseUrl();
-            if (!base) throw new Error('Upload proxy unavailable');
-            const response = await fetch(`${base}?action=upload`, {
+            const response = await fetch(this._getBlossomUploadUrl(), {
                 method: 'PUT',
                 headers: {
                     'Authorization': `Nostr ${eventBase64}`,

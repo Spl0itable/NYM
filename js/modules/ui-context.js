@@ -876,6 +876,7 @@ Object.assign(NYM.prototype, {
         });
 
         const input = document.getElementById('messageInput');
+        this._initRichMessageInput(input);
 
         input.addEventListener('keydown', (e) => {
             const autocomplete = document.getElementById('autocompleteDropdown');
@@ -943,6 +944,11 @@ Object.assign(NYM.prototype, {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     this.sendMessage();
+                } else if (e.key === 'Enter' && e.shiftKey) {
+                    // contenteditable would insert a block element — insert a
+                    // plain newline so the value stays clean text.
+                    e.preventDefault();
+                    this._insertTextAtCursor(input, '\n');
                 } else if (e.key === 'Escape' && this.pendingEdit) {
                     e.preventDefault();
                     this.cancelEditMessage();
@@ -960,6 +966,10 @@ Object.assign(NYM.prototype, {
         });
 
         input.addEventListener('input', (e) => {
+            // Drop browser filler nodes so :empty placeholder styling works.
+            if (!e.target.value && e.target.innerHTML !== '') e.target.innerHTML = '';
+            // Render a just-completed :shortcode: as its custom emoji image.
+            this._maybeRenderTypedEmoji(e.target);
             this.handleInputChange(e.target.value);
             this.autoResizeTextarea(e.target);
             this.updateTranslateInputBtn();
@@ -1067,14 +1077,22 @@ Object.assign(NYM.prototype, {
         // Clipboard paste — auto-upload images/videos pasted into the message input
         document.getElementById('messageInput').addEventListener('paste', (e) => {
             const items = e.clipboardData && e.clipboardData.items;
-            if (!items) return;
-            for (const item of items) {
-                if (item.type.startsWith('image/') || item.type.startsWith('video/')) {
-                    e.preventDefault();
-                    const file = item.getAsFile();
-                    if (file) this.uploadImage(file);
-                    return;
+            if (items) {
+                for (const item of items) {
+                    if (item.type.startsWith('image/') || item.type.startsWith('video/')) {
+                        e.preventDefault();
+                        const file = item.getAsFile();
+                        if (file) this.uploadImage(file);
+                        return;
+                    }
                 }
+            }
+            // Plain-text paste — strip formatting so the contenteditable input
+            // never accumulates foreign HTML.
+            const text = e.clipboardData && e.clipboardData.getData('text/plain');
+            if (text) {
+                e.preventDefault();
+                this._insertTextAtCursor(e.currentTarget, text);
             }
         });
 
@@ -1587,6 +1605,233 @@ Object.assign(NYM.prototype, {
         textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
     },
 
+    _emojiTokenForImg(img) {
+        const code = img.dataset && img.dataset.emojiCode;
+        return code ? ':' + code + ':' : (img.getAttribute('alt') || '');
+    },
+
+    _serializeRichInput(root) {
+        let out = '';
+        const nodes = root.childNodes;
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (node.nodeType === Node.TEXT_NODE) {
+                out += node.nodeValue;
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                if (node.tagName === 'IMG') {
+                    out += this._emojiTokenForImg(node);
+                } else if (node.tagName === 'BR') {
+                    // A lone trailing <br> is browser filler — ignore it.
+                    if (i !== nodes.length - 1) out += '\n';
+                } else {
+                    out += this._serializeRichInput(node);
+                }
+            }
+        }
+        return out;
+    },
+
+    _richNodeLength(node) {
+        if (node.nodeType === Node.TEXT_NODE) return node.nodeValue.length;
+        if (node.nodeType === Node.ELEMENT_NODE) {
+            if (node.tagName === 'IMG') return this._emojiTokenForImg(node).length;
+            if (node.tagName === 'BR') return 1;
+        }
+        // Element wrappers and document fragments (from cloneContents) — sum children.
+        let n = 0;
+        const kids = node.childNodes;
+        if (kids) for (let i = 0; i < kids.length; i++) n += this._richNodeLength(kids[i]);
+        return n;
+    },
+
+    _renderRichInput(el, text) {
+        el.textContent = '';
+        if (!text) return;
+        const frag = document.createDocumentFragment();
+        const pushText = (s) => { if (s) frag.appendChild(document.createTextNode(s)); };
+        const re = /:([a-zA-Z0-9_]+):/g;
+        let last = 0, m;
+        while ((m = re.exec(text)) !== null) {
+            const code = m[1];
+            const url = this.customEmojis && this.customEmojis.get(code);
+            if (!url) continue;
+            pushText(text.slice(last, m.index));
+            const img = document.createElement('img');
+            img.className = 'custom-emoji';
+            img.src = this.getProxiedEmojiUrl(url);
+            img.alt = ':' + code + ':';
+            img.title = ':' + code + ':';
+            img.dataset.emojiCode = code;
+            img.draggable = false;
+            frag.appendChild(img);
+            last = re.lastIndex;
+        }
+        pushText(text.slice(last));
+        el.appendChild(frag);
+    },
+
+    _richSelectionOffset(el, container, offsetInContainer) {
+        if (!container || !el.contains(container)) return null;
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        try {
+            range.setEnd(container, offsetInContainer);
+        } catch (_) {
+            return null;
+        }
+        return this._richNodeLength(range.cloneContents());
+    },
+
+    _richLocate(el, target) {
+        let acc = 0;
+        const visit = (parent) => {
+            const kids = parent.childNodes;
+            for (let i = 0; i < kids.length; i++) {
+                const child = kids[i];
+                if (child.nodeType === Node.TEXT_NODE) {
+                    const len = child.nodeValue.length;
+                    if (target <= acc + len) return { node: child, offset: target - acc };
+                    acc += len;
+                } else if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'IMG') {
+                    const len = this._emojiTokenForImg(child).length;
+                    if (target <= acc) return { node: parent, offset: i };
+                    if (target < acc + len) return { node: parent, offset: i + 1 };
+                    acc += len;
+                } else if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'BR') {
+                    if (target <= acc) return { node: parent, offset: i };
+                    acc += 1;
+                } else if (child.nodeType === Node.ELEMENT_NODE) {
+                    const r = visit(child);
+                    if (r) return r;
+                }
+            }
+            return null;
+        };
+        return visit(el) || { node: el, offset: el.childNodes.length };
+    },
+
+    _setRichCaret(el, start, end) {
+        const s = this._richLocate(el, Math.max(0, start));
+        const e = this._richLocate(el, Math.max(0, end));
+        const range = document.createRange();
+        try {
+            range.setStart(s.node, s.offset);
+            range.setEnd(e.node, e.offset);
+        } catch (_) {
+            return;
+        }
+        const sel = window.getSelection();
+        if (!sel) return;
+        sel.removeAllRanges();
+        sel.addRange(range);
+    },
+
+    _initRichMessageInput(el) {
+        if (!el || el._richInit) return;
+        el._richInit = true;
+        const self = this;
+        el._savedSelStart = 0;
+        el._savedSelEnd = 0;
+
+        // The caret only lives in window.getSelection() while the input is
+        // focused; opening the emoji picker moves focus away. Remember the last
+        // in-input caret so insertions land where the user left off.
+        const saveSel = () => {
+            const sel = window.getSelection();
+            if (!sel || !sel.rangeCount) return;
+            const r = sel.getRangeAt(0);
+            if (!el.contains(r.startContainer)) return;
+            const s = self._richSelectionOffset(el, r.startContainer, r.startOffset);
+            const e = self._richSelectionOffset(el, r.endContainer, r.endOffset);
+            if (s != null) el._savedSelStart = s;
+            if (e != null) el._savedSelEnd = e;
+        };
+        el.addEventListener('keyup', saveSel);
+        el.addEventListener('mouseup', saveSel);
+        el.addEventListener('input', saveSel);
+        el.addEventListener('focus', saveSel);
+
+        Object.defineProperty(el, 'value', {
+            configurable: true,
+            get() { return self._serializeRichInput(el); },
+            set(v) {
+                const text = v == null ? '' : String(v);
+                self._renderRichInput(el, text);
+                // Mirror textarea behaviour: assigning value drops the caret at the end.
+                el._savedSelStart = el._savedSelEnd = text.length;
+                self._setRichCaret(el, text.length, text.length);
+            }
+        });
+
+        Object.defineProperty(el, 'selectionStart', {
+            configurable: true,
+            get() {
+                const sel = window.getSelection();
+                if (sel && sel.rangeCount) {
+                    const r = sel.getRangeAt(0);
+                    const o = self._richSelectionOffset(el, r.startContainer, r.startOffset);
+                    if (o != null) { el._savedSelStart = o; return o; }
+                }
+                return el._savedSelStart || 0;
+            },
+            set(v) { el._savedSelStart = el._savedSelEnd = v; self._setRichCaret(el, v, v); }
+        });
+
+        Object.defineProperty(el, 'selectionEnd', {
+            configurable: true,
+            get() {
+                const sel = window.getSelection();
+                if (sel && sel.rangeCount) {
+                    const r = sel.getRangeAt(0);
+                    const o = self._richSelectionOffset(el, r.endContainer, r.endOffset);
+                    if (o != null) { el._savedSelEnd = o; return o; }
+                }
+                return el._savedSelEnd || 0;
+            },
+            set(v) { el._savedSelStart = el._savedSelEnd = v; self._setRichCaret(el, v, v); }
+        });
+
+        Object.defineProperty(el, 'disabled', {
+            configurable: true,
+            get() { return el.getAttribute('contenteditable') !== 'true'; },
+            set(v) {
+                el.setAttribute('contenteditable', v ? 'false' : 'true');
+                el.classList.toggle('input-disabled', !!v);
+            }
+        });
+
+        el.setSelectionRange = function (s, e) {
+            el._savedSelStart = s;
+            el._savedSelEnd = e;
+            self._setRichCaret(el, s, e);
+        };
+    },
+
+    // When the caret sits just after a complete :shortcode: for a known custom
+    // emoji, re-render so it becomes an inline image. The :shortcode: token and
+    // its emoji image share the same model length, so the caret offset is
+    // unchanged by the re-render.
+    _maybeRenderTypedEmoji(el) {
+        if (!this.customEmojis || this.customEmojis.size === 0) return;
+        const caret = el.selectionStart;
+        const value = el.value;
+        const m = value.slice(0, caret).match(/:([a-zA-Z0-9_]+):$/);
+        if (!m || !this.customEmojis.has(m[1])) return;
+        el.value = value;
+        el.selectionStart = el.selectionEnd = caret;
+    },
+
+    // Insert plain text at the caret (used for Shift+Enter newlines and pastes)
+    _insertTextAtCursor(el, text) {
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+        const v = el.value;
+        el.value = v.slice(0, start) + text + v.slice(end);
+        const pos = start + text.length;
+        el.selectionStart = el.selectionEnd = pos;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+    },
+
     toggleGifPicker() {
         const gifPicker = document.getElementById('gifPicker');
 
@@ -1636,9 +1881,6 @@ Object.assign(NYM.prototype, {
         // Resize the picker to sit above the on-screen keyboard on mobile.
         // Uses visualViewport which shrinks when the keyboard opens.
         this._setupGifPickerKeyboardResize();
-
-        // Focus search
-        searchInput.focus();
     },
 
     _setupGifPickerKeyboardResize() {
