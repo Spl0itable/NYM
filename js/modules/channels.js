@@ -736,8 +736,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 locWrap.className = 'channel-location';
 
                 const link = document.createElement('a');
-                const encodedLocation = encodeURIComponent(location);
-                link.setAttribute('href', `https://www.openstreetmap.org/search?query=${encodedLocation}&zoom=5&minlon=-138.55957031250003&minlat=11.953349393643416&maxlon=-97.69042968750001&maxlat=55.25407706707272#map=5/47.81/5.63`);
+                link.setAttribute('href', `https://www.geohash.es/decode?geohash=${encodeURIComponent(safeGeohash.toLowerCase())}`);
                 link.setAttribute('target', '_blank');
                 link.setAttribute('rel', 'noopener');
                 link.textContent = location;
