@@ -2406,6 +2406,10 @@ body.chat-bubbles .edited-indicator-irc {
     left: -40px;
 }
 
+.swipe-reply-indicator.swipe-reply-indicator-past-avatar {
+    left: -86px;
+}
+
 .swipe-reply-indicator svg {
     width: 16px;
     height: 16px;
