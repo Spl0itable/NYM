@@ -1070,8 +1070,9 @@ Object.assign(NYM.prototype, {
 
         // File input
         document.getElementById('fileInput').addEventListener('change', (e) => {
-            if (e.target.files && e.target.files[0]) {
-                this.uploadImage(e.target.files[0]);
+            if (e.target.files && e.target.files.length) {
+                this.uploadImage(Array.from(e.target.files));
+                e.target.value = '';
             }
         });
 
@@ -1079,13 +1080,17 @@ Object.assign(NYM.prototype, {
         document.getElementById('messageInput').addEventListener('paste', (e) => {
             const items = e.clipboardData && e.clipboardData.items;
             if (items) {
+                const mediaFiles = [];
                 for (const item of items) {
                     if (item.type.startsWith('image/') || item.type.startsWith('video/')) {
-                        e.preventDefault();
                         const file = item.getAsFile();
-                        if (file) this.uploadImage(file);
-                        return;
+                        if (file) mediaFiles.push(file);
                     }
+                }
+                if (mediaFiles.length) {
+                    e.preventDefault();
+                    this.uploadImage(mediaFiles);
+                    return;
                 }
             }
             // Plain-text paste — strip formatting so the contenteditable input

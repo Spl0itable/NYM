@@ -424,14 +424,8 @@ Object.assign(NYM.prototype, {
         const addBtn = document.createElement('span');
         addBtn.className = 'add-reaction-btn';
         addBtn.innerHTML = `
-<svg viewBox="0 0 24 24">
-    <circle cx="12" cy="12" r="10"></circle>
-    <circle cx="9" cy="9" r="1"></circle>
-    <circle cx="15" cy="9" r="1"></circle>
-    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-    <circle cx="18" cy="6" r="5" fill="var(--text)" stroke="none"></circle>
-    <line x1="18" y1="4" x2="18" y2="8" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
-    <line x1="16" y1="6" x2="20" y2="6" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
+<svg viewBox="0 0 20 20" style="fill: var(--text); stroke: none;">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 15.5 1m-13 10a6.5 6.5 0 0 1 7.166-6.466.75.75 0 0 0 .152-1.493 8 8 0 1 0 7.14 7.139.75.75 0 0 0-1.492.152A7 7 0 0 1 15.5 11a6.5 6.5 0 1 1-13 0m4.25-.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m4.5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5M9 15c1.277 0 2.553-.724 3.06-2.173.148-.426-.209-.827-.66-.827H6.6c-.452 0-.808.4-.66.827C6.448 14.276 7.724 15 9 15"></path>
 </svg>
 `;
         addBtn.title = 'Add reaction';

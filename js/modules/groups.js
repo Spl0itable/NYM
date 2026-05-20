@@ -448,6 +448,10 @@ Object.assign(NYM.prototype, {
         const groupId = groupTag[1];
         const groupConvKey = this.getGroupConversationKey(groupId);
 
+        if (typeof this.ingestImetaTags === 'function') {
+            this.ingestImetaTags(rumor.tags);
+        }
+
         // Extract sender's next ephemeral pubkey from the rumor (timing-attack mitigation).
         // When present, future messages to this sender will be encrypted to this key.
         if (!isOwn) {
@@ -1253,6 +1257,11 @@ Object.assign(NYM.prototype, {
         // NIP-30: declare any custom emoji shortcodes used in the message
         tags.push(...this.customEmojiTagsForContent(content));
 
+        // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message
+        if (typeof this.imetaTagsForContent === 'function') {
+            tags.push(...this.imetaTagsForContent(content));
+        }
+
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
@@ -1786,7 +1795,7 @@ Object.assign(NYM.prototype, {
             }).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
             : `<div class="group-icon-wrap">${groupSvg}</div>`;
 
-        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge" style="display:none">0</span><span class="delete-pm" data-group-id="${this.escapeHtml(groupId)}" data-action="deleteGroup">✕</span></div>`;
+        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="delete-pm" data-group-id="${this.escapeHtml(groupId)}" data-action="deleteGroup">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
     },
 
     // Update the stacked reader avatars for group messages using waterfall logic:

@@ -333,6 +333,11 @@ Object.assign(NYM.prototype, {
             // Register any NIP-30 custom emoji declared on this message
             this.ingestEmojiTags(event.tags);
 
+            // NIP-92: register Blossom mirror URLs for media in this message
+            if (typeof this.ingestImetaTags === 'function') {
+                this.ingestImetaTags(event.tags);
+            }
+
             const message = {
                 id: event.id,
                 author: nym,
@@ -2078,6 +2083,11 @@ Object.assign(NYM.prototype, {
             // NIP-30: declare any custom emoji shortcodes used in the message
             tags.push(...this.customEmojiTagsForContent(wireContent));
 
+            // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message
+            if (typeof this.imetaTagsForContent === 'function') {
+                tags.push(...this.imetaTagsForContent(wireContent));
+            }
+
             let event = {
                 kind: kind,
                 created_at: now,
@@ -2205,6 +2215,11 @@ Object.assign(NYM.prototype, {
 
             // NIP-30: declare any custom emoji shortcodes used in the message
             tags.push(...this.customEmojiTagsForContent(wireContent));
+
+            // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message
+            if (typeof this.imetaTagsForContent === 'function') {
+                tags.push(...this.imetaTagsForContent(wireContent));
+            }
 
             let event = {
                 kind: kind,

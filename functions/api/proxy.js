@@ -6,7 +6,8 @@
 //   GET  /api/proxy?url=<encoded-url>            — Proxy any allowed media/resource
 //   POST /api/proxy?action=translate             — Translate text
 //   GET  /api/proxy?action=unfurl&url=<url>      — Fetch Open Graph metadata for URL preview
-//   PUT  /api/proxy?action=upload                — Upload a blob to blossom.band (Nostr auth header)
+//   PUT  /api/proxy?action=upload&server=<host>  — Upload a blob to a Blossom host (Nostr auth header)
+//   PUT  /api/proxy?action=mirror&server=<host>  — Ask a Blossom host to mirror a blob from a source URL
 //   GET  /api/proxy?action=geo-relays            — Fetch bitchat geo-relay CSV (edge-cached)
 //   GET/POST /api/proxy?action=json&url=<url>    — Proxy a JSON request (LNURL, Nominatim, etc.)
 
@@ -61,7 +62,9 @@ export async function onRequest(context) {
     } else if (action === 'unfurl') {
       return await handleUnfurl(url.searchParams.get('url'), context);
     } else if (action === 'upload') {
-      return await handleBlossomUpload(request);
+      return await handleBlossomUpload(request, url.searchParams.get('server'));
+    } else if (action === 'mirror') {
+      return await handleBlossomMirror(request, url.searchParams.get('server'));
     } else if (action === 'geo-relays') {
       return await handleGeoRelays(context);
     } else if (action === 'geocode') {
@@ -212,13 +215,35 @@ async function handleJsonProxy(targetUrl, request) {
   return new Response(text, { status: resp.status, headers });
 }
 
-const BLOSSOM_UPLOAD_URL = 'https://blossom.band/upload';
+const ALLOWED_BLOSSOM_HOSTS = new Set([
+  'blossom.band',
+  'blossom.primal.net',
+  'nostr.download',
+]);
+const DEFAULT_BLOSSOM_HOST = 'https://blossom.band';
 const ALLOWED_UPLOAD_PREFIXES = ['image/', 'video/', 'audio/'];
 const UPLOAD_OCTET_STREAM = 'application/octet-stream';
 
-async function handleBlossomUpload(request) {
+function resolveBlossomBase(serverParam) {
+  if (!serverParam) return DEFAULT_BLOSSOM_HOST;
+  try {
+    const u = new URL(serverParam);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    if (!ALLOWED_BLOSSOM_HOSTS.has(u.hostname)) return null;
+    return `${u.protocol}//${u.hostname}`;
+  } catch {
+    return null;
+  }
+}
+
+async function handleBlossomUpload(request, serverParam) {
   if (request.method !== 'PUT' && request.method !== 'POST') {
     return jsonResponse({ error: 'PUT required' }, 405);
+  }
+
+  const base = resolveBlossomBase(serverParam);
+  if (!base) {
+    return jsonResponse({ error: 'Unknown Blossom server' }, 400);
   }
 
   const auth = request.headers.get('Authorization');
@@ -242,7 +267,7 @@ async function handleBlossomUpload(request) {
   const contentLength = request.headers.get('Content-Length');
   if (contentLength) upstreamHeaders.set('Content-Length', contentLength);
 
-  const resp = await fetch(BLOSSOM_UPLOAD_URL, {
+  const resp = await fetch(`${base}/upload`, {
     method: 'PUT',
     headers: upstreamHeaders,
     body: request.body,
@@ -252,6 +277,51 @@ async function handleBlossomUpload(request) {
   const respCT = resp.headers.get('content-type');
   if (respCT) respHeaders.set('Content-Type', respCT);
 
+  return new Response(resp.body, { status: resp.status, headers: respHeaders });
+}
+
+async function handleBlossomMirror(request, serverParam) {
+  if (request.method !== 'PUT' && request.method !== 'POST') {
+    return jsonResponse({ error: 'PUT required' }, 405);
+  }
+
+  const base = resolveBlossomBase(serverParam);
+  if (!base) {
+    return jsonResponse({ error: 'Unknown Blossom server' }, 400);
+  }
+
+  const auth = request.headers.get('Authorization');
+  if (!auth || !auth.startsWith('Nostr ')) {
+    return jsonResponse({ error: 'Missing Nostr auth' }, 401);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON body' }, 400);
+  }
+  if (!body || typeof body.url !== 'string' || !body.url) {
+    return jsonResponse({ error: 'Missing source url' }, 400);
+  }
+  if (isPrivateUrl(body.url)) {
+    return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
+  }
+
+  const resp = await fetch(`${base}/mirror`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': auth,
+      'Content-Type': 'application/json',
+      'User-Agent': 'NymchatProxy/1.0',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify({ url: body.url }),
+  });
+
+  const respHeaders = new Headers(CORS_HEADERS);
+  const respCT = resp.headers.get('content-type');
+  if (respCT) respHeaders.set('Content-Type', respCT);
   return new Response(resp.body, { status: resp.status, headers: respHeaders });
 }
 

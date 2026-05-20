@@ -236,7 +236,8 @@ Object.assign(NYM.prototype, {
                 ['p', recipientPubkey],
                 ['x', nymMessageId],  // Nymchat message ID for delivery receipts
                 ['ms', String(nowMs)],  // Millisecond send time for sub-second ordering
-                ...this.customEmojiTagsForContent(content)
+                ...this.customEmojiTagsForContent(content),
+                ...(typeof this.imetaTagsForContent === 'function' ? this.imetaTagsForContent(content) : [])
             ],
             content,
             pubkey: this.pubkey
@@ -809,6 +810,11 @@ Object.assign(NYM.prototype, {
 
             // Register any NIP-30 custom emoji declared on this rumor
             this.ingestEmojiTags(rumor.tags);
+
+            // NIP-92: register Blossom mirror URLs for media in this rumor
+            if (typeof this.ingestImetaTags === 'function') {
+                this.ingestImetaTags(rumor.tags);
+            }
 
             const senderPubkey = rumor.pubkey;
             const isOwn = !!this.pubkey && senderPubkey === this.pubkey;
@@ -1795,8 +1801,8 @@ Object.assign(NYM.prototype, {
 <img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy">
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
-<span class="unread-badge" style="display:none">0</span>
 <span class="delete-pm" data-action="deletePMStop" data-pubkey="${safePk}">✕</span>
+<span class="unread-badge" style="display:none">0</span>
 </div>
 `;
             item.dataset.action = 'openPMItem';

@@ -1,5 +1,11 @@
 // users.js - User identities, blocked users/keywords, friends, avatars, banners, wallpaper, uploads
 
+const BLOSSOM_SERVERS = [
+    'https://blossom.band',
+    'https://blossom.primal.net',
+    'https://nostr.download'
+];
+
 Object.assign(NYM.prototype, {
 
     getUserColorClass(pubkey) {
@@ -481,12 +487,139 @@ Object.assign(NYM.prototype, {
         return `${base}?emoji=1&url=${encodeURIComponent(originalUrl)}`;
     },
 
-    // Blob upload endpoint. Routes through the Cloudflare proxy when available
-    // (hides the user's IP); falls back to a direct blossom.band PUT when
-    // running locally / in direct mode so uploads still work.
-    _getBlossomUploadUrl() {
+    _getBlossomUploadUrl(server) {
+        const host = server || BLOSSOM_SERVERS[0];
         const base = this._getProxyBaseUrl();
-        return base ? `${base}?action=upload` : 'https://blossom.band/upload';
+        if (base) {
+            return `${base}?action=upload&server=${encodeURIComponent(host)}`;
+        }
+        return `${host.replace(/\/$/, '')}/upload`;
+    },
+
+    _getBlossomMirrorUrl(server) {
+        const base = this._getProxyBaseUrl();
+        if (base) {
+            return `${base}?action=mirror&server=${encodeURIComponent(server)}`;
+        }
+        return `${server.replace(/\/$/, '')}/mirror`;
+    },
+
+    async _signBlossomEvent(hashHex, tType = 'upload') {
+        const now = Math.floor(Date.now() / 1000);
+        const event = {
+            kind: 24242,
+            created_at: now,
+            tags: [
+                ['t', tType],
+                ['x', hashHex],
+                ['expiration', String(now + 600)]
+            ],
+            content: tType === 'mirror' ? 'Mirror blob' : 'Uploading blob with SHA-256 hash',
+            pubkey: this.pubkey
+        };
+        const signed = await this.signEvent(event);
+        return btoa(JSON.stringify(signed));
+    },
+
+    async _putToBlossom(file, hashHex, server) {
+        const auth = await this._signBlossomEvent(hashHex, 'upload');
+        const resp = await fetch(this._getBlossomUploadUrl(server), {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Nostr ${auth}`,
+                'Content-Type': file.type || 'application/octet-stream'
+            },
+            body: file
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (!data.url) throw new Error('No URL in response');
+        return data.url;
+    },
+
+    async _uploadWithFallback(file, hashHex) {
+        let lastErr = null;
+        for (const server of BLOSSOM_SERVERS) {
+            try {
+                const url = await this._putToBlossom(file, hashHex, server);
+                return { url, server };
+            } catch (e) {
+                lastErr = e;
+            }
+        }
+        throw lastErr || new Error('All Blossom servers failed');
+    },
+
+    imetaTagsForContent(content) {
+        if (!this.mediaFallbacks || !this.mediaFallbacks.size || !content) return [];
+        const tags = [];
+        const re = /(https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(?:\?[^\s]*)?)/gi;
+        const seen = new Set();
+        let m;
+        while ((m = re.exec(content)) !== null) {
+            const url = m[1];
+            if (seen.has(url)) continue;
+            seen.add(url);
+            const mirrors = this.mediaFallbacks.get(url);
+            if (mirrors && mirrors.length) {
+                const tag = ['imeta', `url ${url}`];
+                mirrors.forEach(mu => tag.push(`fallback ${mu}`));
+                tags.push(tag);
+            }
+        }
+        return tags;
+    },
+
+    ingestImetaTags(tags) {
+        if (!tags || !tags.length) return;
+        if (!this.mediaFallbacks) this.mediaFallbacks = new Map();
+        for (const tag of tags) {
+            if (!Array.isArray(tag) || tag[0] !== 'imeta') continue;
+            let primary = null;
+            const fallbacks = [];
+            for (let i = 1; i < tag.length; i++) {
+                const part = tag[i];
+                if (typeof part !== 'string') continue;
+                if (part.startsWith('url ')) primary = part.slice(4).trim();
+                else if (part.startsWith('fallback ')) fallbacks.push(part.slice(9).trim());
+            }
+            if (primary && fallbacks.length) {
+                const existing = this.mediaFallbacks.get(primary) || [];
+                const merged = Array.from(new Set([...existing, ...fallbacks]));
+                this.mediaFallbacks.set(primary, merged);
+            }
+        }
+    },
+
+    _predictMirrorUrl(server, hashHex, primaryUrl) {
+        const base = server.replace(/\/$/, '');
+        const m = primaryUrl.match(/\.([a-z0-9]{2,5})(?:\?|$)/i);
+        const ext = m ? `.${m[1].toLowerCase()}` : '';
+        return `${base}/${hashHex}${ext}`;
+    },
+
+    async _mirrorBlobBackground(hashHex, primaryUrl, excludeServer) {
+        const remaining = BLOSSOM_SERVERS.filter(s => s !== excludeServer);
+        if (!remaining.length) return [];
+        const auth = await this._signBlossomEvent(hashHex, 'upload');
+        const mirrors = [];
+        await Promise.all(remaining.map(async (server) => {
+            try {
+                const resp = await fetch(this._getBlossomMirrorUrl(server), {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Nostr ${auth}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ url: primaryUrl })
+                });
+                if (!resp.ok) return;
+                const data = await resp.json().catch(() => null);
+                const url = (data && data.url) ? data.url : this._predictMirrorUrl(server, hashHex, primaryUrl);
+                mirrors.push(url);
+            } catch (_) { }
+        }));
+        return mirrors;
     },
 
     // Update already-rendered message avatars when a kind 0 profile picture arrives
@@ -511,69 +644,26 @@ Object.assign(NYM.prototype, {
 
     async uploadAvatar(file) {
         try {
-            // Compute SHA-256 hash
             const arrayBuffer = await file.arrayBuffer();
             const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 
-            // Create and sign Nostr event for blossom upload auth
-            const now = Math.floor(Date.now() / 1000);
-            const uploadEvent = {
-                kind: 24242,
-                created_at: now,
-                tags: [
-                    ['t', 'upload'],
-                    ['x', hashHex],
-                    ['expiration', String(now + 600)]
-                ],
-                content: 'Uploading blob with SHA-256 hash',
-                pubkey: this.pubkey
-            };
+            const { url, server } = await this._uploadWithFallback(file, hashHex);
 
-            const signedEvent = await this.signEvent(uploadEvent);
-            const eventBase64 = btoa(JSON.stringify(signedEvent));
+            const oldBlob = this.avatarBlobCache.get(this.pubkey);
+            if (oldBlob) URL.revokeObjectURL(oldBlob);
+            this.avatarBlobCache.delete(this.pubkey);
 
-            const response = await fetch(this._getBlossomUploadUrl(), {
-                method: 'PUT',
-                headers: {
-                    'Authorization': `Nostr ${eventBase64}`,
-                    'Content-Type': file.type || 'image/png'
-                },
-                body: file
-            });
+            this.userAvatars.set(this.pubkey, url);
+            this.cacheAvatarImage(this.pubkey, url);
+            localStorage.setItem('nym_avatar_url', url);
+            this.updateSidebarAvatar();
+            this.updateRenderedAvatars(this.pubkey, url);
+            await this.saveToNostrProfile();
+            this.publishAvatarUpdate(url);
 
-            if (response.ok) {
-                const data = await response.json();
-                if (data.url) {
-                    // Clear old cached blob so cacheAvatarImage will fetch the new one
-                    const oldBlob = this.avatarBlobCache.get(this.pubkey);
-                    if (oldBlob) URL.revokeObjectURL(oldBlob);
-                    this.avatarBlobCache.delete(this.pubkey);
-
-                    // Store locally
-                    this.userAvatars.set(this.pubkey, data.url);
-                    this.cacheAvatarImage(this.pubkey, data.url);
-
-                    // Persist for auto-ephemeral reuse
-                    localStorage.setItem('nym_avatar_url', data.url);
-
-                    // Update sidebar avatar
-                    this.updateSidebarAvatar();
-
-                    // Update rendered avatars immediately
-                    this.updateRenderedAvatars(this.pubkey, data.url);
-
-                    // Update nostr profile with picture
-                    await this.saveToNostrProfile();
-
-                    // Broadcast avatar update so other users clear their cache
-                    this.publishAvatarUpdate(data.url);
-
-                    return data.url;
-                }
-            }
-            throw new Error(`Upload failed: ${response.status}`);
+            this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
+            return url;
         } catch (error) {
             this.displaySystemMessage('Failed to upload avatar: ' + error.message);
             return null;
@@ -597,48 +687,20 @@ Object.assign(NYM.prototype, {
         try {
             const arrayBuffer = await file.arrayBuffer();
             const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 
-            const now = Math.floor(Date.now() / 1000);
-            const uploadEvent = {
-                kind: 24242,
-                created_at: now,
-                tags: [
-                    ['t', 'upload'],
-                    ['x', hashHex],
-                    ['expiration', String(now + 600)]
-                ],
-                content: 'Uploading blob with SHA-256 hash',
-                pubkey: this.pubkey
-            };
+            const { url, server } = await this._uploadWithFallback(file, hashHex);
 
-            const signedEvent = await this.signEvent(uploadEvent);
-            const eventBase64 = btoa(JSON.stringify(signedEvent));
+            const oldBlob = this.bannerBlobCache.get(this.pubkey);
+            if (oldBlob) URL.revokeObjectURL(oldBlob);
+            this.bannerBlobCache.delete(this.pubkey);
+            this.userBanners.set(this.pubkey, url);
+            this.cacheBannerImage(this.pubkey, url);
+            localStorage.setItem('nym_banner_url', url);
+            await this.saveToNostrProfile();
 
-            const response = await fetch(this._getBlossomUploadUrl(), {
-                method: 'PUT',
-                headers: {
-                    'Authorization': `Nostr ${eventBase64}`,
-                    'Content-Type': file.type || 'image/png'
-                },
-                body: file
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.url) {
-                    const oldBlob = this.bannerBlobCache.get(this.pubkey);
-                    if (oldBlob) URL.revokeObjectURL(oldBlob);
-                    this.bannerBlobCache.delete(this.pubkey);
-                    this.userBanners.set(this.pubkey, data.url);
-                    this.cacheBannerImage(this.pubkey, data.url);
-                    localStorage.setItem('nym_banner_url', data.url);
-                    await this.saveToNostrProfile();
-                    return data.url;
-                }
-            }
-            throw new Error(`Upload failed: ${response.status}`);
+            this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
+            return url;
         } catch (error) {
             this.displaySystemMessage('Failed to upload banner: ' + error.message);
             return null;
@@ -678,47 +740,15 @@ Object.assign(NYM.prototype, {
         }
 
         try {
-            // Compute SHA-256 hash
             const arrayBuffer = await file.arrayBuffer();
             const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 
-            // Create and sign Nostr event for blossom upload auth
-            const now = Math.floor(Date.now() / 1000);
-            const uploadEvent = {
-                kind: 24242,
-                created_at: now,
-                tags: [
-                    ['t', 'upload'],
-                    ['x', hashHex],
-                    ['expiration', String(now + 600)]
-                ],
-                content: 'Uploading blob with SHA-256 hash',
-                pubkey: this.pubkey
-            };
-
-            const signedEvent = await this.signEvent(uploadEvent);
-            const eventBase64 = btoa(JSON.stringify(signedEvent));
-
-            const response = await fetch(this._getBlossomUploadUrl(), {
-                method: 'PUT',
-                headers: {
-                    'Authorization': `Nostr ${eventBase64}`,
-                    'Content-Type': file.type || 'image/png'
-                },
-                body: file
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.url) {
-                    await this._persistWallpaperBlob(file, data.url);
-                    this._setWallpaperBlobUrl(file);
-                    return data.url;
-                }
-            }
-            throw new Error(`Upload failed: ${response.status}`);
+            const { url, server } = await this._uploadWithFallback(file, hashHex);
+            await this._persistWallpaperBlob(file, url);
+            this._setWallpaperBlobUrl(file);
+            this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
+            return url;
         } catch (error) {
             this.displaySystemMessage('Failed to upload wallpaper: ' + error.message);
             return null;
@@ -814,83 +844,77 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    async uploadImage(file) {
-        const isVideo = file.type.startsWith('video/');
-        const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
+    async uploadImage(fileOrFiles) {
+        const files = Array.isArray(fileOrFiles) || fileOrFiles instanceof FileList
+            ? Array.from(fileOrFiles)
+            : [fileOrFiles];
+        if (!files.length) return;
 
-        if (file.size > MAX_UPLOAD_SIZE) {
-            this.displaySystemMessage((isVideo ? 'Video' : 'Image') + ' files must be under 50MB. Your file is ' + (file.size / (1024 * 1024)).toFixed(1) + 'MB.');
-            return;
+        const MAX_UPLOAD_SIZE = 50 * 1024 * 1024;
+        for (const f of files) {
+            if (f.size > MAX_UPLOAD_SIZE) {
+                const isVid = f.type.startsWith('video/');
+                this.displaySystemMessage((isVid ? 'Video' : 'Image') + ' files must be under 50MB. "' + (f.name || 'file') + '" is ' + (f.size / (1024 * 1024)).toFixed(1) + 'MB.');
+                return;
+            }
         }
+
+        if (!this.mediaFallbacks) this.mediaFallbacks = new Map();
 
         const progress = document.getElementById('uploadProgress');
         const progressFill = document.getElementById('progressFill');
         const progressLabel = document.getElementById('uploadProgressLabel');
 
+        const total = files.length;
+        const uploaded = [];
+
         try {
             progress.classList.add('active');
-            progressLabel.textContent = isVideo ? 'Uploading video...' : 'Uploading image...';
-            progressFill.style.width = '20%';
 
-            // Compute SHA-256 hash
-            const arrayBuffer = await file.arrayBuffer();
-            const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            for (let i = 0; i < total; i++) {
+                const file = files[i];
+                const isVideo = file.type.startsWith('video/');
+                const label = total > 1
+                    ? `Uploading ${i + 1} of ${total}…`
+                    : (isVideo ? 'Uploading video...' : 'Uploading image...');
+                progressLabel.textContent = label;
+                progressFill.style.width = `${Math.round((i / total) * 80) + 10}%`;
 
-            progressFill.style.width = '40%';
+                const arrayBuffer = await file.arrayBuffer();
+                const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+                const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 
-            // Create and sign Nostr event
-            const now = Math.floor(Date.now() / 1000);
-            const uploadEvent = {
-                kind: 24242,
-                created_at: now,
-                tags: [
-                    ['t', 'upload'],
-                    ['x', hashHex],
-                    ['expiration', String(now + 600)] // 10 minutes from now
-                ],
-                content: 'Uploading blob with SHA-256 hash',
-                pubkey: this.pubkey
-            };
-
-            const signedEvent = await this.signEvent(uploadEvent);
-
-            progressFill.style.width = '60%';
-
-            // Convert signed event to base64
-            const eventString = JSON.stringify(signedEvent);
-            const eventBase64 = btoa(eventString);
-
-            progressFill.style.width = '80%';
-
-            // Upload to blossom.band
-            const response = await fetch(this._getBlossomUploadUrl(), {
-                method: 'PUT',
-                headers: {
-                    'Authorization': `Nostr ${eventBase64}`,
-                    'Content-Type': file.type || 'application/octet-stream'
-                },
-                body: file
-            });
+                const { url, server } = await this._uploadWithFallback(file, hashHex);
+                uploaded.push({ url, hashHex, server, file });
+            }
 
             progressFill.style.width = '100%';
 
-            if (response.ok) {
-                const data = await response.json();
-                if (data.url) {
-                    const mediaUrl = data.url;
-                    const input = document.getElementById('messageInput');
-                    input.value += mediaUrl + ' ';
-                    input.focus();
-                } else {
-                    throw new Error('No URL in response');
-                }
-            } else {
-                throw new Error(`Upload failed: ${response.status}`);
+            const input = document.getElementById('messageInput');
+            const appendedUrls = uploaded.map(u => u.url).join(' ');
+            if (input) {
+                input.value = (input.value || '') + appendedUrls + ' ';
+                input.focus();
+                if (typeof this.autoResizeTextarea === 'function') this.autoResizeTextarea(input);
+            }
+
+            for (const u of uploaded) {
+                const predicted = BLOSSOM_SERVERS
+                    .filter(s => s !== u.server)
+                    .map(s => this._predictMirrorUrl(s, u.hashHex, u.url));
+                if (predicted.length) this.mediaFallbacks.set(u.url, predicted);
+
+                this._mirrorBlobBackground(u.hashHex, u.url, u.server)
+                    .then(mirrors => {
+                        if (mirrors && mirrors.length) {
+                            const existing = this.mediaFallbacks.get(u.url) || [];
+                            this.mediaFallbacks.set(u.url, Array.from(new Set([...mirrors, ...existing])));
+                        }
+                    })
+                    .catch(() => { });
             }
         } catch (error) {
-            this.displaySystemMessage('Failed to upload ' + (isVideo ? 'video' : 'image') + ': ' + error.message);
+            this.displaySystemMessage('Failed to upload media: ' + (error && error.message ? error.message : error));
         } finally {
             setTimeout(() => {
                 progress.classList.remove('active');

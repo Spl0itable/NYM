@@ -1555,6 +1555,8 @@ body.light-mode .channel-context-menu {
     height: 16px;
     stroke: var(--text);
     stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
     fill: none;
 }
 
@@ -1999,6 +2001,48 @@ body.light-mode.chat-bubbles .read-more-btn {
     display: inline-block;
     max-width: 300px;
     margin: 10px 0;
+}
+
+.message-content .message-gallery {
+    display: grid;
+    gap: 4px;
+    margin: 10px 0;
+    max-width: 420px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+
+.message-content .message-gallery.gallery-2 {
+    grid-template-columns: 1fr 1fr;
+}
+
+.message-content .message-gallery.gallery-3 {
+    grid-template-columns: 1fr 1fr;
+}
+
+.message-content .message-gallery.gallery-3 > :first-child {
+    grid-row: span 2;
+}
+
+.message-content .message-gallery.gallery-4plus {
+    grid-template-columns: 1fr 1fr;
+}
+
+.message-content .message-gallery img,
+.message-content .message-gallery .video-container,
+.message-content .message-gallery video.message-video {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: 220px;
+    margin: 0;
+    object-fit: cover;
+    display: block;
+    border-radius: 0;
+}
+
+.message-content .message-gallery .video-container {
+    display: block;
 }
 
 .message-content video.message-video {
@@ -3202,6 +3246,48 @@ div.message-input .custom-emoji {
     justify-content: center;
     transition: all var(--transition);
     z-index: 10002;
+}
+
+.image-modal-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text);
+    font-size: 32px;
+    line-height: 1;
+    cursor: pointer;
+    background: rgba(20, 20, 35, 0.8);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 0 4px;
+    transition: all var(--transition);
+    z-index: 10002;
+}
+
+.image-modal-prev {
+    left: 20px;
+}
+
+.image-modal-next {
+    right: 20px;
+}
+
+.image-modal-nav:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+@media (max-width: 768px) {
+    .image-modal-nav {
+        display: none !important;
+    }
 }
 
 .mobile-menu-toggle,

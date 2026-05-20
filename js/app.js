@@ -1593,6 +1593,8 @@ function closeModal(id) {
 function closeImageModal() {
     document.getElementById('imageModal').classList.remove('active');
     if (window.resetImageModalZoom) window.resetImageModalZoom();
+    window._imageModalGallery = null;
+    if (typeof window.updateImageModalGalleryNav === 'function') window.updateImageModalGalleryNav();
     const modalVid = document.getElementById('modalVideo');
     modalVid.pause();
     modalVid.removeAttribute('src');
@@ -1724,8 +1726,55 @@ function downloadModalMedia(event) {
         }
     }
 
+    function updateGalleryNavButtons() {
+        const prev = document.getElementById('imageModalPrev');
+        const next = document.getElementById('imageModalNext');
+        if (!prev || !next) return;
+        const g = window._imageModalGallery;
+        if (!g || g.sources.length <= 1) {
+            prev.style.display = 'none';
+            next.style.display = 'none';
+            return;
+        }
+        prev.style.display = g.index > 0 ? '' : 'none';
+        next.style.display = g.index < g.sources.length - 1 ? '' : 'none';
+    }
+    window.updateImageModalGalleryNav = updateGalleryNavButtons;
+
+    function navigateGallery(delta) {
+        const g = window._imageModalGallery;
+        if (!g) return false;
+        const next = g.index + delta;
+        if (next < 0 || next >= g.sources.length) return false;
+        g.index = next;
+        const newSrc = g.sources[next];
+        scale = 1; tx = 0; ty = 0;
+        img.style.transition = 'opacity 0.12s linear, transform 0.18s ease';
+        img.style.opacity = '0';
+        img.style.transform = 'translate(0,0) scale(1)';
+        modal.style.background = '';
+        setTimeout(() => {
+            img.src = newSrc;
+            img.style.opacity = '';
+            updateGalleryNavButtons();
+            setTimeout(() => { img.style.transition = ''; }, 200);
+        }, 120);
+        return true;
+    }
+    window.navigateImageModalGallery = navigateGallery;
+
     function onEnd(e) {
         if (mode === 'swipe') {
+            const g = window._imageModalGallery;
+            const horizontal = Math.abs(tx) > Math.abs(ty) * 1.5;
+            if (g && horizontal && Math.abs(tx) > 60) {
+                const delta = tx < 0 ? 1 : -1;
+                if (navigateGallery(delta)) {
+                    return;
+                }
+                reset(true);
+                return;
+            }
             if (Math.hypot(tx, ty) > 100) {
                 window.closeImageModal();
                 return;
@@ -3455,7 +3504,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.379';
+const NYMCHAT_VERSION = 'v3.66.380';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
