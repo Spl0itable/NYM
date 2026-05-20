@@ -2677,6 +2677,7 @@ var NYMBOT_PM_SYSTEM_PROMPT = [
   "",
   "=== LANGUAGE (HIGHEST PRIORITY) ===",
   "Reply in the same language as the user's newest message. Every word must be in that language, no mixing. Quoted or earlier messages may be in another language — read them for meaning only, don't switch your reply language to match them.",
+  "EXCEPTION: If the user explicitly asks for a translation, language lesson, language-comparison example, or otherwise asks you to produce text in a specific target language (e.g. \"translate to Japanese\", \"how do you say X in French\", \"write this sentence in Spanish\"), output the requested target-language text in full — that's the whole point of the task and overrides the same-language rule. Labels and surrounding commentary stay in the user's language; the requested foreign-language content does not.",
   "",
   "=== PERSONALITY & TONE ===",
   "Chill, helpful, sharp. Knowledgeable friend in a private chat, not customer support.",
@@ -2884,13 +2885,18 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType) {
     messages.push({ role: "assistant", content: "Understood." });
   }
 
+  var taskType = preTaskType || await classifyBotTask(ai, question);
+
   messages.push({ role: "user", content: "CONTEXT: The current date is " + new Date().toUTCString() + ". Treat that as 'now' and 'today'. Anything dated on or before it has already happened — never call a recent event 'future', 'fictional', or 'speculative' because of your training cutoff." });
   messages.push({ role: "assistant", content: "Understood." });
-  messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's message below. Quoted messages and earlier history may be in another language — read them for content only, but match your reply language to the user's newest message below." });
-  messages.push({ role: "assistant", content: "Understood." });
+  if (taskType !== "translation") {
+    messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's message below. Quoted messages and earlier history may be in another language — read them for content only, but match your reply language to the user's newest message below." });
+    messages.push({ role: "assistant", content: "Understood." });
+  } else {
+    messages.push({ role: "user", content: "TRANSLATION RULE: The user has asked for a translation or language-target output. Produce the requested target-language text in full — written in that target language's native script (use kana/kanji for Japanese, Hangul for Korean, Hanzi for Chinese, Cyrillic for Russian, Arabic script for Arabic, etc.). Do NOT leave any target-language line blank or substitute it with a placeholder. Labels (\"Japanese:\", \"Spanish:\", etc.) and any commentary may stay in the user's input language." });
+    messages.push({ role: "assistant", content: "Understood." });
+  }
   messages.push({ role: "user", content: question });
-
-  var taskType = preTaskType || await classifyBotTask(ai, question);
   var pmModel = BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general;
   var maxOut = BOT_PM_MAX_TOKENS[taskType] || BOT_PM_MAX_TOKENS.general;
   var reply = "";
@@ -3486,7 +3492,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.66.377";
+var NYMCHAT_VERSION = "3.66.378";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3603,7 +3609,7 @@ async function onRequest(context) {
         response = handleHelp();
         break;
       case "ask":
-        response = await handleAsk(args || "", context, conversation, channelMessages, activeUsers, senderNym);
+        response = await handleAsk(args || "", context, conversation, channelMessages, activeUsers, senderNym, geohash);
         break;
       case "summarize":
         response = await handleSummarize(context, channelMessages, geohash);
@@ -4121,7 +4127,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.377 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.378 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -4267,6 +4273,58 @@ function sanitizeBotResponse(text) {
 }
 
 var MAX_CONVERSATION_HISTORY = 20;
+
+// Decode a geohash to its center lat/lng plus an approximate cell radius.
+// Returns null for invalid or non-geohash channels (custom channel names).
+function decodeGeohash(geohash) {
+  if (!geohash || typeof geohash !== "string") return null;
+  var g = geohash.toLowerCase().replace(/^#/, "");
+  if (!/^[0-9bcdefghjkmnpqrstuvwxyz]+$/.test(g) || g.length < 1 || g.length > 12) return null;
+  var BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz";
+  var latRange = [-90, 90];
+  var lngRange = [-180, 180];
+  var even = true;
+  for (var i = 0; i < g.length; i++) {
+    var cd = BASE32.indexOf(g[i]);
+    if (cd === -1) return null;
+    for (var j = 4; j >= 0; j--) {
+      var mask = 1 << j;
+      if (even) {
+        if (cd & mask) lngRange[0] = (lngRange[0] + lngRange[1]) / 2;
+        else lngRange[1] = (lngRange[0] + lngRange[1]) / 2;
+      } else {
+        if (cd & mask) latRange[0] = (latRange[0] + latRange[1]) / 2;
+        else latRange[1] = (latRange[0] + latRange[1]) / 2;
+      }
+      even = !even;
+    }
+  }
+  var lat = (latRange[0] + latRange[1]) / 2;
+  var lng = (lngRange[0] + lngRange[1]) / 2;
+  // Rough cell-half-width in km along the longer axis (lat varies less than lng away from equator)
+  var latSpanKm = (latRange[1] - latRange[0]) * 111;
+  var lngSpanKm = (lngRange[1] - lngRange[0]) * 111 * Math.cos(lat * Math.PI / 180);
+  var radiusKm = Math.max(latSpanKm, lngSpanKm) / 2;
+  return { lat: lat, lng: lng, precision: g.length, radiusKm: radiusKm };
+}
+
+function buildGeohashLocationContext(geohash) {
+  var dec = decodeGeohash(geohash);
+  if (!dec) return "";
+  var radiusLabel = dec.radiusKm >= 100
+    ? Math.round(dec.radiusKm) + " km"
+    : dec.radiusKm >= 1
+      ? dec.radiusKm.toFixed(1) + " km"
+      : Math.round(dec.radiusKm * 1000) + " m";
+  var latStr = Math.abs(dec.lat).toFixed(3) + "° " + (dec.lat >= 0 ? "N" : "S");
+  var lngStr = Math.abs(dec.lng).toFixed(3) + "° " + (dec.lng >= 0 ? "E" : "W");
+  return "--- CHANNEL LOCATION ---\n"
+    + "This is geohash channel #" + geohash.toLowerCase().replace(/^#/, "") + " (precision " + dec.precision + ").\n"
+    + "Approximate center: " + latStr + ", " + lngStr + ".\n"
+    + "Cell radius: ~" + radiusLabel + ".\n"
+    + "--- END CHANNEL LOCATION ---\n"
+    + "Use this when the user's question is about the channel's location, the local area, nearby places, local time/weather/news, or anything geographically scoped. Identify the city, region, and country from the coordinates yourself — never claim you don't know where the channel is. Don't mention 'geohash' or coordinates unless the user explicitly asks; just speak naturally about the place.\n";
+}
 
 function buildChannelContext(channelMessages, activeUsers) {
   var parts = [];
@@ -4617,7 +4675,7 @@ function needsWebSearch(question) {
   return true;
 }
 
-async function handleAsk(question, context, conversation, channelMessages, activeUsers, senderNym) {
+async function handleAsk(question, context, conversation, channelMessages, activeUsers, senderNym, geohash) {
   question = sanitizeInput(question);
   if (!question) {
     return "Usage: ?ask <your question> (or @Nymbot <your question>)";
@@ -4645,8 +4703,10 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     }
 
     var channelCtx = buildChannelContext(channelMessages, activeUsers);
+    var locationCtx = buildGeohashLocationContext(geohash);
     var contextBlock = "";
     if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
+    if (locationCtx) contextBlock += locationCtx;
     if (searchResults.length > 0) {
       contextBlock += "--- LIVE WEB SEARCH RESULTS ---\n";
       for (var s = 0; s < searchResults.length; s++) {
@@ -4689,8 +4749,8 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     messages.push({ role: "user", content: "CONTEXT: The current date is " + new Date().toUTCString() + ". Treat that as 'now' and 'today'. Anything dated on or before it has already happened — never call a recent event 'future', 'fictional', or 'speculative' because of your training cutoff." });
     messages.push({ role: "assistant", content: "Understood." });
     // Always inject a language reminder right before the user's question
-    messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's question below. Read and use channel context and quoted messages normally for their content — but determine which language to write your response in from the user's question only, not from the language of the context messages." });
-    messages.push({ role: "assistant", content: "Understood. I'll use context messages for content as normal, and match my response language to the user's question." });
+    messages.push({ role: "user", content: "LANGUAGE RULE (HARD): Look ONLY at the user's question immediately below — every word of your reply must be in that language. Ignore the language of channel messages, quoted text, search results, location data, and conversation history when picking your reply language; those are for content only. Example: if the channel is full of German messages but the user just asked in English, reply in English. If the channel is in English but the user asked in Japanese, reply in Japanese. The user's own question is the ONLY signal that decides your reply language." });
+    messages.push({ role: "assistant", content: "Understood. I'll detect language from the user's question only and reply in that language, regardless of what language the surrounding context is in." });
     messages.push({ role: "user", content: question });
     var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
       messages: messages,
@@ -4892,7 +4952,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.66.377")
+  // Prefix match (e.g. "3.61" matches "3.66.378")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -4947,7 +5007,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.66.377", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.66.378", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
