@@ -1487,6 +1487,12 @@ function toggleSearch(inputId) {
     }
 }
 
+function toggleSectionCollapse(sectionId) {
+    if (nym && typeof nym.toggleSidebarSectionCollapse === 'function') {
+        nym.toggleSidebarSectionCollapse(sectionId);
+    }
+}
+
 function clearSearch(inputId) {
     const search = document.getElementById(inputId);
     const wrapper = document.getElementById(inputId + 'Wrapper');
@@ -2551,6 +2557,76 @@ async function showSettings() {
         translateLangSelect.value = nym.settings.translateLanguage || '';
     }
 
+    const gesturesEnabledSelect = document.getElementById('gesturesEnabledSelect');
+    const swipeLeftSelect = document.getElementById('swipeLeftActionSelect');
+    const swipeRightSelect = document.getElementById('swipeRightActionSelect');
+    const swipeThresholdSelect = document.getElementById('swipeThresholdSelect');
+    const swipeLeftGroup = document.getElementById('swipeLeftActionGroup');
+    const swipeRightGroup = document.getElementById('swipeRightActionGroup');
+    const swipeThresholdGroup = document.getElementById('swipeThresholdGroup');
+    const swipeReactEmojiGroup = document.getElementById('swipeReactEmojiGroup');
+    const swipeReactEmojiBtn = document.getElementById('swipeReactEmojiBtn');
+    const swipeReactEmojiPreview = document.getElementById('swipeReactEmojiPreview');
+    if (gesturesEnabledSelect) {
+        gesturesEnabledSelect.value = nym.settings.gesturesEnabled !== false ? 'true' : 'false';
+    }
+    if (swipeLeftSelect) swipeLeftSelect.value = nym.settings.swipeLeftAction || 'quote';
+    if (swipeRightSelect) swipeRightSelect.value = nym.settings.swipeRightAction || 'translate';
+    if (swipeThresholdSelect) {
+        const t = String(nym.settings.swipeThreshold || 60);
+        swipeThresholdSelect.value = ['40', '60', '80', '100'].includes(t) ? t : '60';
+    }
+    let pendingReactEmoji = nym.settings.swipeReactEmoji || '❤️';
+    const renderEmojiPreview = (emoji) => {
+        if (!swipeReactEmojiPreview) return;
+        const m = typeof emoji === 'string' && emoji.match(/^:([a-zA-Z0-9_]+):$/);
+        if (m && nym.customEmojis && nym.customEmojis.has(m[1])) {
+            swipeReactEmojiPreview.innerHTML = nym.renderCustomEmojiImg(m[1], 'swipe-react-emoji-preview-img') || nym.escapeHtml(emoji);
+        } else {
+            swipeReactEmojiPreview.textContent = emoji;
+        }
+    };
+    renderEmojiPreview(pendingReactEmoji);
+    const openSwipeReactEmojiPicker = () => {
+        if (!swipeReactEmojiBtn || typeof nym.showEnhancedReactionPicker !== 'function') return;
+        nym.showEnhancedReactionPicker(null, swipeReactEmojiBtn, (emoji) => {
+            pendingReactEmoji = emoji;
+            nym.settings.swipeReactEmoji = emoji;
+            localStorage.setItem('nym_swipe_react_emoji', emoji);
+            renderEmojiPreview(emoji);
+        });
+    };
+    if (swipeReactEmojiBtn) swipeReactEmojiBtn.onclick = openSwipeReactEmojiPicker;
+
+    const updateSwipeSubsettings = () => {
+        const show = !gesturesEnabledSelect || gesturesEnabledSelect.value === 'true';
+        if (swipeLeftGroup) swipeLeftGroup.style.display = show ? '' : 'none';
+        if (swipeRightGroup) swipeRightGroup.style.display = show ? '' : 'none';
+        if (swipeThresholdGroup) swipeThresholdGroup.style.display = show ? '' : 'none';
+        const needsEmoji = show && (swipeLeftSelect?.value === 'react' || swipeRightSelect?.value === 'react');
+        if (swipeReactEmojiGroup) swipeReactEmojiGroup.style.display = needsEmoji ? '' : 'none';
+    };
+    updateSwipeSubsettings();
+    if (gesturesEnabledSelect) gesturesEnabledSelect.onchange = updateSwipeSubsettings;
+
+    const handleSwipeActionChange = (selectEl) => {
+        if (!selectEl) return;
+        const prev = selectEl.dataset.prevValue || nym.settings[selectEl.id === 'swipeLeftActionSelect' ? 'swipeLeftAction' : 'swipeRightAction'] || '';
+        if (selectEl.value === 'react' && prev !== 'react' && !localStorage.getItem('nym_swipe_react_emoji')) {
+            openSwipeReactEmojiPicker();
+        }
+        selectEl.dataset.prevValue = selectEl.value;
+        updateSwipeSubsettings();
+    };
+    if (swipeLeftSelect) {
+        swipeLeftSelect.dataset.prevValue = swipeLeftSelect.value;
+        swipeLeftSelect.onchange = () => handleSwipeActionChange(swipeLeftSelect);
+    }
+    if (swipeRightSelect) {
+        swipeRightSelect.dataset.prevValue = swipeRightSelect.value;
+        swipeRightSelect.onchange = () => handleSwipeActionChange(swipeRightSelect);
+    }
+
     // Load nickname style setting
     const nickStyleSelect = document.getElementById('nickStyleSelect');
     if (nickStyleSelect) {
@@ -2973,6 +3049,36 @@ async function saveSettings() {
     if (translateLangEl) {
         nym.settings.translateLanguage = translateLangEl.value;
         localStorage.setItem('nym_translate_language', translateLangEl.value);
+    }
+
+    const VALID_SWIPE_ACTIONS = ['quote', 'translate', 'copy', 'react', 'zap', 'slap', 'hug', 'none'];
+    const gesturesEnabledEl = document.getElementById('gesturesEnabledSelect');
+    if (gesturesEnabledEl) {
+        const on = gesturesEnabledEl.value === 'true';
+        nym.settings.gesturesEnabled = on;
+        localStorage.setItem('nym_gestures_enabled', String(on));
+    }
+    const swipeLeftEl = document.getElementById('swipeLeftActionSelect');
+    if (swipeLeftEl && VALID_SWIPE_ACTIONS.includes(swipeLeftEl.value)) {
+        nym.settings.swipeLeftAction = swipeLeftEl.value;
+        localStorage.setItem('nym_swipe_left_action', swipeLeftEl.value);
+    }
+    const swipeRightEl = document.getElementById('swipeRightActionSelect');
+    if (swipeRightEl && VALID_SWIPE_ACTIONS.includes(swipeRightEl.value)) {
+        nym.settings.swipeRightAction = swipeRightEl.value;
+        localStorage.setItem('nym_swipe_right_action', swipeRightEl.value);
+    }
+    const swipeThresholdEl = document.getElementById('swipeThresholdSelect');
+    if (swipeThresholdEl) {
+        const t = parseInt(swipeThresholdEl.value, 10);
+        if (Number.isFinite(t) && t >= 30 && t <= 120) {
+            nym.settings.swipeThreshold = t;
+            localStorage.setItem('nym_swipe_threshold', String(t));
+        }
+    }
+    if (!nym.settings.swipeReactEmoji) {
+        nym.settings.swipeReactEmoji = '❤️';
+        localStorage.setItem('nym_swipe_react_emoji', '❤️');
     }
 
     const tiRaw = document.getElementById('typingIndicatorsSelect').value;
@@ -4961,6 +5067,28 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_nick_style', s.nickStyle);
     }
 
+    const VALID_SWIPE_ACTIONS = ['quote', 'translate', 'copy', 'react', 'zap', 'slap', 'hug', 'none'];
+    if (typeof s.gesturesEnabled === 'boolean') {
+        nym.settings.gesturesEnabled = s.gesturesEnabled;
+        localStorage.setItem('nym_gestures_enabled', String(s.gesturesEnabled));
+    }
+    if (typeof s.swipeLeftAction === 'string' && VALID_SWIPE_ACTIONS.includes(s.swipeLeftAction)) {
+        nym.settings.swipeLeftAction = s.swipeLeftAction;
+        localStorage.setItem('nym_swipe_left_action', s.swipeLeftAction);
+    }
+    if (typeof s.swipeRightAction === 'string' && VALID_SWIPE_ACTIONS.includes(s.swipeRightAction)) {
+        nym.settings.swipeRightAction = s.swipeRightAction;
+        localStorage.setItem('nym_swipe_right_action', s.swipeRightAction);
+    }
+    if (typeof s.swipeThreshold === 'number' && s.swipeThreshold >= 30 && s.swipeThreshold <= 120) {
+        nym.settings.swipeThreshold = s.swipeThreshold;
+        localStorage.setItem('nym_swipe_threshold', String(s.swipeThreshold));
+    }
+    if (typeof s.swipeReactEmoji === 'string' && s.swipeReactEmoji.length > 0 && s.swipeReactEmoji.length <= 8) {
+        nym.settings.swipeReactEmoji = s.swipeReactEmoji;
+        localStorage.setItem('nym_swipe_react_emoji', s.swipeReactEmoji);
+    }
+
     // Wallpaper
     if (s.wallpaperCustomUrl) {
         localStorage.setItem('nym_wallpaper_custom_url', s.wallpaperCustomUrl);
@@ -5132,6 +5260,12 @@ async function applyNostrSettings(s) {
         nym._translateFavorites = s.translateFavoriteLanguages.slice();
         localStorage.setItem('nym_translate_favorites', JSON.stringify(nym._translateFavorites));
         if (typeof nym._renderTranslateDropdownList === 'function') nym._renderTranslateDropdownList();
+    }
+
+    // Favorite custom emoji packs
+    if (Array.isArray(s.emojiPackFavorites)) {
+        nym._emojiPackFavorites = s.emojiPackFavorites.filter(k => typeof k === 'string');
+        localStorage.setItem('nym_emoji_pack_favorites', JSON.stringify(nym._emojiPackFavorites));
     }
 
     // Sidebar section order

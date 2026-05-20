@@ -69,6 +69,44 @@ Object.assign(NYM.prototype, {
         if (on) this._refreshSidebarReorderButtons();
     },
 
+    _getCollapsedSidebarSections() {
+        try {
+            const stored = JSON.parse(localStorage.getItem('nym_sidebar_section_collapsed') || '[]');
+            return Array.isArray(stored) ? stored : [];
+        } catch (_) { return []; }
+    },
+
+    _saveCollapsedSidebarSections(list) {
+        localStorage.setItem('nym_sidebar_section_collapsed', JSON.stringify(list));
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    },
+
+    _applySidebarSectionCollapse() {
+        const collapsed = new Set(this._getCollapsedSidebarSections());
+        for (const el of this._getSidebarSectionEls()) {
+            el.classList.toggle('section-collapsed', collapsed.has(el.dataset.section));
+            const btn = el.querySelector('.collapse-icon');
+            if (btn) {
+                const isCollapsed = collapsed.has(el.dataset.section);
+                btn.title = isCollapsed ? 'Expand section' : 'Collapse section';
+                btn.setAttribute('aria-label', btn.title);
+            }
+        }
+    },
+
+    toggleSidebarSectionCollapse(sectionId) {
+        if (!sectionId) return;
+        const list = this._getCollapsedSidebarSections();
+        const idx = list.indexOf(sectionId);
+        if (idx >= 0) list.splice(idx, 1); else list.push(sectionId);
+        this._saveCollapsedSidebarSections(list);
+        this._applySidebarSectionCollapse();
+    },
+
+    setupSidebarSectionCollapse() {
+        this._applySidebarSectionCollapse();
+    },
+
     setupSidebarSectionReorder() {
         const els = this._getSidebarSectionEls();
         if (!els.length) return;

@@ -514,8 +514,15 @@ Object.assign(NYM.prototype, {
             e.stopPropagation();
             const star = e.target.closest('.translate-dropdown-star');
             if (star) {
-                this._toggleTranslateFavorite(star.dataset.favLang);
-                this._renderTranslateDropdownList(searchInput.value);
+                const code = star.dataset.favLang;
+                this._toggleTranslateFavorite(code);
+                // Update the clicked star in place for instant feedback —
+                // the list order updates the next time the dropdown opens.
+                const nowFav = this._getTranslateFavorites().includes(code);
+                star.classList.toggle('favorited', nowFav);
+                star.title = nowFav ? 'Unfavorite' : 'Favorite';
+                const svg = star.querySelector('svg');
+                if (svg) svg.setAttribute('fill', nowFav ? 'currentColor' : 'none');
                 return;
             }
             const item = e.target.closest('.translate-dropdown-item');

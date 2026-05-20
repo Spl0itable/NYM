@@ -167,7 +167,7 @@ body::after {
 }
 
 .sidebar {
-    width: 260px;
+    width: 290px;
     background: var(--glass-bg);
     backdrop-filter: blur(40px) saturate(1.5);
     -webkit-backdrop-filter: blur(40px) saturate(1.5);
@@ -296,13 +296,18 @@ body.nymchat-app .logo-ascii {
     margin-bottom: 10px;
     padding-left: 8px;
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-start;
     align-items: center;
     font-weight: 600;
+    gap: 10px;
 }
 
 .nav-title-text {
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .section-reorder-arrows {
@@ -346,7 +351,8 @@ body.sidebar-reorder-mode .nav-title {
 }
 
 .search-icon,
-.discover-icon {
+.discover-icon,
+.collapse-icon {
     cursor: pointer;
     padding: 2px 5px;
     transition: all 0.2s;
@@ -355,18 +361,34 @@ body.sidebar-reorder-mode .nav-title {
 }
 
 .search-icon:hover svg,
-.discover-icon:hover svg {
+.discover-icon:hover svg,
+.collapse-icon:hover svg {
     stroke: var(--primary);
 }
 
 .search-icon svg,
-.discover-icon svg {
+.discover-icon svg,
+.collapse-icon svg {
     width: 14px;
     height: 14px;
     stroke: var(--text-dim);
     stroke-width: 2;
     fill: none;
-    transition: stroke 0.2s;
+    transition: stroke 0.2s, transform 0.2s;
+}
+
+.collapse-icon svg {
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.nav-section.section-collapsed > *:not(.nav-title),
+.user-list.section-collapsed > *:not(.nav-title) {
+    display: none !important;
+}
+
+.section-collapsed .collapse-icon svg {
+    transform: rotate(-90deg);
 }
 
 .search-input-wrapper {
@@ -657,6 +679,10 @@ body.sidebar-reorder-mode .nav-title {
     border-radius: 20px;
     font-size: 10px;
     font-weight: 600;
+    min-width: 3ch;
+    box-sizing: content-box;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
 }
 
 @keyframes glow {
@@ -2375,12 +2401,37 @@ body.chat-bubbles .edited-indicator-irc {
     pointer-events: none;
 }
 
+.swipe-reply-indicator.swipe-reply-indicator-left {
+    right: auto;
+    left: 8px;
+}
+
 .swipe-reply-indicator svg {
     width: 16px;
     height: 16px;
     stroke: var(--primary);
     fill: none;
     stroke-width: 2;
+}
+
+.swipe-reply-indicator .swipe-react-emoji {
+    font-size: 18px;
+    line-height: 1;
+}
+
+.swipe-reply-indicator .swipe-react-emoji-img,
+.swipe-reply-indicator img.custom-emoji {
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+}
+
+.swipe-react-emoji-preview-img,
+#swipeReactEmojiPreview img.custom-emoji {
+    width: 26px;
+    height: 26px;
+    object-fit: contain;
+    vertical-align: middle;
 }
 
 .swipe-reply-indicator.visible {
@@ -3523,6 +3574,45 @@ div.message-input .custom-emoji {
     text-transform: uppercase;
     margin-bottom: 5px;
     letter-spacing: 1px;
+}
+
+.emoji-pack-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.emoji-pack-fav-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 2px 4px;
+    color: var(--text-dim);
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--radius-xs);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.emoji-pack-fav-btn svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linejoin: round;
+}
+
+.emoji-pack-fav-btn:hover {
+    color: var(--primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.emoji-pack-fav-btn.active {
+    color: #f5c518;
+}
+
+.emoji-pack-fav-btn.active svg {
+    fill: currentColor;
 }
 
 .emoji-grid {
@@ -7265,7 +7355,7 @@ body.status-hidden .ctx-status-row,
 }
 
 .new-pm-btn {
-    padding-right: 30px;
+    padding-right: 5px;
 }
 
 .pm-recipient-box {

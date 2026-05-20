@@ -1041,7 +1041,8 @@ Object.assign(NYM.prototype, {
                 !e.target.closest('.reaction-btn') &&
                 !e.target.closest('.add-reaction-btn') &&
                 !e.target.closest('.icon-btn.input-btn[title="Emoji"]') &&
-                !e.target.closest('#ctxReact')) {
+                !e.target.closest('#ctxReact') &&
+                !e.target.closest('#swipeReactEmojiBtn')) {
                 this.closeEnhancedEmojiModal();
             }
 

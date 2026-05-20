@@ -144,6 +144,7 @@ window.nymHapticTap = function (ms) {
         'shareChannel':               function () { nym().shareChannel(); },
         'toggleSearch':               function (_e, t) { window.toggleSearch(t.dataset.searchTarget); },
         'clearSearch':                function (_e, t) { window.clearSearch(t.dataset.searchTarget); },
+        'toggleSectionCollapse':      function (e, t) { e.stopPropagation(); window.toggleSectionCollapse(t.dataset.sectionTarget); },
         'channelSearchInput':         function (_e, t) {
             t.value = t.value.toLowerCase();
             nym().handleChannelSearch(t.value);
@@ -157,6 +158,7 @@ window.nymHapticTap = function (ms) {
         'selectP2PFile':              function () { window.selectP2PFile(); },
         'toggleEmojiPicker':          function () { nym().toggleEmojiPicker(); },
         'closeEnhancedEmojiModal':    function () { nym().closeEnhancedEmojiModal(); },
+        'toggleEmojiPackFavorite':    function (e, t) { e && e.stopPropagation && e.stopPropagation(); nym().toggleEmojiPackFavorite(t && t.dataset ? t.dataset.packKey : ''); },
         'toggleGifPicker':            function () { nym().toggleGifPicker(); },
         'closeGifPicker':             function () { nym().closeGifPicker(); },
         'scrollToBottom':             function () { window.scrollToBottom(); },

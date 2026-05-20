@@ -543,7 +543,7 @@ Object.assign(NYM.prototype, {
         this.showEnhancedReactionPicker(messageId, button);
     },
 
-    showEnhancedReactionPicker(messageId, button) {
+    showEnhancedReactionPicker(messageId, button, onSelect) {
         // Check if clicking the same button that opened the current modal
         if (this.enhancedEmojiModal && this.activeReactionPickerButton === button) {
             this.closeEnhancedEmojiModal();
@@ -553,8 +553,11 @@ Object.assign(NYM.prototype, {
         // Close any existing picker
         this.closeEnhancedEmojiModal();
 
-        // Remember which button opened this
+        // Remember which button opened this and the chosen-emoji callback so
+        // toggleEmojiPackFavorite can re-render without changing the mode
         this.activeReactionPickerButton = button;
+        this._activePickerOnSelect = onSelect || null;
+        this._activePickerMessageId = messageId || null;
 
         const modal = document.createElement('div');
         modal.className = 'enhanced-emoji-modal active';
@@ -600,7 +603,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         let css;
         if (window.innerWidth <= 768) {
             // Center on mobile
-            css = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);max-width:90%;max-height:80vh;z-index:10000;';
+            css = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);max-width:90%;max-height:80vh;z-index:10010;';
         } else {
             const spaceBelow = window.innerHeight - rect.bottom;
             const spaceAbove = rect.top;
@@ -610,7 +613,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             const horizontal = (rect.left > window.innerWidth * 0.5)
                 ? `right:${Math.min(window.innerWidth - rect.right, 10)}px;left:auto;`
                 : `left:${Math.max(rect.left, 10)}px;right:auto;`;
-            css = `position:fixed;${vertical}${horizontal}max-height:400px;`;
+            css = `position:fixed;${vertical}${horizontal}max-height:400px;z-index:10010;`;
         }
         modal.style.cssText = css;
 
@@ -649,7 +652,11 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
                 e.stopPropagation();
                 const emoji = btn.dataset.emoji;
                 this.addToRecentEmojis(emoji);
-                await this.sendReaction(messageId, emoji);
+                if (typeof onSelect === 'function') {
+                    onSelect(emoji);
+                } else {
+                    await this.sendReaction(messageId, emoji);
+                }
                 this.closeEnhancedEmojiModal();
             };
         });
@@ -776,6 +783,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         }
         // Clear the button reference
         this.activeReactionPickerButton = null;
+        this._activePickerOnSelect = null;
+        this._activePickerMessageId = null;
     },
 
     _checkReactionRateLimit(messageId, emoji) {

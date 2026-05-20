@@ -1700,8 +1700,8 @@ Object.assign(NYM.prototype, {
 <img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy">
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
-<span class="delete-pm" data-action="deletePMStop" data-pubkey="${safePk}">✕</span>
 <span class="unread-badge" style="display:none">0</span>
+<span class="delete-pm" data-action="deletePMStop" data-pubkey="${safePk}">✕</span>
 </div>
 `;
             item.dataset.action = 'openPMItem';

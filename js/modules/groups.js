@@ -1786,7 +1786,7 @@ Object.assign(NYM.prototype, {
             }).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
             : `<div class="group-icon-wrap">${groupSvg}</div>`;
 
-        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="delete-pm" data-group-id="${this.escapeHtml(groupId)}" data-action="deleteGroup">✕</span><span class="unread-badge" style="display:none">0</span></div>`;
+        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge" style="display:none">0</span><span class="delete-pm" data-group-id="${this.escapeHtml(groupId)}" data-action="deleteGroup">✕</span></div>`;
     },
 
     // Update the stacked reader avatars for group messages using waterfall logic:

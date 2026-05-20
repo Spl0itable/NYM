@@ -264,8 +264,48 @@ Object.assign(NYM.prototype, {
         return `<button class="${btnClass}" data-emoji="${this.escapeHtml(emoji)}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
     },
 
-    // Build the custom-emoji sections for an emoji modal, grouped by pack.
-    // sectionClass/titleClass/gridClass/btnClass let it match either modal style.
+    // Build the custom-emoji sections for an emoji modal, grouped by pack
+    _emojiPackKey(pack) {
+        if (!pack || !pack.pubkey) return '';
+        return `${pack.pubkey}:${pack.identifier || ''}`;
+    },
+
+    _getEmojiPackFavorites() {
+        if (!this._emojiPackFavorites) {
+            let stored = [];
+            try { stored = JSON.parse(localStorage.getItem('nym_emoji_pack_favorites') || '[]'); } catch (_) { }
+            this._emojiPackFavorites = Array.isArray(stored) ? stored : [];
+        }
+        return this._emojiPackFavorites;
+    },
+
+    isEmojiPackFavorite(pack) {
+        const key = this._emojiPackKey(pack);
+        return !!key && this._getEmojiPackFavorites().includes(key);
+    },
+
+    toggleEmojiPackFavorite(key) {
+        if (!key) return;
+        const favs = this._getEmojiPackFavorites();
+        const idx = favs.indexOf(key);
+        const nowFav = idx === -1;
+        if (nowFav) favs.push(key);
+        else favs.splice(idx, 1);
+        localStorage.setItem('nym_emoji_pack_favorites', JSON.stringify(favs));
+        if (typeof nostrSettingsSave === 'function') {
+            try { nostrSettingsSave(); } catch (_) { }
+        }
+        if (this.enhancedEmojiModal) {
+            this.enhancedEmojiModal.querySelectorAll('.emoji-pack-fav-btn').forEach(btn => {
+                if (btn.dataset && btn.dataset.packKey === key) {
+                    btn.classList.toggle('active', nowFav);
+                    btn.title = nowFav ? 'Unfavorite this pack' : 'Favorite this pack';
+                    btn.setAttribute('aria-label', btn.title);
+                }
+            });
+        }
+    },
+
     buildCustomEmojiSectionsHtml(opts = {}) {
         if (!this.customEmojiPacks || this.customEmojiPacks.size === 0) return '';
         const sectionClass = opts.sectionClass || 'emoji-section';
@@ -273,7 +313,9 @@ Object.assign(NYM.prototype, {
         const gridClass = opts.gridClass || 'emoji-grid';
         const btnClass = opts.btnClass || 'emoji-option';
 
-        const rank = (p) => this.isEmojiPackOwn(p) ? 0 : (this.isEmojiPackSubscribed(p) ? 1 : 2);
+        const rank = (p) => this.isEmojiPackFavorite(p) ? 0
+            : this.isEmojiPackOwn(p) ? 1
+            : (this.isEmojiPackSubscribed(p) ? 2 : 3);
         const packs = Array.from(this.customEmojiPacks.values()).sort((a, b) => {
             const ra = rank(a);
             const rb = rank(b);
@@ -290,10 +332,15 @@ Object.assign(NYM.prototype, {
                 .slice(0, 120);
             if (emojis.length === 0) continue;
             shown++;
-            const title = this.escapeHtml(pack.title || 'Emoji pack') +
-                ((this.isEmojiPackOwn(pack) || this.isEmojiPackSubscribed(pack)) ? ' ★' : '');
+            const labelSuffix = (this.isEmojiPackOwn(pack) || this.isEmojiPackSubscribed(pack)) ? ' ★' : '';
+            const title = this.escapeHtml(pack.title || 'Emoji pack') + labelSuffix;
+            const key = this._emojiPackKey(pack);
+            const isFav = this.isEmojiPackFavorite(pack);
+            const favBtn = key
+                ? `<button type="button" class="emoji-pack-fav-btn${isFav ? ' active' : ''}" data-action="toggleEmojiPackFavorite" data-pack-key="${this.escapeHtml(key)}" title="${isFav ? 'Unfavorite' : 'Favorite'} this pack" aria-label="${isFav ? 'Unfavorite' : 'Favorite'} this pack"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 L7.5 14 L2 9.3 L9.1 8.6 Z"/></svg></button>`
+                : '';
             html += `<div class="${sectionClass}" data-category="custom">` +
-                `<div class="${titleClass}">${title}</div><div class="${gridClass}">` +
+                `<div class="${titleClass} emoji-pack-title">${title}${favBtn}</div><div class="${gridClass}">` +
                 emojis.map(e => this.emojiOptionHtml(`:${e.shortcode}:`, null, btnClass)).join('') +
                 `</div></div>`;
         }
