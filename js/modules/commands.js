@@ -189,15 +189,16 @@ Object.assign(NYM.prototype, {
                 }
             });
         }
+        this._setBotChannelThinking(true);
         try {
             const apiHost = this._getApiHost();
-            if (!apiHost) return;
+            if (!apiHost) { this._setBotChannelThinking(false); return; }
             const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers })
             });
-            if (!resp.ok) return;
+            if (!resp.ok) { this._setBotChannelThinking(false); return; }
             const data = await resp.json();
             if (data.event) {
                 // Publish the signed bot event to all connected relays
@@ -217,8 +218,26 @@ Object.assign(NYM.prototype, {
                 }
             }
         } catch (e) {
+            this._setBotChannelThinking(false);
             console.error('[nymbot] Command failed:', e);
         }
+    },
+
+    _setBotChannelThinking(on) {
+        if (!this.verifiedBot || !this.currentGeohash) return;
+        const convKey = `channel-${this.currentGeohash}`;
+        if (!this.typingUsers.has(convKey)) this.typingUsers.set(convKey, new Map());
+        const typers = this.typingUsers.get(convKey);
+        const botPk = this.verifiedBot.pubkey;
+        const existing = typers.get(botPk);
+        if (existing && existing.timeout) clearTimeout(existing.timeout);
+        if (on) {
+            const timeout = setTimeout(() => { typers.delete(botPk); this.renderTypingIndicator(); }, 45000);
+            typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: Date.now() });
+        } else {
+            typers.delete(botPk);
+        }
+        this.renderTypingIndicator();
     },
 
     setupCommands() {

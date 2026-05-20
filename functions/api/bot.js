@@ -3492,7 +3492,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.66.378";
+var NYMCHAT_VERSION = "3.66.379";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -4127,7 +4127,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.378 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.379 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -4587,14 +4587,22 @@ async function searchGoogle(query) {
 }
 
 // Live weather via wttr.in
-async function searchWeather(query) {
+async function searchWeather(query, geohash) {
   var m = /\bweather\b(?:\s+(?:in|at|for|of|near|around))?\s+([a-z0-9 .,'\-]+)/i.exec(query) ||
           /\b(?:forecast|temperature)\b(?:\s+(?:in|at|for|of|near|around))?\s+([a-z0-9 .,'\-]+)/i.exec(query);
-  if (!m) return [];
-  var loc = m[1]
-    .replace(/\b(right now|today|tonight|tomorrow|now|currently|outside|this (?:week|weekend|morning|afternoon|evening)|please|like)\b/gi, "")
-    .replace(/[?.!]+/g, "").replace(/\s+/g, " ").trim()
-    .replace(/^(?:in|at|for|of|near|around|the)\s+/i, "").trim();
+  var loc;
+  if (m) {
+    loc = m[1]
+      .replace(/\b(right now|today|tonight|tomorrow|now|currently|outside|this (?:week|weekend|morning|afternoon|evening)|please|like)\b/gi, "")
+      .replace(/[?.!]+/g, "").replace(/\s+/g, " ").trim()
+      .replace(/^(?:in|at|for|of|near|around|the)\s+/i, "").trim();
+  }
+  // Fall back to the channel's geohash centroid when the user asked about
+  // "the weather" without naming a place (common in geohash channels).
+  if (!loc && geohash) {
+    var dec = decodeGeohash(geohash);
+    if (dec) loc = dec.lat.toFixed(4) + "," + dec.lng.toFixed(4);
+  }
   if (!loc) return [];
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
@@ -4630,10 +4638,10 @@ async function searchWeather(query) {
   }
 }
 
-async function webSearch(query) {
+async function webSearch(query, geohash) {
   // Weather questions: hit a dedicated live weather source first.
   if (/\b(weather|forecast|temperature)\b/i.test(query)) {
-    var weatherResults = await searchWeather(query).catch(function() { return []; });
+    var weatherResults = await searchWeather(query, geohash).catch(function() { return []; });
     if (weatherResults.length > 0) return weatherResults;
   }
   // Fire all search sources in parallel
@@ -4699,7 +4707,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       var releases = await fetchNymchatReleases(15);
       changelogCtx = buildChangelogContext(releases);
     } else if (needsWebSearch(question)) {
-      searchResults = await webSearch(question);
+      searchResults = await webSearch(question, geohash);
     }
 
     var channelCtx = buildChannelContext(channelMessages, activeUsers);
@@ -4952,7 +4960,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.66.378")
+  // Prefix match (e.g. "3.61" matches "3.66.379")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -5007,7 +5015,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.66.378", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.66.379", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

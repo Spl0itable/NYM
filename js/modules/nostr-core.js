@@ -354,6 +354,9 @@ Object.assign(NYM.prototype, {
 
             // Don't display duplicate of own messages
             if (!this.isDuplicateMessage(message)) {
+                if (message.isBot && typeof this._setBotChannelThinking === 'function') {
+                    this._setBotChannelThinking(false);
+                }
                 this.displayMessage(message);
                 // Skip presence for spam-gated senders
                 if (!message._spamGated) {
