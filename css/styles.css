@@ -2121,6 +2121,52 @@ body.light-mode.chat-bubbles .read-more-btn {
     background: rgb(from var(--primary) r g b / 0.3);
 }
 
+.message-content .code-block-wrapper {
+    padding-top: 22px;
+}
+
+.message-content .code-lang-label {
+    position: absolute;
+    top: 4px;
+    left: 8px;
+    font-family: var(--font-sans);
+    font-size: 0.7em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgb(from var(--text) r g b / 0.55);
+    user-select: none;
+    pointer-events: none;
+}
+
+.message-content pre code .hl-comment   { color: #6a9955; font-style: italic; }
+.message-content pre code .hl-string    { color: #ce9178; }
+.message-content pre code .hl-number    { color: #b5cea8; }
+.message-content pre code .hl-keyword   { color: #569cd6; font-weight: 600; }
+.message-content pre code .hl-builtin   { color: #4ec9b0; }
+.message-content pre code .hl-function  { color: #dcdcaa; }
+.message-content pre code .hl-key       { color: #9cdcfe; }
+
+.message-content pre code {
+    white-space: pre;
+    overflow-x: auto;
+    display: block;
+}
+
+.bot-credit-pricing-note {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 1px solid rgb(from var(--primary) r g b / 0.25);
+    border-radius: var(--radius-xs);
+    background: rgb(from var(--primary) r g b / 0.06);
+    color: var(--text);
+    font-size: 0.85em;
+    line-height: 1.5;
+}
+
+.bot-credit-pricing-note strong {
+    color: var(--primary);
+}
+
 .message-content blockquote {
     border-left: 3px solid rgb(from var(--primary) r g b / 0.4);
     padding-left: 12px;

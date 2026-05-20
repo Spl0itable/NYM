@@ -984,6 +984,11 @@ Object.assign(NYM.prototype, {
             }
             if (!peerPubkey) return; // can't place the message without a peer
 
+            if (this.verifiedBot && peerPubkey === this.verifiedBot.pubkey) {
+                const clearedAt = this._getBotPmClearedAt();
+                if (clearedAt && (rumor.created_at || 0) <= clearedAt) return;
+            }
+
             // Re-open closed PMs when a new message arrives from the peer
             if (this.closedPMs.has(peerPubkey)) {
                 this.closedPMs.delete(peerPubkey);
@@ -1283,12 +1288,29 @@ Object.assign(NYM.prototype, {
     _getBotPMHistory() {
         const key = this.getPMConversationKey(this.verifiedBot.pubkey);
         const msgs = this.pmMessages.get(key) || [];
-        return msgs.slice(-30)
-            .filter(m => m && m.content && m.deliveryStatus !== 'failed')
+        const clearedAt = this._getBotPmClearedAt();
+        return msgs
+            .filter(m => m && m.content && m.deliveryStatus !== 'failed'
+                && (!clearedAt || (m.created_at || 0) > clearedAt))
+            .slice(-30)
             .map(m => ({
                 text: String(m.content).slice(0, 1000),
                 isBot: m.pubkey === this.verifiedBot.pubkey
             }));
+    },
+
+    _getBotPmClearedAt() {
+        if (typeof this._botPmClearedAt === 'number') return this._botPmClearedAt;
+        try {
+            const v = parseInt(localStorage.getItem('nym_botpm_cleared_at') || '0', 10);
+            this._botPmClearedAt = Number.isFinite(v) ? v : 0;
+        } catch { this._botPmClearedAt = 0; }
+        return this._botPmClearedAt;
+    },
+
+    _setBotPmClearedAt(ts) {
+        this._botPmClearedAt = ts;
+        try { localStorage.setItem('nym_botpm_cleared_at', String(ts)); } catch { }
     },
 
     // First-person Nymbot introduction shown when a user first opens the premium chat
@@ -1306,7 +1328,7 @@ Object.assign(NYM.prototype, {
             '• <code>?balance</code> — check your credit balance (also shown in the header).',
             '• <code>?buy</code> — purchase more credits. <code>?gift @nym#xxxx</code> — gift credits to someone.',
             '',
-            'I\'m a paid feature — each reply costs 1 credit. Credits are tied to your nym, so save your nsec to keep them.',
+            '<strong>Pricing:</strong> general chat, creative writing, and translation replies cost <strong>1 credit</strong>. Coding and reasoning/math replies cost <strong>2 credits</strong> (they use larger models). Credits are tied to your nym — save your nsec so you don\'t lose them.',
             '',
             'So, what can I help you with?'
         ].join('<br>');
@@ -1356,6 +1378,7 @@ Object.assign(NYM.prototype, {
         const pubkey = this.verifiedBot && this.verifiedBot.pubkey;
         if (!pubkey) return;
         const conversationKey = this.getPMConversationKey(pubkey);
+        this._setBotPmClearedAt(Math.floor(Date.now() / 1000));
         this.pmMessages.set(conversationKey, []);
         this.channelDOMCache.delete(conversationKey);
         if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
@@ -1476,7 +1499,10 @@ Object.assign(NYM.prototype, {
             this._setBotTyping(false);
             this._markBotPMReceipts('read');
             if (data && data.noCredits) {
-                this.displaySystemMessage("You're out of Nymbot credits. Zap Nymbot or type ?buy to purchase more private messages.");
+                const msg = data.error
+                    || `You're out of Nymbot credits (${data.balance || 0} left). Zap Nymbot or type ?buy to purchase more.`;
+                this.displaySystemMessage(msg);
+                if (typeof data.balance === 'number') this._setBotCreditDisplay(data.balance);
                 this.showBotCreditsModal();
                 return;
             }
@@ -1490,8 +1516,11 @@ Object.assign(NYM.prototype, {
             }
             if (typeof data.balance === 'number') {
                 this._setBotCreditDisplay(data.balance);
+                if (data.cost && data.cost > 1) {
+                    this.displaySystemMessage(`${data.taskType || 'Heavy'} reply used ${data.cost} credits. Balance: ${data.balance}.`);
+                }
                 if (data.lowBalance) {
-                    this.displaySystemMessage(`Nymbot credits running low: ${data.balance} message${data.balance === 1 ? '' : 's'} left. Type ?buy to top up.`);
+                    this.displaySystemMessage(`Nymbot credits running low: ${data.balance} credit${data.balance === 1 ? '' : 's'} left. Type ?buy to top up.`);
                 }
             }
         } catch (e) {

@@ -283,9 +283,9 @@ Object.assign(NYM.prototype, {
     _botCreditsForSats(sats) {
         sats = Math.max(0, Math.floor(Number(sats) || 0));
         let mult = 1;
-        if (sats >= 5000) mult = 1.4;
-        else if (sats >= 1000) mult = 1.3;
-        else if (sats >= 500) mult = 1.2;
+        if (sats >= 5000) mult = 1.20;
+        else if (sats >= 1000) mult = 1.15;
+        else if (sats >= 500) mult = 1.10;
         return Math.floor((sats / 10) * mult);
     },
 
@@ -307,6 +307,8 @@ Object.assign(NYM.prototype, {
         }
         const est = document.getElementById('botCreditEstimate');
         if (est) est.style.display = 'none';
+        const note = document.querySelector('.bot-credit-pricing-note');
+        if (note) note.remove();
         const input = document.getElementById('zapCustomAmount');
         if (input) input.oninput = null;
     },
@@ -336,7 +338,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Render the 6 credit-purchase options, each showing sats and the messages bought
     _renderBotCreditAmounts() {
         const container = document.querySelector('.zap-amounts');
         if (!container) return;
@@ -345,9 +346,25 @@ Object.assign(NYM.prototype, {
             const satLabel = sats >= 1000 ? (sats / 1000) + 'K' : String(sats);
             return `<button class="zap-amount-btn bot-credit-btn" data-amount="${sats}">
                 <span class="sats">${satLabel} sats</span>
-                <span class="credits">${credits} messages</span>
+                <span class="credits">${credits} credits</span>
             </button>`;
         }).join('');
+        const note = this._botCreditPricingNote();
+        let info = container.parentElement && container.parentElement.querySelector('.bot-credit-pricing-note');
+        if (!info && container.parentElement) {
+            info = document.createElement('div');
+            info.className = 'bot-credit-pricing-note';
+            container.insertAdjacentElement('afterend', info);
+        }
+        if (info) info.innerHTML = note;
+    },
+
+    _botCreditPricingNote() {
+        return [
+            '<strong>1 credit</strong> per general chat, creative writing, or translation reply.',
+            '<strong>2 credits</strong> per coding or reasoning/math reply (uses larger, more capable models).',
+            'Bulk bonus: +10% at 500 sats, +15% at 1K, +20% at 5K.'
+        ].join('<br>');
     },
 
     // Show/refresh a live "X sats = Y messages" estimate for the custom amount
@@ -379,7 +396,7 @@ Object.assign(NYM.prototype, {
         }
         const credits = this._botCreditsForSats(sats);
         est.textContent = credits > 0
-            ? `${sats.toLocaleString()} sats = ${credits} private message${credits === 1 ? '' : 's'}`
+            ? `${sats.toLocaleString()} sats = ${credits} credit${credits === 1 ? '' : 's'} (1/msg, 2 for coding & reasoning)`
             : 'Amount too small to buy any credits.';
     },
 
