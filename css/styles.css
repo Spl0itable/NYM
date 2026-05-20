@@ -2386,7 +2386,7 @@ body.chat-bubbles .edited-indicator-irc {
 
 .swipe-reply-indicator {
     position: absolute;
-    right: 8px;
+    right: -40px;
     top: 50%;
     transform: translateY(-50%);
     width: 32px;
@@ -2403,7 +2403,7 @@ body.chat-bubbles .edited-indicator-irc {
 
 .swipe-reply-indicator.swipe-reply-indicator-left {
     right: auto;
-    left: 8px;
+    left: -40px;
 }
 
 .swipe-reply-indicator svg {
