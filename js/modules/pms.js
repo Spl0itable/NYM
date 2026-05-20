@@ -1327,6 +1327,7 @@ Object.assign(NYM.prototype, {
             '• <code>?clear</code> — wipe this chat and start fresh.',
             '• <code>?balance</code> — check your credit balance (also shown in the header).',
             '• <code>?buy</code> — purchase more credits. <code>?gift @nym#xxxx</code> — gift credits to someone.',
+            '• <code>?transfer @nym#xxxx confirm</code> — move ALL your credits to another pubkey (great for switching nyms).',
             '',
             '<strong>Pricing:</strong> general chat, creative writing, and translation replies cost <strong>1 credit</strong>. Coding and reasoning/math replies cost <strong>2 credits</strong> (they use larger models). Credits are tied to your nym — save your nsec so you don\'t lose them.',
             '',
@@ -1392,6 +1393,65 @@ Object.assign(NYM.prototype, {
             this.loadPMMessages(conversationKey, true);
         }
         this.displaySystemMessage('Nymbot chat cleared — starting fresh. Earlier messages are no longer used as context.');
+    },
+
+    async _handleBotTransferCommand(trimmed) {
+        const raw = trimmed.replace(/^\?transfer\b/i, '').trim();
+        const parts = raw.split(/\s+/).filter(Boolean);
+        const confirming = parts.length && /^confirm$/i.test(parts[parts.length - 1]);
+        const targetArg = (confirming ? parts.slice(0, -1) : parts).join(' ').trim().replace(/^@/, '');
+        if (!targetArg) {
+            this.displaySystemMessage('Usage: ?transfer @nym#xxxx or ?transfer <npub/hex pubkey> — moves your entire Nymbot credit balance to another pubkey. Append "confirm" to execute (e.g. ?transfer @friend#a1b2 confirm).');
+            return;
+        }
+        let targetPubkey = null;
+        if (/^[0-9a-f]{64}$/i.test(targetArg)) {
+            targetPubkey = targetArg.toLowerCase();
+        } else if (/^npub1/i.test(targetArg) && window.NostrTools && window.NostrTools.nip19) {
+            try {
+                const decoded = window.NostrTools.nip19.decode(targetArg);
+                if (decoded && decoded.type === 'npub') targetPubkey = String(decoded.data).toLowerCase();
+            } catch (e) { }
+        }
+        if (!targetPubkey) targetPubkey = this.resolvePubkeyFromNym(targetArg);
+        if (!targetPubkey) {
+            this.displaySystemMessage(`Could not resolve "${targetArg}". Try ?transfer with a full nym (e.g. ?transfer @friend#a1b2 confirm), an npub, or a 64-char hex pubkey.`);
+            return;
+        }
+        if (targetPubkey === this.pubkey) {
+            this.displaySystemMessage("You can't transfer credits to your own pubkey.");
+            return;
+        }
+        const targetNym = this.stripPubkeySuffix(this.getNymFromPubkey(targetPubkey)) || targetPubkey.slice(0, 8);
+        if (!confirming) {
+            const balance = await this._checkBotCredits(false);
+            const have = typeof balance === 'number' ? balance : (this._lastBotCredits || 0);
+            if (!have || have <= 0) {
+                this.displaySystemMessage('You have no Nymbot credits to transfer.');
+                return;
+            }
+            this.displaySystemMessage(`Transfer ALL ${have} credit${have === 1 ? '' : 's'} to @${targetNym}? This empties your balance. To confirm, type: ?transfer @${targetNym}#${this.getPubkeySuffix(targetPubkey)} confirm`);
+            return;
+        }
+        try {
+            const apiHost = this._getApiHost();
+            if (!apiHost) return;
+            const auth = await this._signBotAuth();
+            const resp = await fetch(`https://${apiHost}/api/bot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'transfer-credits', pubkey: this.pubkey, auth, targetPubkey })
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data || data.error) {
+                this.displaySystemMessage('Transfer failed: ' + ((data && data.error) || 'request failed'));
+                return;
+            }
+            this._setBotCreditDisplay(0);
+            this.displaySystemMessage(`Transferred ${data.transferred} credit${data.transferred === 1 ? '' : 's'} to @${targetNym}. Your balance is now 0.`);
+        } catch (e) {
+            this.displaySystemMessage('Transfer failed. Please try again.');
+        }
     },
 
     // Show/clear a synthetic "Nymbot is typing" indicator in the bot PM
@@ -1468,6 +1528,11 @@ Object.assign(NYM.prototype, {
             this._clearBotPMHistory();
             return;
         }
+        if (/^\?transfer\b/i.test(trimmed)) {
+            this._markBotPMReceipts('read');
+            this._handleBotTransferCommand(trimmed);
+            return;
+        }
         if (/^\?gift\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
             const arg = trimmed.replace(/^\?gift\b/i, '').trim().replace(/^@/, '');
@@ -1489,7 +1554,8 @@ Object.assign(NYM.prototype, {
             const apiHost = this._getApiHost();
             if (!apiHost) { this._setBotTyping(false); return; }
             const auth = await this._signBotAuth();
-            const history = this._getBotPMHistory();
+            const isFresh = /^\s*!\s*\S/.test(content);
+            const history = isFresh ? [] : this._getBotPMHistory();
             const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

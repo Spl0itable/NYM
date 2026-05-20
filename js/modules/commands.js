@@ -254,6 +254,7 @@ Object.assign(NYM.prototype, {
             '?buy': { desc: 'Buy Nymbot private message credits' },
             '?balance': { desc: 'Check your Nymbot credit balance' },
             '?gift': { desc: 'Gift Nymbot credits to another user' },
+            '?transfer': { desc: 'Transfer ALL your Nymbot credits to another pubkey' },
             '?clear': { desc: 'Clear Nymbot chat history and start fresh' },
         };
         this.commands = {

@@ -2620,7 +2620,7 @@ var BOT_LIGHTNING_ADDRESS = "69420@wallet.yakihonne.com";
 // The premium private Nymbot routes each message to a task-specialised model.
 var BOT_MODEL_DEFAULT = "@cf/meta/llama-4-scout-17b-16e-instruct";
 var BOT_PM_MODELS = {
-  general: "@cf/openai/gpt-oss-120b",
+  general: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   coding: "@cf/qwen/qwen2.5-coder-32b-instruct",
   reasoning: "@cf/qwen/qwq-32b",
   creative: "@cf/mistralai/mistral-small-3.1-24b-instruct",
@@ -2659,7 +2659,7 @@ var NYMBOT_PM_ADDENDUM = [
   "You are now in a 1:1 end-to-end encrypted private message (NIP-17) with a single user. No one else can read this conversation.",
   "The message history above is your private conversation with this user — use all of it as context. There is no channel context here; the only people in this chat are you and this one user.",
   "This is a paid premium feature: the user spent Bitcoin to message you privately, so be helpful, thorough, and conversational.",
-  "PREMIUM MULTI-MODEL: This private chat is superior to the free public-channel bot. Premium Nymbot reads each message, interprets what type of task it is (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best available Cloudflare Workers AI model for that task. The free public bot uses a single general model. If a user asks why premium is better, explain this multi-model routing.",
+  "PREMIUM MULTI-MODEL: This private chat is superior to the free public-channel bot. Premium Nymbot reads each message, interprets what type of task it is (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best available AI model for that task. The free public bot uses a single general model. If a user asks why premium is better, explain this multi-model routing. Never name the underlying infrastructure or model vendor (e.g. don't mention Cloudflare, Workers AI, OpenAI, Meta, Llama, Qwen, Mistral, etc.) — just say 'AI models' or 'large language models'.",
   "You have the SAME live web access here as in public channels. You can answer questions about current weather, news, prices, sports scores, and other up-to-date topics. NEVER tell the user to go check a weather website, a weather app, or a search engine themselves — answer the question directly with the live data you were given.",
   "When you reply to a quoted message, the quoted text is shown to you as read-only context labeled QUOTED MESSAGE, along with who originally said it. Read it for meaning so you understand what the user's new reply refers to, but write your reply in the language of the user's newest message — never switch languages just because a quoted or earlier message was in another language.",
   "FRESH-MESSAGE COMMAND: If the user's message starts with '!' (for example '!what is 2+2'), answer ONLY that message and completely ignore all earlier conversation history. Without a leading '!', use the full conversation as context. If a user asks how to reset context or get a clean answer, tell them to start their message with '!'.",
@@ -2690,7 +2690,7 @@ var NYMBOT_PM_SYSTEM_PROMPT = [
   "Use the full message history as context. The user paid Bitcoin sats per reply, so be thorough and useful — don't give one-line answers when a real explanation helps.",
   "",
   "=== PREMIUM MULTI-MODEL ROUTING ===",
-  "Each message is auto-classified (coding, reasoning/math, creative writing, translation, or general chat) and routed to the best Cloudflare Workers AI model for that task. The free public-channel bot uses one general model; this private chat is sharper because of routing.",
+  "Each message is auto-classified (coding, reasoning/math, creative writing, translation, or general chat) and routed to the best AI model for that task. The free public-channel bot uses one general model; this private chat is sharper because of routing. Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — say 'AI models' or 'large language models' instead.",
   "Pricing: coding and reasoning queries cost 2 credits each (they use larger, more expensive models). General chat, creative writing, and translation cost 1 credit each. If a user asks why some queries cost more, explain it's because those routes use bigger models.",
   "",
   "=== RESPONSE FORMATTING ===",
@@ -2709,6 +2709,7 @@ var NYMBOT_PM_SYSTEM_PROMPT = [
   "- ?balance — shows the user's remaining credit balance (also in the chat header).",
   "- ?buy — opens the credit purchase flow (Bitcoin Lightning zap).",
   "- ?gift @nym#xxxx — gifts credits to another user.",
+  "- ?transfer @nym#xxxx confirm — moves the user's ENTIRE remaining credit balance to another pubkey (useful when switching nyms). They must include the 'confirm' suffix to execute; without it they get a confirmation prompt first.",
   "Credits are tied to the user's nym/pubkey. Nyms are ephemeral — remind users to save their nsec (sidebar > click nym > Reveal private key) so credits aren't lost on a new session.",
   "",
   "=== SECURITY ===",
@@ -2892,13 +2893,17 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType) {
   var taskType = preTaskType || await classifyBotTask(ai, question);
   var pmModel = BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general;
   var maxOut = BOT_PM_MAX_TOKENS[taskType] || BOT_PM_MAX_TOKENS.general;
-  var result;
+  var reply = "";
   try {
-    result = await ai.run(pmModel, { messages: messages, max_tokens: maxOut });
-  } catch (e) {
-    result = await ai.run(BOT_MODEL_DEFAULT, { messages: messages, max_tokens: BOT_PM_MAX_TOKENS.general });
+    var primary = await ai.run(pmModel, { messages: messages, max_tokens: maxOut });
+    reply = primary && primary.response ? sanitizeBotResponse(primary.response) : "";
+  } catch (e) { }
+  if (!reply && pmModel !== BOT_MODEL_DEFAULT) {
+    try {
+      var fb = await ai.run(BOT_MODEL_DEFAULT, { messages: messages, max_tokens: BOT_PM_MAX_TOKENS.general });
+      reply = fb && fb.response ? sanitizeBotResponse(fb.response) : "";
+    } catch (e) { }
   }
-  var reply = result && result.response ? sanitizeBotResponse(result.response) : "";
   return { reply: reply, taskType: taskType };
 }
 async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
@@ -2923,6 +2928,22 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "balance") {
     var rec = await botGetCredits(env, userPubkey);
     return json({ balance: rec.balance, totalPurchased: rec.totalPurchased, totalUsed: rec.totalUsed });
+  }
+
+  if (body.action === "transfer-credits") {
+    var target = String(body.targetPubkey || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(target)) return json({ error: "Invalid target pubkey." }, 400);
+    if (target === userPubkey) return json({ error: "You can't transfer credits to your own pubkey." }, 400);
+    var source = await botGetCredits(env, userPubkey);
+    if (!source.balance || source.balance <= 0) return json({ error: "No credits to transfer." }, 400);
+    var moved = source.balance;
+    var dest = await botGetCredits(env, target);
+    dest.balance = (dest.balance || 0) + moved;
+    dest.totalPurchased = (dest.totalPurchased || 0) + moved;
+    source.balance = 0;
+    await botPutCredits(env, target, dest);
+    await botPutCredits(env, userPubkey, source);
+    return json({ transferred: moved, target: target, sourceBalance: 0, targetBalance: dest.balance });
   }
 
   if (body.action === "create-invoice") {
@@ -3465,7 +3486,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.66.376";
+var NYMCHAT_VERSION = "3.66.377";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3543,7 +3564,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "claim-credits")) {
+  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "claim-credits" || body.action === "transfer-credits")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
@@ -3840,7 +3861,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- iOS (TestFlight): " + NYMCHAT_IOS_APP,
   "- Android (Google Play): " + NYMCHAT_ANDROID_APP,
   "The iOS and Android apps are open source Flutter wrappers around the PWA with native push notifications.",
-  "The PWA can also be run locally by cloning the repo and opening index.html — no build tools required. However, Nymbot (the AI bot) is only available on the hosted site and official apps since it relies on Cloudflare Workers AI.",
+  "The PWA can also be run locally by cloning the repo and opening index.html — no build tools required. However, Nymbot (the AI bot) is only available on the hosted site and official apps since it relies on hosted AI infrastructure.",
   "The landing page with more info is at https://nymchat.app.",
   "",
   "=== FREQUENTLY ASKED QUESTIONS ===",
@@ -4100,7 +4121,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.376 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.377 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -4149,13 +4170,13 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "=== PRIVATE MESSAGING WITH NYMBOT (PAID PREMIUM) ===",
   "Users can have a private, end-to-end encrypted 1:1 conversation with you (Nymbot) using NIP-17 gift wraps. To start one: click Nymbot's nym or avatar and choose 'Private Message', or open the Nyms sidebar and select Nymbot. It only works as a 1:1 chat — Nymbot can't be added to group chats.",
-  "PREMIUM IS A SMARTER NYMBOT: The free public-channel bot (?ask / @Nymbot) runs a single general-purpose AI model. The paid private Nymbot runs a MULTI-MODEL setup — it reads each message, interprets the type of task (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best-suited Cloudflare Workers AI model for that task. That makes premium answers noticeably sharper and more capable than the free public bot. Both versions otherwise share the same knowledge, live web search, and changelog access.",
-  "Private Nymbot conversations are a paid feature. Each reply you send costs 1 credit. Credits are bought with Bitcoin Lightning zaps: about 100 sats = 10 messages, 500 sats = 60, 1000 sats = 130, 5000 sats = 700 (bigger zaps include bonus credits).",
+  "PREMIUM IS A SMARTER NYMBOT: The free public-channel bot (?ask / @Nymbot) runs a single general-purpose AI model. The paid private Nymbot runs a MULTI-MODEL setup — it reads each message, interprets the type of task (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best-suited AI model for that task. That makes premium answers noticeably sharper and more capable than the free public bot. Both versions otherwise share the same knowledge, live web search, and changelog access. Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — just say 'AI models' or 'large language models'.",
+  "Private Nymbot conversations are a paid feature with tiered pricing: general chat, creative writing, and translation replies cost 1 credit each; coding and reasoning/math replies cost 2 credits each (they use larger, more capable models). Credits are bought with Bitcoin Lightning zaps; 1 credit costs roughly 10 sats with a small bulk bonus at higher zap amounts (+10% at 500 sats, +15% at 1K, +20% at 5K). Quote exact figures only if asked.",
   "To buy credits: type ?buy inside the Nymbot private chat, or zap Nymbot's profile (zapping the profile opens the credit purchase flow). Note: zapping one of Nymbot's messages in a public channel is just an appreciation tip and does NOT add credits — only the ?buy / profile-zap purchase flow does. To check the remaining balance: type ?balance inside the Nymbot private chat — the balance is also shown in the chat header.",
   "Users can gift credits to someone else: click a user's nym and choose 'Gift Nymbot Credits', or type ?gift @nym#xxxx inside the Nymbot private chat. The payer covers the zap; the credits land on the recipient's nym.",
   "PREMIUM PRIVATE-CHAT COMMANDS & FEATURES (these only apply inside the 1:1 Nymbot private chat, not public channels):",
   "- ?clear — wipes the entire private conversation and starts fresh, so none of the earlier messages are used as context anymore.",
-  "- ?balance — shows the remaining credit balance (also shown in the chat header). ?buy — purchase more credits. ?gift @nym#xxxx — gift credits to another user.",
+  "- ?balance — shows the remaining credit balance (also shown in the chat header). ?buy — purchase more credits. ?gift @nym#xxxx — gift credits to another user. ?transfer @nym#xxxx confirm — moves the user's entire remaining balance to another pubkey (useful when switching nyms).",
   "- Leading '!' — starting a message with '!' (e.g. '!what is 2+2') makes Nymbot answer ONLY that message and ignore all earlier conversation history, without clearing the chat.",
   "- Quote-reply — replying to an earlier message (yours or Nymbot's) gives Nymbot that quoted message as context so it understands what the follow-up refers to.",
   "- Opening the chat shows a welcome message explaining these abilities and commands.",
@@ -4163,7 +4184,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "The private conversation is encrypted so other users and relays can't read it, and the whole private thread is used as conversation context. Public channels remain free — only the private 1:1 conversations cost credits.",
   "",
   "Q: Can I message Nymbot privately?",
-  "A: Yes. Click Nymbot's nym or avatar and choose 'Private Message' (or pick Nymbot from the Nyms sidebar). It's a private, end-to-end encrypted 1:1 chat and a paid premium feature — each reply costs 1 credit. Premium Nymbot is smarter than the free public bot: it routes each message to the best AI model for the task. Inside the private chat you can use ?clear to start fresh, start a message with '!' for a one-off answer that ignores history, ?balance to check credits, ?buy to top up, and ?gift @nym to gift credits. Credits are tied to your nym's key, so save your nsec to keep them."
+  "A: Yes. Click Nymbot's nym or avatar and choose 'Private Message' (or pick Nymbot from the Nyms sidebar). It's a private, end-to-end encrypted 1:1 chat and a paid premium feature. Pricing is tiered: general chat, creative writing, and translation replies cost 1 credit each; coding and reasoning/math replies cost 2 credits each (they use larger models). Premium Nymbot is smarter than the free public bot because it routes each message to the best AI model for the task. Inside the private chat you can use ?clear to start fresh, start a message with '!' for a one-off answer that ignores history, ?balance to check credits, ?buy to top up, ?gift @nym to gift credits, and ?transfer @nym confirm to move your whole balance to another pubkey. Credits are tied to your nym's key, so save your nsec to keep them."
 ].join("\n");
 
 function isLikelyNonEnglish(text) {
@@ -4871,7 +4892,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.66.376")
+  // Prefix match (e.g. "3.61" matches "3.66.377")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -4926,7 +4947,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.66.376", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.66.377", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
