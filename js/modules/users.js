@@ -42,9 +42,8 @@ Object.assign(NYM.prototype, {
 
     _ensureBitchatColorSheet(isLight) {
         const id = isLight ? 'bitchat-colors-l' : 'bitchat-colors-d';
-        if (document.getElementById(id)) return;
-        const style = document.createElement('style');
-        style.id = id;
+        if (!this._bitchatColorSheets) this._bitchatColorSheets = {};
+        if (this._bitchatColorSheets[id]) return;
         const parts = new Array(1000);
         const tag = isLight ? 'l' : 'd';
         for (let i = 0; i < 1000; i++) {
@@ -54,8 +53,10 @@ Object.assign(NYM.prototype, {
             const cls = `bitchat-user-${tag}${i}`;
             parts[i] = `.${cls},.${cls} .nym-suffix{color:hsl(${hue},${sat}%,${light}%)!important}`;
         }
-        style.textContent = parts.join('');
-        document.head.appendChild(style);
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(parts.join(''));
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+        this._bitchatColorSheets[id] = sheet;
     },
 
     isVerifiedDeveloper(pubkey) {

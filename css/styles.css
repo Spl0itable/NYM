@@ -1891,7 +1891,6 @@ body.light-mode.chat-bubbles .read-more-btn {
 .emoji-btn .custom-emoji {
     width: 24px;
     height: 24px;
-    object-fit: contain; 
     vertical-align: middle;
     margin: 0;
 }
