@@ -107,6 +107,205 @@ Object.assign(NYM.prototype, {
         this._applySidebarSectionCollapse();
     },
 
+    // Render a generic long-press action menu (reuses the message context menu styling).
+    _showSidebarActionMenu(items, clientX, clientY) {
+        document.querySelectorAll('.quick-context-menu').forEach(el => el.remove());
+        if (!items.length) return;
+
+        const menu = document.createElement('div');
+        menu.className = 'quick-context-menu';
+        menu.innerHTML = items.map((item, i) =>
+            `<button class="quick-context-item${item.cls ? ' ' + item.cls : ''}" data-idx="${i}">${item.svg}<span>${this.escapeHtml(item.label)}</span></button>`
+        ).join('');
+
+        menu.style.position = 'fixed';
+        menu.style.visibility = 'hidden';
+        document.body.appendChild(menu);
+        const w = menu.offsetWidth;
+        const h = menu.offsetHeight;
+        menu.style.visibility = '';
+
+        let left = Math.max(10, Math.min(clientX, window.innerWidth - w - 10));
+        let top = clientY;
+        if (top + h > window.innerHeight - 10) top = Math.max(10, window.innerHeight - h - 10);
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+
+        requestAnimationFrame(() => menu.classList.add('active'));
+
+        const openedAt = Date.now();
+        const close = () => {
+            menu.remove();
+            document.removeEventListener('mousedown', onOutside);
+            document.removeEventListener('touchstart', onOutside);
+        };
+        const onOutside = (ev) => {
+            if (menu.contains(ev.target)) return;
+            if (Date.now() - openedAt < 400) return;
+            close();
+        };
+        const run = (ev) => {
+            const btn = ev.target.closest('.quick-context-item');
+            if (!btn) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            const item = items[parseInt(btn.dataset.idx, 10)];
+            close();
+            if (item && typeof item.action === 'function') item.action();
+        };
+        menu.addEventListener('click', run);
+        menu.addEventListener('touchend', run);
+        document.addEventListener('mousedown', onOutside);
+        document.addEventListener('touchstart', onOutside);
+    },
+
+    _buildSidebarMenuItems(itemEl) {
+        const pinSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z"/></svg>';
+        const hideSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.8 11.8 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>';
+        const blockSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>';
+        const leaveSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>';
+
+        // Public channel
+        if (itemEl.classList.contains('channel-item')) {
+            const channel = itemEl.dataset.channel;
+            const geohash = itemEl.dataset.geohash;
+            if (geohash === 'nym') return [];
+            const key = geohash || channel;
+            const isPinned = this.pinnedChannels.has(key);
+            const isHidden = this.hiddenChannels.has(key);
+            return [
+                {
+                    label: isPinned ? 'Unpin channel' : 'Pin channel',
+                    svg: pinSvg,
+                    action: () => this.togglePin(channel, geohash)
+                },
+                {
+                    label: isHidden ? 'Unhide channel' : 'Hide channel',
+                    svg: hideSvg,
+                    action: () => this.toggleHideChannel(channel, geohash)
+                },
+                {
+                    label: 'Block channel',
+                    svg: blockSvg,
+                    cls: 'danger',
+                    action: () => {
+                        const name = geohash || channel;
+                        if (!confirm(`Block channel #${name}? Messages to it will be dropped.`)) return;
+                        this.blockChannel(channel, geohash);
+                        this.displaySystemMessage(`Blocked channel #${name}`);
+                        if (typeof this.updateBlockedChannelsList === 'function') this.updateBlockedChannelsList();
+                    }
+                }
+            ];
+        }
+
+        // Group conversation
+        if (itemEl.classList.contains('group-item')) {
+            const groupId = itemEl.dataset.groupId;
+            return [
+                {
+                    label: 'Leave conversation',
+                    svg: leaveSvg,
+                    cls: 'danger',
+                    action: () => this.deleteGroup(groupId)
+                }
+            ];
+        }
+
+        // 1:1 private message
+        if (itemEl.classList.contains('pm-item')) {
+            const pubkey = itemEl.dataset.pubkey;
+            if (!pubkey) return [];
+            const isBlocked = this.blockedUsers.has(pubkey);
+            return [
+                {
+                    label: isBlocked ? 'Unblock user' : 'Block user',
+                    svg: blockSvg,
+                    cls: isBlocked ? '' : 'danger',
+                    action: () => this.toggleBlockUserByPubkey(pubkey)
+                },
+                {
+                    label: 'Leave conversation',
+                    svg: leaveSvg,
+                    cls: 'danger',
+                    action: () => this.deletePM(pubkey)
+                }
+            ];
+        }
+
+        return [];
+    },
+
+    setupSidebarItemMenus() {
+        const MOVE_THRESHOLD = 10;
+        let pressTimer = null;
+        let startX = 0, startY = 0;
+        let fired = false;
+
+        const cancel = () => {
+            if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        };
+
+        const onStart = (itemEl, x, y) => {
+            startX = x; startY = y;
+            fired = false;
+            cancel();
+            pressTimer = setTimeout(() => {
+                pressTimer = null;
+                const items = this._buildSidebarMenuItems(itemEl);
+                if (!items.length) return;
+                fired = true;
+                window.nymHapticTap && window.nymHapticTap();
+                this._showSidebarActionMenu(items, x, y);
+            }, 500);
+        };
+
+        const attach = (listId) => {
+            const list = document.getElementById(listId);
+            if (!list) return;
+
+            list.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                const itemEl = e.target.closest('.channel-item, .pm-item');
+                if (!itemEl || !list.contains(itemEl)) return;
+                onStart(itemEl, e.clientX, e.clientY);
+            });
+            list.addEventListener('touchstart', (e) => {
+                const itemEl = e.target.closest('.channel-item, .pm-item');
+                if (!itemEl || !list.contains(itemEl)) return;
+                const t = e.touches && e.touches[0];
+                if (t) onStart(itemEl, t.clientX, t.clientY);
+            }, { passive: true });
+
+            list.addEventListener('mousemove', (e) => {
+                if (!pressTimer) return;
+                if (Math.abs(e.clientX - startX) > MOVE_THRESHOLD ||
+                    Math.abs(e.clientY - startY) > MOVE_THRESHOLD) cancel();
+            });
+            list.addEventListener('touchmove', (e) => {
+                if (!pressTimer) return;
+                const t = e.touches && e.touches[0];
+                if (t && (Math.abs(t.clientX - startX) > MOVE_THRESHOLD ||
+                    Math.abs(t.clientY - startY) > MOVE_THRESHOLD)) cancel();
+            }, { passive: true });
+
+            list.addEventListener('mouseup', cancel);
+            list.addEventListener('mouseleave', cancel);
+            list.addEventListener('touchend', (e) => {
+                cancel();
+                if (fired) { e.preventDefault(); fired = false; }
+            });
+            list.addEventListener('touchcancel', cancel);
+            // Suppress the click that opens the conversation when the menu fired
+            list.addEventListener('click', (e) => {
+                if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; }
+            }, true);
+        };
+
+        attach('channelList');
+        attach('pmList');
+    },
+
     setupSidebarSectionReorder() {
         const els = this._getSidebarSectionEls();
         if (!els.length) return;

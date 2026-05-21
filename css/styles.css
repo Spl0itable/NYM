@@ -512,8 +512,22 @@ body.sidebar-reorder-mode .nav-title {
 
 .channel-item.pinned {
     order: -2;
-    background: rgba(255, 215, 0, 0.04);
-    border-color: rgba(255, 215, 0, 0.15);
+    background: rgba(150, 150, 160, 0.1);
+    border-color: rgba(150, 150, 160, 0.2);
+    box-shadow: 0 0 12px rgba(150, 150, 160, 0.05);
+}
+
+.channel-item.pinned:not(.active)::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 60%;
+    border-radius: 0 3px 3px 0;
+    background: var(--text-dim);
+    box-shadow: 0 0 8px rgba(150, 150, 160, 0.3);
 }
 
 .channel-item:hover,
@@ -589,54 +603,6 @@ body.sidebar-reorder-mode .nav-title {
     pointer-events: auto;
 }
 
-
-.pin-btn {
-    font-size: 12px;
-    color: var(--text-dim);
-    padding: 2px;
-    cursor: pointer;
-    opacity: 0.5;
-    transition: opacity 0.2s;
-    display: flex;
-    align-items: center;
-}
-
-.pin-btn:hover {
-    opacity: 1;
-}
-
-.pin-btn.pinned {
-    opacity: 1;
-    color: var(--warning);
-}
-
-.pin-btn svg {
-    width: 14px;
-    height: 14px;
-    fill: currentColor;
-}
-
-.hide-btn {
-    font-size: 12px;
-    color: var(--text-dim);
-    padding: 2px;
-    cursor: pointer;
-    opacity: 0.5;
-    transition: opacity 0.2s;
-    display: flex;
-    align-items: center;
-}
-
-.hide-btn:hover {
-    opacity: 1;
-    color: var(--error, #f44);
-}
-
-.hide-btn svg {
-    width: 14px;
-    height: 14px;
-    fill: currentColor;
-}
 
 .std-badge {
     font-size: 9px;
@@ -3284,12 +3250,6 @@ div.message-input .custom-emoji {
     border-color: rgba(255, 255, 255, 0.2);
 }
 
-@media (max-width: 768px) {
-    .image-modal-nav {
-        display: none !important;
-    }
-}
-
 .mobile-menu-toggle,
 .mobile-notif-toggle {
     display: none;
@@ -3342,7 +3302,7 @@ div.message-input .custom-emoji {
     backdrop-filter: blur(30px) saturate(1.5);
     -webkit-backdrop-filter: blur(30px) saturate(1.5);
     border: 1px solid var(--glass-border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
     max-height: 150px;
     overflow-y: auto;
     display: none;
@@ -3447,7 +3407,7 @@ div.message-input .custom-emoji {
     backdrop-filter: blur(30px) saturate(1.5);
     -webkit-backdrop-filter: blur(30px) saturate(1.5);
     border: 1px solid var(--glass-border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
     padding: 6px;
     display: none;
     max-height: 200px;
@@ -3458,6 +3418,54 @@ div.message-input .custom-emoji {
 
 .command-palette.active {
     display: block;
+}
+
+.command-category {
+    padding: 6px 10px 2px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    opacity: 0.7;
+}
+
+.help-output {
+    text-align: left;
+    display: inline-block;
+}
+
+.help-title {
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.help-category {
+    margin-top: 10px;
+    margin-bottom: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--primary);
+    opacity: 0.85;
+}
+
+.help-cmd {
+    padding: 1px 0;
+    line-height: 1.4;
+}
+
+.help-cmd-name {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.help-footer {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--glass-border);
+    opacity: 0.85;
 }
 
 .command-item {
@@ -3774,6 +3782,45 @@ div.message-input .custom-emoji {
 .emoji-option:hover {
     background: rgba(255, 255, 255, 0.08);
     transform: scale(1.15);
+}
+
+.emoji-default-cat-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.emoji-category-fav-btn {
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    cursor: pointer;
+    color: var(--text-dim);
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--radius-xs);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.emoji-category-fav-btn svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linejoin: round;
+}
+
+.emoji-category-fav-btn:hover {
+    color: var(--primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.emoji-category-fav-btn.active {
+    color: #f5c518;
+}
+
+.emoji-category-fav-btn.active svg {
+    fill: currentColor;
 }
 
 .verified-badge {
@@ -6692,7 +6739,53 @@ body.light-mode .friend-badge svg {
     display: block;
 }
 
+.gif-fav-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.45);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    opacity: 1;
+    transition: opacity var(--transition), color var(--transition), background var(--transition);
+}
+
+.gif-fav-btn svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+}
+
+.gif-fav-btn.active {
+    color: var(--warning);
+}
+
+.gif-fav-btn.active svg {
+    fill: currentColor;
+    stroke: currentColor;
+}
+
+.gif-section-label {
+    grid-column: 1 / -1;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    opacity: 0.8;
+    padding: 4px 2px 0;
+}
+
 .gif-loading {
+    grid-column: 1 / -1;
     text-align: center;
     padding: 20px;
     color: var(--text-dim);
@@ -6700,6 +6793,7 @@ body.light-mode .friend-badge svg {
 }
 
 .gif-error {
+    grid-column: 1 / -1;
     text-align: center;
     padding: 20px;
     color: var(--danger);

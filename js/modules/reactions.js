@@ -11,6 +11,9 @@ Object.assign(NYM.prototype, {
 
     saveRecentEmojis() {
         localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, 20)));
+        if (typeof this._debouncedNostrSettingsSave === 'function') {
+            this._debouncedNostrSettingsSave();
+        }
     },
 
     addToRecentEmojis(emoji) {
@@ -552,6 +555,7 @@ Object.assign(NYM.prototype, {
         this.activeReactionPickerButton = button;
         this._activePickerOnSelect = onSelect || null;
         this._activePickerMessageId = messageId || null;
+        this._activePickerMode = 'reaction';
 
         const modal = document.createElement('div');
         modal.className = 'enhanced-emoji-modal active';
@@ -579,14 +583,11 @@ ${this.recentEmojis.length > 0 ? `
     </div>
 ` : ''}
 ${this.buildCustomEmojiSectionsHtml()}
-${Object.entries(this.allEmojis).map(([category, emojis]) => `
+${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
     <div class="emoji-section" data-category="${category}">
-        <div class="emoji-section-title">${category.charAt(0).toUpperCase() + category.slice(1)}</div>
+        <div class="emoji-section-title emoji-default-cat-title">${category.charAt(0).toUpperCase() + category.slice(1)}${this._emojiCategoryFavButtonHtml(category)}</div>
         <div class="emoji-grid">
-            ${emojis.map(emoji => {
-            const names = emojiToNames[emoji] || [];
-            return `<button class="emoji-option" data-emoji="${emoji}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
-        }).join('')}
+            ${emojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 `).join('')}
@@ -675,6 +676,10 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         // Close any existing picker
         this.closeEnhancedEmojiModal();
 
+        // Track the launch button so category-favorite toggles can re-render
+        this.activeReactionPickerButton = button;
+        this._activePickerMode = 'input';
+
         const modal = document.createElement('div');
         modal.className = 'enhanced-emoji-modal active';
 
@@ -701,14 +706,11 @@ ${this.recentEmojis.length > 0 ? `
     </div>
 ` : ''}
 ${this.buildCustomEmojiSectionsHtml()}
-${Object.entries(this.allEmojis).map(([category, emojis]) => `
+${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
     <div class="emoji-section" data-category="${category}">
-        <div class="emoji-section-title">${category.charAt(0).toUpperCase() + category.slice(1)}</div>
+        <div class="emoji-section-title emoji-default-cat-title">${category.charAt(0).toUpperCase() + category.slice(1)}${this._emojiCategoryFavButtonHtml(category)}</div>
         <div class="emoji-grid">
-            ${emojis.map(emoji => {
-            const names = emojiToNames[emoji] || [];
-            return `<button class="emoji-option" data-emoji="${emoji}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
-        }).join('')}
+            ${emojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 `).join('')}
@@ -771,6 +773,7 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
     },
 
     closeEnhancedEmojiModal() {
+        const wasOpen = !!this.enhancedEmojiModal;
         if (this.enhancedEmojiModal) {
             this.enhancedEmojiModal.remove();
             this.enhancedEmojiModal = null;
@@ -779,6 +782,8 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
         this.activeReactionPickerButton = null;
         this._activePickerOnSelect = null;
         this._activePickerMessageId = null;
+        this._activePickerMode = null;
+        if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
     _checkReactionRateLimit(messageId, emoji) {
@@ -1095,15 +1100,12 @@ ${Object.entries(this.allEmojis).map(([category, emojis]) => `
             btnClass: 'emoji-btn'
         });
 
-        // All category sections
-        Object.entries(this.allEmojis).forEach(([category, emojis]) => {
+        // Default category sections, favorited categories first
+        this._getOrderedDefaultEmojiEntries().forEach(([category, emojis]) => {
             html += `<div class="emoji-picker-section" data-category="${category}">
-                <div class="emoji-picker-section-title">${category.charAt(0).toUpperCase() + category.slice(1)}</div>
+                <div class="emoji-picker-section-title emoji-default-cat-title">${category.charAt(0).toUpperCase() + category.slice(1)}${this._emojiCategoryFavButtonHtml(category)}</div>
                 <div class="emoji-picker-grid">
-                    ${emojis.map(emoji => {
-                const names = emojiToNames[emoji] || [];
-                return `<button class="emoji-btn" data-emoji="${emoji}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
-            }).join('')}
+                    ${emojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
                 </div>
             </div>`;
         });

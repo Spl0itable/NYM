@@ -170,6 +170,7 @@ window.nymHapticTap = function (ms) {
         'toggleEmojiPicker':          function () { nym().toggleEmojiPicker(); },
         'closeEnhancedEmojiModal':    function () { nym().closeEnhancedEmojiModal(); },
         'toggleEmojiPackFavorite':    function (e, t) { e && e.stopPropagation && e.stopPropagation(); nym().toggleEmojiPackFavorite(t && t.dataset ? t.dataset.packKey : ''); },
+        'toggleEmojiCategoryFavorite':function (e, t) { e && e.stopPropagation && e.stopPropagation(); nym().toggleEmojiCategoryFavorite(t && t.dataset ? t.dataset.category : ''); },
         'toggleGifPicker':            function () { nym().toggleGifPicker(); },
         'closeGifPicker':             function () { nym().closeGifPicker(); },
         'scrollToBottom':             function () { window.scrollToBottom(); },
@@ -298,7 +299,6 @@ window.nymHapticTap = function (ms) {
                 }).catch(function () {});
             } catch (e) {}
         },
-        'deleteGroup':                function (e, t) { e.stopPropagation(); nym().deleteGroup(t.dataset.groupId); },
         'dismissShopSuccess':         function () { nym().dismissShopSuccess(); },
 
         // Group moderation context-menu actions. Target pubkey lives on
@@ -395,16 +395,11 @@ window.nymHapticTap = function (ms) {
         'unblockChannelFromSettings': function (_e, t) { nym().unblockChannelFromSettings(t.dataset.channelKey); },
         'unhideChannelFromSettings':  function (_e, t) { nym().unhideChannelFromSettings(t.dataset.channelKey); },
 
-        // Channel sidebar list item buttons
-        'channelTogglePin':           function (_e, t) { nym().togglePin(t.dataset.channel, t.dataset.geohash); },
-        'channelToggleHide':          function (_e, t) { nym().toggleHideChannel(t.dataset.channel, t.dataset.geohash); },
-
         // PM / group sidebar list items
         'openPMItem':                 function (_e, t) { nym().openPM(t.dataset.nym, t.dataset.pubkey); },
         'openGroupItem':              function (_e, t) { nym().openGroup(t.dataset.groupId); },
 
         // PMs dynamic
-        'deletePMStop':               function (e, t) { e.stopPropagation(); nym().deletePM(t.dataset.pubkey); },
         'removeNewPMRecipient':       function (_e, t) { nym().removeNewPMRecipient(t.dataset.pubkey); }
     });
 })();

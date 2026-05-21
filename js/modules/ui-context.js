@@ -656,6 +656,7 @@ Object.assign(NYM.prototype, {
     closeContextMenu() {
         document.getElementById('contextMenu').classList.remove('active');
         document.getElementById('contextMenuOverlay').classList.remove('active');
+        if (typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
     // Unfurl a URL and return Open Graph metadata.
@@ -1950,9 +1951,13 @@ Object.assign(NYM.prototype, {
         try {
             const data = await this.fetchGiphy({ trending: true, apiKey: this.giphyApiKey });
 
-            this.displayGifs(data.data);
+            this.displayGifs(data.data, { showFavorites: true });
         } catch (error) {
-            resultsDiv.innerHTML = '<div class="gif-error">Failed to load GIFs</div>';
+            if (this._getFavoriteGifs().length) {
+                this.displayGifs([], { showFavorites: true });
+            } else {
+                resultsDiv.innerHTML = '<div class="gif-error">Failed to load GIFs</div>';
+            }
         }
     },
 
@@ -1973,27 +1978,84 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    displayGifs(gifs) {
-        const resultsDiv = document.getElementById('gifResults');
+    _getFavoriteGifs() {
+        if (!this._favoriteGifs) {
+            let stored;
+            try { stored = JSON.parse(localStorage.getItem('nym_favorite_gifs') || '[]'); } catch (_) { }
+            this._favoriteGifs = Array.isArray(stored)
+                ? stored.filter(g => g && typeof g.url === 'string').map(g => ({ url: g.url, title: typeof g.title === 'string' ? g.title : '' }))
+                : [];
+        }
+        return this._favoriteGifs;
+    },
 
-        // Render thumbnails through the Cloudflare media proxy
-        resultsDiv.innerHTML = gifs.map(gif => {
-            const originalUrl = gif.images.fixed_height.url;
-            const safeOriginal = this.escapeHtml(originalUrl);
-            const safeProxied = this.escapeHtml(this.getProxiedMediaUrl(originalUrl));
-            return `
-    <div class="gif-item" data-gif-url="${safeOriginal}">
-        <img src="${safeProxied}" alt="${this.escapeHtml(gif.title || '')}" loading="lazy">
+    saveFavoriteGifs() {
+        this._favoriteGifs = this._getFavoriteGifs().slice(0, 100);
+        localStorage.setItem('nym_favorite_gifs', JSON.stringify(this._favoriteGifs));
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    },
+
+    isFavoriteGif(url) {
+        return this._getFavoriteGifs().some(g => g.url === url);
+    },
+
+    toggleFavoriteGif(url, title) {
+        if (!url) return;
+        const favs = this._getFavoriteGifs();
+        const idx = favs.findIndex(g => g.url === url);
+        if (idx >= 0) favs.splice(idx, 1);
+        else favs.unshift({ url, title: title || '' });
+        this.saveFavoriteGifs();
+
+        // Re-render the current view from cached results so favorites/stars update
+        if (this._lastGifRender) {
+            this.displayGifs(this._lastGifRender.gifs, { showFavorites: this._lastGifRender.showFavorites });
+        }
+    },
+
+    _gifItemHtml(originalUrl, title) {
+        const safeOriginal = this.escapeHtml(originalUrl);
+        const safeProxied = this.escapeHtml(this.getProxiedMediaUrl(originalUrl));
+        const safeTitle = this.escapeHtml(title || '');
+        const fav = this.isFavoriteGif(originalUrl);
+        const favLabel = fav ? 'Unfavorite GIF' : 'Favorite GIF';
+        return `
+    <div class="gif-item" data-gif-url="${safeOriginal}" data-gif-title="${safeTitle}">
+        <img src="${safeProxied}" alt="${safeTitle}" loading="lazy">
+        <button class="gif-fav-btn${fav ? ' active' : ''}" data-gif-fav="${safeOriginal}" title="${favLabel}" aria-label="${favLabel}">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 L7.5 14 L2 9.3 L9.1 8.6 Z"/></svg>
+        </button>
     </div>
 `;
-        }).join('');
+    },
 
-        // Add click handlers
-        resultsDiv.querySelectorAll('.gif-item').forEach(item => {
-            item.onclick = () => {
-                const gifUrl = item.dataset.gifUrl;
-                this.insertGif(gifUrl);
+    displayGifs(gifs, { showFavorites = false } = {}) {
+        const resultsDiv = document.getElementById('gifResults');
+        if (!resultsDiv) return;
+
+        this._lastGifRender = { gifs, showFavorites };
+
+        const parts = [];
+        if (showFavorites) {
+            const favs = this._getFavoriteGifs();
+            if (favs.length) {
+                parts.push('<div class="gif-section-label">Favorites</div>');
+                parts.push(favs.map(g => this._gifItemHtml(g.url, g.title)).join(''));
+                if (gifs.length) parts.push('<div class="gif-section-label">Trending</div>');
+            }
+        }
+        parts.push(gifs.map(gif => this._gifItemHtml(gif.images.fixed_height.url, gif.title)).join(''));
+        resultsDiv.innerHTML = parts.join('');
+
+        resultsDiv.querySelectorAll('.gif-fav-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const item = btn.closest('.gif-item');
+                this.toggleFavoriteGif(btn.dataset.gifFav, item ? item.dataset.gifTitle : '');
             };
+        });
+        resultsDiv.querySelectorAll('.gif-item').forEach(item => {
+            item.onclick = () => this.insertGif(item.dataset.gifUrl);
         });
     },
 
@@ -2027,6 +2089,7 @@ Object.assign(NYM.prototype, {
             window.visualViewport.removeEventListener('scroll', this._gifViewportHandler);
             this._gifViewportHandler = null;
         }
+        if (typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
     toggleSidebar() {

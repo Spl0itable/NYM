@@ -41,6 +41,7 @@ Object.assign(NYM.prototype, {
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
         this._updateNotificationBadge();
+        this._refreshNotificationsModalIfOpen();
         // Push the updated history to the self-addressed settings giftwrap so
         // other signed-in devices can render this notification too.
         if (typeof this._debouncedNostrSettingsSave === 'function') {
@@ -141,6 +142,21 @@ Object.assign(NYM.prototype, {
         // Refresh badge so unviewed historical events (newer than the synced
         // notificationLastReadTime) surface as unread on reconnected devices.
         this._updateNotificationBadge();
+        this._refreshNotificationsModalIfOpen();
+    },
+
+    _refreshNotificationsModalIfOpen() {
+        const modal = document.getElementById('notificationsModal');
+        if (!modal || !modal.classList.contains('active')) return;
+        if (this._refreshNotifModalTimer) return;
+        this._refreshNotifModalTimer = setTimeout(() => {
+            this._refreshNotifModalTimer = null;
+            const m = document.getElementById('notificationsModal');
+            if (!m || !m.classList.contains('active')) return;
+            const wasReadTs = this.notificationLastReadTime;
+            this.openNotificationsModal();
+            this.notificationLastReadTime = wasReadTs;
+        }, 150);
     },
 
     _loadNotificationHistory() {

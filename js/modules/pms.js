@@ -1801,7 +1801,6 @@ Object.assign(NYM.prototype, {
 <img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy">
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
-<span class="delete-pm" data-action="deletePMStop" data-pubkey="${safePk}">✕</span>
 <span class="unread-badge" style="display:none">0</span>
 </div>
 `;
@@ -2022,6 +2021,11 @@ Object.assign(NYM.prototype, {
 
         // Restore any unsent input previously typed for this conversation
         this._restoreDraftForContext();
+
+        this.hideAutocomplete();
+        this.hideChannelAutocomplete();
+        this.hideEmojiAutocomplete();
+        this._focusMessageInput();
 
         // Close mobile sidebar on mobile
         if (window.innerWidth <= 768) {

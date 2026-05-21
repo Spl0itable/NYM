@@ -37,10 +37,43 @@ Object.assign(NYM.prototype, {
             try {
                 const packs = Array.from(this.customEmojiPacks.values())
                     .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
-                    .slice(0, 80);
+                    .slice(0, 500);
                 localStorage.setItem('nym_custom_emoji_packs', JSON.stringify(packs));
-            } catch (_) { }
+            } catch (err) {
+                if (err && err.name === 'QuotaExceededError') {
+                    try {
+                        const trimmed = Array.from(this.customEmojiPacks.values())
+                            .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+                            .slice(0, 80);
+                        localStorage.setItem('nym_custom_emoji_packs', JSON.stringify(trimmed));
+                    } catch (_) { }
+                }
+            }
         }, 2000);
+    },
+
+    _prefetchCustomEmojiImages() {
+        if (this._emojiPrefetchTimer) return;
+        if (this.settings && this.settings.lowDataMode) return;
+        this._emojiPrefetchTimer = setTimeout(() => {
+            this._emojiPrefetchTimer = null;
+            if (!this.customEmojis || this.customEmojis.size === 0) return;
+            if (!this._prefetchedEmojiUrls) this._prefetchedEmojiUrls = new Set();
+            let budget = 60;
+            for (const [, url] of this.customEmojis) {
+                if (budget <= 0) break;
+                if (this._prefetchedEmojiUrls.has(url)) continue;
+                this._prefetchedEmojiUrls.add(url);
+                budget--;
+                try {
+                    const img = new Image();
+                    img.decoding = 'async';
+                    img.loading = 'eager';
+                    img.referrerPolicy = 'no-referrer';
+                    img.src = this.getProxiedEmojiUrl(url);
+                } catch (_) { }
+            }
+        }, 3000);
     },
 
     _saveCustomEmojiMap() {
@@ -48,9 +81,16 @@ Object.assign(NYM.prototype, {
         this._emojiMapSaveTimer = setTimeout(() => {
             this._emojiMapSaveTimer = null;
             try {
-                const entries = Array.from(this.customEmojis.entries()).slice(-800);
+                const entries = Array.from(this.customEmojis.entries()).slice(-5000);
                 localStorage.setItem('nym_custom_emojis', JSON.stringify(entries));
-            } catch (_) { }
+            } catch (err) {
+                if (err && err.name === 'QuotaExceededError') {
+                    try {
+                        const trimmed = Array.from(this.customEmojis.entries()).slice(-800);
+                        localStorage.setItem('nym_custom_emojis', JSON.stringify(trimmed));
+                    } catch (_) { }
+                }
+            }
         }, 2000);
     },
 
@@ -63,6 +103,7 @@ Object.assign(NYM.prototype, {
         this.customEmojis.set(shortcode, url);
         this._saveCustomEmojiMap();
         this._scheduleEmojiDomRefresh();
+        this._prefetchCustomEmojiImages();
     },
 
     // A custom emoji can register after messages have already rendered (packs
@@ -143,6 +184,7 @@ Object.assign(NYM.prototype, {
         this.customEmojiPacks.set(key, pack);
         for (const e of pack.emojis) this.registerCustomEmoji(e.shortcode, e.url);
         if (persist) this._saveCustomEmojiCache();
+        this._prefetchCustomEmojiImages();
     },
 
     // kind 30030 - emoji set
@@ -277,6 +319,75 @@ Object.assign(NYM.prototype, {
             this._emojiPackFavorites = Array.isArray(stored) ? stored : [];
         }
         return this._emojiPackFavorites;
+    },
+
+    _getDefaultCategoryFavorites() {
+        if (!this._defaultCategoryFavorites) {
+            let stored = [];
+            try { stored = JSON.parse(localStorage.getItem('nym_emoji_category_favorites') || '[]'); } catch (_) { }
+            this._defaultCategoryFavorites = Array.isArray(stored) ? stored : [];
+        }
+        return this._defaultCategoryFavorites;
+    },
+
+    isEmojiCategoryFavorite(category) {
+        return !!category && this._getDefaultCategoryFavorites().includes(category);
+    },
+
+    toggleEmojiCategoryFavorite(category) {
+        if (!category) return;
+        const favs = this._getDefaultCategoryFavorites();
+        const idx = favs.indexOf(category);
+        const nowFav = idx === -1;
+        if (nowFav) favs.push(category);
+        else favs.splice(idx, 1);
+        localStorage.setItem('nym_emoji_category_favorites', JSON.stringify(favs));
+        if (typeof nostrSettingsSave === 'function') {
+            try { nostrSettingsSave(); } catch (_) { }
+        }
+        // Reorder default-category sections in any open emoji surface so the
+        // newly-favorited category moves to the top of the default block.
+        const desiredOrder = this._getOrderedDefaultEmojiEntries().map(([c]) => c);
+        const reorderIn = (root) => {
+            if (!root) return;
+            const sections = Array.from(root.querySelectorAll('.emoji-section, .emoji-picker-section'))
+                .filter(el => desiredOrder.includes(el.getAttribute('data-category')));
+            if (sections.length < 2) return;
+            const parent = sections[0].parentNode;
+            const anchor = sections[sections.length - 1].nextSibling;
+            desiredOrder.forEach(cat => {
+                const el = sections.find(s => s.getAttribute('data-category') === cat);
+                if (el) parent.insertBefore(el, anchor);
+            });
+            root.querySelectorAll('.emoji-category-fav-btn').forEach(btn => {
+                const cat = btn.dataset.category;
+                const isFav = this.isEmojiCategoryFavorite(cat);
+                btn.classList.toggle('active', isFav);
+                btn.title = isFav ? 'Unfavorite category' : 'Favorite category';
+                btn.setAttribute('aria-label', btn.title);
+            });
+        };
+        reorderIn(this.enhancedEmojiModal);
+        reorderIn(document.getElementById('emojiPicker'));
+    },
+
+    // Sort default emoji categories: favorited first (in fav-list order),
+    // then the remainder in their declared order.
+    _getOrderedDefaultEmojiEntries() {
+        const favs = this._getDefaultCategoryFavorites();
+        const entries = Object.entries(this.allEmojis);
+        const favSet = new Set(favs);
+        const favored = favs
+            .map(cat => entries.find(([c]) => c === cat))
+            .filter(Boolean);
+        const rest = entries.filter(([c]) => !favSet.has(c));
+        return favored.concat(rest);
+    },
+
+    _emojiCategoryFavButtonHtml(category) {
+        const isFav = this.isEmojiCategoryFavorite(category);
+        const label = isFav ? 'Unfavorite category' : 'Favorite category';
+        return `<button type="button" class="emoji-category-fav-btn${isFav ? ' active' : ''}" data-action="toggleEmojiCategoryFavorite" data-category="${this.escapeHtml(category)}" title="${label}" aria-label="${label}"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 L7.5 14 L2 9.3 L9.1 8.6 Z"/></svg></button>`;
     },
 
     isEmojiPackFavorite(pack) {

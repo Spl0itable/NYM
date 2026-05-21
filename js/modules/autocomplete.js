@@ -137,7 +137,11 @@ Object.assign(NYM.prototype, {
     },
 
     hideEmojiAutocomplete() {
-        document.getElementById('emojiAutocomplete').classList.remove('active');
+        const el = document.getElementById('emojiAutocomplete');
+        if (el) {
+            el.classList.remove('active');
+            el.replaceChildren();
+        }
         this.emojiAutocompleteIndex = -1;
     },
 
@@ -145,11 +149,15 @@ Object.assign(NYM.prototype, {
         const items = document.querySelectorAll('.emoji-item');
         if (items.length === 0) return;
 
-        items[this.emojiAutocompleteIndex]?.classList.remove('selected');
+        items.forEach(el => el.classList.remove('selected'));
 
-        this.emojiAutocompleteIndex += direction;
-        if (this.emojiAutocompleteIndex < 0) this.emojiAutocompleteIndex = items.length - 1;
-        if (this.emojiAutocompleteIndex >= items.length) this.emojiAutocompleteIndex = 0;
+        if (this.emojiAutocompleteIndex < 0 || this.emojiAutocompleteIndex >= items.length) {
+            this.emojiAutocompleteIndex = direction > 0 ? 0 : items.length - 1;
+        } else {
+            this.emojiAutocompleteIndex += direction;
+            if (this.emojiAutocompleteIndex < 0) this.emojiAutocompleteIndex = items.length - 1;
+            if (this.emojiAutocompleteIndex >= items.length) this.emojiAutocompleteIndex = 0;
+        }
 
         items[this.emojiAutocompleteIndex].classList.add('selected');
         items[this.emojiAutocompleteIndex].scrollIntoView({ block: 'nearest' });
@@ -387,7 +395,11 @@ Object.assign(NYM.prototype, {
     },
 
     hideAutocomplete() {
-        document.getElementById('autocompleteDropdown').classList.remove('active');
+        const dropdown = document.getElementById('autocompleteDropdown');
+        if (dropdown) {
+            dropdown.classList.remove('active');
+            dropdown.replaceChildren();
+        }
         this.autocompleteIndex = -1;
     },
 
@@ -395,11 +407,15 @@ Object.assign(NYM.prototype, {
         const items = document.querySelectorAll('.autocomplete-item');
         if (items.length === 0) return;
 
-        items[this.autocompleteIndex]?.classList.remove('selected');
+        items.forEach(el => el.classList.remove('selected'));
 
-        this.autocompleteIndex += direction;
-        if (this.autocompleteIndex < 0) this.autocompleteIndex = items.length - 1;
-        if (this.autocompleteIndex >= items.length) this.autocompleteIndex = 0;
+        if (this.autocompleteIndex < 0 || this.autocompleteIndex >= items.length) {
+            this.autocompleteIndex = direction > 0 ? 0 : items.length - 1;
+        } else {
+            this.autocompleteIndex += direction;
+            if (this.autocompleteIndex < 0) this.autocompleteIndex = items.length - 1;
+            if (this.autocompleteIndex >= items.length) this.autocompleteIndex = 0;
+        }
 
         items[this.autocompleteIndex].classList.add('selected');
         items[this.autocompleteIndex].scrollIntoView({ block: 'nearest' });
@@ -537,19 +553,38 @@ Object.assign(NYM.prototype, {
 
     hideChannelAutocomplete() {
         const el = document.getElementById('channelAutocomplete');
-        if (el) el.classList.remove('active');
+        if (el) {
+            el.classList.remove('active');
+            el.replaceChildren();
+        }
         this.channelAutocompleteIndex = -1;
+    },
+
+    refreshChannelAutocompleteIfOpen() {
+        const dropdown = document.getElementById('channelAutocomplete');
+        if (!dropdown || !dropdown.classList.contains('active')) return;
+        const input = document.getElementById('messageInput');
+        if (!input) return;
+        const value = input.value;
+        const lastHash = value.lastIndexOf('#');
+        if (lastHash !== -1 && value.substring(lastHash).match(/^#[^\s]*$/)) {
+            this.showChannelAutocomplete(value.substring(lastHash + 1));
+        }
     },
 
     navigateChannelAutocomplete(direction) {
         const items = document.querySelectorAll('#channelAutocomplete .autocomplete-item');
         if (items.length === 0) return;
 
-        items[this.channelAutocompleteIndex]?.classList.remove('selected');
+        items.forEach(el => el.classList.remove('selected'));
 
-        this.channelAutocompleteIndex += direction;
-        if (this.channelAutocompleteIndex < 0) this.channelAutocompleteIndex = items.length - 1;
-        if (this.channelAutocompleteIndex >= items.length) this.channelAutocompleteIndex = 0;
+        if (this.channelAutocompleteIndex < 0 || this.channelAutocompleteIndex >= items.length) {
+            this.channelAutocompleteIndex = direction > 0 ? 0 : items.length - 1;
+        } else {
+            this.channelAutocompleteIndex += direction;
+            if (this.channelAutocompleteIndex < 0) this.channelAutocompleteIndex = items.length - 1;
+            if (this.channelAutocompleteIndex >= items.length) this.channelAutocompleteIndex = 0;
+        }
 
         items[this.channelAutocompleteIndex].classList.add('selected');
         items[this.channelAutocompleteIndex].scrollIntoView({ block: 'nearest' });

@@ -78,6 +78,7 @@ Object.assign(NYM.prototype, {
             this.populateTranslateLanguageSelect();
             this.setupSidebarSectionReorder();
             this.setupSidebarSectionCollapse();
+            this.setupSidebarItemMenus();
 
             // Load saved preferences
             this.applyColorMode();

@@ -277,62 +277,99 @@ Object.assign(NYM.prototype, {
             '?clear': { desc: 'Clear Nymbot chat history and start fresh' },
         };
         this.commands = {
-            '/help': { desc: 'Show available commands', fn: () => this.showHelp() },
-            '/join': { desc: 'Join a channel', fn: (args) => this.cmdJoin(args) },
-            '/j': { desc: 'Shortcut for /join', fn: (args) => this.cmdJoin(args) },
-            '/pm': { desc: 'Send private message', fn: (args) => this.cmdPM(args) },
-            '/nick': { desc: 'Change your nym', fn: (args) => this.cmdNick(args) },
-            '/who': { desc: 'List active nyms', fn: () => this.cmdWho() },
-            '/w': { desc: 'Shortcut for /who', fn: () => this.cmdWho() },
-            '/clear': { desc: 'Clear chat messages', fn: () => this.cmdClear() },
-            '/block': { desc: 'Block a user or #channel', fn: (args) => this.cmdBlock(args) },
-            '/unblock': { desc: 'Unblock a user', fn: (args) => this.cmdUnblock(args) },
-            '/slap': { desc: 'Slap someone with a trout 🐟', fn: (args) => this.cmdSlap(args) },
-            '/hug': { desc: 'Give someone a warm hug 🫂', fn: (args) => this.cmdHug(args) },
-            '/me': { desc: 'Action message', fn: (args) => this.cmdMe(args) },
-            '/shrug': { desc: 'Send a shrug', fn: () => this.cmdShrug() },
-            '/bold': { desc: 'Send bold text (**text**)', fn: (args) => this.cmdBold(args) },
-            '/b': { desc: 'Shortcut for /bold', fn: (args) => this.cmdBold(args) },
-            '/italic': { desc: 'Send italic text (*text*)', fn: (args) => this.cmdItalic(args) },
-            '/i': { desc: 'Shortcut for /italic', fn: (args) => this.cmdItalic(args) },
-            '/strike': { desc: 'Send strikethrough text (~~text~~)', fn: (args) => this.cmdStrike(args) },
-            '/s': { desc: 'Shortcut for /strike', fn: (args) => this.cmdStrike(args) },
-            '/code': { desc: 'Send code block', fn: (args) => this.cmdCode(args) },
-            '/c': { desc: 'Shortcut for /code', fn: (args) => this.cmdCode(args) },
-            '/quote': { desc: 'Send quoted text', fn: (args) => this.cmdQuote(args) },
-            '/q': { desc: 'Shortcut for /quote', fn: (args) => this.cmdQuote(args) },
-            '/brb': { desc: 'Set away message', fn: (args) => this.cmdBRB(args) },
-            '/back': { desc: 'Clear away message', fn: () => this.cmdBack() },
-            '/zap': { desc: 'Zap a user profile', fn: (args) => this.cmdZap(args) },
-            '/invite': { desc: 'Invite a user to channel or group chat', fn: (args) => this.cmdInvite(args) },
-            '/group': { desc: 'Create a private group', fn: (args) => this.cmdGroup(args) },
-            '/addmember': { desc: 'Add a member to the current group chat', fn: (args) => this.cmdAddMember(args) },
-            '/kick': { desc: 'Remove a member from the current group (owner/mod)', fn: (args) => this.cmdKick(args) },
-            '/ban': { desc: 'Remove and banlist a member from the current group (owner/mod)', fn: (args) => this.cmdBanFromGroup(args) },
-            '/unban': { desc: 'Remove a user from the group banlist (owner only)', fn: (args) => this.cmdUnbanFromGroup(args) },
-            '/addmod': { desc: 'Promote a member to moderator (owner only)', fn: (args) => this.cmdAddMod(args) },
-            '/removemod': { desc: 'Revoke a member\'s moderator role (owner only)', fn: (args) => this.cmdRemoveMod(args) },
-            '/transferowner': { desc: 'Transfer group ownership to another member', fn: (args) => this.cmdTransferOwner(args) },
-            '/groupinfo': { desc: 'Show members of the current group', fn: () => this.cmdGroupInfo() },
-            '/share': { desc: 'Share current channel URL', fn: () => this.cmdShare() },
-            '/leave': { desc: 'Leave current channel, group chat, or PM', fn: () => this.cmdLeave() },
-            '/quit': { desc: 'Disconnect from Nymchat', fn: () => this.cmdQuit() },
-            '/poll': { desc: 'Create a poll', fn: () => this.cmdPoll() }
+            '/help':          { desc: 'Show all commands',              cat: 'misc',       fn: () => this.showHelp() },
+            '/join':          { desc: 'Join channel',                   cat: 'channels',   aliases: ['/j'], fn: (args) => this.cmdJoin(args) },
+            '/j':             { aliasOf: '/join',                       fn: (args) => this.cmdJoin(args) },
+            '/pm':            { desc: 'Send private message',           cat: 'pms',        fn: (args) => this.cmdPM(args) },
+            '/nick':          { desc: 'Change nickname',                cat: 'misc',       fn: (args) => this.cmdNick(args) },
+            '/who':           { desc: 'Show active users',              cat: 'channels',   aliases: ['/w'], fn: () => this.cmdWho() },
+            '/w':             { aliasOf: '/who',                        fn: () => this.cmdWho() },
+            '/clear':         { desc: 'Clear conversation',             cat: 'misc',       fn: () => this.cmdClear() },
+            '/me':            { desc: 'Action message',                 cat: 'misc', fn: (args) => this.cmdMe(args) },
+            '/shrug':         { desc: 'Send shrug',                     cat: 'misc', fn: () => this.cmdShrug() },
+            '/bold':          { desc: 'Bold text (**text**)',           cat: 'formatting', aliases: ['/b'], fn: (args) => this.cmdBold(args) },
+            '/b':             { aliasOf: '/bold',                       fn: (args) => this.cmdBold(args) },
+            '/italic':        { desc: 'Italic text (*text*)',           cat: 'formatting', aliases: ['/i'], fn: (args) => this.cmdItalic(args) },
+            '/i':             { aliasOf: '/italic',                     fn: (args) => this.cmdItalic(args) },
+            '/strike':        { desc: 'Strikethrough text (~~text~~)',  cat: 'formatting', aliases: ['/s'], fn: (args) => this.cmdStrike(args) },
+            '/s':             { aliasOf: '/strike',                     fn: (args) => this.cmdStrike(args) },
+            '/code':          { desc: 'Code block (`code`)',            cat: 'formatting', aliases: ['/c'], fn: (args) => this.cmdCode(args) },
+            '/c':             { aliasOf: '/code',                       fn: (args) => this.cmdCode(args) },
+            '/quote':         { desc: 'Quote text (> quote)',           cat: 'formatting', aliases: ['/q'], fn: (args) => this.cmdQuote(args) },
+            '/q':             { aliasOf: '/quote',                      fn: (args) => this.cmdQuote(args) },
+            '/brb':           { desc: 'Set away message',               cat: 'misc',       fn: (args) => this.cmdBRB(args) },
+            '/back':          { desc: 'Clear away message',             cat: 'misc',       fn: () => this.cmdBack() },
+            '/zap':           { desc: 'Zap profile',                    cat: 'misc',       fn: (args) => this.cmdZap(args) },
+            '/block':         { desc: 'Block user/#channel',            cat: 'pms',        fn: (args) => this.cmdBlock(args) },
+            '/unblock':       { desc: 'Unblock user/#channel',          cat: 'pms',        fn: (args) => this.cmdUnblock(args) },
+            '/invite':        { desc: 'Invite to chat',                 cat: 'pms',        fn: (args) => this.cmdInvite(args) },
+            '/group':         { desc: 'Create private group',           cat: 'groups',     fn: (args) => this.cmdGroup(args) },
+            '/addmember':     { desc: 'Add group member',               cat: 'groups',     fn: (args) => this.cmdAddMember(args) },
+            '/groupinfo':     { desc: 'Show group members',             cat: 'groups',     fn: () => this.cmdGroupInfo() },
+            '/share':         { desc: 'Share #channel URL',             cat: 'channels',   fn: () => this.cmdShare() },
+            '/leave':         { desc: 'Leave conversation',             cat: 'pms',        fn: () => this.cmdLeave() },
+            '/poll':          { desc: 'Create poll',                    cat: 'channels',   fn: () => this.cmdPoll() },
+            '/kick':          { desc: 'Remove member (owner/mod)',      cat: 'groups',     fn: (args) => this.cmdKick(args) },
+            '/ban':           { desc: 'Ban member (owner/mod)',         cat: 'groups',     fn: (args) => this.cmdBanFromGroup(args) },
+            '/unban':         { desc: 'Unban member (owner)',           cat: 'groups',     fn: (args) => this.cmdUnbanFromGroup(args) },
+            '/addmod':        { desc: 'Promote to moderator (owner)',   cat: 'groups',     fn: (args) => this.cmdAddMod(args) },
+            '/removemod':     { desc: 'Remove moderator (owner)',       cat: 'groups',     fn: (args) => this.cmdRemoveMod(args) },
+            '/transferowner': { desc: 'Change group ownership',         cat: 'groups',     fn: (args) => this.cmdTransferOwner(args) },
+            '/slap':          { desc: 'Slap someone with a trout 🐟',   cat: 'misc', fn: (args) => this.cmdSlap(args) },
+            '/hug':           { desc: 'Give someone a warm hug 🫂',     cat: 'misc', fn: (args) => this.cmdHug(args) },
+            '/quit':          { desc: 'Disconnect from Nymchat',        cat: 'misc',       fn: () => this.cmdQuit() }
         };
+        this.commandCategories = [
+            ['channels',   'Public Channels'],
+            ['pms',        'Private Messages'],
+            ['groups',     'Groups'],
+            ['formatting', 'Formatting'],
+            ['misc',       'Misc']
+        ];
+    },
+
+    // Filter commands map for display surfaces. Hides aliasOf entries so each
+    // command shows once with its shortcuts collapsed into the description.
+    _visibleCommandEntries() {
+        return Object.entries(this.commands).filter(([, info]) => !(info && info.aliasOf));
+    },
+
+    _formatCommandDisplay(cmd, info) {
+        if (!info || !info.aliases || info.aliases.length === 0) return cmd;
+        return `${cmd}, ${info.aliases.join(', ')}`;
+    },
+
+    // Group visible command entries by category, preserving category order.
+    _groupCommandsByCategory(entries) {
+        const cats = this.commandCategories || [['misc', 'Misc']];
+        return cats
+            .map(([key, label]) => [label, entries.filter(([, info]) => (info.cat || 'misc') === key)])
+            .filter(([, items]) => items.length > 0);
     },
 
     showCommandPalette(input) {
         const palette = document.getElementById('commandPalette');
-        const matchingCommands = Object.entries(this.commands)
-            .filter(([cmd]) => cmd.startsWith(input.toLowerCase()));
+        const needle = input.toLowerCase();
+        const matchingCommands = this._visibleCommandEntries().filter(([cmd, info]) => {
+            if (cmd.startsWith(needle)) return true;
+            if (Array.isArray(info.aliases) && info.aliases.some(a => a.startsWith(needle))) return true;
+            return false;
+        });
 
         if (matchingCommands.length > 0) {
-            palette.innerHTML = matchingCommands.map(([cmd, info], index) => `
-                <div class="command-item ${index === 0 ? 'selected' : ''}" data-command="${cmd}">
-                    <span class="command-name">${cmd}</span>
+            let firstAssigned = false;
+            palette.innerHTML = this._groupCommandsByCategory(matchingCommands).map(([label, items]) => {
+                const rows = items.map(([cmd, info]) => {
+                    const selected = firstAssigned ? '' : ' selected';
+                    firstAssigned = true;
+                    return `
+                <div class="command-item${selected}" data-command="${cmd}">
+                    <span class="command-name">${this._formatCommandDisplay(cmd, info)}</span>
                     <span class="command-desc">${info.desc}</span>
-                </div>
-            `).join('');
+                </div>`;
+                }).join('');
+                return `<div class="command-category">${label}</div>${rows}`;
+            }).join('');
             palette.classList.add('active');
             this.commandPaletteIndex = 0;
         } else {
@@ -409,12 +446,26 @@ Object.assign(NYM.prototype, {
 
     // Command implementations
     showHelp() {
-        const helpText = Object.entries(this.commands)
-            .map(([cmd, info]) => `${cmd} - ${info.desc}  \n`)
+        const groups = this._groupCommandsByCategory(this._visibleCommandEntries())
+            .map(([label, items]) => {
+                const lines = items
+                    .map(([cmd, info]) => `<div class="help-cmd"><span class="help-cmd-name">${this.escapeHtml(this._formatCommandDisplay(cmd, info))}</span> — ${this.escapeHtml(info.desc)}</div>`)
+                    .join('');
+                return `<div class="help-category">${this.escapeHtml(label)}</div>${lines}`;
+            })
             .join('');
 
+        const footer = [
+            'Markdown supported: **bold**, *italic*, ~~strikethrough~~, `code`, > quote',
+            'Type : to quickly pick an emoji',
+            'Nyms are shown as name#xxxx where xxxx is the last 4 characters of their pubkey',
+            'Click on users for more options'
+        ].map(line => this.escapeHtml(line)).join('<br><br>');
+
         this.displaySystemMessage(
-            `Available commands:  \n${helpText}\n\nMarkdown supported: **bold**, *italic*, ~~strikethrough~~, \`code\`, > quote\n\nType : to quickly pick an emoji\n\nNyms are shown as name#xxxx where xxxx is the last 4 characters of their pubkey\n\nClick on users for more options`
+            `<div class="help-output"><div class="help-title">Available commands</div>${groups}<div class="help-footer">${footer}</div></div>`,
+            'system',
+            { html: true }
         );
     },
 

@@ -1520,6 +1520,23 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
+    toggleBlockUserByPubkey(pubkey) {
+        if (!pubkey) return;
+        if (this.blockedUsers.has(pubkey)) {
+            this.unblockByPubkey(pubkey);
+            return;
+        }
+        this.blockedUsers.add(pubkey);
+        this.saveBlockedUsers();
+        this.hideMessagesFromBlockedUser(pubkey);
+
+        const nym = this.getNymFromPubkey(pubkey);
+        this.displaySystemMessage(`Blocked ${nym}`);
+        this.updateUserList();
+        this.updateBlockedList();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    },
+
     loadBlockedUsers() {
         const blocked = localStorage.getItem('nym_blocked');
         if (blocked) {

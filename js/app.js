@@ -1766,16 +1766,18 @@ function downloadModalMedia(event) {
     function onEnd(e) {
         if (mode === 'swipe') {
             const g = window._imageModalGallery;
-            const horizontal = Math.abs(tx) > Math.abs(ty) * 1.5;
-            if (g && horizontal && Math.abs(tx) > 60) {
-                const delta = tx < 0 ? 1 : -1;
-                if (navigateGallery(delta)) {
-                    return;
+            const hasGallery = g && g.sources.length > 1;
+            const horizontal = Math.abs(tx) > Math.abs(ty);
+            if (hasGallery && horizontal) {
+                if (Math.abs(tx) > 60) {
+                    const delta = tx < 0 ? 1 : -1;
+                    if (navigateGallery(delta)) return;
                 }
                 reset(true);
                 return;
             }
-            if (Math.hypot(tx, ty) > 100) {
+            const closeDist = hasGallery ? Math.abs(ty) : Math.hypot(tx, ty);
+            if (closeDist > 100) {
                 window.closeImageModal();
                 return;
             }
@@ -3504,7 +3506,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.380';
+const NYMCHAT_VERSION = 'v3.66.382';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -5315,6 +5317,38 @@ async function applyNostrSettings(s) {
     if (Array.isArray(s.emojiPackFavorites)) {
         nym._emojiPackFavorites = s.emojiPackFavorites.filter(k => typeof k === 'string');
         localStorage.setItem('nym_emoji_pack_favorites', JSON.stringify(nym._emojiPackFavorites));
+    }
+
+    // Favorite GIFs — replace with remote set so favorites sync across devices.
+    if (Array.isArray(s.favoriteGifs)) {
+        nym._favoriteGifs = s.favoriteGifs
+            .filter(g => g && typeof g.url === 'string')
+            .map(g => ({ url: g.url, title: typeof g.title === 'string' ? g.title : '' }))
+            .slice(0, 100);
+        localStorage.setItem('nym_favorite_gifs', JSON.stringify(nym._favoriteGifs));
+    }
+
+    // Favorited default emoji categories — replace with remote set so an
+    // unfavorite on one device propagates to others.
+    if (Array.isArray(s.emojiCategoryFavorites)) {
+        const allCats = nym.allEmojis ? new Set(Object.keys(nym.allEmojis)) : null;
+        nym._defaultCategoryFavorites = s.emojiCategoryFavorites
+            .filter(c => typeof c === 'string' && (!allCats || allCats.has(c)));
+        localStorage.setItem('nym_emoji_category_favorites', JSON.stringify(nym._defaultCategoryFavorites));
+    }
+
+    // Recently used emoji — merge most-recent-first, dedupe by emoji
+    if (Array.isArray(s.recentEmojis) && s.recentEmojis.length > 0) {
+        const seen = new Set();
+        const merged = [];
+        for (const e of s.recentEmojis) {
+            if (typeof e === 'string' && !seen.has(e)) { seen.add(e); merged.push(e); }
+        }
+        for (const e of (nym.recentEmojis || [])) {
+            if (typeof e === 'string' && !seen.has(e)) { seen.add(e); merged.push(e); }
+        }
+        nym.recentEmojis = merged.slice(0, 20);
+        nym.saveRecentEmojis();
     }
 
     // Sidebar section order

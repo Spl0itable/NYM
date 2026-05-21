@@ -206,6 +206,11 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            // Drop messages to blocked channels so they never get cached in the DOM
+            if (this.isChannelBlocked(geohash, geohash)) {
+                return;
+            }
+
             // Block impersonation: drop events using reserved nym "nymbot"
             // unless they come from the verified bot pubkey
             if (nym.toLowerCase() === 'nymbot' && !this.isVerifiedBot(event.pubkey)) {
