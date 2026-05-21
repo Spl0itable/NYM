@@ -948,6 +948,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     _focusMessageInput() {
         if (window.innerWidth <= 768) return;
+        // Don't steal focus from another input/editable the user just clicked
+        // into (search boxes, modal fields, etc.). Only refocus the message
+        // input when focus isn't already on a different focusable control.
+        const active = document.activeElement;
+        if (active && active.id !== 'messageInput') {
+            const tag = active.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || active.isContentEditable) {
+                return;
+            }
+        }
         const input = document.getElementById('messageInput');
         if (input) input.focus();
     },

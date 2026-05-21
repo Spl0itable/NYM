@@ -654,9 +654,11 @@ Object.assign(NYM.prototype, {
     },
 
     closeContextMenu() {
-        document.getElementById('contextMenu').classList.remove('active');
+        const menu = document.getElementById('contextMenu');
+        const wasOpen = menu && menu.classList.contains('active');
+        menu.classList.remove('active');
         document.getElementById('contextMenuOverlay').classList.remove('active');
-        if (typeof this._focusMessageInput === 'function') this._focusMessageInput();
+        if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
     // Unfurl a URL and return Open Graph metadata.
@@ -2080,6 +2082,7 @@ Object.assign(NYM.prototype, {
 
     closeGifPicker() {
         const gifPicker = document.getElementById('gifPicker');
+        const wasOpen = gifPicker.classList.contains('active');
         gifPicker.classList.remove('active');
         gifPicker.innerHTML = '';
         gifPicker.style.bottom = '';
@@ -2089,7 +2092,7 @@ Object.assign(NYM.prototype, {
             window.visualViewport.removeEventListener('scroll', this._gifViewportHandler);
             this._gifViewportHandler = null;
         }
-        if (typeof this._focusMessageInput === 'function') this._focusMessageInput();
+        if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
     toggleSidebar() {
