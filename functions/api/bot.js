@@ -2611,6 +2611,103 @@ function buildGiftWrappedDM(plaintext, botPrivkey, botPubkey, recipientPubkey) {
   return wrap;
 }
 
+// Build a reply gift wrap addressed to the user plus a self-addressed copy
+function buildGiftWrappedDMPair(plaintext, botPrivkey, botPubkey, recipientPubkey) {
+  var rumor = {
+    kind: 14,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [["p", recipientPubkey], ["ms", String(Date.now())], ["bot", "nymchat"]],
+    content: plaintext,
+    pubkey: botPubkey
+  };
+  rumor.id = getEventHash(rumor);
+  function wrapFor(targetPubkey) {
+    var seal = {
+      kind: 13,
+      created_at: randomTimestampNow(),
+      tags: [],
+      content: nip44Encrypt(JSON.stringify(rumor), nip44ConversationKey(botPrivkey, targetPubkey)),
+      pubkey: botPubkey
+    };
+    signEvent(seal, botPrivkey);
+    var ephSk = bytesToHex(randomBytes(32));
+    var ephPk = getPublicKey(ephSk);
+    var wrap = {
+      kind: 1059,
+      created_at: randomTimestampNow(),
+      tags: [["p", targetPubkey]],
+      content: nip44Encrypt(JSON.stringify(seal), nip44ConversationKey(ephSk, targetPubkey)),
+      pubkey: ephPk
+    };
+    signEvent(wrap, ephSk);
+    return wrap;
+  }
+  return { event: wrapFor(recipientPubkey), selfEvent: wrapFor(botPubkey) };
+}
+
+// NIP-44 v2 decryption (inverse of nip44Encrypt)
+function botBase64Decode(b64) {
+  var s = atob(b64);
+  var out = new Uint8Array(s.length);
+  for (var i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+function nip44Decrypt(payload, conversationKey) {
+  var data = botBase64Decode(payload);
+  if (data.length < 99 || data[0] !== 2) throw new Error("invalid nip44 payload");
+  var nonce = data.slice(1, 33);
+  var ciphertext = data.slice(33, data.length - 32);
+  var mac = data.slice(data.length - 32);
+  var keys = hkdfExpand(conversationKey, nonce, 76);
+  var chachaKey = keys.slice(0, 32);
+  var chachaNonce = keys.slice(32, 44);
+  var hmacKey = keys.slice(44, 76);
+  var expectedMac = hmac(sha256, hmacKey, concatBytes(nonce, ciphertext));
+  var diff = mac.length ^ expectedMac.length;
+  for (var i = 0; i < mac.length && i < expectedMac.length; i++) diff |= mac[i] ^ expectedMac[i];
+  if (diff !== 0) throw new Error("nip44 mac mismatch");
+  var padded = chacha20(chachaKey, chachaNonce, ciphertext);
+  var len = (padded[0] << 8) | padded[1];
+  if (len < 1 || len + 2 > padded.length) throw new Error("invalid nip44 padding");
+  return new TextDecoder().decode(padded.slice(2, 2 + len));
+}
+
+// NIP-59 unwrap with the bot's key
+function unwrapBotGiftWrap(wrap, botPrivkey) {
+  try {
+    if (!wrap || wrap.kind !== 1059 || !wrap.pubkey || !wrap.content) return null;
+    var seal = JSON.parse(nip44Decrypt(wrap.content, nip44ConversationKey(botPrivkey, wrap.pubkey)));
+    if (!seal || seal.kind !== 13 || !seal.pubkey || !seal.content) return null;
+    var rumor = JSON.parse(nip44Decrypt(seal.content, nip44ConversationKey(botPrivkey, seal.pubkey)));
+    if (!rumor || rumor.kind !== 14) return null;
+    // NIP-59: the rumor's author must match the seal's signer, else it's forged
+    if (rumor.pubkey !== seal.pubkey) return null;
+    return { rumor: rumor, author: seal.pubkey };
+  } catch (e) {
+    return null;
+  }
+}
+
+// Fetch gift-wrap events by id from relays, retrying so a just-published wrap
+// has time to propagate. requiredId is the current message and must be found.
+async function fetchGiftWrapsByIds(ids, requiredId, timeoutMs) {
+  var found = {};
+  for (var attempt = 0; attempt < 4; attempt++) {
+    var missing = ids.filter(function (id) { return !found[id]; });
+    if (missing.length === 0) break;
+    var events = await fetchRecentEvents({ ids: missing, kinds: [1059] }, timeoutMs || 3000);
+    for (var i = 0; i < events.length; i++) {
+      if (events[i] && events[i].id) found[events[i].id] = events[i];
+    }
+    var stillMissing = ids.filter(function (id) { return !found[id]; });
+    if (stillMissing.length === 0) break;
+    // Once the current message is in hand, one more pass for history is enough
+    if (requiredId && found[requiredId] && attempt >= 1) break;
+    await new Promise(function (r) { setTimeout(r, 1000); });
+  }
+  return found;
+}
+
 // Private Nymbot messaging: auth, credits (R2), pricing
 var BOT_PM_RATE_LIMIT = 20;
 var BOT_PM_RATE_WINDOW_MS = 60000;
@@ -3101,8 +3198,6 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   }
 
   if (body.action === "pm") {
-    var message = sanitizeInput(body.message || "");
-    if (!message) return json({ error: "Empty message" }, 400);
     var record = await botGetCredits(env, userPubkey);
     var cutoff = Date.now() - BOT_PM_RATE_WINDOW_MS;
     record.rl = (record.rl || []).filter(function (t) { return t > cutoff; });
@@ -3112,6 +3207,48 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (record.balance <= 0) {
       return json({ noCredits: true, balance: 0 });
     }
+
+    // The message and history never travel as plaintext. The client publishes
+    // each turn as a NIP-17 gift wrap to the relays and sends only the wrap
+    // event IDs; the worker fetches and decrypts them here with the bot key.
+    var isHex64 = function (x) { return typeof x === "string" && /^[0-9a-f]{64}$/i.test(x); };
+    var historyIds = Array.isArray(body.eventIds) ? body.eventIds.filter(isHex64) : [];
+    var currentId = isHex64(body.eventId) ? body.eventId : (historyIds.length ? historyIds[historyIds.length - 1] : null);
+    if (!currentId) return json({ error: "Missing message event id" }, 400);
+
+    var fetchIds = [];
+    for (var fi = 0; fi < historyIds.length; fi++) {
+      if (fetchIds.indexOf(historyIds[fi]) === -1) fetchIds.push(historyIds[fi]);
+    }
+    if (fetchIds.indexOf(currentId) === -1) fetchIds.push(currentId);
+
+    var fetched = await fetchGiftWrapsByIds(fetchIds, currentId, 3000);
+    var currentWrap = fetched[currentId];
+    if (!currentWrap) {
+      return json({ error: "Could not fetch your encrypted message from the relays yet — please try again." }, 504);
+    }
+    var currentUnwrapped = unwrapBotGiftWrap(currentWrap, botPrivkey);
+    if (!currentUnwrapped) return json({ error: "Could not decrypt your message." }, 400);
+    // The current message must be authored by the authenticated user
+    if (currentUnwrapped.author !== userPubkey) {
+      return json({ error: "Message author does not match the authenticated user." }, 403);
+    }
+    var message = sanitizeInput(currentUnwrapped.rumor.content || "");
+    if (!message) return json({ error: "Empty message" }, 400);
+
+    // Reconstruct prior turns (in order) from the remaining fetched wraps.
+    var history = [];
+    for (var hk = 0; hk < historyIds.length; hk++) {
+      if (historyIds[hk] === currentId) continue;
+      var hw = fetched[historyIds[hk]];
+      if (!hw) continue;
+      var hu = unwrapBotGiftWrap(hw, botPrivkey);
+      if (!hu || !hu.rumor || !hu.rumor.content) continue;
+      var isBotTurn = hu.author === botPubkey;
+      if (!isBotTurn && hu.author !== userPubkey) continue;
+      history.push({ text: String(hu.rumor.content).slice(0, 1000), isBot: isBotTurn });
+    }
+
     var ai = env.AI;
     var parsed = parseBotPMRequest(message);
     var taskType;
@@ -3132,7 +3269,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     var chatResult;
     try {
-      chatResult = await handleBotPMChat(message, body.history, context, taskType);
+      chatResult = await handleBotPMChat(message, history, context, taskType);
     } catch (e) {
       return json({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
     }
@@ -3142,9 +3279,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     record.totalUsed = (record.totalUsed || 0) + cost;
     record.rl.push(Date.now());
     await botPutCredits(env, userPubkey, record);
-    var event = buildGiftWrappedDM(reply, botPrivkey, botPubkey, userPubkey);
+    var pair = buildGiftWrappedDMPair(reply, botPrivkey, botPubkey, userPubkey);
     return json({
-      event: event,
+      event: pair.event,
+      selfEvent: pair.selfEvent,
       balance: record.balance,
       cost: cost,
       taskType: taskType,
@@ -3492,7 +3630,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.66.384";
+var NYMCHAT_VERSION = "3.66.385";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -4127,7 +4265,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.384 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.385 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -4960,7 +5098,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.66.384")
+  // Prefix match (e.g. "3.61" matches "3.66.385")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -5015,7 +5153,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.66.384", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.66.385", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

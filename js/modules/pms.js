@@ -344,7 +344,7 @@ Object.assign(NYM.prototype, {
                 // Force auto-scroll to bottom after sending own PM
                 this._scheduleScrollToBottom();
             }
-            return true;
+            return wrapped.id;
         }
 
         // Extension or NIP-46 remote signer path (seal via signer, wrap locally)
@@ -464,7 +464,7 @@ Object.assign(NYM.prototype, {
                 // Force auto-scroll to bottom after sending own PM
                 this._scheduleScrollToBottom();
             }
-            return true;
+            return wrapped.id;
         }
 
         throw new Error('No signing/encryption available for NIP-17 (need local privkey, extension, or remote signer)');
@@ -1235,7 +1235,7 @@ Object.assign(NYM.prototype, {
             const wrapped = await this.sendNIP17PM(content, recipientPubkey);
             this.recordOwnActivity();
             if (this.isVerifiedBot(recipientPubkey)) {
-                this._handleBotPM(content);
+                this._handleBotPM(content, typeof wrapped === 'string' ? wrapped : null);
             }
             return !!wrapped;
         } catch (error) {
@@ -1290,19 +1290,30 @@ Object.assign(NYM.prototype, {
         return await this.signEvent(event);
     },
 
-    // Recent Nymbot conversation history sent to the worker as AI context
-    _getBotPMHistory() {
-        const key = this.getPMConversationKey(this.verifiedBot.pubkey);
-        const msgs = this.pmMessages.get(key) || [];
-        const clearedAt = this._getBotPmClearedAt();
-        return msgs
-            .filter(m => m && m.content && m.deliveryStatus !== 'failed'
-                && (!clearedAt || (m.created_at || 0) > clearedAt))
-            .slice(-30)
-            .map(m => ({
-                text: String(m.content).slice(0, 1000),
-                isBot: m.pubkey === this.verifiedBot.pubkey
-            }));
+    // Ordered list of NIP-17 gift-wrap event IDs for the Nymbot conversation.
+    // The worker fetches these from relays and decrypts them with the bot key,
+    // so the chat history stays end-to-end encrypted — no plaintext is sent.
+    _getBotPmThread() {
+        if (Array.isArray(this._botPmThread)) return this._botPmThread;
+        try {
+            const v = JSON.parse(localStorage.getItem('nym_botpm_thread') || '[]');
+            this._botPmThread = Array.isArray(v) ? v.filter(id => /^[0-9a-f]{64}$/i.test(id)) : [];
+        } catch { this._botPmThread = []; }
+        return this._botPmThread;
+    },
+
+    _pushBotPmThreadId(id) {
+        if (!id || !/^[0-9a-f]{64}$/i.test(id)) return;
+        const thread = this._getBotPmThread();
+        thread.push(id);
+        // Cap so we never ask the worker to fetch an unbounded number of wraps
+        if (thread.length > 30) this._botPmThread = thread.slice(-30);
+        try { localStorage.setItem('nym_botpm_thread', JSON.stringify(this._botPmThread)); } catch { }
+    },
+
+    _clearBotPmThread() {
+        this._botPmThread = [];
+        try { localStorage.setItem('nym_botpm_thread', '[]'); } catch { }
     },
 
     _getBotPmClearedAt() {
@@ -1386,6 +1397,7 @@ Object.assign(NYM.prototype, {
         if (!pubkey) return;
         const conversationKey = this.getPMConversationKey(pubkey);
         this._setBotPmClearedAt(Math.floor(Date.now() / 1000));
+        this._clearBotPmThread();
         this.pmMessages.set(conversationKey, []);
         this.channelDOMCache.delete(conversationKey);
         if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
@@ -1516,7 +1528,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Process a message the user sent to Nymbot in a private chat
-    async _handleBotPM(content) {
+    async _handleBotPM(content, wrapId) {
         const trimmed = (content || '').trim();
         this._markBotPMReceipts('delivered');
         if (/^\?balance\b/i.test(trimmed)) {
@@ -1555,17 +1567,29 @@ Object.assign(NYM.prototype, {
             this.showBotCreditsModal({ pubkey: giftPubkey, nym: giftNym });
             return;
         }
+        if (!wrapId) {
+            this.displaySystemMessage('Nymbot: could not publish your encrypted message. Please try again.');
+            return;
+        }
         this._setBotTyping(true);
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) { this._setBotTyping(false); return; }
             const auth = await this._signBotAuth();
             const isFresh = /^\s*!\s*\S/.test(content);
-            const history = isFresh ? [] : this._getBotPMHistory();
+            // Append this turn's wrap to the thread, then send the IDs. For a
+            // one-off (!) we send only the current ID so the worker skips history.
+            this._pushBotPmThreadId(wrapId);
+            const payload = { action: 'pm', pubkey: this.pubkey, auth };
+            if (isFresh) {
+                payload.eventId = wrapId;
+            } else {
+                payload.eventIds = this._getBotPmThread().slice();
+            }
             const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'pm', pubkey: this.pubkey, auth, message: content, history })
+                body: JSON.stringify(payload)
             });
             const data = await resp.json().catch(() => ({}));
             this._setBotTyping(false);
@@ -1585,6 +1609,12 @@ Object.assign(NYM.prototype, {
             if (data.event) {
                 this.sendDMToRelays(['EVENT', data.event]);
                 this.handleGiftWrapDM(data.event, {});
+            }
+            // Publish the bot's self-addressed copy so the worker can re-fetch
+            // and decrypt its own reply as context on later turns, and track it.
+            if (data.selfEvent && /^[0-9a-f]{64}$/i.test(data.selfEvent.id || '')) {
+                this.sendDMToRelays(['EVENT', data.selfEvent]);
+                this._pushBotPmThreadId(data.selfEvent.id);
             }
             if (typeof data.balance === 'number') {
                 this._setBotCreditDisplay(data.balance);
