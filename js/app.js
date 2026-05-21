@@ -1609,12 +1609,12 @@ function downloadModalMedia(event) {
     let src = '';
     let defaultName = 'download';
 
-    if (modalImg.style.display !== 'none' && modalImg.src) {
+    if (getComputedStyle(modalImg).display !== 'none' && modalImg.src) {
         src = modalImg.src;
         const ext = src.split('.').pop().split('?')[0].toLowerCase();
         const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
         defaultName = 'image.' + (imageExts.includes(ext) ? ext : 'jpg');
-    } else if (modalVid.style.display !== 'none') {
+    } else if (getComputedStyle(modalVid).display !== 'none') {
         src = modalVid.src || (modalVid.querySelector('source') && modalVid.querySelector('source').src) || '';
         const ext = src.split('.').pop().split('?')[0].toLowerCase();
         const videoExts = ['mp4', 'webm', 'ogg', 'mov'];
@@ -1949,7 +1949,7 @@ function editNick() {
     const privkeySlideout = document.getElementById('privkeySlideout');
     if (privkeySlideout) privkeySlideout.style.display = 'none';
     const privkeyArrow = document.getElementById('revealPrivkeyArrow');
-    if (privkeyArrow) privkeyArrow.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle;"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
+    if (privkeyArrow) privkeyArrow.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
     const nsecInput = document.getElementById('revealedNsecValue');
     if (nsecInput) { nsecInput.value = ''; nsecInput.type = 'password'; }
     // Hide reveal privkey option for extension login (no local privkey)
@@ -2275,9 +2275,9 @@ function toggleRevealPrivkey() {
     const arrow = document.getElementById('revealPrivkeyArrow');
     if (!slideout) return;
 
-    const isHidden = slideout.style.display === 'none';
+    const isHidden = getComputedStyle(slideout).display === 'none';
     slideout.style.display = isHidden ? 'block' : 'none';
-    if (arrow) arrow.innerHTML = isHidden ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle;"><path d="M 3 6 L 8 11 L 13 6 Z"/></svg>' : '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle;"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
+    if (arrow) arrow.innerHTML = isHidden ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 3 6 L 8 11 L 13 6 Z"/></svg>' : '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
 
     if (isHidden) {
         // Populate the nsec value
@@ -2749,7 +2749,7 @@ async function showSettings() {
                 : channelOptions;
 
             if (filtered.length === 0) {
-                pinnedDropdown.innerHTML = '<div style="padding: 8px 12px; color: var(--text-dim);">No channels found</div>';
+                pinnedDropdown.innerHTML = '<div class="nm-app-1">No channels found</div>';
                 return;
             }
 
@@ -2763,9 +2763,9 @@ async function showSettings() {
             // Render grouped options
             let html = '';
             Object.keys(grouped).forEach(groupName => {
-                html += `<div style="padding: 6px 12px; font-size: 11px; font-weight: bold; color: var(--text-dim); text-transform: uppercase; background: var(--background); margin-top: 4px;">${groupName}</div>`;
+                html += `<div class="nm-app-2">${groupName}</div>`;
                 grouped[groupName].forEach(opt => {
-                    html += `<div class="channel-dropdown-option" data-value='${JSON.stringify(opt.value)}' style="padding: 8px 12px; cursor: pointer; color: var(--text);">${opt.label}</div>`;
+                    html += `<div class="channel-dropdown-option nm-app-3" data-value='${JSON.stringify(opt.value)}'>${opt.label}</div>`;
                 });
             });
 
@@ -3462,7 +3462,7 @@ async function handleWallpaperUpload(event) {
     const customOption = document.getElementById('customWallpaperOption');
     const customPreview = document.getElementById('customWallpaperPreview');
     const originalContent = customPreview.innerHTML;
-    customPreview.innerHTML = '<span style="font-size: 10px; color: var(--text-dim);">Uploading...</span>';
+    customPreview.innerHTML = '<span class="nm-app-4">Uploading...</span>';
 
     const url = await nym.uploadWallpaper(file);
 
@@ -4334,7 +4334,7 @@ async function _nip46HandleEvent(event) {
             // Remote signer requires auth — show URL to user
             const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
             const safeUrl = (response.error && /^https?:\/\//i.test(response.error)) ? response.error.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' })[m]) : '#';
-            statusEl.innerHTML = `Signer requires authorization. <a href="${safeUrl}" target="_blank" rel="noopener" style="color: var(--secondary)">Open auth page</a>`;
+            statusEl.innerHTML = `Signer requires authorization. <a href="${safeUrl}" target="_blank" rel="noopener" class="nm-secondary">Open auth page</a>`;
             return;
         }
 
@@ -6198,7 +6198,7 @@ function renderRelayList(pool, stats) {
     });
 
     if (entries.length === 0) {
-        listEl.innerHTML = '<div style="padding: 16px; text-align: center; color: var(--text-dim); font-size: 12px;">No relays connected</div>';
+        listEl.innerHTML = '<div class="nm-app-5">No relays connected</div>';
         return;
     }
 

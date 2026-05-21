@@ -478,22 +478,22 @@ Object.assign(NYM.prototype, {
         let html = '';
 
         if (connectedRelays.length > 0 || writeOnlyRelays.length > 0) {
-            html += '<div style="margin-bottom: 10px;"><strong style="color: var(--primary);">Connected Relays:</strong><br/>';
+            html += '<div class="nm-relay-1"><strong class="nm-primary">Connected Relays:</strong><br/>';
             connectedRelays.slice(0, 20).forEach(url => {
-                html += `<div style="font-size: 11px; margin-left: 10px;">• ${this.escapeHtml(url)}</div>`;
+                html += `<div class="nm-relay-2">• ${this.escapeHtml(url)}</div>`;
             });
             if (connectedRelays.length > 20) {
-                html += `<div style="font-size: 11px; margin-left: 10px; color: var(--text-dim);">... and ${connectedRelays.length - 20} more</div>`;
+                html += `<div class="nm-relay-3">... and ${connectedRelays.length - 20} more</div>`;
             }
             writeOnlyRelays.forEach(url => {
-                html += `<div style="font-size: 11px; margin-left: 10px;">• ${this.escapeHtml(url)} (write-only)</div>`;
+                html += `<div class="nm-relay-2">• ${this.escapeHtml(url)} (write-only)</div>`;
             });
             html += '</div>';
         }
 
-        html += `<div style="margin-top: 10px; font-size: 12px; color: var(--text-bright);">Total Connected: ${this.relayPool.size} relays</div>`;
+        html += `<div class="nm-relay-4">Total Connected: ${this.relayPool.size} relays</div>`;
 
-        listEl.innerHTML = html || '<div style="color: var(--text-dim); font-size: 12px;">No relays connected</div>';
+        listEl.innerHTML = html || '<div class="nm-dim12">No relays connected</div>';
     },
 
     setupVisibilityMonitoring() {

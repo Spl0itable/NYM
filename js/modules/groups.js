@@ -1789,13 +1789,13 @@ Object.assign(NYM.prototype, {
         const groupSvg = `<svg class="group-chat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
 
         const avatarStackHtml = displayMembers.length > 0
-            ? `<div class="group-avatar-stack">${displayMembers.map((pk, i) => {
+            ? `<div class="group-avatar-stack">${displayMembers.map((pk) => {
                 const sk = this._safePubkey(pk);
-                return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" style="z-index:${3 - i}" alt="" loading="lazy">`;
+                return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
             }).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
             : `<div class="group-icon-wrap">${groupSvg}</div>`;
 
-        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge" style="display:none">0</span></div>`;
+        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge nm-hidden">0</span></div>`;
     },
 
     // Update the stacked reader avatars for group messages using waterfall logic:
@@ -2151,8 +2151,8 @@ Object.assign(NYM.prototype, {
                     return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
                 }).join('');
                 const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-                const memberLabel = `<span style="font-size:12px;color:var(--text-dim);margin-left:4px">(${this.abbreviateNumber(group.members.length)} members)</span>`;
-                const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span style="margin-left:${otherMembers.length > 0 ? '8' : '0'}px">${this.escapeHtml(group.name)}</span>${memberLabel}`;
+                const memberLabel = `<span class="nm-grp-1">(${this.abbreviateNumber(group.members.length)} members)</span>`;
+                const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span>${memberLabel}`;
                 const channelEl = document.getElementById('currentChannel');
                 if (channelEl) channelEl.innerHTML = headerHtml;
             }
@@ -2192,11 +2192,11 @@ Object.assign(NYM.prototype, {
         }).join('');
 
         const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-        const memberLabel = `<span style="font-size:12px;color:var(--text-dim);margin-left:4px">(${this.abbreviateNumber(group.members.length)} members)</span>`;
-        const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span style="margin-left:${otherMembers.length > 0 ? '8' : '0'}px">${this.escapeHtml(group.name)}</span>${memberLabel}`;
+        const memberLabel = `<span class="nm-grp-1">(${this.abbreviateNumber(group.members.length)} members)</span>`;
+        const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span>${memberLabel}`;
 
         document.getElementById('currentChannel').innerHTML = headerHtml;
-        const lockSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
+        const lockSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-grp-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
         const metaText = `${lockSvg}End-to-end encrypted group chat`;
         document.getElementById('channelMeta').innerHTML = metaText;
 

@@ -655,7 +655,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!container) return;
 
         if (this.blockedChannels.size === 0) {
-            container.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No blocked channels</div>';
+            container.innerHTML = '<div class="nm-dim12">No blocked channels</div>';
         } else {
             container.innerHTML = Array.from(this.blockedChannels).map(key => {
                 const displayName = this.isValidGeohash(key) ? `#${key} [GEO]` : `#${key} [EPH]`;
@@ -683,7 +683,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!container) return;
 
         if (this.hiddenChannels.size === 0) {
-            container.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No hidden channels</div>';
+            container.innerHTML = '<div class="nm-dim12">No hidden channels</div>';
         } else {
             container.innerHTML = Array.from(this.hiddenChannels).map(key => {
                 const displayName = `#${key}`;
@@ -1000,7 +1000,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             item.innerHTML = `
     <span class="channel-name"${locationHint}>${displayName}</span>
     <div class="channel-badges">
-        <span class="unread-badge" style="display:none">0</span>
+        <span class="unread-badge nm-hidden">0</span>
     </div>
 `;
 

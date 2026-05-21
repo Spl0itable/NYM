@@ -716,10 +716,10 @@ Object.assign(NYM.prototype, {
         } catch (err) {
             // Fallback if QRCode library not loaded
             qrContainer.innerHTML = `
-    <div style="display: inline-block; padding: 20px; border: 5px solid white; background: white; color: black; text-align: center; border-radius: 10px;">
-        <div style="font-size: 14px; margin-bottom: 10px;">Lightning Invoice</div>
-        <div style="font-size: 10px; word-break: break-all;">${this.escapeHtml(invoice.pr.substring(0, 60))}...</div>
-        <div style="margin-top: 10px; font-size: 12px; color: red;">QR generation failed - copy invoice manually</div>
+    <div class="nm-zap-1">
+        <div class="nm-zap-2">Lightning Invoice</div>
+        <div class="nm-zap-3">${this.escapeHtml(invoice.pr.substring(0, 60))}...</div>
+        <div class="nm-zap-4">QR generation failed - copy invoice manually</div>
     </div>
 `;
         }
@@ -830,9 +830,9 @@ Object.assign(NYM.prototype, {
         document.getElementById('zapStatus').style.display = 'block';
         document.getElementById('zapStatus').className = 'zap-status paid';
         document.getElementById('zapStatus').innerHTML = `
-<div style="font-size: 24px; margin-bottom: 10px;">⚡</div>
+<div class="nm-zap-5">⚡</div>
 <div>Zap sent successfully!</div>
-<div style="font-size: 20px; margin-top: 10px;">${amount} sats</div>
+<div class="nm-zap-6">${amount} sats</div>
 `;
 
         if (isBotCreditPurchase) {
@@ -1119,7 +1119,7 @@ Object.assign(NYM.prototype, {
         if (modalActions) {
             modalActions.innerHTML = `
                 <button class="icon-btn" data-action="closeZapModal">Cancel</button>
-                <button class="send-btn" id="zapSendBtn" style="display: none;"></button>
+                <button class="send-btn nm-hidden" id="zapSendBtn"></button>
             `;
         }
 

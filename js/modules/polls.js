@@ -245,7 +245,7 @@ Object.assign(NYM.prototype, {
 
             return `
                 <div class="poll-option${selectedClass}" data-poll-id="${pollId}" data-option-index="${opt.index}" data-action="votePoll">
-                    <div class="poll-option-bar" style="width: ${pct}%"></div>
+                    <div class="poll-option-bar" data-pct="${pct}"></div>
                     <div class="poll-option-content">
                         <span class="poll-option-text">${this.escapeHtml(opt.text)}</span>
                         <span class="poll-option-pct">${totalVotes > 0 ? pct + '%' : ''}</span>
@@ -282,6 +282,7 @@ Object.assign(NYM.prototype, {
                 <span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
             </div>
         `;
+        messageEl.querySelectorAll('.poll-option-bar[data-pct]').forEach(b => { b.style.width = b.dataset.pct + '%'; });
 
         // Add context menu to poll author (same as regular messages)
         const authorClickable = messageEl.querySelector('.author-clickable');
@@ -364,7 +365,7 @@ Object.assign(NYM.prototype, {
 
             return `
                 <div class="poll-option${selectedClass}" data-poll-id="${pollId}" data-option-index="${opt.index}" data-action="votePoll">
-                    <div class="poll-option-bar" style="width: ${pct}%"></div>
+                    <div class="poll-option-bar" data-pct="${pct}"></div>
                     <div class="poll-option-content">
                         <span class="poll-option-text">${this.escapeHtml(opt.text)}</span>
                         <span class="poll-option-pct">${totalVotes > 0 ? pct + '%' : ''}</span>
@@ -373,6 +374,7 @@ Object.assign(NYM.prototype, {
                 </div>
             `;
         }).join('');
+        optionsEl.querySelectorAll('.poll-option-bar[data-pct]').forEach(b => { b.style.width = b.dataset.pct + '%'; });
 
         const pollFooter = container.querySelector('.poll-footer');
         if (pollFooter) pollFooter.textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;

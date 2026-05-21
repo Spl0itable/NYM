@@ -133,19 +133,12 @@ Object.assign(NYM.prototype, {
             overlay.className = 'modal active';
             overlay.style.zIndex = '10003';
             overlay.innerHTML = `
-                <div class="modal-content" style="max-width:360px;padding:24px;">
-                    <h3 style="margin:0 0 6px;font-size:1.1em;color:var(--text-bright);">Select Your Language</h3>
-                    <p style="margin:0 0 12px;font-size:0.85em;color:var(--text-dim);">Choose the language you'd like messages translated into. This will be saved to your settings.</p>
-                    <input type="text" class="translate-lang-search" placeholder="Search languages..." style="
-                        width:100%;box-sizing:border-box;margin:0 0 12px;padding:9px 12px;border-radius:var(--radius-sm);
-                        border:1px solid var(--glass-border);background:rgba(255,255,255,0.05);color:var(--text);
-                        font-size:0.9em;outline:none;">
-                    <div class="translate-lang-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:320px;overflow-y:auto;padding-right:4px;">
-                        ${languages.map(l => `<button class="translate-lang-option" data-lang="${l.code}" data-name="${l.name.toLowerCase()}" style="
-                            padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--glass-border);
-                            background:rgba(255,255,255,0.04);color:var(--text);cursor:pointer;font-size:0.9em;
-                            transition:background 0.12s,border-color 0.12s;text-align:left;
-                        ">${l.name}</button>`).join('')}
+                <div class="modal-content nm-tr-1">
+                    <h3 class="nm-tr-2">Select Your Language</h3>
+                    <p class="nm-tr-3">Choose the language you'd like messages translated into. This will be saved to your settings.</p>
+                    <input type="text" class="translate-lang-search nm-tr-4" placeholder="Search languages...">
+                    <div class="translate-lang-grid nm-tr-5">
+                        ${languages.map(l => `<button class="translate-lang-option nm-tr-6" data-lang="${l.code}" data-name="${l.name.toLowerCase()}">${l.name}</button>`).join('')}
                     </div>
                 </div>
             `;

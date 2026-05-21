@@ -327,7 +327,7 @@ Object.assign(NYM.prototype, {
         container.insertAdjacentHTML('beforeend', `
 <canvas id="geohashMapCanvas" class="geohash-map-canvas"></canvas>
 
-<div class="geohash-info-panel" id="geohashInfoPanel" style="display: none;">
+<div class="geohash-info-panel nm-hidden" id="geohashInfoPanel">
     <button class="geohash-info-close" id="geohashInfoClose" data-action="closeGeohashInfo" aria-label="Close">&#x2715;</button>
     <div class="geohash-info-title" id="geohashInfoTitle">Channel Info</div>
     <div id="geohashInfoContent"></div>
@@ -350,7 +350,7 @@ Object.assign(NYM.prototype, {
 
 <div class="geohash-legend">
     <div class="geohash-legend-item">
-        <div class="geohash-legend-dot" style="background: var(--primary); box-shadow: 0 0 5px var(--primary);"></div>
+        <div class="geohash-legend-dot nm-geo-1"></div>
         <span>Active</span>
         <div class="geohash-window-group" role="group" aria-label="Active window">${windowButtons}</div>
         <select class="geohash-window-select" aria-label="Active window"
@@ -358,7 +358,7 @@ Object.assign(NYM.prototype, {
     </div>
     ${showYourLocation ? `
     <div class="geohash-legend-item">
-        <div class="geohash-legend-dot" style="background: var(--warning);"></div>
+        <div class="geohash-legend-dot nm-geo-2"></div>
         <span>Your Location</span>
     </div>` : ''}
 </div>

@@ -675,7 +675,7 @@ Object.assign(NYM.prototype, {
                             <span class="p2p-transfer-size">${this.formatFileSize(transfer.offer.size)}</span>
                         </div>
                         <div class="p2p-transfer-progress">
-                            <div class="p2p-transfer-progress-fill" style="width: ${progress.toFixed(1)}%"></div>
+                            <div class="p2p-transfer-progress-fill" data-pct="${progress.toFixed(1)}"></div>
                         </div>
                         <div class="p2p-transfer-status">
                             <span class="p2p-transfer-status-text ${transfer.status}">${transfer.status}</span>
@@ -684,6 +684,8 @@ Object.assign(NYM.prototype, {
                             </div>
                         </div>
                     `;
+                    const pf = item.querySelector('.p2p-transfer-progress-fill[data-pct]');
+                    if (pf) pf.style.width = pf.dataset.pct + '%';
                     fragment.appendChild(item);
                 }
             });

@@ -1743,7 +1743,7 @@ Object.assign(NYM.prototype, {
                     ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                     : '';
             const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-            const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+            const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span class="nm-pms-1">(PM)</span>`;
             const channelEl = document.getElementById('currentChannel');
             if (channelEl) channelEl.innerHTML = pmHeaderHtml;
         }
@@ -1801,7 +1801,7 @@ Object.assign(NYM.prototype, {
 <img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy">
 <span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
-<span class="unread-badge" style="display:none">0</span>
+<span class="unread-badge nm-hidden">0</span>
 </div>
 `;
             item.dataset.action = 'openPMItem';
@@ -1968,11 +1968,11 @@ Object.assign(NYM.prototype, {
                 ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                 : '';
         const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span style="font-size: 12px; color: var(--text-dim);">(PM)</span>`;
+        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span class="nm-pms-1">(PM)</span>`;
 
         // Update UI with formatted nym
         document.getElementById('currentChannel').innerHTML = pmHeaderHtml;
-        const lockSvgPM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
+        const lockSvgPM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-pms-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
         if (this.isVerifiedBot(pubkey)) {
             document.getElementById('channelMeta').innerHTML =
                 `${lockSvgPM}E2E encrypted · <span id="botCreditMeta">checking credits…</span>`;
@@ -2695,7 +2695,7 @@ Object.assign(NYM.prototype, {
         this.currentChannel = null;
         this.currentGeohash = null;
 
-        document.getElementById('currentChannel').innerHTML = '<span style="color: var(--text-dim);">No conversation selected</span>';
+        document.getElementById('currentChannel').innerHTML = '<span class="nm-dim">No conversation selected</span>';
         document.getElementById('channelMeta').textContent = '';
 
         const shareBtn = document.getElementById('shareChannelBtn');
@@ -2707,10 +2707,10 @@ Object.assign(NYM.prototype, {
         const container = document.getElementById('messagesContainer');
         if (container) {
             container.innerHTML = `
-                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); text-align: center; padding: 40px;">
-                    <div style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;">+</div>
-                    <div style="font-size: 16px; margin-bottom: 8px;">No conversations yet</div>
-                    <div style="font-size: 13px; opacity: 0.7;">Click the <strong>+</strong> button in the Private Messages section to start a new group chat or private message.</div>
+                <div class="nm-pms-3">
+                    <div class="nm-pms-4">+</div>
+                    <div class="nm-pms-5">No conversations yet</div>
+                    <div class="nm-pms-6">Click the <strong>+</strong> button in the Private Messages section to start a new group chat or private message.</div>
                 </div>`;
         }
     },

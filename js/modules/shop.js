@@ -496,7 +496,7 @@ Object.assign(NYM.prototype, {
         <div class="shop-item-name">${item.name}</div>
         <div class="shop-item-description">${item.description}</div>
         ${item.benefits ? `
-            <div class="shop-item-preview" style="font-size: 11px; text-align: left;">
+            <div class="shop-item-preview nm-shop-1">
                 ${item.benefits.map(b => `• ${b}`).join('<br>')}
             </div>
         ` : ''}
@@ -512,7 +512,7 @@ Object.assign(NYM.prototype, {
         let html = '<div class="shop-category-title">My Items</div>';
 
         if (this.userPurchases.size === 0) {
-            html += '<div style="text-align: center; padding: 40px; color: var(--text-dim);">No items purchased yet</div>';
+            html += '<div class="nm-shop-2">No items purchased yet</div>';
             container.innerHTML = html;
             return;
         }
@@ -545,7 +545,7 @@ Object.assign(NYM.prototype, {
             html += '</div>';
         }
 
-        html += '<div class="shop-category-title" style="margin-top: 20px;">All Purchased Items</div>';
+        html += '<div class="shop-category-title nm-shop-3">All Purchased Items</div>';
         html += '<div class="shop-items">';
 
         this.userPurchases.forEach((purchase, itemId) => {
@@ -557,7 +557,7 @@ Object.assign(NYM.prototype, {
         <div class="shop-item-icon">${item.icon}</div>
         <div class="shop-item-name">${item.name}</div>
         <div class="shop-item-description">${item.description}</div>
-        <div style="font-size: 10px; color: var(--text-dim); margin-top: 10px;">
+        <div class="nm-shop-4">
             Acquired: ${new Date((purchase.timestamp || 0) * 1000).toLocaleDateString()}
         </div>
     `;
@@ -565,38 +565,38 @@ Object.assign(NYM.prototype, {
             if (item.type === 'message-style') {
                 const isActive = this.activeMessageStyle === itemId;
                 html += `
-<button class="shop-buy-btn" data-action="activateMessageStyle" data-item-id="${itemId}" style="margin-top: 10px; width: 100%;">
+<button class="shop-buy-btn nm-shop-5" data-action="activateMessageStyle" data-item-id="${itemId}">
 ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
             } else if (item.type === 'nickname-flair') {
                 const isActive = this.activeFlairs && this.activeFlairs.has(itemId);
                 html += `
-<button class="shop-buy-btn" data-action="activateFlair" data-item-id="${itemId}" style="margin-top: 10px; width: 100%;">
+<button class="shop-buy-btn nm-shop-5" data-action="activateFlair" data-item-id="${itemId}">
 ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
             } else if (item.type === 'cosmetic') {
                 const isOn = this.activeCosmetics.has(itemId);
                 html += `
-<button class="shop-buy-btn" data-action="activateCosmetic" data-item-id="${itemId}" style="margin-top: 10px; width: 100%;">
+<button class="shop-buy-btn nm-shop-5" data-action="activateCosmetic" data-item-id="${itemId}">
 ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
             } else if (item.type === 'supporter') {
                 const isActive = this.supporterBadgeActive !== false;
                 html += `<div class="shop-item-preview"><span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span></div>`;
                 html += `
-<button class="shop-buy-btn" data-action="activateSupporter" style="margin-top: 10px; width: 100%;">
+<button class="shop-buy-btn nm-shop-5" data-action="activateSupporter">
 ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
             }
 
             if (purchase.code) {
                 html += `
-<div style="margin-top: 8px; font-size: 10px; color: var(--text-dim);">Recovery code</div>
-<div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-bright); word-break: break-all; cursor: pointer;" data-action="copyTextFromData" data-copy-text="${purchase.code}" title="Click to copy">${purchase.code}</div>`;
+<div class="nm-shop-6">Recovery code</div>
+<div class="nm-shop-7" data-action="copyTextFromData" data-copy-text="${purchase.code}" title="Click to copy">${purchase.code}</div>`;
             }
 
             html += `
-<button class="shop-buy-btn shop-transfer-btn" data-action="promptTransferShopItem" data-item-id="${itemId}" style="margin-top: 8px; width: 100%; background: linear-gradient(135deg, rgba(0, 255, 170, 0.12), rgba(0, 255, 170, 0.05)); border-color: rgba(0, 255, 170, 0.3); color: var(--text-bright);">
+<button class="shop-buy-btn shop-transfer-btn nm-shop-8" data-action="promptTransferShopItem" data-item-id="${itemId}">
 TRANSFER TO PUBKEY
 </button>`;
 
@@ -662,7 +662,7 @@ TRANSFER TO PUBKEY
         if (recipientInfo) {
             recipientInfo.innerHTML = `
 <div>${recipientPubkey ? 'Gifting' : 'Purchasing'}: <strong>${item.name}</strong></div>
-<div style="font-size: 12px; margin-top: 5px; color: var(--warning);">Price: ${amount} sats${recipientPubkey ? ' — gift to ' + recipientPubkey.substring(0, 8) + '...' : ''}</div>
+<div class="nm-shop-9">Price: ${amount} sats${recipientPubkey ? ' — gift to ' + recipientPubkey.substring(0, 8) + '...' : ''}</div>
 `;
         }
 
@@ -909,14 +909,14 @@ TRANSFER TO PUBKEY
             zapStatus.style.display = 'block';
             zapStatus.className = 'zap-status paid';
             zapStatus.innerHTML = `
-<div style="font-size: 24px; margin-bottom: 10px;">✅</div>
+<div class="nm-shop-10">✅</div>
 <div>${isGift ? 'Gift sent!' : 'Purchase successful!'}</div>
-<div style="font-size: 16px; margin-top: 10px;">${item ? item.name : ''}</div>
+<div class="nm-shop-11">${item ? item.name : ''}</div>
 ${code ? `
-<div style="margin-top: 20px; padding: 15px; background: var(--bg-tertiary); border: 1px solid var(--warning); border-radius: 5px;">
-    <div style="color: var(--warning); font-weight: bold; margin-bottom: 10px;">⚠️ SAVE YOUR RECOVERY CODE</div>
-    <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 10px;">Use this code to restore this item on another pubkey:</div>
-    <div style="font-family: monospace; color: var(--text-bright); font-size: 14px; word-break: break-all; cursor: pointer;" data-action="copyTextFromData" data-copy-text="${code}" title="Click to copy">${code}</div>
+<div class="nm-shop-12">
+    <div class="nm-shop-13">⚠️ SAVE YOUR RECOVERY CODE</div>
+    <div class="nm-shop-14">Use this code to restore this item on another pubkey:</div>
+    <div class="nm-shop-15" data-action="copyTextFromData" data-copy-text="${code}" title="Click to copy">${code}</div>
 </div>` : ''}
 `;
         }
@@ -943,25 +943,25 @@ ${code ? `
         modal.className = 'modal active';
         modal.id = 'giftShopModal';
         modal.innerHTML = `
-<div class="modal-content" style="max-width: 420px;">
+<div class="modal-content nm-shop-16">
     <button class="modal-close" data-action="removeElementById" data-remove-id="giftShopModal">✕</button>
-    <h3 style="color: var(--text-bright); margin-bottom: 15px;">Gift Item</h3>
-    <div style="margin-bottom: 15px;">
-        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+    <h3 class="nm-shop-17">Gift Item</h3>
+    <div class="nm-shop-18">
+        <div class="nm-shop-19">
             <span>${item.icon}</span>
             <strong>${item.name}</strong>
-            <span style="color: var(--warning); font-size: 12px;">${item.price} sats</span>
+            <span class="nm-shop-20">${item.price} sats</span>
         </div>
-        <p style="font-size: 12px; color: var(--text-dim); margin-bottom: 15px;">
+        <p class="nm-shop-21">
             Enter the recipient's hex pubkey (64 characters). You pay for the item and it lands directly in their inventory.
         </p>
         <input type="text" id="giftPubkeyInput" placeholder="Recipient hex pubkey (64 chars)"
-            style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--glass-border); border-radius: 8px; color: var(--text); font-family: var(--font-mono); font-size: 12px;" />
-        <p id="giftError" style="color: var(--danger); font-size: 11px; margin-top: 5px; display: none;"></p>
+            class="nm-shop-22" />
+        <p id="giftError" class="nm-shop-23 nm-hidden"></p>
     </div>
-    <div style="display: flex; gap: 10px;">
-        <button class="send-btn" data-action="executeGiftShopItem" data-item-id="${itemId}" style="flex: 1;">Continue</button>
-        <button class="send-btn" data-action="removeElementById" data-remove-id="giftShopModal" style="flex: 1; background: var(--bg-tertiary);">Cancel</button>
+    <div class="nm-shop-24">
+        <button class="send-btn nm-flex1" data-action="executeGiftShopItem" data-item-id="${itemId}">Continue</button>
+        <button class="send-btn nm-shop-25" data-action="removeElementById" data-remove-id="giftShopModal">Cancel</button>
     </div>
 </div>`;
         document.body.appendChild(modal);
@@ -1025,24 +1025,24 @@ ${code ? `
         modal.className = 'modal active';
         modal.id = 'transferModal';
         modal.innerHTML = `
-<div class="modal-content" style="max-width: 420px;">
+<div class="modal-content nm-shop-16">
     <button class="modal-close" data-action="removeElementById" data-remove-id="transferModal">✕</button>
-    <h3 style="color: var(--text-bright); margin-bottom: 15px;">Transfer Item</h3>
-    <div style="margin-bottom: 15px;">
-        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+    <h3 class="nm-shop-17">Transfer Item</h3>
+    <div class="nm-shop-18">
+        <div class="nm-shop-19">
             <span>${item.icon}</span>
             <strong>${item.name}</strong>
         </div>
-        <p style="font-size: 12px; color: var(--text-dim); margin-bottom: 15px;">
+        <p class="nm-shop-21">
             Enter the recipient's hex pubkey (64 characters). The item will be revoked from your inventory and assigned to theirs.
         </p>
         <input type="text" id="transferPubkeyInput" placeholder="Recipient hex pubkey (64 chars)"
-            style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--glass-border); border-radius: 8px; color: var(--text); font-family: var(--font-mono); font-size: 12px;" />
-        <p id="transferError" style="color: var(--danger); font-size: 11px; margin-top: 5px; display: none;"></p>
+            class="nm-shop-22" />
+        <p id="transferError" class="nm-shop-23 nm-hidden"></p>
     </div>
-    <div style="display: flex; gap: 10px;">
-        <button class="send-btn" data-action="executeTransferShopItem" data-item-id="${itemId}" style="flex: 1;">Confirm</button>
-        <button class="send-btn" data-action="removeElementById" data-remove-id="transferModal" style="flex: 1; background: var(--bg-tertiary);">Cancel</button>
+    <div class="nm-shop-24">
+        <button class="send-btn nm-flex1" data-action="executeTransferShopItem" data-item-id="${itemId}">Confirm</button>
+        <button class="send-btn nm-shop-25" data-action="removeElementById" data-remove-id="transferModal">Cancel</button>
     </div>
 </div>`;
         document.body.appendChild(modal);
@@ -1327,22 +1327,22 @@ ${code ? `
         if (!container) return;
 
         if (this.pendingSettingsTransfers.length === 0) {
-            container.innerHTML = '<div style="color: var(--text-dim); font-size: 12px;">No pending transfers</div>';
+            container.innerHTML = '<div class="nm-shop-26">No pending transfers</div>';
             return;
         }
 
         container.innerHTML = this.pendingSettingsTransfers.map(t => {
             const date = new Date(t.transferredAt * 1000).toLocaleString();
             return `
-                <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; margin-bottom: 6px; background: rgba(255,255,255,0.03); border: 1px solid var(--glass-border); border-radius: 8px;">
-                    <div style="flex: 1; min-width: 0;">
-                        <div style="font-size: 13px; color: var(--text); font-weight: 500;">${this.escapeHtml(t.fromNym)}</div>
-                        <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${date}</div>
-                        <div style="font-size: 11px; color: var(--text-dim);">Includes: ${t.nickname ? 'nickname' : ''}${t.avatarUrl ? ', avatar' : ''}${t.settings ? ', preferences' : ''}</div>
+                <div class="nm-shop-27">
+                    <div class="nm-shop-28">
+                        <div class="nm-shop-29">${this.escapeHtml(t.fromNym)}</div>
+                        <div class="nm-shop-30">${date}</div>
+                        <div class="nm-shop-31">Includes: ${t.nickname ? 'nickname' : ''}${t.avatarUrl ? ', avatar' : ''}${t.settings ? ', preferences' : ''}</div>
                     </div>
-                    <div style="display: flex; gap: 6px; margin-left: 8px;">
-                        <button class="icon-btn" data-action="acceptSettingsTransfer" data-event-id="${t.eventId}" style="padding: 4px 10px; font-size: 12px;">Accept</button>
-                        <button class="icon-btn" data-action="rejectSettingsTransfer" data-event-id="${t.eventId}" style="padding: 4px 10px; font-size: 12px; color: var(--danger); border-color: var(--danger);">Reject</button>
+                    <div class="nm-shop-32">
+                        <button class="icon-btn nm-shop-33" data-action="acceptSettingsTransfer" data-event-id="${t.eventId}">Accept</button>
+                        <button class="icon-btn nm-shop-34" data-action="rejectSettingsTransfer" data-event-id="${t.eventId}">Reject</button>
                     </div>
                 </div>`;
         }).join('');
