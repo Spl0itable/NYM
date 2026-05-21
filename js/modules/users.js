@@ -286,9 +286,10 @@ Object.assign(NYM.prototype, {
         if (el && this.pubkey) {
             const pubkey = this.pubkey;
             el.setAttribute('data-avatar-pubkey', pubkey);
-            el.src = this.getAvatarUrl(pubkey);
+            const src = this.getAvatarUrl(pubkey);
             const fallback = this.generateAvatarSvg(pubkey);
             el.onerror = function () { this.onerror = null; this.src = fallback; };
+            if (el.getAttribute('src') !== src) el.src = src;
         }
     },
 
@@ -748,6 +749,7 @@ Object.assign(NYM.prototype, {
             const { url, server } = await this._uploadWithFallback(file, hashHex);
             await this._persistWallpaperBlob(file, url);
             this._setWallpaperBlobUrl(file);
+            this._wallpaperCachedUrl = url;
             this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
             return url;
         } catch (error) {
@@ -762,27 +764,28 @@ Object.assign(NYM.prototype, {
 
         const presets = ['geometric', 'circuit', 'dots', 'waves', 'topography', 'hexagons', 'diamonds'];
 
-        // Remove any existing wallpaper classes and inline background-image
-        presets.forEach(p => layer.classList.remove(`wallpaper-pattern-${p}`));
-        layer.classList.remove('has-custom-wallpaper');
-        layer.style.backgroundImage = '';
-
-        if (type === 'none' || !type) return;
-
+        let targetClass = '';
+        let targetImage = '';
         if (presets.includes(type)) {
-            layer.classList.add(`wallpaper-pattern-${type}`);
+            targetClass = `wallpaper-pattern-${type}`;
         } else if (type === 'custom' && (this.wallpaperBlobUrl || customUrl)) {
-            layer.classList.add('has-custom-wallpaper');
-            // Layer a semi-transparent overlay on top of the image for readability
+            targetClass = 'has-custom-wallpaper';
             const isLight = document.body.classList.contains('light-mode');
             const overlay = isLight
                 ? 'rgba(245, 245, 242, 0.85)'
                 : 'rgba(10, 10, 15, 0.82)';
-            // Prefer the locally cached blob so the wallpaper renders without
-            // an external fetch on every load.
             const src = this.wallpaperBlobUrl || customUrl;
-            layer.style.backgroundImage = `linear-gradient(${overlay}, ${overlay}), url('${src}')`;
+            targetImage = `linear-gradient(${overlay}, ${overlay}), url('${src}')`;
         }
+
+        // Skip DOM mutation when nothing changed
+        const currentClass = [...layer.classList].find(c => c.startsWith('wallpaper-pattern-') || c === 'has-custom-wallpaper') || '';
+        if (currentClass === targetClass && layer.style.backgroundImage === targetImage) return;
+
+        presets.forEach(p => layer.classList.remove(`wallpaper-pattern-${p}`));
+        layer.classList.remove('has-custom-wallpaper');
+        layer.style.backgroundImage = targetImage;
+        if (targetClass) layer.classList.add(targetClass);
     },
 
     saveWallpaper(type, customUrl) {
@@ -822,11 +825,12 @@ Object.assign(NYM.prototype, {
             URL.revokeObjectURL(this.wallpaperBlobUrl);
             this.wallpaperBlobUrl = null;
         }
+        this._wallpaperCachedUrl = null;
     },
 
-    // Render the custom wallpaper from a local blob. If none is cached for
-    // this URL, fetch it once and store it so later loads stay offline.
+    // Render the custom wallpaper from a local blob
     async _ensureWallpaperCached(customUrl) {
+        if (this.wallpaperBlobUrl && this._wallpaperCachedUrl === customUrl) return;
         try {
             const meta = await this._cacheGetAll('meta');
             const entry = meta.find(m => m.key === 'customWallpaper');
@@ -839,6 +843,7 @@ Object.assign(NYM.prototype, {
                 await this._persistWallpaperBlob(blob, customUrl);
                 this._setWallpaperBlobUrl(blob);
             }
+            this._wallpaperCachedUrl = customUrl;
             if ((localStorage.getItem('nym_wallpaper_type') || '') === 'custom') {
                 this.applyWallpaper('custom', customUrl);
             }

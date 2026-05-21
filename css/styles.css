@@ -62,6 +62,23 @@
     box-sizing: border-box;
 }
 
+@media (pointer: coarse) {
+    * {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+
+    input,
+    textarea,
+    [contenteditable="true"],
+    [contenteditable=""] {
+        -webkit-touch-callout: default;
+        -webkit-user-select: text;
+        user-select: text;
+    }
+}
+
 :root {
     color-scheme: dark;
     --primary: #00ff00;
@@ -8463,6 +8480,18 @@ body.light-mode .wallpaper-preview.wallpaper-diamonds {
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
+}
+
+body.light-mode #wallpaperLayer.wallpaper-pattern-circuit,
+body.light-mode #wallpaperLayer.wallpaper-pattern-waves,
+body.light-mode #wallpaperLayer.wallpaper-pattern-topography,
+body.light-mode #wallpaperLayer.wallpaper-pattern-hexagons,
+body.light-mode #wallpaperLayer.wallpaper-pattern-diamonds {
+    background-color: rgba(var(--wp-r, 0), var(--wp-g, 102), var(--wp-b, 0), 0.45);
+}
+
+body.light-mode #wallpaperLayer.wallpaper-pattern-dots {
+    background-image: radial-gradient(circle, rgba(var(--wp-r, 0), var(--wp-g, 102), var(--wp-b, 0), 0.4) 1px, transparent 1px);
 }
 
 .layout-grid {
