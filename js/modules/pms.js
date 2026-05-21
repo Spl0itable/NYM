@@ -1290,30 +1290,18 @@ Object.assign(NYM.prototype, {
         return await this.signEvent(event);
     },
 
-    // Ordered list of NIP-17 gift-wrap event IDs for the Nymbot conversation.
-    // The worker fetches these from relays and decrypts them with the bot key,
-    // so the chat history stays end-to-end encrypted — no plaintext is sent.
-    _getBotPmThread() {
-        if (Array.isArray(this._botPmThread)) return this._botPmThread;
+    // Ask the worker to wipe the server-side gift-wrap thread it uses for AI context
+    async _clearBotServerThread() {
         try {
-            const v = JSON.parse(localStorage.getItem('nym_botpm_thread') || '[]');
-            this._botPmThread = Array.isArray(v) ? v.filter(id => /^[0-9a-f]{64}$/i.test(id)) : [];
-        } catch { this._botPmThread = []; }
-        return this._botPmThread;
-    },
-
-    _pushBotPmThreadId(id) {
-        if (!id || !/^[0-9a-f]{64}$/i.test(id)) return;
-        const thread = this._getBotPmThread();
-        thread.push(id);
-        // Cap so we never ask the worker to fetch an unbounded number of wraps
-        if (thread.length > 30) this._botPmThread = thread.slice(-30);
-        try { localStorage.setItem('nym_botpm_thread', JSON.stringify(this._botPmThread)); } catch { }
-    },
-
-    _clearBotPmThread() {
-        this._botPmThread = [];
-        try { localStorage.setItem('nym_botpm_thread', '[]'); } catch { }
+            const apiHost = this._getApiHost();
+            if (!apiHost) return;
+            const auth = await this._signBotAuth();
+            await fetch(`https://${apiHost}/api/bot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'clear-history', pubkey: this.pubkey, auth })
+            });
+        } catch { /* best effort */ }
     },
 
     _getBotPmClearedAt() {
@@ -1397,7 +1385,7 @@ Object.assign(NYM.prototype, {
         if (!pubkey) return;
         const conversationKey = this.getPMConversationKey(pubkey);
         this._setBotPmClearedAt(Math.floor(Date.now() / 1000));
-        this._clearBotPmThread();
+        this._clearBotServerThread();
         this.pmMessages.set(conversationKey, []);
         this.channelDOMCache.delete(conversationKey);
         if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
@@ -1577,19 +1565,12 @@ Object.assign(NYM.prototype, {
             if (!apiHost) { this._setBotTyping(false); return; }
             const auth = await this._signBotAuth();
             const isFresh = /^\s*!\s*\S/.test(content);
-            // Append this turn's wrap to the thread, then send the IDs. For a
-            // one-off (!) we send only the current ID so the worker skips history.
-            this._pushBotPmThreadId(wrapId);
-            const payload = { action: 'pm', pubkey: this.pubkey, auth };
-            if (isFresh) {
-                payload.eventId = wrapId;
-            } else {
-                payload.eventIds = this._getBotPmThread().slice();
-            }
+            // Send only the current message's wrap ID; the worker maintains the
+            // ordered thread server-side. fresh (!) tells it to skip history.
             const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({ action: 'pm', pubkey: this.pubkey, auth, eventId: wrapId, fresh: isFresh })
             });
             const data = await resp.json().catch(() => ({}));
             this._setBotTyping(false);
@@ -1610,11 +1591,10 @@ Object.assign(NYM.prototype, {
                 this.sendDMToRelays(['EVENT', data.event]);
                 this.handleGiftWrapDM(data.event, {});
             }
-            // Publish the bot's self-addressed copy so the worker can re-fetch
-            // and decrypt its own reply as context on later turns, and track it.
+            // Publish the bot's self-addressed copy to the relays so the worker
+            // can re-fetch and decrypt its own reply as context on later turns.
             if (data.selfEvent && /^[0-9a-f]{64}$/i.test(data.selfEvent.id || '')) {
                 this.sendDMToRelays(['EVENT', data.selfEvent]);
-                this._pushBotPmThreadId(data.selfEvent.id);
             }
             if (typeof data.balance === 'number') {
                 this._setBotCreditDisplay(data.balance);

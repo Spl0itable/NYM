@@ -2891,6 +2891,29 @@ async function botPutCredits(env, pubkey, data) {
   data.updatedAt = Date.now();
   await env.R2_BUCKET.put("credits/" + pubkey, JSON.stringify(data));
 }
+
+function isHex64(x) { return typeof x === "string" && /^[0-9a-f]{64}$/i.test(x); }
+
+// Per-user ordered list of NIP-17 gift-wrap event IDs for the private Nymbot
+var BOT_THREAD_MAX = 40;
+async function botGetThread(env, pubkey) {
+  if (!env.R2_BUCKET) return [];
+  try {
+    var obj = await env.R2_BUCKET.get("botpm-thread/" + pubkey);
+    if (!obj) return [];
+    var data = await obj.json();
+    var ids = Array.isArray(data) ? data : (data && Array.isArray(data.ids) ? data.ids : []);
+    return ids.filter(isHex64);
+  } catch (e) {
+    return [];
+  }
+}
+async function botPutThread(env, pubkey, ids) {
+  if (!env.R2_BUCKET) return;
+  var trimmed = ids.filter(isHex64);
+  if (trimmed.length > BOT_THREAD_MAX) trimmed = trimmed.slice(-BOT_THREAD_MAX);
+  await env.R2_BUCKET.put("botpm-thread/" + pubkey, JSON.stringify({ ids: trimmed, updatedAt: Date.now() }));
+}
 // Split a PM message into its leading quote-reply block
 function splitQuotedReply(raw) {
   var lines = String(raw || "").split("\n");
@@ -3208,18 +3231,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       return json({ noCredits: true, balance: 0 });
     }
 
-    // The message and history never travel as plaintext. The client publishes
-    // each turn as a NIP-17 gift wrap to the relays and sends only the wrap
-    // event IDs; the worker fetches and decrypts them here with the bot key.
-    var isHex64 = function (x) { return typeof x === "string" && /^[0-9a-f]{64}$/i.test(x); };
-    var historyIds = Array.isArray(body.eventIds) ? body.eventIds.filter(isHex64) : [];
-    var currentId = isHex64(body.eventId) ? body.eventId : (historyIds.length ? historyIds[historyIds.length - 1] : null);
+    // The message and history never travel as plaintext
+    var currentId = isHex64(body.eventId) ? body.eventId : null;
     if (!currentId) return json({ error: "Missing message event id" }, 400);
+    var fresh = !!body.fresh;
 
-    var fetchIds = [];
-    for (var fi = 0; fi < historyIds.length; fi++) {
-      if (fetchIds.indexOf(historyIds[fi]) === -1) fetchIds.push(historyIds[fi]);
-    }
+    var thread = await botGetThread(env, userPubkey);
+    var historyIds = fresh ? [] : thread.filter(function (id) { return id !== currentId; });
+
+    var fetchIds = historyIds.slice();
     if (fetchIds.indexOf(currentId) === -1) fetchIds.push(currentId);
 
     var fetched = await fetchGiftWrapsByIds(fetchIds, currentId, 3000);
@@ -3280,6 +3300,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     record.rl.push(Date.now());
     await botPutCredits(env, userPubkey, record);
     var pair = buildGiftWrappedDMPair(reply, botPrivkey, botPubkey, userPubkey);
+    var updatedThread = thread.filter(function (id) { return id !== currentId; });
+    updatedThread.push(currentId);
+    updatedThread.push(pair.selfEvent.id);
+    try { await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
     return json({
       event: pair.event,
       selfEvent: pair.selfEvent,
@@ -3288,6 +3312,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       taskType: taskType,
       lowBalance: record.balance <= 3
     });
+  }
+
+  if (body.action === "clear-history") {
+    try { await env.R2_BUCKET.delete("botpm-thread/" + userPubkey); } catch (e) { }
+    return json({ cleared: true });
   }
 
   return json({ error: "Unknown action" }, 400);
@@ -3630,7 +3659,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.66.385";
+var NYMCHAT_VERSION = "3.66.386";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3708,7 +3737,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "claim-credits" || body.action === "transfer-credits")) {
+  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
@@ -4265,7 +4294,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.385 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.386 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -5098,7 +5127,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.66.385")
+  // Prefix match (e.g. "3.61" matches "3.66.386")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -5153,7 +5182,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.66.385", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.66.386", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
