@@ -1431,6 +1431,7 @@ body.light-mode .channel-context-menu {
     fill: none;
 }
 
+.reaction-btn svg,
 .translate-msg-btn svg {
     stroke: none;
     fill: var(--text);
@@ -2922,6 +2923,16 @@ div.message-input .custom-emoji {
 
 .form-group {
     margin-bottom: 20px;
+}
+
+.mobile-only {
+    display: none;
+}
+
+@media (max-width: 768px) {
+    .mobile-only {
+        display: block;
+    }
 }
 
 .form-label {
@@ -8315,6 +8326,7 @@ body.light-mode .wallpaper-preview.wallpaper-waves,
 body.light-mode .wallpaper-preview.wallpaper-topography,
 body.light-mode .wallpaper-preview.wallpaper-hexagons,
 body.light-mode .wallpaper-preview.wallpaper-diamonds {
+    background-color: rgba(var(--wp-r, 0), var(--wp-g, 255), var(--wp-b, 0), 1);
     opacity: 0.6;
 }
 
