@@ -36,6 +36,17 @@ function _getQuoteToMePattern(cleanNym, suffix) {
     return pattern;
 }
 
+// Presence test for any emoji-bearing codepoint (pictographs, regional indicators,
+// keycap combiner). Lets formatMessage skip the heavy emoji-wrapping regex on plain text.
+const _RX_HAS_EMOJI = /\p{Extended_Pictographic}|[\u{1F1E6}-\u{1F1FF}]|\u{20E3}/u;
+
+// LRU cache for formatMessage output. Invalidated when the identity/channel context
+// changes, since that context can alter the rendered HTML (e.g. active-channel class).
+const _FORMAT_CACHE_MAX = 200;
+const _formatCache = new Map();
+let _formatCacheSig = null;
+let _formatCacheEpoch = 0;
+
 Object.assign(NYM.prototype, {
 
     // Millisecond sort key for a message. NYM clients stamp outgoing events with
@@ -1225,16 +1236,33 @@ Object.assign(NYM.prototype, {
     },
 
     formatMessage(content) {
+        // LRU cache: reuse rendered HTML for identical content under the same
+        // identity/channel context. The signature invalidates the whole cache when
+        // that context changes (active-channel class etc. depends on it).
+        const sig = (this.pubkey || '') + '|' + (this.currentChannel || '') + '|' + (this.currentGeohash || '') + '|' + _formatCacheEpoch;
+        if (sig !== _formatCacheSig) {
+            _formatCache.clear();
+            _formatCacheSig = sig;
+        }
+        const cacheKey = content + '|' + (this.pubkey || '');
+        const cachedHit = _formatCache.get(cacheKey);
+        if (cachedHit !== undefined) {
+            _formatCache.delete(cacheKey);
+            _formatCache.set(cacheKey, cachedHit);
+            return cachedHit;
+        }
+
         let formatted = content;
 
         // Deduplicate suffixes in mentions from external apps (e.g., @user#abcd#abcd -> @user#abcd)
-        formatted = formatted.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
+        if (formatted.includes('@') && formatted.includes('#')) {
+            formatted = formatted.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
+        }
 
-        formatted = formatted
-            .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
+        if (formatted.includes('&')) formatted = formatted.replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;');
+        if (formatted.includes('<')) formatted = formatted.replace(/</g, '&lt;');
+        if (formatted.includes('>')) formatted = formatted.replace(/>/g, '&gt;');
+        if (formatted.includes('"')) formatted = formatted.replace(/"/g, '&quot;');
 
         // Code blocks and inline code — extract into placeholders so
         // later markdown/mention/channel processing doesn't touch their contents
@@ -1263,108 +1291,127 @@ Object.assign(NYM.prototype, {
             codePlaceholders.push(`<div class="code-block-wrapper">${langLabel}<pre><code${langClass}>${codeHtml}</code></pre><button class="code-copy-btn" data-code="${encodedRaw}" data-action="codeBlockCopy">Copy</button></div>`);
             return `\uFDD0${idx}\uFDD1`;
         };
-        formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => pushCodeBlock(code));
-        // Unterminated fence (e.g. a truncated bot reply): render the remainder as a block
-        formatted = formatted.replace(/```([\s\S]+)$/, (match, code) => pushCodeBlock(code));
-        formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
-            const idx = codePlaceholders.length;
-            codePlaceholders.push(`<code>${code}</code>`);
-            return `\uFDD0${idx}\uFDD1`;
-        });
+        if (formatted.includes('```')) {
+            formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => pushCodeBlock(code));
+            // Unterminated fence (e.g. a truncated bot reply): render the remainder as a block
+            formatted = formatted.replace(/```([\s\S]+)$/, (match, code) => pushCodeBlock(code));
+        }
+        if (formatted.includes('`')) {
+            formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
+                const idx = codePlaceholders.length;
+                codePlaceholders.push(`<code>${code}</code>`);
+                return `\uFDD0${idx}\uFDD1`;
+            });
+        }
 
         // Bold **text** (asterisks — fine anywhere) or __text__ (underscores — require word boundary)
-        formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        formatted = formatted.replace(/(?<!\w)__(.+?)__(?!\w)/g, '<strong>$1</strong>');
+        if (formatted.includes('**')) formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        if (formatted.includes('__')) formatted = formatted.replace(/(?<!\w)__(.+?)__(?!\w)/g, '<strong>$1</strong>');
 
         // Italic *text* (asterisks — fine anywhere) or _text_ (underscores — require word boundary
         // so that underscores inside names/identifiers like @Cool_User#a1b2 are not treated as italic)
-        formatted = formatted.replace(/(?<![:/])\*([^*\s][^*]*)\*/g, '<em>$1</em>');
-        formatted = formatted.replace(/(?<![:/\w])_([^_\s][^_]*)_(?!\w)/g, '<em>$1</em>');
+        if (formatted.includes('*')) formatted = formatted.replace(/(?<![:/])\*([^*\s][^*]*)\*/g, '<em>$1</em>');
+        if (formatted.includes('_')) formatted = formatted.replace(/(?<![:/\w])_([^_\s][^_]*)_(?!\w)/g, '<em>$1</em>');
 
         // Strikethrough ~~text~~
-        formatted = formatted.replace(/~~(.+?)~~/g, '<del>$1</del>');
+        if (formatted.includes('~~')) formatted = formatted.replace(/~~(.+?)~~/g, '<del>$1</del>');
 
         // Blockquotes > text
-        formatted = formatted.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+        if (formatted.includes('&gt; ')) formatted = formatted.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
 
-        // Headers
-        formatted = formatted.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-        formatted = formatted.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-        formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+        // Headers (#, ##, ### collapsed into one pass)
+        if (formatted.includes('# ')) {
+            formatted = formatted.replace(/^(#{1,3}) (.+)$/gm, (match, hashes, text) => {
+                const level = hashes.length;
+                return `<h${level}>${text}</h${level}>`;
+            });
+        }
 
-        // Convert video URLs to video players
-        // Use __VID_n__ placeholders to prevent the general URL-to-link regex from
-        // matching URLs that are already embedded inside video HTML attributes.
-        const mediaPlaceholders = [];
-        const buildFallbackAttr = (url) => {
-            const mirrors = this.mediaFallbacks ? this.mediaFallbacks.get(url) : null;
-            if (!mirrors || !mirrors.length) return '';
-            const proxied = mirrors.map(m => this.getProxiedMediaUrl(m));
-            return ` data-media-fallbacks="${this.escapeHtml(proxied.join('|'))}"`;
-        };
-        formatted = formatted.replace(
-            /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
-            (match, url, ext) => {
-                const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
-                const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
-                const proxiedUrl = this.getProxiedMediaUrl(url);
-                const fbAttr = buildFallbackAttr(url);
-                const idx = mediaPlaceholders.length;
-                mediaPlaceholders.push({
-                    kind: 'video',
-                    html: `<span class="video-container" data-action="stopPropagation"${fbAttr}><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${proxiedUrl}" type="${type}"></video><button class="video-expand-btn" data-video-src="${proxiedUrl.replace(/"/g, '&quot;')}" data-action="expandVideoFromContainer">⛶</button></span>`
-                });
-                return `﷒${idx}﷓`;
+        // Media + URL handling all require a scheme; skip the whole group otherwise.
+        if (formatted.includes('://')) {
+            // Convert video URLs to video players
+            // Use __VID_n__ placeholders to prevent the general URL-to-link regex from
+            // matching URLs that are already embedded inside video HTML attributes.
+            const mediaPlaceholders = [];
+            const buildFallbackAttr = (url) => {
+                const mirrors = this.mediaFallbacks ? this.mediaFallbacks.get(url) : null;
+                if (!mirrors || !mirrors.length) return '';
+                const proxied = mirrors.map(m => this.getProxiedMediaUrl(m));
+                return ` data-media-fallbacks="${this.escapeHtml(proxied.join('|'))}"`;
+            };
+            if (/\.(?:mp4|webm|ogg|mov)/i.test(formatted)) {
+                formatted = formatted.replace(
+                    /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
+                    (match, url, ext) => {
+                        const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
+                        const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
+                        const proxiedUrl = this.getProxiedMediaUrl(url);
+                        const fbAttr = buildFallbackAttr(url);
+                        const idx = mediaPlaceholders.length;
+                        mediaPlaceholders.push({
+                            kind: 'video',
+                            html: `<span class="video-container" data-action="stopPropagation"${fbAttr}><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${proxiedUrl}" type="${type}"></video><button class="video-expand-btn" data-video-src="${proxiedUrl.replace(/"/g, '&quot;')}" data-action="expandVideoFromContainer">⛶</button></span>`
+                        });
+                        return `﷒${idx}﷓`;
+                    }
+                );
             }
-        );
 
-        // Convert image URLs to images (proxied through Cloudflare worker for IP privacy)
-        formatted = formatted.replace(
-            /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
-            (match, url) => {
-                const proxiedUrl = this.getProxiedMediaUrl(url);
-                const fbAttr = buildFallbackAttr(url);
-                const idx = mediaPlaceholders.length;
-                mediaPlaceholders.push({
-                    kind: 'image',
-                    html: `<img src="${proxiedUrl}" alt="Image" data-action="expandImageFromData"${fbAttr} />`
-                });
-                return `﷒${idx}﷓`;
+            // Convert image URLs to images (proxied through Cloudflare worker for IP privacy)
+            if (/\.(?:jpg|jpeg|png|gif|webp)/i.test(formatted)) {
+                formatted = formatted.replace(
+                    /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
+                    (match, url) => {
+                        const proxiedUrl = this.getProxiedMediaUrl(url);
+                        const fbAttr = buildFallbackAttr(url);
+                        const idx = mediaPlaceholders.length;
+                        mediaPlaceholders.push({
+                            kind: 'image',
+                            html: `<img src="${proxiedUrl}" alt="Image" data-action="expandImageFromData"${fbAttr} />`
+                        });
+                        return `﷒${idx}﷓`;
+                    }
+                );
             }
-        );
 
-        // Convert Nymchat app channel links BEFORE general URLs
-        formatted = formatted.replace(
-            /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
-            (match, prefix, channelId) => {
-                return `<span class="channel-link" data-action="channelLink" data-channel-ref="${prefix}:${this.escapeHtml(channelId)}">${match}</span>`;
+            // Convert Nymchat app channel links BEFORE general URLs
+            if (formatted.includes('app.nym.bar')) {
+                formatted = formatted.replace(
+                    /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
+                    (match, prefix, channelId) => {
+                        return `<span class="channel-link" data-action="channelLink" data-channel-ref="${prefix}:${this.escapeHtml(channelId)}">${match}</span>`;
+                    }
+                );
             }
-        );
 
-        // Convert other URLs to links (but not placeholders)
-        formatted = formatted.replace(
-            /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
-            '<a href="$1" target="_blank" rel="noopener">$1</a>'
-        );
+            // Convert other URLs to links (but not placeholders)
+            formatted = formatted.replace(
+                /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
+                '<a href="$1" target="_blank" rel="noopener">$1</a>'
+            );
 
-        // Restore media placeholders; collapse runs of 2+ media items into a gallery
-        formatted = formatted.replace(
-            /(?:﷒(\d+)﷓)(?:[ \t\r\n]*﷒(\d+)﷓)+/g,
-            (run) => {
-                const indices = [];
-                run.replace(/﷒(\d+)﷓/g, (_m, idx) => { indices.push(parseInt(idx, 10)); return ''; });
-                const inner = indices.map(i => mediaPlaceholders[i].html).join('');
-                const count = indices.length;
-                const sizeClass = count === 2 ? 'gallery-2' : count === 3 ? 'gallery-3' : 'gallery-4plus';
-                return `<div class="message-gallery ${sizeClass}" data-count="${count}">${inner}</div>`;
+            // Restore media placeholders; collapse runs of 2+ media items into a gallery
+            if (mediaPlaceholders.length) {
+                formatted = formatted.replace(
+                    /(?:﷒(\d+)﷓)(?:[ \t\r\n]*﷒(\d+)﷓)+/g,
+                    (run) => {
+                        const indices = [];
+                        run.replace(/﷒(\d+)﷓/g, (_m, idx) => { indices.push(parseInt(idx, 10)); return ''; });
+                        const inner = indices.map(i => mediaPlaceholders[i].html).join('');
+                        const count = indices.length;
+                        const sizeClass = count === 2 ? 'gallery-2' : count === 3 ? 'gallery-3' : 'gallery-4plus';
+                        return `<div class="message-gallery ${sizeClass}" data-count="${count}">${inner}</div>`;
+                    }
+                );
+                formatted = formatted.replace(/﷒(\d+)﷓/g, (_m, idx) => mediaPlaceholders[parseInt(idx, 10)].html);
             }
-        );
-        formatted = formatted.replace(/﷒(\d+)﷓/g, (_m, idx) => mediaPlaceholders[parseInt(idx, 10)].html);
+        }
 
         // Process mentions and channel references (both geohash and non-geohash) in one pass.
         // The trailing (?![^<]*>) prevents matches inside HTML attribute values
         // (e.g. inside an <a href="...@user/...">), which would otherwise consume
         // the closing quote and `>` of the tag and break the rendered HTML.
+        if (formatted.includes('@') || formatted.includes('#')) {
         formatted = formatted.replace(
             /(?:(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?]))(?![^<]*>)/gi,
             (match, mentionWithSuffix, simpleMention, whitespace, channel) => {
@@ -1406,51 +1453,67 @@ Object.assign(NYM.prototype, {
                 }
             }
         );
+        }
 
         // Convert emoji shortcodes :emoji: — built-in unicode first, then NIP-30 custom emoji
-        formatted = formatted.replace(/:([a-zA-Z0-9_]+):/g, (match, code) => {
-            const emoji = this.emojiMap[code.toLowerCase()];
-            if (emoji) return emoji;
-            if (this.customEmojis && this.customEmojis.has(code)) {
-                return this.renderCustomEmojiImg(code) || match;
-            }
-            return match;
-        });
+        if (formatted.includes(':')) {
+            formatted = formatted.replace(/:([a-zA-Z0-9_]+):/g, (match, code) => {
+                const emoji = this.emojiMap[code.toLowerCase()];
+                if (emoji) return emoji;
+                if (this.customEmojis && this.customEmojis.has(code)) {
+                    return this.renderCustomEmojiImg(code) || match;
+                }
+                return match;
+            });
+        }
 
         // Convert simple emoticons to emojis
-        formatted = formatted.replace(/(^|\s):\)($|\s)/g, '$1😊$2');
-        formatted = formatted.replace(/(^|\s):\(($|\s)/g, '$1😢$2');
-        formatted = formatted.replace(/(^|\s):D($|\s)/g, '$1😃$2');
-        formatted = formatted.replace(/(^|\s):P($|\s)/g, '$1😛$2');
-        formatted = formatted.replace(/(^|\s);-?\)($|\s)/g, '$1😉$2');
-        formatted = formatted.replace(/(^|\s):o($|\s)/gi, '$1😮$2');
-        formatted = formatted.replace(/(^|\s):\|($|\s)/g, '$1😐$2');
-        formatted = formatted.replace(/(^|\s)&lt;3($|\s)/g, '$1❤️$2');
-        formatted = formatted.replace(/(^|\s)\/\\($|\s)/g, '$1⚠️$2');
+        if (formatted.includes(':)')) formatted = formatted.replace(/(^|\s):\)($|\s)/g, '$1😊$2');
+        if (formatted.includes(':(')) formatted = formatted.replace(/(^|\s):\(($|\s)/g, '$1😢$2');
+        if (formatted.includes(':D')) formatted = formatted.replace(/(^|\s):D($|\s)/g, '$1😃$2');
+        if (formatted.includes(':P')) formatted = formatted.replace(/(^|\s):P($|\s)/g, '$1😛$2');
+        if (formatted.includes(';')) formatted = formatted.replace(/(^|\s);-?\)($|\s)/g, '$1😉$2');
+        if (formatted.includes(':o') || formatted.includes(':O')) formatted = formatted.replace(/(^|\s):o($|\s)/gi, '$1😮$2');
+        if (formatted.includes(':|')) formatted = formatted.replace(/(^|\s):\|($|\s)/g, '$1😐$2');
+        if (formatted.includes('&lt;3')) formatted = formatted.replace(/(^|\s)&lt;3($|\s)/g, '$1❤️$2');
+        if (formatted.includes('/\\')) formatted = formatted.replace(/(^|\s)\/\\($|\s)/g, '$1⚠️$2');
 
         // Wrap emoji characters in <span class="emoji"> to isolate them from --font-sans
         // This regex matches all Unicode emoji including: emoticons, symbols, dingbats,
         // skin tone modifiers, regional indicator flag sequences, variation selectors,
         // ZWJ sequences, keycap sequences (#️⃣ 0️⃣-9️⃣), and tag flag sequences.
-        formatted = formatted.replace(
-            /(?:<[^>]+>)|((?:[\u{1F1E0}-\u{1F1FF}]{2})|(?:[#*0-9]\u{FE0F}?\u{20E3})|(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?(?:\u{200D}(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?)*)(?:[\u{E0020}-\u{E007E}]+\u{E007F})?)/gu,
-            (match, emoji) => {
-                // If this is an HTML tag, skip it
-                if (!emoji) return match;
-                return `<span class="emoji">${match}</span>`;
-            }
-        );
+        if (_RX_HAS_EMOJI.test(formatted)) {
+            formatted = formatted.replace(
+                /(?:<[^>]+>)|((?:[\u{1F1E0}-\u{1F1FF}]{2})|(?:[#*0-9]\u{FE0F}?\u{20E3})|(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?(?:\u{200D}(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?)*)(?:[\u{E0020}-\u{E007E}]+\u{E007F})?)/gu,
+                (match, emoji) => {
+                    // If this is an HTML tag, skip it
+                    if (!emoji) return match;
+                    return `<span class="emoji">${match}</span>`;
+                }
+            );
+        }
 
         // Restore code placeholders
-        formatted = formatted.replace(/\uFDD0(\d+)\uFDD1/g, (m, idx) => codePlaceholders[idx]);
+        if (codePlaceholders.length) formatted = formatted.replace(/\uFDD0(\d+)\uFDD1/g, (m, idx) => codePlaceholders[idx]);
 
         // Handle game tokens
-        formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
+        if (formatted.includes('[gc:')) formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
 
         // Line breaks
-        formatted = formatted.replace(/\n/g, '<br>');
+        if (formatted.includes('\n')) formatted = formatted.replace(/\n/g, '<br>');
 
+        _formatCache.set(cacheKey, formatted);
+        if (_formatCache.size > _FORMAT_CACHE_MAX) {
+            _formatCache.delete(_formatCache.keys().next().value);
+        }
         return formatted;
+    },
+
+    // Bump the formatMessage cache epoch so previously rendered content is
+    // recomputed. Call when state that formatMessage reads — but isn't part of
+    // the cache key — changes (custom emoji registration, media fallbacks).
+    invalidateFormatCache() {
+        _formatCacheEpoch++;
     },
 
     // Check if a raw message is emoji-only (1-6 emoji, optional whitespace, no other text)

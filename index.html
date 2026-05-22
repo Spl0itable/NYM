@@ -30,7 +30,7 @@
     <meta name="apple-mobile-web-app-title" content="Nymchat">
     <link rel="apple-touch-icon" href="https://nymchat.app/images/NYM-favicon.png">
 
-    <!-- Resource hints: open connections to CDNs early -->
+    <!-- Resource hints -->
     <link rel="preconnect" href="https://nymchat.app" crossorigin>
     <link rel="dns-prefetch" href="https://nymchat.app">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
@@ -40,13 +40,18 @@
     <link rel="preconnect" href="https://unpkg.com" crossorigin>
     <link rel="dns-prefetch" href="https://unpkg.com">
 
-    <!-- Preload critical assets for faster paint -->
-    <link rel="preload" href="css/styles.css" as="style">
+    <!-- Preload -->
+    <link rel="preload" href="css/styles-core.css" as="style">
     <link rel="preload" href="js/nostr-tools.js" as="script">
     <link rel="preload" href="js/app.js" as="script">
 
-    <!-- Stylesheet -->
-    <link rel="stylesheet" href="css/styles.css">
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="css/styles-core.css">
+    <link rel="stylesheet" href="css/styles-shell.css">
+    <link rel="stylesheet" href="css/styles-chat.css">
+    <link rel="stylesheet" href="css/styles-components.css">
+    <link rel="stylesheet" href="css/styles-features.css">
+    <link rel="stylesheet" href="css/styles-themes-responsive.css">
     <link rel="stylesheet" href="css/no-inline.css">
 </head>
 
