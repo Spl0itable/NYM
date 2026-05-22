@@ -216,6 +216,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return this.geohashRegex.test(str.toLowerCase());
     },
 
+    // Wire encoding for a channel. Geohash channels use kind 20000 + `g` tag;
+    // named (non-geohash) channels use kind 23333 + `d` tag.
+    channelWire(channelKey) {
+        const isGeohash = !!channelKey && this.isValidGeohash(channelKey);
+        return {
+            isGeohash,
+            kind: isGeohash ? 20000 : 23333,
+            tag: isGeohash ? 'g' : 'd'
+        };
+    },
+
     handleChannelSearch(searchTerm) {
         const term = this.sanitizeChannelName(searchTerm.trim());
         const resultsDiv = document.getElementById('channelSearchResults');

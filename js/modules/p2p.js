@@ -86,8 +86,9 @@ Object.assign(NYM.prototype, {
         tags.push(['ms', String(nowMs)]);
 
         if (this.currentGeohash) {
-            kind = 20000; // Geohash channel kind
-            tags.push(['g', this.currentGeohash]);
+            const wire = this.channelWire(this.currentGeohash);
+            kind = wire.kind;
+            tags.push([wire.tag, this.currentGeohash]);
         } else {
             this.displaySystemMessage('No channel selected for file sharing');
             return;
@@ -722,7 +723,7 @@ Object.assign(NYM.prototype, {
                     ['status', 'unseeded']
                 ];
                 if (offer.hash) tags.push(['x', offer.hash]);
-                if (this.currentGeohash) tags.push(['g', this.currentGeohash]);
+                if (this.currentGeohash) tags.push([this.channelWire(this.currentGeohash).tag, this.currentGeohash]);
 
                 const event = {
                     kind: this.P2P_FILE_STATUS_KIND,
@@ -857,16 +858,17 @@ Object.assign(NYM.prototype, {
         // Build tags for the Nostr event
         const nowMs = Date.now();
         const now = Math.floor(nowMs / 1000);
+        const wire = this.channelWire(this.currentGeohash);
         const tags = [
             ['n', this.nym],
             ['offer', JSON.stringify(fileOffer)],
-            ['g', this.currentGeohash],
+            [wire.tag, this.currentGeohash],
             ['ms', String(nowMs)]
         ];
 
         // Create and broadcast the file offer event
         const event = {
-            kind: 20000,
+            kind: wire.kind,
             created_at: now,
             tags: tags,
             content: `Sharing file via torrent: ${displayName} (${this.formatFileSize(displaySize)})`,

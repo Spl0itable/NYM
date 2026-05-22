@@ -1471,7 +1471,8 @@ Object.assign(NYM.prototype, {
         if (this._channelTypingSubs.has(channelKey)) return;
 
         const sinceNow = Math.floor(Date.now() / 1000);
-        const typingFilter = [{ kinds: [24420, 24421], "#g": [channelKey], since: sinceNow }];
+        const typingTag = this.isValidGeohash(channelKey) ? "#g" : "#d";
+        const typingFilter = [{ kinds: [24420, 24421], [typingTag]: [channelKey], since: sinceNow }];
         const typingSubId = Math.random().toString(36).substring(2);
         this._channelTypingSubs.set(channelKey, typingSubId);
         this.channelSubscriptions.set(channelKey, typingSubId);
@@ -2389,10 +2390,10 @@ Object.assign(NYM.prototype, {
         const filters = [];
 
         if (!this.settings.groupChatPMOnlyMode) {
-            filters.push({ kinds: [20000], since: since24h });
+            filters.push({ kinds: [20000, 23333], since: since24h });
             filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since24h, limit: 100 });
-            filters.push({ kinds: [7], "#k": ["20000"], since: since24h, limit: 100 });
-            filters.push({ kinds: [5], "#k": ["20000", "1059"], since: since24h, limit: 100 });
+            filters.push({ kinds: [7], "#k": ["20000", "23333"], since: since24h, limit: 100 });
+            filters.push({ kinds: [5], "#k": ["20000", "23333", "1059"], since: since24h, limit: 100 });
         }
 
         filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
@@ -2409,7 +2410,7 @@ Object.assign(NYM.prototype, {
             // Gift wraps to our real pubkey (1:1 DMs, bootstrapping, resyncs)
             filters.push(
                 { kinds: [1059], "#p": [this.pubkey], limit: 500 },
-                { kinds: [7], "#p": [this.pubkey], "#k": ["20000"], limit: 100 },
+                { kinds: [7], "#p": [this.pubkey], "#k": ["20000", "23333"], limit: 100 },
                 { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
                 { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 },
                 { kinds: [10030], authors: [this.pubkey], limit: 1 }
@@ -3389,7 +3390,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
 
         const is30078Fanout = evt && evt.kind === 30078 && evt.tags && evt.tags.some(t => t[0] === 't' && ['nym-poll', 'nym-poll-vote'].includes(t[1]));
-        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
 
         if (wideFanout) {
             const sent = new Set();

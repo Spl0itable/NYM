@@ -336,7 +336,7 @@ window.nymHapticTap = function (ms) {
             var isOwn = d.pubkey === n.pubkey;
             if (isOwn) {
                 if (window.confirm('Are you sure you want to delete this message? This will send a deletion request to relays.')) {
-                    n.publishDeletionEvent(d.messageId, n.inPMMode ? 1059 : 20000).then(function () {
+                    n.publishDeletionEvent(d.messageId, n.inPMMode ? 1059 : n.channelWire(n.currentGeohash).kind).then(function () {
                         n.displaySystemMessage('Deletion request sent to relays');
                     });
                 }

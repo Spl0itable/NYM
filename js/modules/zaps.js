@@ -601,7 +601,7 @@ Object.assign(NYM.prototype, {
                 if (this.inPMMode) {
                     originalKind = '1059'; // PMs via NIP-17
                 } else if (this.currentGeohash) {
-                    originalKind = '20000';
+                    originalKind = String(this.channelWire(this.currentGeohash).kind);
                 }
                 zapRequest.tags.push(['k', originalKind]);
             }
@@ -902,7 +902,7 @@ Object.assign(NYM.prototype, {
 
                     // Optional: Verify the k tag to ensure it's for supported kinds
                     const kTag = zapRequest.tags?.find(t => t[0] === 'k');
-                    if (kTag && !['20000', '1059'].includes(kTag[1])) {
+                    if (kTag && !['20000', '23333', '1059'].includes(kTag[1])) {
                         return;
                     }
                 } catch (e) {

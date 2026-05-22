@@ -1851,17 +1851,18 @@ Object.assign(NYM.prototype, {
         try {
             if (!this.connected) throw new Error('Not connected to relay');
 
-            const geohash = this.currentGeohash || 'nym';
+            const channelKey = this.currentGeohash || 'nym';
+            const wire = this.channelWire(channelKey);
 
             const now = Math.floor(Date.now() / 1000);
             const tags = [
                 ['n', this.nym],
-                ['g', geohash],
+                [wire.tag, channelKey],
                 ['edit', originalEventId]
             ];
 
             let event = {
-                kind: 20000,
+                kind: wire.kind,
                 created_at: now,
                 tags: tags,
                 content: newContent,
@@ -1897,7 +1898,7 @@ Object.assign(NYM.prototype, {
             this.sendToRelay(['EVENT', signedEvent]);
 
             // Ensure geo relays for this channel also receive the edit
-            this.ensureGeoRelayDelivery(signedEvent, geohash);
+            if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
 
             // Schedule deletion if redacted cosmetic is active
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {

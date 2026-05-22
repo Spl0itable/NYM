@@ -137,7 +137,7 @@ Object.assign(NYM.prototype, {
         }
 
         // Early deduplication for channel messages to prevent re-processing on reconnect
-        if (event.kind === 20000) {
+        if (event.kind === 20000 || event.kind === 23333) {
             if (this.processedMessageEventIds.has(event.id)) {
                 return; // Already processed this message
             }
@@ -154,8 +154,8 @@ Object.assign(NYM.prototype, {
         const isHistorical = messageAge > 10000; // Older than 10 seconds
 
         if (event.pubkey === this.pubkey) {
-            // For geohash channel messages (kind 20000)
-            if (event.kind === 20000) {
+            // For channel messages (kind 20000 geohash, 23333 named)
+            if (event.kind === 20000 || event.kind === 23333) {
                 // Check if message already displayed in DOM
                 if (document.querySelector(`[data-message-id="${event.id}"]`)) {
                     return; // Already displayed optimistically, skip
@@ -186,22 +186,24 @@ Object.assign(NYM.prototype, {
         }
 
 
-        if (event.kind === 20000) {
+        if (event.kind === 20000 || event.kind === 23333) {
             // Validate PoW (NIP-13)
             if (this.enablePow && !this.validatePow(event, this.powDifficulty)) {
                 return;
             }
 
-            // Handle geohash channel messages
+            // Geohash channels carry the channel in a `g` tag (kind 20000);
+            // named channels carry it in a `d` tag (kind 23333).
             const nymTag = event.tags.find(t => t[0] === 'n');
-            const geohashTag = event.tags.find(t => t[0] === 'g');
+            const channelTagName = event.kind === 20000 ? 'g' : 'd';
+            const channelTag = event.tags.find(t => t[0] === channelTagName);
 
             // Strip any existing #suffix from n tag (bitchat includes it, Nymchat adds its own)
             const rawNym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : null;
             const nym = rawNym || this.getNymFromPubkey(event.pubkey);
-            const geohash = geohashTag ? this.sanitizeChannelName(geohashTag[1]) : '';
+            const geohash = channelTag ? this.sanitizeChannelName(channelTag[1]) : '';
 
-            // Drop kind 20000 events that aren't legitimate channel messages
+            // Drop events that aren't legitimate channel messages
             if (!geohash) {
                 return;
             }
@@ -1271,12 +1273,13 @@ Object.assign(NYM.prototype, {
 
     async _sendChannelTypingEvent(status, geohash) {
         if (!geohash || !this._canPublishChannelEvent()) return;
+        const wire = this.channelWire(geohash);
         const event = {
             kind: 24420,
             created_at: Math.floor(Date.now() / 1000),
             tags: [
                 ['typing', status],
-                ['g', geohash],
+                [wire.tag, geohash],
                 ['n', this.nym]
             ],
             content: '',
@@ -1285,7 +1288,7 @@ Object.assign(NYM.prototype, {
         try {
             const signed = await this.signEvent(event);
             this.sendToRelay(["EVENT", signed]);
-            this.ensureGeoRelayDelivery(signed, geohash);
+            if (wire.isGeohash) this.ensureGeoRelayDelivery(signed, geohash);
         } catch (_) { }
     },
 
@@ -1333,7 +1336,7 @@ Object.assign(NYM.prototype, {
         for (const tag of event.tags) {
             if (!Array.isArray(tag)) continue;
             if (tag[0] === 'typing') status = tag[1];
-            else if (tag[0] === 'g') geohash = tag[1];
+            else if (tag[0] === 'g' || tag[0] === 'd') geohash = tag[1];
             else if (tag[0] === 'n') rawNym = tag[1];
         }
         if (!status || !geohash) return;
@@ -1374,13 +1377,14 @@ Object.assign(NYM.prototype, {
             this._sentChannelReadReceipts = new Set(arr.slice(-1500));
         }
 
+        const wire = this.channelWire(geohash);
         const event = {
             kind: 24421,
             created_at: Math.floor(Date.now() / 1000),
             tags: [
                 ['e', messageId],
                 ['p', authorPubkey],
-                ['g', geohash],
+                [wire.tag, geohash],
                 ['n', this.nym]
             ],
             content: '',
@@ -1389,7 +1393,7 @@ Object.assign(NYM.prototype, {
         try {
             const signed = await this.signEvent(event);
             this.sendToRelay(["EVENT", signed]);
-            this.ensureGeoRelayDelivery(signed, geohash);
+            if (wire.isGeohash) this.ensureGeoRelayDelivery(signed, geohash);
         } catch (_) { }
     },
 
@@ -1403,7 +1407,7 @@ Object.assign(NYM.prototype, {
         for (const tag of event.tags) {
             if (!Array.isArray(tag)) continue;
             if (tag[0] === 'e') messageId = tag[1];
-            else if (tag[0] === 'g') geohash = tag[1];
+            else if (tag[0] === 'g' || tag[0] === 'd') geohash = tag[1];
             else if (tag[0] === 'n') rawNym = tag[1];
         }
         if (!messageId || !geohash) return;
@@ -2063,8 +2067,10 @@ Object.assign(NYM.prototype, {
                 ['ms', String(nowMs)]
             ];
 
-            const kind = 20000; // Geohash channels use kind 20000
-            tags.push(['g', geohash || 'nym']);
+            const channelKey = geohash || 'nym';
+            const wire = this.channelWire(channelKey);
+            const kind = wire.kind;
+            tags.push([wire.tag, channelKey]);
 
             // Build wire content: if quoting, use @mention format instead of > blockquote
             // so other Nostr clients see a normal mention, while NYM reconstructs the quote
@@ -2132,7 +2138,7 @@ Object.assign(NYM.prototype, {
             this.sendToRelay(["EVENT", signedEvent]);
 
             // Ensure geo relays for this channel also receive the event
-            this.ensureGeoRelayDelivery(signedEvent, geohash);
+            if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
 
             // Bump our own presence so status stays "online" and other clients
             // see us as recently active.
@@ -2198,8 +2204,10 @@ Object.assign(NYM.prototype, {
                 ['ms', String(nowMs)]
             ];
 
-            const kind = 20000;
-            tags.push(['g', geohash || 'nym']);
+            const channelKey = geohash || 'nym';
+            const wire = this.channelWire(channelKey);
+            const kind = wire.kind;
+            tags.push([wire.tag, channelKey]);
 
             // Build wire content: if quoting, use @mention format instead of > blockquote
             let wireContent = content;
@@ -2265,7 +2273,7 @@ Object.assign(NYM.prototype, {
             this.sendToRelay(["EVENT", signedEvent]);
 
             // Ensure geo relays for this channel also receive the event
-            this.ensureGeoRelayDelivery(signedEvent, geohash);
+            if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
 
             return true;
         } catch (error) {

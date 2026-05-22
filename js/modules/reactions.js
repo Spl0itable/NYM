@@ -81,8 +81,8 @@ Object.assign(NYM.prototype, {
         if (!eTag) return;
 
         // Only process reactions for our supported kinds
-        // 20000 = channel messages, 1059 = NIP-17 gift wraps, 14 = group rumor messages
-        if (kTag && !['20000', '1059', '14'].includes(kTag[1])) {
+        // 20000 = geohash channel, 23333 = named channel, 1059 = NIP-17 gift wraps, 14 = group rumor messages
+        if (kTag && !['20000', '23333', '1059', '14'].includes(kTag[1])) {
             return;
         }
 
@@ -859,6 +859,8 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             let originalKind = '20000'; // default to geohash channel
             if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
                 originalKind = '1059'; // NIP-17 gift wrap (covers 1:1 PMs and group messages)
+            } else if (this.currentGeohash && !this.isValidGeohash(this.currentGeohash)) {
+                originalKind = '23333'; // named (non-geohash) channel
             }
 
             const reactionTags = [
@@ -975,6 +977,8 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             let originalKind = '20000';
             if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
                 originalKind = '1059';
+            } else if (this.currentGeohash && !this.isValidGeohash(this.currentGeohash)) {
+                originalKind = '23333';
             }
 
             const removeTags = [

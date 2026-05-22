@@ -1347,7 +1347,7 @@ Object.assign(NYM.prototype, {
                     svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M 3 5 L 13 5" stroke-linecap="round" /><path d="M 5 5 L 5 13 C 5 13.55 5.45 14 6 14 L 10 14 C 10.55 14 11 13.55 11 13 L 11 5" stroke-linejoin="round" /><path d="M 6.5 2 L 9.5 2" stroke-linecap="round" /><path d="M 7 7 L 7 11.5" stroke-linecap="round" /><path d="M 9 7 L 9 11.5" stroke-linecap="round" /></svg>',
                     action: () => {
                         if (window.confirm('Are you sure you want to delete this message? This will send a deletion request to relays.')) {
-                            this.publishDeletionEvent(messageId, this.inPMMode ? 1059 : 20000).then(() => {
+                            this.publishDeletionEvent(messageId, this.inPMMode ? 1059 : this.channelWire(this.currentGeohash).kind).then(() => {
                                 this.displaySystemMessage('Deletion request sent to relays');
                             });
                         }
