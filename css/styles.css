@@ -973,6 +973,7 @@ body.light-mode .channel-context-menu {
     color: var(--primary);
     font-weight: 700;
     letter-spacing: 0.3px;
+    min-height: calc((var(--user-text-size) + 3px) * 1.4 + 19px);
 }
 
 .channel-type-label {

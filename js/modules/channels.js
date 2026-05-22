@@ -741,34 +741,58 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const nodes = [nameNode, typeLabel];
 
         if (isGeo) {
-            const location = this.getGeohashLocation(safeGeohash);
-            if (location) {
-                const locWrap = document.createElement('div');
-                locWrap.className = 'channel-location';
+            const locWrap = document.createElement('div');
+            locWrap.className = 'channel-location';
 
-                const link = document.createElement('a');
-                link.setAttribute('href', `https://www.geohash.es/decode?geohash=${encodeURIComponent(safeGeohash.toLowerCase())}`);
-                link.setAttribute('target', '_blank');
-                link.setAttribute('rel', 'noopener');
-                link.textContent = location;
-                locWrap.appendChild(link);
+            const link = document.createElement('a');
+            link.setAttribute('href', `https://www.geohash.es/decode?geohash=${encodeURIComponent(safeGeohash.toLowerCase())}`);
+            link.setAttribute('target', '_blank');
+            link.setAttribute('rel', 'noopener');
 
-                if (this.userLocation && this.settings.sortByProximity) {
-                    try {
-                        const coords = this.decodeGeohash(safeGeohash);
-                        const distance = this.calculateDistance(
-                            this.userLocation.lat, this.userLocation.lng,
-                            coords.lat, coords.lng
-                        );
-                        locWrap.appendChild(document.createTextNode(` (${distance.toFixed(1)}km)`));
-                    } catch (e) { }
-                }
+            const cached = this._geohashPlaceCache && this._geohashPlaceCache.get(safeGeohash.toLowerCase());
+            link.textContent = cached || 'Loading location...';
+            locWrap.appendChild(link);
 
-                nodes.push(locWrap);
+            if (this.userLocation && this.settings.sortByProximity) {
+                try {
+                    const coords = this.decodeGeohash(safeGeohash);
+                    const distance = this.calculateDistance(
+                        this.userLocation.lat, this.userLocation.lng,
+                        coords.lat, coords.lng
+                    );
+                    locWrap.appendChild(document.createTextNode(` (${distance.toFixed(1)}km)`));
+                } catch (e) { }
+            }
+
+            nodes.push(locWrap);
+
+            if (!cached) {
+                this._resolveGeohashPlaceName(safeGeohash).then(place => {
+                    if (link.isConnected) link.textContent = place;
+                }).catch(() => {
+                    if (link.isConnected) link.textContent = this.getGeohashLocation(safeGeohash);
+                });
             }
         }
 
         titleEl.replaceChildren(...nodes);
+    },
+
+    // Resolve a geohash to a human-readable place name, cached per geohash.
+    async _resolveGeohashPlaceName(geohash) {
+        if (!this._geohashPlaceCache) this._geohashPlaceCache = new Map();
+        const key = geohash.toLowerCase();
+        if (this._geohashPlaceCache.has(key)) return this._geohashPlaceCache.get(key);
+
+        const coords = this.decodeGeohash(geohash);
+        const data = await this.fetchGeocode(coords.lat, coords.lng, 10);
+        const addr = (data && data.address) || {};
+        const city = addr.city || addr.town || addr.village || addr.county || '';
+        const country = addr.country || '';
+        const place = [city, country].filter(x => x).join(', ') || 'Unknown location';
+
+        this._geohashPlaceCache.set(key, place);
+        return place;
     },
 
     // Identifies the active conversation so unsent input can be kept per place.
