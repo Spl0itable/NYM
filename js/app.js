@@ -554,7 +554,7 @@ class NYM {
         this.spamFilterEnabled = true;
         this.spamFilterAggressive = true;
         this.connectionMode = 'ephemeral';
-        this.currentChannel = 'nym';
+        this.currentChannel = 'nymchat';
         this.currentGeohash = '';
         this.currentPM = null;
         this.navigationHistory = [];
@@ -625,7 +625,7 @@ class NYM {
         this.pmPageSize = 100;
         this.pmLoadMoreSize = 50;
         this.pmRenderedStart = new Map();
-        this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+        this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
         if (this.settings.groupChatPMOnlyMode) {
             // In PM-only mode, don't default to a geohash channel
             this.currentChannel = null;
@@ -634,8 +634,8 @@ class NYM {
             this.currentChannel = this.pinnedLandingChannel.geohash;
             this.currentGeohash = this.pinnedLandingChannel.geohash;
         } else {
-            this.currentChannel = 'nym';
-            this.currentGeohash = 'nym';
+            this.currentChannel = 'nymchat';
+            this.currentGeohash = 'nymchat';
         }
         this.commandHistory = [];
         this.historyIndex = -1;
@@ -650,7 +650,7 @@ class NYM {
         this.gifSearchTimeout = null;
         this.giphyApiKey = 'G6neFEExTMBM0h3hM2QjQg4vG8jMMLa9';
         this.emojiAutocompleteIndex = -1;
-        this.commonGeohashes = ['nym', '9q', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
+        this.commonGeohashes = ['nymchat', '9q', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5'];
         this.userJoinedChannels = new Set(this.loadUserJoinedChannels());
         this.inPMMode = false;
         this.userSearchTerm = '';
@@ -2700,7 +2700,7 @@ async function showSettings() {
 
     if (pinnedSearchInput && pinnedValueInput && pinnedDropdown) {
         // Get current pinned value
-        const currentPinned = nym.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+        const currentPinned = nym.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
 
         // Build geohash channel options only
         const channelOptions = [];
@@ -2737,8 +2737,8 @@ async function showSettings() {
             pinnedSearchInput.value = currentOption.label;
             pinnedValueInput.value = JSON.stringify(currentOption.value);
         } else {
-            pinnedSearchInput.value = '#nym';
-            pinnedValueInput.value = JSON.stringify({ type: 'geohash', geohash: 'nym' });
+            pinnedSearchInput.value = '#nymchat';
+            pinnedValueInput.value = JSON.stringify({ type: 'geohash', geohash: 'nymchat' });
         }
 
         // Function to render filtered options
@@ -3213,7 +3213,7 @@ async function saveSettings() {
             localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(pinnedLandingChannel));
         } catch (e) {
             // Fallback to default
-            const defaultChannel = { type: 'geohash', geohash: 'nym' };
+            const defaultChannel = { type: 'geohash', geohash: 'nymchat' };
             nym.pinnedLandingChannel = defaultChannel;
             nym.settings.pinnedLandingChannel = defaultChannel;
             localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(defaultChannel));
@@ -3506,7 +3506,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.389';
+const NYMCHAT_VERSION = 'v3.66.390';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -5194,9 +5194,12 @@ async function applyNostrSettings(s) {
 
     // Pinned landing channel
     if (s.pinnedLandingChannel && typeof s.pinnedLandingChannel === 'object') {
-        nym.pinnedLandingChannel = s.pinnedLandingChannel;
-        nym.settings.pinnedLandingChannel = s.pinnedLandingChannel;
-        localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(s.pinnedLandingChannel));
+        const landing = s.pinnedLandingChannel.geohash === 'nym'
+            ? { type: 'geohash', geohash: 'nymchat' }
+            : s.pinnedLandingChannel;
+        nym.pinnedLandingChannel = landing;
+        nym.settings.pinnedLandingChannel = landing;
+        localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(landing));
     }
 
     // Text size
@@ -5245,16 +5248,18 @@ async function applyNostrSettings(s) {
 
     // User joined channels
     if (Array.isArray(s.userJoinedChannels)) {
-        s.userJoinedChannels.forEach(key => {
+        // Migrate the legacy default channel key to the renamed default.
+        const joined = [...new Set(s.userJoinedChannels.map(key => key === 'nym' ? 'nymchat' : key))];
+        joined.forEach(key => {
             nym.userJoinedChannels.add(key);
             if (!nym.channels.has(key)) {
                 nym.addChannel(key, key);
             }
         });
 
-        localStorage.setItem('nym_user_joined_channels', JSON.stringify(s.userJoinedChannels));
+        localStorage.setItem('nym_user_joined_channels', JSON.stringify(joined));
         localStorage.setItem('nym_user_channels', JSON.stringify(
-            s.userJoinedChannels.map(key => ({
+            joined.map(key => ({
                 key: key,
                 channel: key,
                 geohash: key
@@ -5319,12 +5324,21 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_emoji_pack_favorites', JSON.stringify(nym._emojiPackFavorites));
     }
 
-    // Favorite GIFs — replace with remote set so favorites sync across devices.
-    if (Array.isArray(s.favoriteGifs)) {
-        nym._favoriteGifs = s.favoriteGifs
+    // Favorite GIFs — merge the remote set into the local one so favorites sync
+    // across devices without an empty or stale remote list wiping local picks.
+    if (Array.isArray(s.favoriteGifs) && s.favoriteGifs.length) {
+        const remote = s.favoriteGifs
             .filter(g => g && typeof g.url === 'string')
-            .map(g => ({ url: g.url, title: typeof g.title === 'string' ? g.title : '' }))
-            .slice(0, 100);
+            .map(g => ({ url: g.url, title: typeof g.title === 'string' ? g.title : '' }));
+        const local = typeof nym._getFavoriteGifs === 'function' ? nym._getFavoriteGifs() : (nym._favoriteGifs || []);
+        const merged = [];
+        const seen = new Set();
+        for (const g of [...local, ...remote]) {
+            if (seen.has(g.url)) continue;
+            seen.add(g.url);
+            merged.push(g);
+        }
+        nym._favoriteGifs = merged.slice(0, 100);
         localStorage.setItem('nym_favorite_gifs', JSON.stringify(nym._favoriteGifs));
     }
 

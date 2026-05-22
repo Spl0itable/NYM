@@ -515,8 +515,8 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        if (this.currentGeohash === 'nym') {
-            this.displaySystemMessage('Cannot leave the default #nym channel');
+        if (this.currentGeohash === 'nymchat') {
+            this.displaySystemMessage('Cannot leave the default #nymchat channel');
             return;
         }
 
@@ -833,18 +833,22 @@ Object.assign(NYM.prototype, {
 
             // Check current channel
             const currentChannelName = this.currentGeohash || this.currentChannel;
-            if (this.currentGeohash === 'nym') {
-                this.displaySystemMessage('Cannot block the default #nym channel');
+            if (this.currentGeohash === 'nymchat') {
+                this.displaySystemMessage('Cannot block the default #nymchat channel');
                 return;
             }
 
             // Block current channel
             if (confirm(`Block channel #${currentChannelName}?`)) {
                 this.blockChannel(this.currentGeohash, this.currentGeohash);
-                this.displaySystemMessage(`Blocked geohash channel #${this.currentGeohash}`);
+                this.displaySystemMessage(
+                    this.isValidGeohash(this.currentGeohash)
+                        ? `Blocked geohash channel #${this.currentGeohash}`
+                        : `Blocked channel #${this.currentGeohash}`
+                );
 
-                // Switch to #nym
-                this.switchChannel('nym', 'nym');
+                // Switch to #nymchat
+                this.switchChannel('nymchat', 'nymchat');
 
                 this.updateBlockedChannelsList();
 
@@ -860,22 +864,26 @@ Object.assign(NYM.prototype, {
 
             // Check if it's current channel
             if (this.currentGeohash === channelName) {
-                // Block current channel and switch to #nym
+                // Block current channel and switch to #nymchat
                 if (confirm(`Block and leave channel #${channelName}?`)) {
                     this.blockChannel(channelName, channelName);
-                    this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
+                    this.displaySystemMessage(
+                        this.isValidGeohash(channelName)
+                            ? `Blocked geohash channel #${channelName}`
+                            : `Blocked channel #${channelName}`
+                    );
 
-                    // Switch to #nym
-                    this.switchChannel('nym', 'nym');
+                    // Switch to #nymchat
+                    this.switchChannel('nymchat', 'nymchat');
 
                     this.updateBlockedChannelsList();
                 }
                 return;
             }
 
-            // Don't allow blocking #nym
-            if (channelName === 'nym') {
-                this.displaySystemMessage("Cannot block the default #nym channel");
+            // Don't allow blocking #nymchat
+            if (channelName === 'nymchat') {
+                this.displaySystemMessage("Cannot block the default #nymchat channel");
                 return;
             }
 

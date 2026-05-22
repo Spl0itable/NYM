@@ -169,8 +169,8 @@ Object.assign(NYM.prototype, {
         if (itemEl.classList.contains('channel-item')) {
             const channel = itemEl.dataset.channel;
             const geohash = itemEl.dataset.geohash;
-            if (geohash === 'nym') return [];
             const key = geohash || channel;
+            if (key === 'nymchat') return [];
             const isPinned = this.pinnedChannels.has(key);
             const isHidden = this.hiddenChannels.has(key);
             return [

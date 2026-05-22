@@ -1914,7 +1914,7 @@ Object.assign(NYM.prototype, {
 
             // If currently viewing this PM, switch to bar
             if (this.inPMMode && this.currentPM === pubkey) {
-                this.switchChannel('nym', 'nym');
+                this.switchChannel('nymchat', 'nymchat');
             }
 
             this.displaySystemMessage('PM conversation deleted');
@@ -1933,7 +1933,7 @@ Object.assign(NYM.prototype, {
         const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
         if (item) item.remove();
         if (this.inPMMode && this.currentPM === pubkey) {
-            this.switchChannel('nym', 'nym');
+            this.switchChannel('nymchat', 'nymchat');
         }
         this.displaySystemMessage('PM conversation deleted');
     },
@@ -2657,11 +2657,11 @@ Object.assign(NYM.prototype, {
             this.navigateToLatestPMOrGroup();
         } else {
             // Restore default channel view
-            const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+            const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
             if (pinned.type === 'geohash' && pinned.geohash) {
                 this.switchChannel(pinned.geohash, pinned.geohash);
             } else {
-                this.switchChannel('nym', 'nym');
+                this.switchChannel('nymchat', 'nymchat');
             }
             // Re-discover and subscribe to channels
             this.discoverChannels();

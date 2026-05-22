@@ -1074,13 +1074,13 @@ Object.assign(NYM.prototype, {
                         if (this.settings.groupChatPMOnlyMode) {
                             this.navigateToLatestPMOrGroup();
                         } else {
-                            const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+                            const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
                             this.currentChannel = '';
                             this.currentGeohash = '';
                             if (pinned.type === 'geohash' && pinned.geohash) {
                                 this.switchChannel(pinned.geohash, pinned.geohash);
                             } else {
-                                this.switchChannel('nym', 'nym');
+                                this.switchChannel('nymchat', 'nymchat');
                             }
                         }
                     }, 100);
@@ -1223,14 +1223,14 @@ Object.assign(NYM.prototype, {
                 if (this.settings.groupChatPMOnlyMode) {
                     this.navigateToLatestPMOrGroup();
                 } else {
-                    const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' };
+                    const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
                     this.currentChannel = '';
                     this.currentGeohash = '';
 
                     if (pinned.type === 'geohash' && pinned.geohash) {
                         this.switchChannel(pinned.geohash, pinned.geohash);
                     } else {
-                        this.switchChannel('nym', 'nym');
+                        this.switchChannel('nymchat', 'nymchat');
                     }
                 }
             }, 100);

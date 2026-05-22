@@ -88,7 +88,7 @@ Object.assign(NYM.prototype, {
             readReceiptsScope: _normalizeIndicatorScope(this.settings.readReceiptsScope),
             typingIndicatorsEnabled: _normalizeIndicatorScope(this.settings.typingIndicatorsScope) !== 'disabled',
             typingIndicatorsScope: _normalizeIndicatorScope(this.settings.typingIndicatorsScope),
-            pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nym' },
+            pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' },
             chatLayout: this.settings.chatLayout || 'irc',
             nickStyle: this.settings.nickStyle || 'fancy',
             colorMode: localStorage.getItem('nym_color_mode') || 'auto',
@@ -104,7 +104,7 @@ Object.assign(NYM.prototype, {
             translateFavoriteLanguages: this._getTranslateFavorites(),
             emojiPackFavorites: this._getEmojiPackFavorites(),
             emojiCategoryFavorites: this._getDefaultCategoryFavorites(),
-            favoriteGifs: this._getFavoriteGifs().slice(0, 100),
+            ...(this._getFavoriteGifs().length ? { favoriteGifs: this._getFavoriteGifs().slice(0, 100) } : {}),
             recentEmojis: Array.isArray(this.recentEmojis) ? this.recentEmojis.slice(0, 20) : [],
             gesturesEnabled: this.settings.gesturesEnabled !== false,
             swipeLeftAction: this.settings.swipeLeftAction || 'quote',
@@ -603,9 +603,14 @@ Object.assign(NYM.prototype, {
         let pinnedLandingChannel;
         try {
             const saved = localStorage.getItem('nym_pinned_landing_channel');
-            pinnedLandingChannel = saved ? JSON.parse(saved) : { type: 'geohash', geohash: 'nym' };
+            pinnedLandingChannel = saved ? JSON.parse(saved) : { type: 'geohash', geohash: 'nymchat' };
         } catch (e) {
-            pinnedLandingChannel = { type: 'geohash', geohash: 'nym' };
+            pinnedLandingChannel = { type: 'geohash', geohash: 'nymchat' };
+        }
+        // Migrate the legacy default channel key to the renamed default.
+        if (pinnedLandingChannel && pinnedLandingChannel.geohash === 'nym') {
+            pinnedLandingChannel = { type: 'geohash', geohash: 'nymchat' };
+            try { localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(pinnedLandingChannel)); } catch (_) { }
         }
 
         return {

@@ -1886,64 +1886,6 @@ Object.assign(NYM.prototype, {
                 this.loadTrendingGifs();
             }
         });
-
-        // Resize the picker to sit above the on-screen keyboard on mobile.
-        // Uses visualViewport which shrinks when the keyboard opens.
-        this._setupGifPickerKeyboardResize();
-    },
-
-    _setupGifPickerKeyboardResize() {
-        const gifPicker = document.getElementById('gifPicker');
-        if (!gifPicker) return;
-
-        const apply = () => {
-            if (!gifPicker.classList.contains('active')) return;
-            // Only adjust where the picker is fixed-positioned (mobile layout,
-            // matching the <=768px CSS media query).
-            if (window.innerWidth > 768 || !window.visualViewport) {
-                gifPicker.style.bottom = '';
-                gifPicker.style.maxHeight = '';
-                return;
-            }
-            const vv = window.visualViewport;
-            // Keyboard height is the slice of the layout viewport the visual
-            // viewport lost — independent of how far the page has scrolled
-            // (vv.offsetTop), so it stays correct after the focused field
-            // scrolls into view.
-            const keyboardOffset = Math.max(0, window.innerHeight - vv.height);
-            if (keyboardOffset < 80) {
-                // Keyboard closed — fall back to the CSS-defined placement.
-                gifPicker.style.bottom = '';
-                gifPicker.style.maxHeight = '';
-                return;
-            }
-            // Sit just above the keyboard and cap the height to the visible area.
-            gifPicker.style.bottom = (keyboardOffset + 8) + 'px';
-            gifPicker.style.maxHeight = Math.max(180, vv.height - 24) + 'px';
-        };
-
-        if (this._gifViewportHandler && window.visualViewport) {
-            window.visualViewport.removeEventListener('resize', this._gifViewportHandler);
-            window.visualViewport.removeEventListener('scroll', this._gifViewportHandler);
-        }
-        this._gifViewportHandler = apply;
-        if (window.visualViewport) {
-            window.visualViewport.addEventListener('resize', apply);
-            window.visualViewport.addEventListener('scroll', apply);
-        }
-
-        // The keyboard animation may not have settled when the first resize
-        // event fires, so re-apply shortly after the search field is focused.
-        const searchInput = gifPicker.querySelector('#gifSearchInput');
-        if (searchInput) {
-            searchInput.addEventListener('focus', () => {
-                setTimeout(apply, 100);
-                setTimeout(apply, 350);
-            });
-            searchInput.addEventListener('blur', () => setTimeout(apply, 100));
-        }
-
-        apply();
     },
 
     async loadTrendingGifs() {
@@ -2085,13 +2027,6 @@ Object.assign(NYM.prototype, {
         const wasOpen = gifPicker.classList.contains('active');
         gifPicker.classList.remove('active');
         gifPicker.innerHTML = '';
-        gifPicker.style.bottom = '';
-        gifPicker.style.maxHeight = '';
-        if (this._gifViewportHandler && window.visualViewport) {
-            window.visualViewport.removeEventListener('resize', this._gifViewportHandler);
-            window.visualViewport.removeEventListener('scroll', this._gifViewportHandler);
-            this._gifViewportHandler = null;
-        }
         if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 

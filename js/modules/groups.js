@@ -698,7 +698,7 @@ Object.assign(NYM.prototype, {
                 if (this.currentGroup === groupId) {
                     this.currentGroup = null;
                     this.inPMMode = false;
-                    this.switchChannel(this.currentChannel || 'nym', this.currentChannel || 'nym');
+                    this.switchChannel(this.currentChannel || 'nymchat', this.currentChannel || 'nymchat');
                     this.displaySystemMessage(`You were removed from "${groupName}" by ${removerName}.`);
                 }
                 // Notify — the user might not have the group open.
@@ -1385,7 +1385,7 @@ Object.assign(NYM.prototype, {
         if (this.currentGroup === groupId) {
             this.currentGroup = null;
             this.inPMMode = false;
-            const fallback = this.currentChannel || 'nym';
+            const fallback = this.currentChannel || 'nymchat';
             this.switchChannel(fallback, fallback);
         }
         this.updateViewMoreButton('pmList');

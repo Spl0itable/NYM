@@ -178,7 +178,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     shareChannel() {
         // Generate the share URL with geohash channel
         const baseUrl = window.location.origin + window.location.pathname;
-        const channel = this.currentChannel || 'nym';
+        const channel = this.currentChannel || 'nymchat';
         const shareUrl = `${baseUrl}#${channel}`;
 
         // Set the URL in the input
@@ -467,9 +467,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     togglePin(channel, geohash) {
-        // Don't allow pinning/unpinning #nym since it's always at top
-        if (geohash === 'nym') {
-            this.displaySystemMessage('#nym is always at the top');
+        // Don't allow pinning/unpinning #nymchat since it's always at top
+        if ((geohash || channel) === 'nymchat') {
+            this.displaySystemMessage('#nymchat is always at the top');
             return;
         }
 
@@ -529,8 +529,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     toggleHideChannel(channel, geohash) {
-        if (geohash === 'nym') {
-            this.displaySystemMessage('#nym cannot be hidden');
+        if ((geohash || channel) === 'nymchat') {
+            this.displaySystemMessage('#nymchat cannot be hidden');
             return;
         }
 
@@ -558,8 +558,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 return;
             }
 
-            // Never hide #nym or the active channel
-            if (geohash === 'nym' || item.classList.contains('active')) {
+            // Never hide #nymchat or the active channel
+            if (key === 'nymchat' || item.classList.contains('active')) {
                 item.style.display = '';
                 return;
             }
@@ -634,10 +634,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Remove from channels map
         this.channels.delete(key);
 
-        // If currently in this channel, switch to #nym
+        // If currently in this channel, switch to #nymchat
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
             (geohash && this.currentGeohash === geohash)) {
-            this.switchChannel('nym', 'nym');
+            this.switchChannel('nymchat', 'nymchat');
         }
 
         // Update view more button after removing
@@ -1189,9 +1189,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     removeChannel(channel, geohash = '') {
         const key = geohash || channel;
 
-        // Don't allow removing default channel #nym
-        if (key === 'nym') {
-            this.displaySystemMessage('Cannot remove the default #nym channel');
+        // Don't allow removing default channel #nymchat
+        if (key === 'nymchat') {
+            this.displaySystemMessage('Cannot remove the default #nymchat channel');
             return;
         }
 
@@ -1210,10 +1210,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             element.remove();
         }
 
-        // If we're currently in this channel, switch to #nym
+        // If we're currently in this channel, switch to #nymchat
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
             (geohash && this.currentGeohash === geohash)) {
-            this.switchChannel('nym', 'nym');
+            this.switchChannel('nymchat', 'nymchat');
         }
 
         // Save the updated channel list
@@ -1236,7 +1236,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             try {
                 const channels = JSON.parse(saved);
                 // Filter out invalid channel names (legacy data with spaces/special chars/underscores/hyphens)
-                return channels.filter(ch => ch && /^[\p{L}\p{N}]+$/u.test(ch));
+                // and migrate the legacy default channel key to the renamed default.
+                return [...new Set(channels
+                    .filter(ch => ch && /^[\p{L}\p{N}]+$/u.test(ch))
+                    .map(ch => ch === 'nym' ? 'nymchat' : ch))];
             } catch (error) {
                 return [];
             }
@@ -1391,9 +1394,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const scrollTop = channelList.scrollTop;
 
         channels.sort((a, b) => {
-            // #nym is always first
-            const aIsDefault = a.dataset.geohash === 'nym';
-            const bIsDefault = b.dataset.geohash === 'nym';
+            // #nymchat is always first
+            const aIsDefault = (a.dataset.geohash || a.dataset.channel) === 'nymchat';
+            const bIsDefault = (b.dataset.geohash || b.dataset.channel) === 'nymchat';
 
             if (aIsDefault) return -1;
             if (bIsDefault) return 1;

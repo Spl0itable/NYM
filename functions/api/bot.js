@@ -3659,7 +3659,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.66.389";
+var NYMCHAT_VERSION = "3.66.390";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -3904,17 +3904,19 @@ async function onRequest(context) {
   // Build and sign the Nostr event
   var nowMs = Date.now();
   var now = Math.floor(nowMs / 1000);
+  var channelKey = geohash || "nymchat";
+  var isGeo = isGeohashName(channelKey);
   var eventTags = [
     ["n", BOT_NYM],
     ["bot", "nymchat"],
-    ["g", geohash || "nym"],
+    [isGeo ? "g" : "d", channelKey],
     ["ms", String(nowMs)]
   ];
   if (quoteTag) {
     eventTags.push(quoteTag);
   }
   var event = {
-    kind: 20000,
+    kind: isGeo ? 20000 : 23333,
     created_at: now,
     tags: eventTags,
     content: response,
@@ -4148,7 +4150,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "=== CHANNELS & GEOHASHING ===",
   "Channels are based on geohash locations and bridged with Bitchat.",
   "Channel names are geohash codes (e.g. #9q8yyk). Shorter codes = larger areas.",
-  "Default channels: nym, 9q, w2, dr5r, 9q8y, u4pr, gcpv, f2m6, xn77, tjm5.",
+  "Default channels: nymchat, 9q, w2, dr5r, 9q8y, u4pr, gcpv, f2m6, xn77, tjm5.",
   "Users can also create custom (non-geohash) channels.",
   "The sidebar shows channels sorted by proximity (if enabled in Settings > Channel Settings) or alphabetically.",
   "Pin a landing channel in Settings > Channel Settings so the app opens to that channel.",
@@ -4294,7 +4296,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.389 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.66.390 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -5127,7 +5129,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.66.389")
+  // Prefix match (e.g. "3.61" matches "3.66.390")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -5182,7 +5184,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.66.389", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.66.390", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
@@ -5761,8 +5763,16 @@ function extractNym(event) {
 }
 
 function extractGeohash(event) {
-  var gTag = event.tags ? event.tags.find(function(t) { return t[0] === "g"; }) : null;
-  return gTag ? gTag[1] : null;
+  if (!event.tags) return null;
+  var gTag = event.tags.find(function(t) { return t[0] === "g"; });
+  if (gTag) return gTag[1];
+  var dTag = event.tags.find(function(t) { return t[0] === "d"; });
+  return dTag ? dTag[1] : null;
+}
+
+// A valid geohash uses base32 (no a, i, l, o); anything else is a named channel.
+function isGeohashName(str) {
+  return typeof str === "string" && /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/.test(str.toLowerCase());
 }
 
 function timeAgo(unixTs) {
@@ -5801,7 +5811,7 @@ async function handleTop(channelMessages) {
   }
   // Fallback to relay fetch if no in-memory data
   if (messages.length === 0) {
-    var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 500 }, 6000);
+    var events = await fetchRecentEvents({ kinds: [20000, 23333], since: since, limit: 500 }, 6000);
     events = events.filter(isHumanMessage);
     messages = events.map(function(evt) {
       return { channel: extractGeohash(evt), timestamp: evt.created_at };
@@ -5848,7 +5858,7 @@ async function handleLast(args, channelMessages) {
   }
   // Fallback to relay fetch if no in-memory data
   if (messages.length === 0) {
-    var events = await fetchRecentEvents({ kinds: [20000], since: since, limit: 200 }, 6000);
+    var events = await fetchRecentEvents({ kinds: [20000, 23333], since: since, limit: 200 }, 6000);
     events = events.filter(isHumanMessage);
     messages = events.map(function(evt) {
       return {
@@ -5923,7 +5933,7 @@ async function handleSeen(nickname, channelMessages) {
   // Fallback to relay fetch if not found in memory
   if (!foundNym) {
     var since = Math.floor(Date.now() / 1000) - 86400; // last 24h
-    var filter = { kinds: [20000], since: since, limit: 500 };
+    var filter = { kinds: [20000, 23333], since: since, limit: 500 };
     if (targetPubkey && /^[0-9a-f]{64}$/i.test(targetPubkey)) {
       filter.authors = [targetPubkey];
     }
@@ -5990,7 +6000,9 @@ async function handleWho(geohash, channelMessages, activeUsers) {
   }
   // Fallback to relay fetch if no in-memory data
   if (Object.keys(nymsByPubkey).length === 0) {
-    var filter = { kinds: [20000], since: since, limit: 500, "#g": [geohash] };
+    var filter = isGeohashName(geohash)
+      ? { kinds: [20000], since: since, limit: 500, "#g": [geohash] }
+      : { kinds: [23333], since: since, limit: 500, "#d": [geohash] };
     var events = await fetchRecentEvents(filter, 6000);
     events = events.filter(isHumanMessage);
     if (events.length === 0) {

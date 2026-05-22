@@ -2067,7 +2067,7 @@ Object.assign(NYM.prototype, {
                 ['ms', String(nowMs)]
             ];
 
-            const channelKey = geohash || 'nym';
+            const channelKey = geohash || 'nymchat';
             const wire = this.channelWire(channelKey);
             const kind = wire.kind;
             tags.push([wire.tag, channelKey]);
@@ -2204,7 +2204,7 @@ Object.assign(NYM.prototype, {
                 ['ms', String(nowMs)]
             ];
 
-            const channelKey = geohash || 'nym';
+            const channelKey = geohash || 'nymchat';
             const wire = this.channelWire(channelKey);
             const kind = wire.kind;
             tags.push([wire.tag, channelKey]);

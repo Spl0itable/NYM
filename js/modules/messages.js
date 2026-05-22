@@ -1851,7 +1851,7 @@ Object.assign(NYM.prototype, {
         try {
             if (!this.connected) throw new Error('Not connected to relay');
 
-            const channelKey = this.currentGeohash || 'nym';
+            const channelKey = this.currentGeohash || 'nymchat';
             const wire = this.channelWire(channelKey);
 
             const now = Math.floor(Date.now() / 1000);

@@ -564,7 +564,8 @@ body.sidebar-reorder-mode .nav-title {
     order: -3;
 }
 
-.channel-item[data-geohash="nym"] {
+.channel-item[data-geohash="nymchat"],
+.channel-item[data-channel="nymchat"] {
     order: -4;
 }
 
