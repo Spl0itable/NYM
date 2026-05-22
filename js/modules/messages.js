@@ -2334,7 +2334,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async sendMessageAnonymous() {
+    async sendMessagePseudonymous() {
         const input = document.getElementById('messageInput');
         let content = input.value.trim();
 
@@ -2347,7 +2347,7 @@ Object.assign(NYM.prototype, {
 
         // Capture quote context before clearing (for bot reply support)
         const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text, fullText: this.pendingQuote.fullText } : null;
-        const quoteData = savedQuote; // Pass to publishMessageAnonymous for nymquote tag
+        const quoteData = savedQuote; // Pass to publishMessagePseudonymous for nymquote tag
         const rawInput = content;
 
         // Prepend quote if there's a pending quote reply
@@ -2372,8 +2372,8 @@ Object.assign(NYM.prototype, {
             } else if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM);
             } else if (this.currentGeohash) {
-                // Send via ephemeral keypair (anonymous)
-                await this.publishMessageAnonymous(content, this.currentGeohash, this.currentGeohash, quoteData);
+                // Send via ephemeral keypair (pseudonymous)
+                await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, quoteData);
                 // Check for bot commands (? prefix or @Nymbot mention)
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
                 const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);

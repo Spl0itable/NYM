@@ -1015,7 +1015,7 @@ Object.assign(NYM.prototype, {
     // Create a new private group and send invites to all members via NIP-17 gift wraps.
     async createGroup(name, memberPubkeys) {
         if (!this._canSendGiftWraps()) {
-            this.displaySystemMessage('Creating groups requires a logged-in account (not anonymous mode)');
+            this.displaySystemMessage('Creating groups requires a logged-in account (not pseudonymous mode)');
             return null;
         }
 
@@ -2308,7 +2308,7 @@ Object.assign(NYM.prototype, {
     // /group @alice @bob [GroupName] — create a new private group
     async cmdGroup(args) {
         if (!this._canSendGiftWraps()) {
-            this.displaySystemMessage('Creating groups requires a logged-in account (not anonymous mode)');
+            this.displaySystemMessage('Creating groups requires a logged-in account (not pseudonymous mode)');
             return;
         }
         if (!args) {

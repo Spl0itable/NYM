@@ -2159,7 +2159,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async publishMessageAnonymous(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null) {
+    async publishMessagePseudonymous(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null) {
         try {
             if (!this.connected) {
                 throw new Error('Not connected to relay');
@@ -2277,7 +2277,7 @@ Object.assign(NYM.prototype, {
 
             return true;
         } catch (error) {
-            this.displaySystemMessage('Failed to send anonymous message: ' + error.message);
+            this.displaySystemMessage('Failed to send pseudonymous message: ' + error.message);
             return false;
         }
     },

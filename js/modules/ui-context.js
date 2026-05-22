@@ -1118,7 +1118,7 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Long-press Send button (2s) for anonymous send (Nostr login users only)
+        // Long-press Send button (2s) for pseudonymous send (Nostr login users only)
         const sendBtn = document.getElementById('sendBtn');
         let sendLongPressTimer = null;
         let sendLongPressFired = false;
@@ -1131,7 +1131,7 @@ Object.assign(NYM.prototype, {
                     window.nymHapticTap && window.nymHapticTap();
                     sendBtn.style.boxShadow = '0 0 15px rgb(from var(--primary) r g b / 0.4)';
                     sendBtn.textContent = 'ANON';
-                    this.sendMessageAnonymous();
+                    this.sendMessagePseudonymous();
                     setTimeout(() => {
                         sendBtn.textContent = 'SEND';
                         sendBtn.style.boxShadow = '';
