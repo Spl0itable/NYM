@@ -1,4 +1,5 @@
 import { transform } from 'esbuild';
+import { minify as minifyHtml } from 'html-minifier-terser';
 import { promises as fs } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -24,6 +25,15 @@ function hashedName(rel, content) {
   const stem = rel.slice(0, -ext.length);
   return `${stem}.${sha8(content)}${ext}`;
 }
+
+const htmlMinifyOptions = {
+  collapseWhitespace: true,
+  conservativeCollapse: true,
+  removeComments: true,
+  removeRedundantAttributes: true,
+  minifyCSS: true,
+  minifyJS: true,
+};
 
 async function emit(rel, code) {
   const dest = path.join(dist, rel);
@@ -84,11 +94,11 @@ async function run() {
 
   let indexHtml = rewriteHtml(await fs.readFile(path.join(root, 'index.html'), 'utf8'));
   indexHtml = indexHtml.replace('</body>', `    <script src="${swRegRel}"></script>\n</body>`);
-  await emit('index.html', indexHtml);
+  await emit('index.html', await minifyHtml(indexHtml, htmlMinifyOptions));
 
   for (const file of await walk(path.join(root, 'static'))) {
     const rel = toPosix(path.relative(root, file));
-    if (file.endsWith('.html')) await emit(rel, rewriteHtml(await fs.readFile(file, 'utf8')));
+    if (file.endsWith('.html')) await emit(rel, await minifyHtml(rewriteHtml(await fs.readFile(file, 'utf8')), htmlMinifyOptions));
     else await emit(rel, await fs.readFile(file));
   }
 
