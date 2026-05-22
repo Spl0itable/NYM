@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DMCA &amp; Content Policy - Nymchat</title>
+    <meta name="description" content="Nymchat DMCA &amp; Content Policy">
+    <link rel="icon" type="image/x-icon" href="https://nymchat.app/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymchat.app/images/android-chrome-192x192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymchat.app/images/android-chrome-192x192.png">
+    <link rel="stylesheet" href="../css/styles.css">
+</head>
+
+<body class="legal-body">
+    <div class="legal-page">
+        <a href="/" class="legal-back">&larr; Back to Nymchat</a>
+
+        <h1>DMCA &amp; Content Policy</h1>
+        <p class="last-updated">Last Updated: October 17th, 2025</p>
+
+        <h2>Understanding Nymchat Architecture</h2>
+        <p>Nymchat is a decentralized, pseudonymous messaging application that operates differently from traditional chat services. It's important to understand how content is distributed on our platform:</p>
+        <ul>
+            <li><strong>Nymchat does not host any message or media content.</strong> We are a client/interface that displays content stored elsewhere.</li>
+            <li>All media files (images, videos) are stored on independent Blossom servers operated by third parties.</li>
+            <li>Message content and metadata are published to Nostr relays, which are also independently operated.</li>
+            <li>Nymchat simply aggregates and displays this distributed content through a user-friendly interface.</li>
+        </ul>
+
+        <h2>Filing a DMCA Claim</h2>
+        <p>Because Nymchat does not host content, we cannot directly remove infringing material. To address copyright infringement, you must contact the appropriate parties:</p>
+
+        <h3>1. For Image/Video Content</h3>
+        <p>Media files are stored on Blossom servers. You need to:</p>
+        <ul>
+            <li>Identify which Blossom server is hosting the content (the URL will indicate this)</li>
+            <li>Contact the Blossom server operator directly with your DMCA takedown request</li>
+            <li>Each Blossom server operates independently and has its own policies</li>
+        </ul>
+
+        <h3>2. For Messages/Metadata</h3>
+        <p>If the infringing content is in a message, profile, channel name, or other metadata:</p>
+        <ul>
+            <li>This information is stored on Nostr relays</li>
+            <li>Contact the specific Nostr relay operators where the content appears</li>
+            <li>Multiple relays may store the same data due to Nostr's distributed nature</li>
+        </ul>
+
+        <h2>What Nymchat Can Do</h2>
+        <p>While we don't host content, we can:</p>
+        <ul>
+            <li>Help you identify which Blossom servers or relays are hosting specific content</li>
+            <li>Add content to a local blocklist so it doesn't appear in our interface (note: this only affects nymchat.app, not other Nostr clients)</li>
+            <li>Provide guidance on how to contact the appropriate service operators</li>
+        </ul>
+        <p>To request assistance, please contact us with:</p>
+        <ul>
+            <li>The URL or identifier of the infringing content</li>
+            <li>Proof of your copyright ownership</li>
+            <li>A description of the copyrighted work</li>
+        </ul>
+
+        <h2>Blossom Server Operators</h2>
+        <p>If you operate a Blossom server and receive a DMCA takedown request, you are responsible for handling it according to your jurisdiction's laws.</p>
+        <p><a href="https://github.com/hzrd149/blossom" target="_blank" rel="noopener">For a list of known Blossom servers, refer to the Blossom project documentation.</a></p>
+
+        <h2>Important Considerations</h2>
+        <ul>
+            <li><strong>Decentralization:</strong> Due to the decentralized nature of Nostr and Blossom, complete removal of content from all sources may not be possible.</li>
+            <li><strong>Multiple Copies:</strong> Content may exist on multiple Blossom servers and relays. You may need to contact multiple operators.</li>
+            <li><strong>Hash-Based Storage:</strong> Blossom uses content-addressed storage. The same file will have the same hash on any server.</li>
+            <li><strong>No Central Control:</strong> Neither Nymchat nor any single entity has the ability to remove content from the entire network.</li>
+        </ul>
+
+        <h2>Counter-Notification</h2>
+        <p>If you believe your content was wrongly removed from a Blossom server, you should contact that server operator directly to file a counter-notification.</p>
+
+        <h2>Contact</h2>
+        <p>For questions about this policy or assistance identifying content hosts, please <a href="contact.html">contact us</a>.</p>
+    </div>
+</body>
+
+</html>
