@@ -464,7 +464,7 @@
                         const ts = ((last && last.created_at) || (sample.created_at || 0)) * 1000;
                         const nym = this.users.has(peer)
                             ? this.users.get(peer).nym
-                            : `anon#${(peer || '').slice(0, 4)}`;
+                            : `nym#${(peer || '').slice(0, 4)}`;
                         this.addPMConversation(nym, peer, ts || Date.now());
                     }
                 }

@@ -510,7 +510,7 @@ Object.assign(NYM.prototype, {
                 const pubkey = el.dataset.pubkey;
                 if (pubkey !== this.pubkey) {
                     const user = this.users.get(pubkey);
-                    const baseNym = user ? this.parseNymFromDisplay(user.nym) : `anon`;
+                    const baseNym = user ? this.parseNymFromDisplay(user.nym) : `nym`;
                     this.openUserPM(baseNym, pubkey);
                 }
                 this.closeReactorsModal();

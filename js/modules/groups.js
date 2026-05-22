@@ -372,7 +372,7 @@ Object.assign(NYM.prototype, {
             for (const [groupId, group] of Object.entries(data)) {
                 // Pre-populate users Map and avatar cache from saved kind 0 profile
                 // snapshots so nicknames/avatars display immediately on restore
-                // instead of showing "anon" while waiting for relay profile fetches.
+                // instead of showing "nym" while waiting for relay profile fetches.
                 if (group.memberProfiles) {
                     for (const [pk, profile] of Object.entries(group.memberProfiles)) {
                         if (profile.name && !this.users.has(pk)) {
@@ -675,7 +675,7 @@ Object.assign(NYM.prototype, {
                     if (Array.isArray(grpForCheck.mods) && grpForCheck.mods.includes(removedPubkey)) return;
                 }
             }
-            // Fetch profiles so nicknames display correctly instead of anon#xxxx
+            // Fetch profiles so nicknames display correctly instead of nym#xxxx
             const profileFetches = [];
             if (!this.users.has(removedPubkey)) profileFetches.push(this.fetchProfileDirect(removedPubkey));
             if (!this.users.has(senderPubkey)) profileFetches.push(this.fetchProfileDirect(senderPubkey));

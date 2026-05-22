@@ -3595,7 +3595,7 @@ async function checkSavedConnection() {
             const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
             if (!pubkey) throw new Error('No stored pubkey');
 
-            // Set login method early so UI features (e.g. long-press anon send)
+            // Set login method early so UI features (e.g. long-press nym send)
             // recognise the user as logged in even if later async steps fail
             nym.nostrLoginMethod = method;
 
@@ -3638,7 +3638,7 @@ async function checkSavedConnection() {
 
             // Apply cached profile immediately for instant UI (name + avatar)
             // before relays connect; fresh data will overwrite later
-            nym.nym = 'anon'; // fallback until kind 0 profile is fetched
+            nym.nym = 'nym'; // fallback until kind 0 profile is fetched
             try {
                 const cached = JSON.parse(localStorage.getItem('nym_nostr_login_profile') || '{}');
                 if (cached.name) nym.nym = cached.name;
@@ -4985,7 +4985,7 @@ async function applyNostrSettingsAdditive(s) {
                 const inflated = backupMessages.map(m => {
                     if (m.conversationKey && m.isPM) return m;
                     return Object.assign({
-                        author: nym.getNymFromPubkey(m.pubkey) || 'anon',
+                        author: nym.getNymFromPubkey(m.pubkey) || 'nym',
                         timestamp: new Date((m.created_at || 0) * 1000),
                         isPM: true,
                         isGroup: true,
@@ -5452,7 +5452,7 @@ async function applyNostrSettings(s) {
                 const inflated = backupMessages.map(m => {
                     if (m.conversationKey && m.isPM) return m; // already full-fidelity
                     return Object.assign({
-                        author: nym.getNymFromPubkey(m.pubkey) || 'anon',
+                        author: nym.getNymFromPubkey(m.pubkey) || 'nym',
                         timestamp: new Date((m.created_at || 0) * 1000),
                         isPM: true,
                         isGroup: true,

@@ -546,7 +546,7 @@ Object.assign(NYM.prototype, {
                     const existingUser = this.users.get(pubkey);
                     // Always update: the kind 0 event is the authoritative source
                     // for a user's display name. Previous code only updated when
-                    // nym was missing or "anon", causing stale nicknames.
+                    // nym was missing or "nym", causing stale nicknames.
                     if (!existingUser) {
                         this.users.set(pubkey, {
                             nym: truncatedName,
@@ -2182,7 +2182,7 @@ Object.assign(NYM.prototype, {
                     'echo', 'nexus', 'void', 'flux', 'ghost',
                     'phantom', 'stealth', 'cryptic', 'dark', 'neural',
                     'binary', 'matrix', 'digital', 'virtual', 'zero',
-                    'null', 'anon', 'masked', 'hidden', 'cipher',
+                    'null', 'nym', 'masked', 'hidden', 'cipher',
                     'enigma', 'spectral', 'rogue', 'omega', 'alpha'
                 ];
                 const nouns = [

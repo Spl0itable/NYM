@@ -230,7 +230,7 @@ Object.assign(NYM.prototype, {
             'echo', 'nexus', 'void', 'flux', 'ghost',
             'phantom', 'stealth', 'cryptic', 'dark', 'neural',
             'binary', 'matrix', 'digital', 'virtual', 'zero',
-            'null', 'anon', 'masked', 'hidden', 'cipher',
+            'null', 'nym', 'masked', 'hidden', 'cipher',
             'enigma', 'spectral', 'rogue', 'omega', 'alpha',
             'delta', 'sigma', 'vortex', 'turbo', 'razor',
             'blade', 'frost', 'storm', 'glitch', 'pixel',
@@ -300,7 +300,7 @@ Object.assign(NYM.prototype, {
     },
 
     parseNymFromDisplay(displayNym) {
-        if (!displayNym) return 'anon';
+        if (!displayNym) return 'nym';
 
         // Strip flair and everything after the nym-suffix span first
         // Use [\s\S]* instead of .* to match across newlines (SVG flair icons contain newlines)
@@ -313,7 +313,7 @@ Object.assign(NYM.prototype, {
         cleaned = cleaned.replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
 
         // Strip pubkey suffix if still present (#xxxx where xxxx is 4 hex chars)
-        return cleaned.replace(/#[0-9a-f]{4}$/i, '') || cleaned || 'anon';
+        return cleaned.replace(/#[0-9a-f]{4}$/i, '') || cleaned || 'nym';
     },
 
     // Generate a deterministic identicon SVG from a seed (pubkey or any string).
@@ -944,8 +944,8 @@ Object.assign(NYM.prototype, {
             return `${cleanNym}#${this.getPubkeySuffix(pubkey)}`;
         }
 
-        // Return shortened pubkey as fallback with anon prefix
-        return `anon#${pubkey.slice(-4)}`;
+        // Return shortened pubkey as fallback with nym prefix
+        return `nym#${pubkey.slice(-4)}`;
     },
 
     // Compute the effective status (online / away / offline / hidden) for a user.

@@ -119,7 +119,7 @@ Object.assign(NYM.prototype, {
             for (const chanKey of referencedChannels) {
                 const msgs = this.messages.get(chanKey) || [];
                 const mapped = msgs.slice(-msgLimit).map(m => ({
-                    nym: m.author || 'anon',
+                    nym: m.author || 'nym',
                     pubkey: m.pubkey || '',
                     content: (m.content || '').slice(0, 300),
                     timestamp: m.created_at || 0,
@@ -168,7 +168,7 @@ Object.assign(NYM.prototype, {
             channelMessages = [];
             for (const [chanKey, msgs] of this.messages) {
                 const mapped = msgs.map(m => ({
-                    nym: m.author || 'anon',
+                    nym: m.author || 'nym',
                     pubkey: m.pubkey || '',
                     content: (m.content || '').slice(0, 300),
                     timestamp: m.created_at || 0,
@@ -1025,7 +1025,7 @@ Object.assign(NYM.prototype, {
                 // Get the base nym without HTML tags and flair
                 targetNym = this.parseNymFromDisplay(user.nym);
             } else {
-                targetNym = `anon#${targetPubkey.slice(-4)}`;
+                targetNym = `nym#${targetPubkey.slice(-4)}`;
             }
         } else {
             const hashIndex = targetInput.indexOf('#');
@@ -1103,7 +1103,7 @@ Object.assign(NYM.prototype, {
             if (user) {
                 targetNym = this.parseNymFromDisplay(user.nym);
             } else {
-                targetNym = `anon#${targetPubkey.slice(-4)}`;
+                targetNym = `nym#${targetPubkey.slice(-4)}`;
             }
         } else {
             const hashIndex = targetInput.indexOf('#');

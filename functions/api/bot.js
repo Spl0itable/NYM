@@ -4499,14 +4499,14 @@ function buildChannelContext(channelMessages, activeUsers) {
   var knownUsers = {};
   if (activeUsers && Array.isArray(activeUsers)) {
     activeUsers.forEach(function(u) {
-      var name = u.nym || "anon";
+      var name = u.nym || "nym";
       knownUsers[name.toLowerCase()] = u;
     });
   }
   // Add authors from channel messages who aren't in activeUsers
   if (channelMessages && Array.isArray(channelMessages)) {
     channelMessages.forEach(function(m) {
-      var author = m.nym || "anon";
+      var author = m.nym || "nym";
       var isBot = m.isBot || /^nymbot/i.test(author);
       if (!isBot && !knownUsers[author.toLowerCase()]) {
         knownUsers[author.toLowerCase()] = { nym: author, pubkey: m.pubkey || "" };
@@ -4516,7 +4516,7 @@ function buildChannelContext(channelMessages, activeUsers) {
   var allUsers = Object.values(knownUsers);
   if (allUsers.length > 0) {
     var userLines = allUsers.slice(0, 50).map(function(u) {
-      var line = u.nym || "anon";
+      var line = u.nym || "nym";
       if (u.pubkey) line += " (pubkey: " + u.pubkey + ")";
       if (u.flair) line += " [flair: " + u.flair + "]";
       if (u.style) line += " [style: " + u.style + "]";
@@ -4545,7 +4545,7 @@ function buildChannelContext(channelMessages, activeUsers) {
       var m = recent[mi];
       var isBot = m.isBot || /^nymbot/i.test(m.nym || "");
       // Strip the nym to just alphanumeric + basic chars to avoid confusing the LLM
-      var author = isBot ? "Nymbot" : (m.nym || "anon").replace(/[\x00-\x1F\x7F]/g, "").slice(0, 25);
+      var author = isBot ? "Nymbot" : (m.nym || "nym").replace(/[\x00-\x1F\x7F]/g, "").slice(0, 25);
       var text = (m.content || "").replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, "").trim().slice(0, 1000);
       // Strip @Nymbot mentions and ?command prefixes from context to avoid confusing the LLM
       text = text.replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").replace(/^\?ask\s*/i, "").trim();
@@ -4960,7 +4960,7 @@ async function handleSummarize(context, channelMessages, geohash) {
       return "No user messages to summarize — only bot commands found.";
     }
     var msgLines = filtered.slice(-100).map(function(m) {
-      var author = (m.nym || "anon").replace(/[\x00-\x1F\x7F]/g, "").slice(0, 25);
+      var author = (m.nym || "nym").replace(/[\x00-\x1F\x7F]/g, "").slice(0, 25);
       var isBotMsg = m.isBot || /^nymbot/i.test(m.nym || "");
       var text = (m.content || "").replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, "").trim().slice(0, 1000);
       // Redact prompt injection attempts in summarize context
@@ -5853,7 +5853,7 @@ async function handleLast(args, channelMessages) {
     messages = events.map(function(evt) {
       return {
         channel: extractGeohash(evt),
-        nym: extractNym(evt) || "anon",
+        nym: extractNym(evt) || "nym",
         content: evt.content || "",
         timestamp: evt.created_at
       };
@@ -5869,7 +5869,7 @@ async function handleLast(args, channelMessages) {
     var m = recent[i];
     var geo = (m.channel || "").replace(/^#/, "");
     if (!geo) continue;
-    var nym = m.nym || "anon";
+    var nym = m.nym || "nym";
     var preview = (m.content || "").trim();
     if (preview.length > 80) preview = preview.slice(0, 80) + "...";
     lines.push("#" + geo + " \u2014 " + nym + " (" + timeAgo(m.timestamp) + "): " + preview);
@@ -5895,7 +5895,7 @@ async function handleSeen(nickname, channelMessages) {
     if (targetPubkey) {
       return m.pubkey && m.pubkey.toLowerCase() === targetPubkey;
     }
-    var mNym = m.nym || "anon";
+    var mNym = m.nym || "nym";
     return mNym.toLowerCase().replace(/#.*$/, "").trim() === target;
   }
 
@@ -5905,7 +5905,7 @@ async function handleSeen(nickname, channelMessages) {
       var m = channelMessages[i];
       if (m.isBot) continue;
       if (!matchesSeen(m)) continue;
-      var mNym = m.nym || "anon";
+      var mNym = m.nym || "nym";
       if (!foundNym) foundNym = mNym;
       var chan = (m.channel || "").replace(/^#/, "");
       if (!chan) continue;
@@ -5975,7 +5975,7 @@ async function handleWho(geohash, channelMessages, activeUsers) {
       if (m.isBot) continue;
       if (m.channel !== channelKey && m.channel !== geohash) continue;
       if (m.timestamp < since) continue;
-      var mNym = m.nym || "anon";
+      var mNym = m.nym || "nym";
       var mKey = m.pubkey || mNym.toLowerCase().replace(/#.*$/, "").trim();
       if (!nymsByPubkey[mKey]) {
         nymsByPubkey[mKey] = { nym: mNym, pubkey: m.pubkey || "", lastSeen: m.timestamp, msgCount: 1 };

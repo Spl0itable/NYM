@@ -1252,7 +1252,7 @@ Object.assign(NYM.prototype, {
             popup.style.top = top + 'px';
 
             // Build the quick context menu (Slap, Hug, Zap, Quote, Copy)
-            const baseAuthor = this.parseNymFromDisplay(msgEl.dataset.author || 'anon');
+            const baseAuthor = this.parseNymFromDisplay(msgEl.dataset.author || 'nym');
             const targetPubkey = msgEl.dataset.pubkey || '';
             const targetBaseNym = this.stripPubkeySuffix(baseAuthor);
             const contentEl = msgEl.querySelector('.message-content');

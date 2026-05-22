@@ -1962,7 +1962,7 @@ Object.assign(NYM.prototype, {
                 icon: '<svg viewBox="0 0 24 24"><polyline points="9 14 4 9 9 4"></polyline><path d="M20 20v-7a4 4 0 0 0-4-4H4"></path></svg>',
                 run: (msgEl) => {
                     if (!msgEl.dataset.pubkey) return;
-                    const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'anon');
+                    const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'nym');
                     const suffix = this.getPubkeySuffix(msgEl.dataset.pubkey);
                     const authorText = `${baseNym}#${suffix}`;
                     const cleanContent = msgEl.dataset.rawContent || msgEl.querySelector('.message-content')?.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
@@ -2019,7 +2019,7 @@ Object.assign(NYM.prototype, {
                         this.displaySystemMessage('Cannot zap your own message');
                         return;
                     }
-                    const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'anon');
+                    const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'nym');
                     this.displaySystemMessage(`Checking if @${baseNym} can receive zaps...`);
                     try {
                         const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
@@ -2223,7 +2223,7 @@ Object.assign(NYM.prototype, {
             if (!msgEl.dataset.pubkey) return;
 
             // Build clean author from data attributes to avoid flair emoji leaking into quote text
-            const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'anon');
+            const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'nym');
             const suffix = this.getPubkeySuffix(msgEl.dataset.pubkey);
             const authorText = `${baseNym}#${suffix}`;
             const cleanContent = msgEl.dataset.rawContent || msgEl.querySelector('.message-content')?.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();

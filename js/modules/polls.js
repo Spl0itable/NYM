@@ -109,7 +109,7 @@ Object.assign(NYM.prototype, {
 
         const question = questionTag[1];
         const options = optionTags.map(t => ({ index: parseInt(t[1]), text: t[2] }));
-        const nym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : 'anon';
+        const nym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : 'nym';
         const geohash = geohashTag ? geohashTag[1] : '';
 
         if (!this.polls.has(event.id)) {
@@ -400,7 +400,7 @@ Object.assign(NYM.prototype, {
         channelPolls.sort((a, b) => a[1].created_at - b[1].created_at);
 
         for (const [pollId, poll] of channelPolls) {
-            const nym = poll.nym || 'anon';
+            const nym = poll.nym || 'nym';
             const isOwn = poll.pubkey === this.pubkey;
             this.displayPollMessage(pollId, nym, poll.pubkey, poll.question, poll.options, poll.votes, poll.created_at, isOwn);
         }

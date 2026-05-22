@@ -1833,11 +1833,11 @@ Object.assign(NYM.prototype, {
 
             this.updateViewMoreButton('pmList');
 
-            // Proactively request their profile. Unknown/anon contacts get
+            // Proactively request their profile. Unknown/nym contacts get
             // an immediate fetch; known contacts go through the throttled
             // refresh so we still pick up nickname/avatar updates without
             // hammering relays on every PM message.
-            if (!this.users.has(pubkey) || /^anon$/i.test(cleanBaseNym)) {
+            if (!this.users.has(pubkey) || /^nym$/i.test(cleanBaseNym)) {
                 this.requestUserProfile(pubkey);
             } else if (typeof this.refreshUserProfileThrottled === 'function') {
                 this.refreshUserProfileThrottled(pubkey);
@@ -2115,7 +2115,7 @@ Object.assign(NYM.prototype, {
 
         // Proactively fetch kind 0 profile to update nickname/avatar
         const known = this.users.get(pubkey);
-        if (!known || /^anon$/i.test(this.parseNymFromDisplay(known.nym))) {
+        if (!known || /^nym$/i.test(this.parseNymFromDisplay(known.nym))) {
             this.fetchProfileDirect(pubkey);
         }
     },
