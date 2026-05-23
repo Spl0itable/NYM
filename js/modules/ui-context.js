@@ -698,12 +698,18 @@ Object.assign(NYM.prototype, {
             }
             if (!data || data.error) return null;
 
-            // Cache result
+            // Cache result in memory and persist to IndexedDB so it survives
+            // reloads (and iOS Safari HTTP-cache evictions).
             this._unfurlCache.set(url, data);
-            // Trim cache to max 200 entries
-            if (this._unfurlCache.size > 200) {
+            if (this._unfurlCache.size > 500) {
                 const first = this._unfurlCache.keys().next().value;
                 this._unfurlCache.delete(first);
+                if (typeof this.deleteCachedUnfurl === 'function') {
+                    this.deleteCachedUnfurl(first);
+                }
+            }
+            if (typeof this.persistUnfurl === 'function') {
+                this.persistUnfurl(url, data);
             }
             return data;
         } catch {
@@ -1685,14 +1691,48 @@ Object.assign(NYM.prototype, {
 
     _richSelectionOffset(el, container, offsetInContainer) {
         if (!container || !el.contains(container)) return null;
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        try {
-            range.setEnd(container, offsetInContainer);
-        } catch (_) {
-            return null;
-        }
-        return this._richNodeLength(range.cloneContents());
+        // Walk the live DOM accumulating the model-character length of every
+        // node we pass on the way to the caret. Avoids allocating a Range or
+        // cloning the prefix subtree on each call — the original cloneContents
+        // path made every iOS keystroke do an O(n) DOM clone + character walk.
+        let total = 0;
+        let found = false;
+        const walk = (node) => {
+            if (found) return;
+            if (node === container) {
+                if (container.nodeType === Node.TEXT_NODE) {
+                    total += offsetInContainer;
+                } else {
+                    const kids = container.childNodes;
+                    const upto = Math.min(offsetInContainer, kids.length);
+                    for (let i = 0; i < upto; i++) {
+                        total += this._richNodeLength(kids[i]);
+                    }
+                }
+                found = true;
+                return;
+            }
+            if (node.nodeType === Node.TEXT_NODE) {
+                total += node.nodeValue.length;
+                return;
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+            if (node.tagName === 'IMG') {
+                total += this._emojiTokenForImg(node).length;
+                return;
+            }
+            if (node.tagName === 'BR') {
+                total += 1;
+                return;
+            }
+            const kids = node.childNodes;
+            for (let i = 0; i < kids.length; i++) {
+                walk(kids[i]);
+                if (found) return;
+            }
+        };
+        walk(el);
+        return found ? total : null;
     },
 
     _richLocate(el, target) {
@@ -1749,19 +1789,29 @@ Object.assign(NYM.prototype, {
         // The caret only lives in window.getSelection() while the input is
         // focused; opening the emoji picker moves focus away. Remember the last
         // in-input caret so insertions land where the user left off.
+        // We deliberately skip the 'input' event here — the input handler
+        // already reads inputEl.selectionStart, whose getter updates
+        // _savedSelStart as a side effect. Running saveSel on 'input' too
+        // doubled the selection offset walk on every keystroke.
         const saveSel = () => {
             const sel = window.getSelection();
             if (!sel || !sel.rangeCount) return;
             const r = sel.getRangeAt(0);
             if (!el.contains(r.startContainer)) return;
             const s = self._richSelectionOffset(el, r.startContainer, r.startOffset);
-            const e = self._richSelectionOffset(el, r.endContainer, r.endOffset);
             if (s != null) el._savedSelStart = s;
-            if (e != null) el._savedSelEnd = e;
+            // Only compute the end offset when a real selection exists — for a
+            // collapsed caret it equals the start and is the common case while
+            // typing on iOS.
+            if (r.collapsed) {
+                el._savedSelEnd = el._savedSelStart;
+            } else {
+                const e = self._richSelectionOffset(el, r.endContainer, r.endOffset);
+                if (e != null) el._savedSelEnd = e;
+            }
         };
         el.addEventListener('keyup', saveSel);
         el.addEventListener('mouseup', saveSel);
-        el.addEventListener('input', saveSel);
         el.addEventListener('focus', saveSel);
 
         Object.defineProperty(el, 'value', {
