@@ -93,12 +93,9 @@ Object.assign(NYM.prototype, {
                 this.setupSidebarSectionReorder();
             }, 800);
 
-            try {
-                await Promise.race([
-                    this.hydrateFromCache(),
-                    new Promise(r => setTimeout(r, 1000))
-                ]);
-            } catch (_) { }
+            this._hydrationPromise = this.hydrateFromCache()
+                .then(() => { this._hydrationComplete = true; this._onHydrationComplete(); })
+                .catch(() => { this._hydrationComplete = true; });
 
             await this.loadLightningAddress();
             this.cleanupOldLightningAddress();

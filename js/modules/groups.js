@@ -692,7 +692,8 @@ Object.assign(NYM.prototype, {
                 const gck = this.getGroupConversationKey(groupId);
                 this.pmMessages.delete(gck);
                 this.channelDOMCache.delete(gck);
-                if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', gck);
+                if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', gck);
+                if (this._persistedPMIds) this._persistedPMIds.delete(gck);
                 document.getElementById('pmList')?.querySelector(`[data-group-id="${groupId}"]`)?.remove();
                 this.updateViewMoreButton('pmList');
                 if (this.currentGroup === groupId) {
@@ -1378,7 +1379,8 @@ Object.assign(NYM.prototype, {
         const groupConvKey = this.getGroupConversationKey(groupId);
         this.pmMessages.delete(groupConvKey);
         this.channelDOMCache.delete(groupConvKey);
-        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', groupConvKey);
+        if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', groupConvKey);
+        if (this._persistedPMIds) this._persistedPMIds.delete(groupConvKey);
         const pmList = document.getElementById('pmList');
         const item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
         if (item) item.remove();

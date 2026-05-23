@@ -2981,8 +2981,8 @@ async function countAppCacheItems() {
             nym._cacheGetAll('reactions')
         ]);
         counts.profiles = profiles.length;
-        counts.channels = channels.length;
-        counts.pms = pms.length;
+        counts.channels = new Set(channels.map(r => r && r.conv).filter(Boolean)).size;
+        counts.pms = new Set(pms.map(r => r && r.conv).filter(Boolean)).size;
         counts.reactions = reactions.length;
         const all = [].concat(profiles, channels, pms, reactions);
         for (const r of all) {
@@ -3523,7 +3523,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.399';
+const NYMCHAT_VERSION = 'v3.66.400';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
