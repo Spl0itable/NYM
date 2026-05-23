@@ -23,6 +23,7 @@
     const META_PROCESSED_PM_EVENT_IDS = 'processedPMEventIds';
     const META_DELETED_EVENT_IDS = 'deletedEventIds';
     const META_NYMCHAT_PUBKEYS = 'nymchatPubkeys';
+    const META_NYMCHAT_VOUCHES = 'nymchatVouches';
 
     Object.assign(NYM.prototype, {
 
@@ -261,6 +262,12 @@
                         ids: Array.from(this.nymchatPubkeys)
                     });
                 }
+                if (this.nymchatVouches && this.nymchatVouches.size > 0) {
+                    this._cachePut('meta', {
+                        key: META_NYMCHAT_VOUCHES,
+                        ids: Array.from(this.nymchatVouches)
+                    });
+                }
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
@@ -275,6 +282,8 @@
                         for (const id of m.ids) this.deletedEventIds.add(id);
                     } else if (m.key === META_NYMCHAT_PUBKEYS && this.nymchatPubkeys) {
                         for (const id of m.ids) this.nymchatPubkeys.add(id);
+                    } else if (m.key === META_NYMCHAT_VOUCHES && this.nymchatVouches) {
+                        for (const id of m.ids) this.nymchatVouches.add(id);
                     }
                 }
             } catch (_) { }
@@ -354,25 +363,41 @@
                 }
 
                 const loadedChannelKeys = [];
+                const channelLimit = this.channelMessageLimit || 100;
                 for (const c of channels) {
                     if (!c || !c.key || !Array.isArray(c.messages)) continue;
-                    if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
-                    const msgs = c.messages.map(m => this._hydrateMessage(m));
-                    this.messages.set(c.key, msgs);
+                    if (!this.messages.has(c.key)) this.messages.set(c.key, []);
                     if (!this.channelMessageIds.has(c.key)) this.channelMessageIds.set(c.key, new Set());
+                    const arr = this.messages.get(c.key);
                     const idSet = this.channelMessageIds.get(c.key);
-                    for (const m of msgs) {
-                        if (m && m.id) idSet.add(m.id);
+                    let added = 0;
+                    for (const raw of c.messages) {
+                        const m = this._hydrateMessage(raw);
+                        if (!m || !m.id || idSet.has(m.id)) continue;
+                        if (typeof this._insertMessageSorted === 'function') {
+                            this._insertMessageSorted(arr, m);
+                        } else {
+                            arr.push(m);
+                        }
+                        idSet.add(m.id);
                         if (typeof this._indexMessage === 'function') this._indexMessage(c.key, m);
+                        if (typeof this._trackPubkeyMessage === 'function' && m.pubkey) {
+                            this._trackPubkeyMessage(m.pubkey, m.id, true);
+                        }
+                        added++;
                     }
-                    loadedChannelKeys.push(c.key);
-                    if (typeof this._trackPubkeyMessage === 'function') {
-                        for (const m of msgs) {
-                            if (m && m.pubkey && m.id) {
-                                this._trackPubkeyMessage(m.pubkey, m.id, true);
+                    if (arr.length > channelLimit) {
+                        const drop = arr.length - channelLimit;
+                        for (let i = 0; i < drop; i++) {
+                            const removed = arr[i];
+                            if (removed && removed.id) {
+                                idSet.delete(removed.id);
+                                if (typeof this._unindexMessage === 'function') this._unindexMessage(removed);
                             }
                         }
+                        arr.splice(0, drop);
                     }
+                    if (added > 0) loadedChannelKeys.push(c.key);
                 }
 
                 for (const key of loadedChannelKeys) {
@@ -393,13 +418,32 @@
                 }
 
                 if (cachePMsAllowed) {
+                    const pmLimit = this.pmStorageLimit || 1000;
                     for (const p of pms) {
                         if (!p || !p.key || !Array.isArray(p.messages)) continue;
-                        if (this.pmMessages.has(p.key) && this.pmMessages.get(p.key).length > 0) continue;
-                        const msgs = p.messages.map(m => this._hydrateMessage(m));
-                        this.pmMessages.set(p.key, msgs);
-                        if (typeof this._indexMessage === 'function') {
-                            for (const m of msgs) this._indexMessage(p.key, m);
+                        if (!this.pmMessages.has(p.key)) this.pmMessages.set(p.key, []);
+                        const arr = this.pmMessages.get(p.key);
+                        const seen = new Set(arr.map(m => m && m.id).filter(Boolean));
+                        for (const raw of p.messages) {
+                            const m = this._hydrateMessage(raw);
+                            if (!m || !m.id || seen.has(m.id)) continue;
+                            if (typeof this._insertMessageSorted === 'function') {
+                                this._insertMessageSorted(arr, m);
+                            } else {
+                                arr.push(m);
+                            }
+                            seen.add(m.id);
+                            if (typeof this._indexMessage === 'function') this._indexMessage(p.key, m);
+                        }
+                        if (arr.length > pmLimit) {
+                            const drop = arr.length - pmLimit;
+                            for (let i = 0; i < drop; i++) {
+                                const removed = arr[i];
+                                if (removed && typeof this._unindexMessage === 'function') {
+                                    this._unindexMessage(removed);
+                                }
+                            }
+                            arr.splice(0, drop);
                         }
                     }
                 } else {

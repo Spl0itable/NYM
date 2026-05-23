@@ -123,6 +123,59 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _replaceOptimisticMessage(tempId, signedEvent, storageKey, isPM) {
+        const arr = isPM ? this.pmMessages.get(storageKey) : this.messages.get(storageKey);
+        if (!arr) return;
+        const idx = arr.findIndex(m => m && m.id === tempId);
+        if (idx < 0) return;
+        const msg = arr[idx];
+        const oldCreated = msg.created_at || 0;
+        msg.id = signedEvent.id;
+        msg.created_at = signedEvent.created_at;
+        msg.timestamp = new Date(signedEvent.created_at * 1000);
+        delete msg._optimistic;
+
+        const idSet = isPM ? null : this.channelMessageIds.get(storageKey);
+        if (idSet) idSet.add(signedEvent.id);
+        if (typeof this._indexMessage === 'function') this._indexMessage(storageKey, msg);
+        if (this.processedMessageEventIds) this.processedMessageEventIds.add(signedEvent.id);
+        if (this.renderedMessageIds) {
+            this.renderedMessageIds.delete(tempId);
+            this.renderedMessageIds.add(signedEvent.id);
+        }
+
+        if (oldCreated !== msg.created_at) {
+            arr.splice(idx, 1);
+            this._insertMessageSorted(arr, msg);
+        }
+
+        const el = document.querySelector(`[data-message-id="${tempId.replace(/"/g, '\\"')}"]`);
+        if (el) {
+            el.dataset.messageId = signedEvent.id;
+            el.dataset.createdAt = String(signedEvent.created_at || 0);
+            el.classList.remove('optimistic-pending');
+
+            if (oldCreated !== msg.created_at) {
+                const container = el.parentNode;
+                if (container) {
+                    const insertBefore = this._findDomInsertionPoint(container, msg.created_at, msg._ms || msg.created_at * 1000, msg._seq || 0);
+                    if (insertBefore !== el && insertBefore !== el.nextSibling) {
+                        if (insertBefore) container.insertBefore(el, insertBefore);
+                        else container.appendChild(el);
+                    }
+                }
+            }
+        }
+    },
+
+    _markOptimisticFailed(tempId, storageKey, err) {
+        const el = document.querySelector(`[data-message-id="${tempId.replace(/"/g, '\\"')}"]`);
+        if (el) el.classList.add('optimistic-failed');
+        if (typeof this.displaySystemMessage === 'function') {
+            this.displaySystemMessage('Failed to send message: ' + (err && err.message || err));
+        }
+    },
+
     _findDomInsertionPoint(container, msgCreatedAt, msgMs, msgSeq) {
         const nodes = container.children;
         const n = nodes.length;
@@ -485,6 +538,10 @@ Object.assign(NYM.prototype, {
                 }
 
                 const arr = this.messages.get(storageKey);
+                if (arr.length >= this.channelMessageLimit && arr.length > 0
+                    && (message.created_at || 0) < (arr[0].created_at || 0)) {
+                    return;
+                }
                 this._insertMessageSorted(arr, message);
                 idSet.add(message.id);
                 this._indexMessage(storageKey, message);
@@ -2004,8 +2061,9 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
-            if (this.enablePow && this.powDifficulty > 0) {
-                event = NostrTools.nip13.minePow(event, this.powDifficulty);
+            const editDifficulty = this._effectivePowDifficulty();
+            if (editDifficulty > 0) {
+                event = await this._minePow(event, editDifficulty);
             }
 
             const signedEvent = await this.signEvent(event);
@@ -2656,6 +2714,7 @@ Object.assign(NYM.prototype, {
             fragment,
             messageCount: messages.length,
             messageFingerprint: this._computeMessageFingerprint(messages),
+            bubbleMode: document.body.classList.contains('chat-bubbles'),
             virtualScrollState: {
                 currentStartIndex: this.virtualScroll.currentStartIndex,
                 currentEndIndex: this.virtualScroll.currentEndIndex
@@ -2765,6 +2824,7 @@ Object.assign(NYM.prototype, {
         container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
 
         // Partial hit: render trailing messages that arrived while we were away.
+        let appendedTrailing = false;
         if (cachedCount < currentLen) {
             const trailing = currentMessages.slice(cachedCount);
             this.virtualScroll.suppressAutoScroll = true;
@@ -2776,12 +2836,14 @@ Object.assign(NYM.prototype, {
             this._suppressSound = false;
             this._suppressBubbleRewrap = false;
             this.virtualScroll.suppressAutoScroll = false;
+            appendedTrailing = trailing.length > 0;
         }
 
-        // The cached fragment was built when bubbles may have been off, or
-        // when grouping ran against a different sibling chain. Recompute now
-        // that the fragment is back in the live container.
-        this._recomputeAllBubbleGrouping(container);
+        const currentBubbleMode = document.body.classList.contains('chat-bubbles');
+        const bubbleModeMatches = cached.bubbleMode === currentBubbleMode;
+        if (!bubbleModeMatches || appendedTrailing) {
+            requestAnimationFrame(() => this._recomputeAllBubbleGrouping(container));
+        }
 
         if (this.settings.autoscroll) {
             this.userScrolledUp = false;
@@ -2865,7 +2927,7 @@ Object.assign(NYM.prototype, {
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
 
-        this._recomputeAllBubbleGrouping(container);
+        requestAnimationFrame(() => this._recomputeAllBubbleGrouping(container));
 
         // Scroll to bottom if requested. The reverse-column container keeps
         // the bottom pinned as media loads afterwards, so no follow-up is needed.
