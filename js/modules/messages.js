@@ -175,6 +175,102 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _initSeenObserver() {
+        if (this._seenObserver !== undefined) return;
+        if (typeof IntersectionObserver === 'undefined') { this._seenObserver = null; return; }
+        const root = document.getElementById('messagesContainer') || null;
+        const cb = (entries) => {
+            if (document.hidden) return;
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                const el = entry.target;
+                this._seenObserver.unobserve(el);
+                this._handleMessageElementSeen(el);
+            }
+        };
+        this._seenObserver = new IntersectionObserver(cb, { root, threshold: 0.5 });
+        if (!this._seenObserverVisibilityBound) {
+            this._seenObserverVisibilityBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) return;
+                this._reobserveVisibleMessages();
+            });
+        }
+    },
+
+    _observeMessageSeen(messageEl, message) {
+        if (!messageEl || !message) return;
+        if (message.isOwn) return;
+        if (message.readReceiptSent) return;
+        if (this.blockedUsers && this.blockedUsers.has(message.pubkey)) return;
+        if (!message.isPM) {
+            if (!message.geohash) return;
+            if (!message.id || !/^[0-9a-f]{64}$/i.test(message.id)) return;
+        }
+        this._initSeenObserver();
+        if (!this._seenObserver) return;
+        this._seenObserver.observe(messageEl);
+    },
+
+    _reobserveVisibleMessages() {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+        const isPM = container.dataset.virtualScrollIsPM === 'true';
+        const arr = isPM
+            ? (this.currentGroup
+                ? this.pmMessages.get(this.getGroupConversationKey(this.currentGroup))
+                : this.pmMessages.get(this.getPMConversationKey(this.currentPM)))
+            : this.messages.get(this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel);
+        if (!arr || arr.length === 0) return;
+        const recent = arr.slice(-50);
+        for (const m of recent) {
+            if (!m || m.isOwn || m.readReceiptSent) continue;
+            const lookupId = (m.isPM && m.nymMessageId) ? m.nymMessageId : m.id;
+            const el = container.querySelector(`[data-message-id="${String(lookupId).replace(/"/g, '\\"')}"]`);
+            if (el) this._observeMessageSeen(el, m);
+        }
+    },
+
+    _handleMessageElementSeen(el) {
+        if (!el || !el.dataset) return;
+        const msgId = el.dataset.messageId;
+        if (!msgId) return;
+        const entry = this.messageIndex && this.messageIndex.get(msgId);
+        const msg = entry && entry.msg;
+        if (!msg || msg.isOwn) return;
+        if (this.blockedUsers && this.blockedUsers.has(msg.pubkey)) return;
+
+        if (msg.isPM) {
+            if (msg.readReceiptSent) return;
+            const context = msg.isGroup ? 'group' : 'pm';
+            let sent = false;
+            if (msg.bitchatMessageId && this.bitchatUsers && this.bitchatUsers.has(msg.pubkey)
+                && typeof this.sendBitchatReceipt === 'function') {
+                this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
+                sent = true;
+            }
+            if (msg.nymMessageId && this.nymUsers && this.nymUsers.has(msg.pubkey)
+                && typeof this.sendNymReceipt === 'function') {
+                this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey, context);
+                sent = true;
+            }
+            if (sent) {
+                msg.readReceiptSent = true;
+                if (entry.convKey && typeof this.persistPMMessages === 'function') {
+                    this.persistPMMessages(entry.convKey);
+                }
+                if (typeof this.recordOwnActivity === 'function') this.recordOwnActivity();
+            }
+        } else if (msg.geohash && msg.id && /^[0-9a-f]{64}$/i.test(msg.id)
+            && typeof this.sendChannelReadReceipt === 'function') {
+            this.sendChannelReadReceipt(msg.id, msg.pubkey, msg.geohash);
+            msg.readReceiptSent = true;
+            const storageKey = `#${msg.geohash}`;
+            if (typeof this.persistChannelMessages === 'function') this.persistChannelMessages(storageKey);
+            if (typeof this.recordOwnActivity === 'function') this.recordOwnActivity();
+        }
+    },
+
     _markOptimisticFailed(tempId, storageKey, err) {
         const el = document.querySelector(`[data-message-id="${tempId.replace(/"/g, '\\"')}"]`);
         if (el) el.classList.add('optimistic-failed');
@@ -598,16 +694,6 @@ Object.assign(NYM.prototype, {
             }
             if (typeof this._markChannelRead === 'function' && message.created_at) {
                 this._markChannelRead(storageKey, message.created_at);
-            }
-
-            // Send a public read receipt (kind 24421) only for messages the
-            // user can actually see: fresh, in the current channel, tab
-            // visible, and not scrolled away from the bottom.
-            const canBeSeen = !document.hidden && !this.userScrolledUp;
-            if (canBeSeen && !message.isOwn && !message.isHistorical && message.geohash &&
-                message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
-                typeof this.sendChannelReadReceipt === 'function') {
-                this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);
             }
         }
 
@@ -1069,6 +1155,7 @@ Object.assign(NYM.prototype, {
         }
 
         this.renderedMessageIds.add(_dedupeId);
+        this._observeMessageSeen(messageEl, message);
         this._updateBubbleGrouping(messageEl);
 
         // Sending your own channel message should always jump to the latest,
@@ -2876,6 +2963,8 @@ Object.assign(NYM.prototype, {
         container.dataset.virtualScrollKey = storageKey;
         container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
 
+        this._reobserveVisibleMessages();
+
         // Partial hit: render trailing messages that arrived while we were away.
         let appendedTrailing = false;
         if (cachedCount < currentLen) {
@@ -2980,6 +3069,7 @@ Object.assign(NYM.prototype, {
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
 
+        this._reobserveVisibleMessages();
         requestAnimationFrame(() => this._recomputeAllBubbleGrouping(container));
 
         // Scroll to bottom if requested. The reverse-column container keeps

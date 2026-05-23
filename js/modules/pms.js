@@ -1161,21 +1161,6 @@ Object.assign(NYM.prototype, {
                 if (typeof this._markChannelRead === 'function') {
                     this._markChannelRead(conversationKey, msg.created_at);
                 }
-                // Send READ receipt if viewing the conversation, and mark
-                // the message so openPM doesn't re-send on next open.
-                if (!isOwn) {
-                    let sent = false;
-                    if (parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
-                        this.sendBitchatReceipt(parsed.messageId, 0x02, senderPubkey); // 0x02 = READ
-                        sent = true;
-                    }
-                    if (nymMsgId && this.nymUsers.has(senderPubkey)) {
-                        this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
-                        sent = true;
-                    }
-                    if (sent) msg.readReceiptSent = true;
-                    this.recordOwnActivity();
-                }
             } else {
                 // Not viewing this conversation — leave the cached DOM in
                 // place. loadPMMessages does a partial-cache restore that
@@ -2001,22 +1986,6 @@ Object.assign(NYM.prototype, {
 
         // Load PM messages
         this.loadPMMessages(conversationKey);
-
-        // Send READ receipts only for messages we haven't acknowledged
-        const pmMsgs = this.pmMessages.get(conversationKey) || [];
-        for (const msg of pmMsgs) {
-            if (msg.isOwn || msg.readReceiptSent) continue;
-            let sent = false;
-            if (msg.bitchatMessageId && this.bitchatUsers.has(msg.pubkey)) {
-                this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
-                sent = true;
-            }
-            if (msg.nymMessageId && this.nymUsers.has(msg.pubkey)) {
-                this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey);
-                sent = true;
-            }
-            if (sent) msg.readReceiptSent = true;
-        }
         this.recordOwnActivity();
 
         // Restore any unsent input previously typed for this conversation
