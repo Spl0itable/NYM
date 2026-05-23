@@ -954,6 +954,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const unreadKey = geohash ? `#${geohash}` : channel;
         this.clearUnreadCount(unreadKey);
 
+        if (typeof this._updateNotificationBadge === 'function') {
+            this._updateNotificationBadge();
+        }
+
         // Re-sort sidebar so the active channel moves to the top while we're
         // viewing it (and the previous channel falls back to its activity slot)
         this.sortChannelsByActivity();

@@ -970,8 +970,10 @@ Object.assign(NYM.prototype, {
     },
 
     // Update message with zap display
-    updateMessageZaps(messageId) {
-        const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+    updateMessageZaps(messageId, messageEl) {
+        if (!messageEl) {
+            messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+        }
         if (!messageEl) return;
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed

@@ -2211,6 +2211,11 @@ Object.assign(NYM.prototype, {
 
         const groupConvKey = this.getGroupConversationKey(groupId);
         this.clearUnreadCount(groupConvKey);
+
+        if (typeof this._updateNotificationBadge === 'function') {
+            this._updateNotificationBadge();
+        }
+
         this.loadPMMessages(groupConvKey);
 
         // Restore any unsent input previously typed for this conversation

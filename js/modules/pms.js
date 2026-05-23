@@ -1990,6 +1990,10 @@ Object.assign(NYM.prototype, {
         const conversationKey = this.getPMConversationKey(pubkey);
         this.clearUnreadCount(conversationKey);
 
+        if (typeof this._updateNotificationBadge === 'function') {
+            this._updateNotificationBadge();
+        }
+
         // Load PM messages
         this.loadPMMessages(conversationKey);
 
