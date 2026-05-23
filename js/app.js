@@ -377,6 +377,7 @@
 
         state.overlay.classList.add('active');
         state.overlay.style.display = 'flex';
+        state.overlay.removeAttribute('aria-hidden');
         state.started = true;
         state.idx = 0;
 
@@ -410,8 +411,14 @@
 
     function endTutorial(markSeen) {
         // Hide
+        if (state.overlay && state.overlay.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
         state.overlay?.classList.remove('active');
-        if (state.overlay) state.overlay.style.display = 'none';
+        if (state.overlay) {
+            state.overlay.style.display = 'none';
+            state.overlay.setAttribute('aria-hidden', 'true');
+        }
         if (state.highlight) state.highlight.style.display = 'none';
 
         // Save flag
@@ -551,6 +558,9 @@ class NYM {
         this.dismissedTransferEvents = new Set(JSON.parse(localStorage.getItem('nym_dismissed_transfers') || '[]'));
         this.powDifficulty = 12;
         this.enablePow = false;
+        this.nymchatPowFloor = 16;
+        this.nymchatVouches = new Set();
+        this._lastVouchPublishAt = 0;
         this.spamFilterEnabled = true;
         this.spamFilterAggressive = true;
         this.connectionMode = 'ephemeral';
@@ -562,6 +572,9 @@ class NYM {
         this._navigating = false;
         try { history.replaceState({ _nym_nav: -1 }, ''); } catch { }
         this.messages = new Map();
+        this.channelMessageIds = new Map();
+        this.renderedMessageIds = new Set();
+        this.messageIndex = new Map();
         this._msgSeq = 0;
         this.channelDOMCache = new Map();
         this.virtualScroll = {
@@ -618,10 +631,9 @@ class NYM {
         this.performanceMode = false;
         this._deviceCapabilities = this._detectDeviceCapabilities();
         this._applyPerformanceMode();
-        const _tier = this._deviceCapabilities.tier;
-        this.channelSubscriptionBatchSize = _tier === 'low' ? 5 : (_tier === 'high' ? 15 : 10);
-        this.channelMessageLimit = _tier === 'low' ? 50 : (_tier === 'high' ? 150 : 100);
-        this.pmStorageLimit = _tier === 'low' ? 200 : (_tier === 'high' ? 1000 : 500);
+        this.channelSubscriptionBatchSize = 10;
+        this.channelMessageLimit = 100;
+        this.pmStorageLimit = 1000;
         this.pmPageSize = 100;
         this.pmLoadMoreSize = 50;
         this.pmRenderedStart = new Map();
@@ -1039,6 +1051,8 @@ class NYM {
             title: 'Nymchat Bot'
         };
         this.verifiedBotPubkeys = new Set([this.verifiedBot.pubkey]);
+        this.nymchatPubkeys.add(this.verifiedDeveloper.pubkey);
+        this.nymchatPubkeys.add(this.verifiedBot.pubkey);
         // Seed nymbot into users map so it always appears in sidebar and mention autocomplete
         this.users.set(this.verifiedBot.pubkey, {
             nym: 'Nymbot',
@@ -2967,8 +2981,8 @@ async function countAppCacheItems() {
             nym._cacheGetAll('reactions')
         ]);
         counts.profiles = profiles.length;
-        counts.channels = channels.length;
-        counts.pms = pms.length;
+        counts.channels = new Set(channels.map(r => r && r.conv).filter(Boolean)).size;
+        counts.pms = new Set(pms.map(r => r && r.conv).filter(Boolean)).size;
         counts.reactions = reactions.length;
         const all = [].concat(profiles, channels, pms, reactions);
         for (const r of all) {
@@ -3320,6 +3334,9 @@ async function clearLocalStorageCache() {
     // state instead of showing stale data until the next reload.
     try {
         if (nym.messages && typeof nym.messages.clear === 'function') nym.messages.clear();
+        if (nym.channelMessageIds && typeof nym.channelMessageIds.clear === 'function') nym.channelMessageIds.clear();
+        if (nym.renderedMessageIds && typeof nym.renderedMessageIds.clear === 'function') nym.renderedMessageIds.clear();
+        if (nym.messageIndex && typeof nym.messageIndex.clear === 'function') nym.messageIndex.clear();
         if (nym.pmMessages && typeof nym.pmMessages.clear === 'function') nym.pmMessages.clear();
         if (nym.reactions && typeof nym.reactions.clear === 'function') nym.reactions.clear();
         if (nym.userBios && typeof nym.userBios.clear === 'function') nym.userBios.clear();
@@ -3506,7 +3523,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.390';
+const NYMCHAT_VERSION = 'v3.66.403';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -4781,8 +4798,8 @@ function nostrSettingsLoad() {
     const filter = {
         kinds: [1059],
         '#p': [pubkey],
-        '#d': ['nymchat-settings', 'nymchat-keys', 'nymchat-groups', 'nymchat-history', 'nymchat-notifications'],
-        limit: 24
+        '#d': ['nymchat-settings', 'nymchat-keys', 'nymchat-groups', 'nymchat-history', 'nymchat-notifications', 'nymchat-pms', 'nymchat-pm-history'],
+        limit: 32
     };
 
     // Buffer settings events during the initial REQ
@@ -5361,7 +5378,8 @@ async function applyNostrSettings(s) {
         for (const e of (nym.recentEmojis || [])) {
             if (typeof e === 'string' && !seen.has(e)) { seen.add(e); merged.push(e); }
         }
-        nym.recentEmojis = merged.slice(0, 20);
+        const cap = typeof nym._recentEmojiLimit === 'function' ? nym._recentEmojiLimit() : 24;
+        nym.recentEmojis = merged.slice(0, cap);
         nym.saveRecentEmojis();
     }
 
@@ -5500,6 +5518,88 @@ async function applyNostrSettings(s) {
             // messages, re-render it so the merged messages appear immediately.
             if (refreshedConvKeys.size > 0 && nym.inPMMode && nym.currentGroup) {
                 const activeKey = nym.getGroupConversationKey(nym.currentGroup);
+                if (refreshedConvKeys.has(activeKey)) {
+                    nym.loadPMMessages(activeKey);
+                }
+            }
+        } catch (_) { }
+    }
+
+    // Channel last-read timestamps (max-merge so reads on any device stick)
+    if (s.channelLastRead && typeof s.channelLastRead === 'object') {
+        if (!nym.channelLastRead) nym.channelLastRead = new Map();
+        let changed = false;
+        for (const [k, v] of Object.entries(s.channelLastRead)) {
+            if (typeof v !== 'number' || v <= 0) continue;
+            const cur = nym.channelLastRead.get(k) || 0;
+            if (v > cur) { nym.channelLastRead.set(k, v); changed = true; }
+        }
+        if (changed && typeof nym._persistUnreadCounts === 'function') {
+            nym._persistUnreadCounts(true);
+        }
+        if (changed && typeof nym.recomputeAllUnreadCounts === 'function') {
+            nym.recomputeAllUnreadCounts();
+        }
+    }
+
+    // PM conversation metadata
+    if (s.pmConversations && typeof s.pmConversations === 'object') {
+        try {
+            for (const [pubkey, conv] of Object.entries(s.pmConversations)) {
+                if (!pubkey || nym.closedPMs?.has(pubkey)) continue;
+                if (!nym.pmConversations.has(pubkey)) {
+                    nym.addPMConversation(conv.nym || `nym#${pubkey.slice(0, 4)}`, pubkey, conv.lastMessageTime || Date.now(), { reopen: true });
+                }
+            }
+        } catch (_) { }
+    }
+
+    // PM message history — mirror of the group-history apply path
+    if (s.pmMessageHistory && typeof s.pmMessageHistory === 'object') {
+        try {
+            const refreshedConvKeys = new Set();
+            for (const [convKey, backupMessages] of Object.entries(s.pmMessageHistory)) {
+                if (!Array.isArray(backupMessages) || backupMessages.length === 0) continue;
+                const peer = backupMessages.find(m => m && m.conversationPubkey)?.conversationPubkey;
+                if (peer && nym.closedPMs?.has(peer)) continue;
+
+                const inflated = backupMessages.map(m => Object.assign({
+                    author: nym.getNymFromPubkey(m.pubkey) || 'nym',
+                    timestamp: new Date((m.created_at || 0) * 1000),
+                    isPM: true,
+                    conversationKey: convKey,
+                    isHistorical: true,
+                    eventKind: 1059,
+                    _seq: ++nym._msgSeq
+                }, m));
+
+                const existing = nym.pmMessages.get(convKey) || [];
+                const existingIds = new Set(existing.map(m => m.id));
+                const newMsgs = inflated.filter(m => m.id && !existingIds.has(m.id));
+                if (newMsgs.length === 0) continue;
+
+                const merged = [...existing, ...newMsgs];
+                merged.sort((a, b) => nym._compareMessages(a, b));
+                const capped = merged.length > nym.pmStorageLimit
+                    ? merged.slice(-nym.pmStorageLimit)
+                    : merged;
+                nym.pmMessages.set(convKey, capped);
+                nym.channelDOMCache.delete(convKey);
+                refreshedConvKeys.add(convKey);
+
+                if (peer && !nym.pmConversations.has(peer) && !nym.closedPMs?.has(peer)) {
+                    const lastTs = (capped[capped.length - 1]?.created_at || 0) * 1000;
+                    nym.addPMConversation(
+                        nym.users.has(peer) ? nym.users.get(peer).nym : `nym#${peer.slice(0, 4)}`,
+                        peer,
+                        lastTs || Date.now(),
+                        { reopen: true }
+                    );
+                }
+            }
+
+            if (refreshedConvKeys.size > 0 && nym.inPMMode && nym.currentPM) {
+                const activeKey = nym.getPMConversationKey(nym.currentPM);
                 if (refreshedConvKeys.has(activeKey)) {
                     nym.loadPMMessages(activeKey);
                 }
@@ -5848,7 +5948,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (channelMessages.length >= nym.channelMessageLimit && !messagesContainer.querySelector('.channel-history-limit')) {
                         const notice = document.createElement('div');
                         notice.className = 'system-message channel-history-limit';
-                        notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void \u2014 only the latest 100 messages are shown.';
+                        notice.textContent = `You've reached the edge of this channel's history. Older messages are lost to the void \u2014 only the latest ${nym.channelMessageLimit} messages are shown.`;
                         messagesContainer.insertBefore(notice, messagesContainer.firstChild);
                     }
                 }

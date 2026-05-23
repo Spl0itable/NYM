@@ -4,30 +4,25 @@ Object.assign(NYM.prototype, {
 
     setupMobileGestures() {
         if (window.innerWidth <= 768) {
-            // Touch events for swipe to open menu
             document.addEventListener('touchstart', (e) => {
                 const touch = e.touches[0];
-                // Only track swipes starting from left edge
                 if (touch.clientX < 50) {
                     this.swipeStartX = touch.clientX;
                 }
-            });
+            }, { passive: true });
 
             document.addEventListener('touchmove', (e) => {
-                if (this.swipeStartX !== null) {
-                    const touch = e.touches[0];
-                    const swipeDistance = touch.clientX - this.swipeStartX;
-
-                    if (swipeDistance > this.swipeThreshold) {
-                        this.toggleSidebar();
-                        this.swipeStartX = null;
-                    }
+                if (this.swipeStartX === null) return;
+                const touch = e.touches[0];
+                if (touch.clientX - this.swipeStartX > this.swipeThreshold) {
+                    this.toggleSidebar();
+                    this.swipeStartX = null;
                 }
-            });
+            }, { passive: true });
 
             document.addEventListener('touchend', () => {
                 this.swipeStartX = null;
-            });
+            }, { passive: true });
         }
     },
 
@@ -1533,15 +1528,18 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Cancel long-press react if the pointer moves (e.g. text selection drag)
+        let msgMoveCheckTs = 0;
         messagesEl.addEventListener('mousemove', (e) => {
             if (!msgLongPressTimer) return;
+            const now = performance.now();
+            if (now - msgMoveCheckTs < 50) return;
+            msgMoveCheckTs = now;
             const dx = e.clientX - msgLongPressStartX;
             const dy = e.clientY - msgLongPressStartY;
             if (dx * dx + dy * dy > MSG_LONG_PRESS_MOVE_THRESHOLD * MSG_LONG_PRESS_MOVE_THRESHOLD) {
                 cancelMsgLongPress();
             }
-        });
+        }, { passive: true });
         // Cancel long-press react if a swipe gesture is detected
         messagesEl.addEventListener('touchmove', cancelMsgLongPress, { passive: true });
         messagesEl.addEventListener('mouseup', cancelMsgLongPress);
@@ -1867,6 +1865,23 @@ Object.assign(NYM.prototype, {
 <div class="gif-attribution">Powered by <a href="https://giphy.com" target="_blank">GIPHY</a></div>
 `;
 
+        const button = document.querySelector('.icon-btn.input-btn[title="GIF"]');
+        document.body.appendChild(gifPicker);
+        gifPicker.style.position = 'fixed';
+        if (window.innerWidth <= 768) {
+            gifPicker.style.bottom = '60px';
+            gifPicker.style.left = '50%';
+            gifPicker.style.transform = 'translateX(-50%)';
+            gifPicker.style.right = 'auto';
+            gifPicker.style.maxWidth = '90%';
+        } else if (button) {
+            const rect = button.getBoundingClientRect();
+            gifPicker.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
+            gifPicker.style.right = Math.min(window.innerWidth - rect.right + 50, 10) + 'px';
+            gifPicker.style.left = '';
+            gifPicker.style.transform = '';
+        }
+
         gifPicker.classList.add('active');
 
         // Load trending GIFs by default
@@ -2027,6 +2042,7 @@ Object.assign(NYM.prototype, {
         const wasOpen = gifPicker.classList.contains('active');
         gifPicker.classList.remove('active');
         gifPicker.innerHTML = '';
+        gifPicker.style.cssText = '';
         if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
