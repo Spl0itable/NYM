@@ -28,9 +28,9 @@ Object.assign(NYM.prototype, {
         } else if (channelName) {
             // Non-geohash channel
             if (!this.channels.has(channelName)) {
-                this.addChannel(channelName, channelName);
+                this.addChannel(channelName, '');
             }
-            this.switchChannel(channelName, channelName);
+            this.switchChannel(channelName, '');
             this.userJoinedChannels.add(channelName);
             this.saveUserChannels();
         }
@@ -270,8 +270,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         <span>Join channel "${term}"</span>
     `;
                 prompt.onclick = async () => {
-                    this.addChannel(term, term);
-                    this.switchChannel(term, term);
+                    this.addChannel(term, '');
+                    this.switchChannel(term, '');
                     this.userJoinedChannels.add(term);
                     document.getElementById('channelSearch').value = '';
                     resultsDiv.innerHTML = '';
@@ -429,6 +429,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (wrapper) {
             wrapper.classList.toggle('has-value', term.length > 0);
         }
+
+        this._syncChannelBadgesFromState();
 
         const validChannelPattern = /^#[\p{L}\p{N}]+$/u;
         items.forEach(item => {
@@ -663,7 +665,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (geohash) {
             this.addChannel(geohash, geohash);
         } else {
-            this.addChannel(channel, channel);
+            this.addChannel(channel, '');
         }
 
         // Update view more button after adding
@@ -1071,6 +1073,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
 
             this.channels.set(key, { channel, geohash });
+
+            const unreadKey = geohash ? `#${geohash}` : channel;
+            const storedCount = (this.unreadCounts && this.unreadCounts.get(unreadKey)) || 0;
+            if (storedCount > 0) {
+                this._renderUnreadBadge(unreadKey, storedCount);
+            }
+
             this.updateChannelPins();
             this.applyHiddenChannels();
             if (typeof this.refreshChannelAutocompleteIfOpen === 'function') {
@@ -1361,17 +1370,42 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const groupId = channel.substring(6);
             item = document.querySelector(`#pmList [data-group-id="${groupId}"]`);
         } else if (channel.startsWith('#')) {
-            item = document.querySelector(`[data-geohash="${channel.substring(1)}"]`);
+            item = document.querySelector(`#channelList .channel-item[data-geohash="${channel.substring(1)}"]`);
         } else {
-            item = document.querySelector(`[data-channel="${channel}"][data-geohash=""]`);
+            item = document.querySelector(`#channelList .channel-item[data-channel="${channel}"][data-geohash=""]`);
         }
         if (!item) return;
         const badge = item.querySelector('.unread-badge');
         if (badge) {
             badge.textContent = count > 99 ? '99+' : count;
+            badge.classList.toggle('nm-hidden', count <= 0);
             badge.style.display = count > 0 ? 'block' : 'none';
         }
         item.classList.toggle('has-unread', count > 0);
+    },
+
+    _channelKeyForItem(item) {
+        if (!item || !item.dataset) return '';
+        const geohash = item.dataset.geohash;
+        const channel = item.dataset.channel;
+        if (geohash) return `#${geohash}`;
+        return channel || '';
+    },
+
+    _syncChannelBadgesFromState() {
+        const items = document.querySelectorAll('#channelList .channel-item');
+        items.forEach(item => {
+            const key = this._channelKeyForItem(item);
+            if (!key) return;
+            const count = (this.unreadCounts && this.unreadCounts.get(key)) || 0;
+            const badge = item.querySelector('.unread-badge');
+            if (badge) {
+                badge.textContent = count > 99 ? '99+' : count;
+                badge.classList.toggle('nm-hidden', count <= 0);
+                badge.style.display = count > 0 ? 'block' : 'none';
+            }
+            item.classList.toggle('has-unread', count > 0);
+        });
     },
 
     // Throttle the sidebar sort so it fires immediately on the first call
@@ -1480,6 +1514,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Clear and re-append
         channelList.innerHTML = '';
         channels.forEach(channel => channelList.appendChild(channel));
+
+        this._syncChannelBadgesFromState();
 
         // Re-add view more button
         this.updateViewMoreButton('channelList');

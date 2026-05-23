@@ -1386,7 +1386,7 @@ Object.assign(NYM.prototype, {
         const since24h = Math.floor(Date.now() / 1000) - 86400;
         const isGeo = this._isGeoOrDiscoveredRelay(relayUrl);
 
-        // Geo/discovered relays only get kind 20000
+        // Geo/discovered relays only get channel-message kinds (20000, 23333)
         if (isGeo) {
             const subId = Math.random().toString(36).substring(2);
             if (!relay.subscriptions) relay.subscriptions = new Set();
@@ -2360,7 +2360,7 @@ Object.assign(NYM.prototype, {
 
         const since24h = Math.floor(Date.now() / 1000) - 86400;
 
-        // Geo/discovered shards only get kind 20000
+        // Geo/discovered shards only get channel-message kinds (20000, 23333)
         const isGeoOrDiscovered = p.role === 'geo' || p.role === 'discovered';
         const filters = isGeoOrDiscovered
             ? this._buildGeoFilters(since24h)
@@ -2381,7 +2381,7 @@ Object.assign(NYM.prototype, {
     _buildGeoFilters(since24h) {
         const filters = [];
         if (!this.settings.groupChatPMOnlyMode) {
-            filters.push({ kinds: [20000], since: since24h });
+            filters.push({ kinds: [20000, 23333], since: since24h });
         }
         return filters;
     },
@@ -2412,6 +2412,7 @@ Object.assign(NYM.prototype, {
             filters.push(
                 { kinds: [1059], "#p": [this.pubkey], limit: 500 },
                 { kinds: [7], "#p": [this.pubkey], "#k": ["20000", "23333"], limit: 100 },
+                { kinds: [24421], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 200 },
                 { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
                 { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 },
                 { kinds: [10030], authors: [this.pubkey], limit: 1 }
@@ -2468,7 +2469,7 @@ Object.assign(NYM.prototype, {
         const criticalFilters = this._buildCriticalFilters(since24h);
         this._poolSendToRole('critical', ["REQ", criticalSubId, ...criticalFilters]);
 
-        // Geo + discovered shards: only kind 20000
+        // Geo + discovered shards: only channel-message kinds (20000, 23333)
         const geoSubId = Math.random().toString(36).substring(2);
         this._lastGeoSubId = geoSubId;
         const geoFilters = this._buildGeoFilters(since24h);
@@ -3391,7 +3392,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
 
         const is30078Fanout = evt && evt.kind === 30078 && evt.tags && evt.tags.some(t => t[0] === 't' && ['nym-poll', 'nym-poll-vote'].includes(t[1]));
-        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 24421 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
 
         if (wideFanout) {
             const sent = new Set();
