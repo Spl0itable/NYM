@@ -56,14 +56,6 @@
     flex-wrap: wrap;
     align-items: flex-start;
     font-size: var(--user-text-size);
-    content-visibility: auto;
-    contain-intrinsic-size: 0 80px;
-}
-
-.message-content img,
-.message-content video {
-    content-visibility: auto;
-    contain-intrinsic-size: 320px 240px;
 }
 
 .message.blocked {

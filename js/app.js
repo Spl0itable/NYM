@@ -621,10 +621,9 @@ class NYM {
         this.performanceMode = false;
         this._deviceCapabilities = this._detectDeviceCapabilities();
         this._applyPerformanceMode();
-        const _tier = this._deviceCapabilities.tier;
-        this.channelSubscriptionBatchSize = _tier === 'low' ? 5 : (_tier === 'high' ? 15 : 10);
-        this.channelMessageLimit = _tier === 'low' ? 50 : (_tier === 'high' ? 150 : 100);
-        this.pmStorageLimit = _tier === 'low' ? 200 : (_tier === 'high' ? 1000 : 500);
+        this.channelSubscriptionBatchSize = 10;
+        this.channelMessageLimit = 100;
+        this.pmStorageLimit = 1000;
         this.pmPageSize = 100;
         this.pmLoadMoreSize = 50;
         this.pmRenderedStart = new Map();
@@ -3512,7 +3511,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.392';
+const NYMCHAT_VERSION = 'v3.66.393';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -5854,7 +5853,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (channelMessages.length >= nym.channelMessageLimit && !messagesContainer.querySelector('.channel-history-limit')) {
                         const notice = document.createElement('div');
                         notice.className = 'system-message channel-history-limit';
-                        notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void \u2014 only the latest 100 messages are shown.';
+                        notice.textContent = `You've reached the edge of this channel's history. Older messages are lost to the void \u2014 only the latest ${nym.channelMessageLimit} messages are shown.`;
                         messagesContainer.insertBefore(notice, messagesContainer.firstChild);
                     }
                 }
