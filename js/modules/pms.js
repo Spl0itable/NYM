@@ -671,12 +671,15 @@ Object.assign(NYM.prototype, {
             // Check if content is Bitchat format (v2: prefix)
             const isBitchatFormat = (content) => content.startsWith('v2:');
 
-            // Unwrap local privkey path
-            const unwrapWithLocal = () => {
+            const cw = window.cryptoWorkerClient;
+            const decryptN44 = cw && cw.isAvailable()
+                ? (ct, key) => cw.nip44Decrypt(ct, key)
+                : (ct, key) => Promise.resolve(NT.nip44.decrypt(ct, key));
+
+            const unwrapWithLocal = async () => {
                 let sealJson, seal, rumorJson, rumor;
 
                 if (isBitchatFormat(event.content)) {
-                    // Bitchat raw XChaCha20-Poly1305 format
                     sealJson = decryptBitchat(event.content, event.pubkey);
                     seal = JSON.parse(sealJson);
 
@@ -684,17 +687,16 @@ Object.assign(NYM.prototype, {
                         rumorJson = decryptBitchat(seal.content, seal.pubkey);
                     } else {
                         const ckSeal = NT.nip44.getConversationKey(this.privkey, seal.pubkey);
-                        rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
+                        rumorJson = await decryptN44(seal.content, ckSeal);
                     }
                     rumor = JSON.parse(rumorJson);
                 } else {
-                    // Standard NIP-44 format
                     const ckWrap = NT.nip44.getConversationKey(this.privkey, event.pubkey);
-                    sealJson = NT.nip44.decrypt(event.content, ckWrap);
+                    sealJson = await decryptN44(event.content, ckWrap);
                     seal = JSON.parse(sealJson);
 
                     const ckSeal = NT.nip44.getConversationKey(this.privkey, seal.pubkey);
-                    rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
+                    rumorJson = await decryptN44(seal.content, ckSeal);
                     rumor = JSON.parse(rumorJson);
                 }
 
@@ -720,7 +722,7 @@ Object.assign(NYM.prototype, {
             let seal, rumor;
             if (this.privkey) {
                 try {
-                    ({ seal, rumor } = unwrapWithLocal());
+                    ({ seal, rumor } = await unwrapWithLocal());
                 } catch (_realKeyErr) {
                     // Real privkey failed — try ephemeral keys (timing-attack mitigation scheme)
                     const ephResult = this._tryDecryptWithEphemeralKeys(event);
