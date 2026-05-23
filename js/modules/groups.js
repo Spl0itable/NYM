@@ -495,7 +495,7 @@ Object.assign(NYM.prototype, {
             const unbanBody = `${actorName} unbanned you from "${groupName}". You may be re-invited.`;
             const unbanChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
             if (!unbanIsHistorical) {
-                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
+                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo);
             } else {
                 this._addNotificationToHistory(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
             }
@@ -589,14 +589,14 @@ Object.assign(NYM.prototype, {
                     this.showNotification(`Group invite: ${groupName}`, inviteBody, {
                         type: 'group',
                         groupId,
-                        id: event.id,
+                        id: groupConvKeyForNotif,
                         pubkey: senderPubkey
-                    }, inviteTsSec * 1000);
+                    });
                 } else {
                     this._addNotificationToHistory(`Group invite: ${groupName}`, inviteBody, {
                         type: 'group',
                         groupId,
-                        id: event.id,
+                        id: groupConvKeyForNotif,
                         pubkey: senderPubkey
                     }, inviteTsSec * 1000);
                 }
@@ -683,6 +683,7 @@ Object.assign(NYM.prototype, {
             const removedName = this.getNymFromPubkey(removedPubkey);
             const removerName = this.getNymFromPubkey(senderPubkey);
             if (removedPubkey === this.pubkey) {
+                // We were removed — track as left so it doesn't reappear
                 this.leftGroups.add(groupId);
                 this._saveLeftGroups();
                 this.groupConversations.delete(groupId);
@@ -691,15 +692,7 @@ Object.assign(NYM.prototype, {
                 const gck = this.getGroupConversationKey(groupId);
                 this.pmMessages.delete(gck);
                 this.channelDOMCache.delete(gck);
-                if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', gck);
-                if (this._persistedPMIds) this._persistedPMIds.delete(gck);
-                this.unreadCounts?.delete(gck);
-                this.channelLastRead?.delete(gck);
-                this.channelLastActivity?.delete(gck);
-                if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
-                if (typeof this.pruneNotificationsForContext === 'function') {
-                    this.pruneNotificationsForContext({ type: 'group', groupId });
-                }
+                if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', gck);
                 document.getElementById('pmList')?.querySelector(`[data-group-id="${groupId}"]`)?.remove();
                 this.updateViewMoreButton('pmList');
                 if (this.currentGroup === groupId) {
@@ -717,7 +710,7 @@ Object.assign(NYM.prototype, {
                 const removeSelfTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
                 const removeSelfIsHistorical = (Math.floor(Date.now() / 1000) - removeSelfTsSec) > 10;
                 if (!removeSelfIsHistorical) {
-                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
+                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo);
                 } else {
                     this._addNotificationToHistory(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
                 }
@@ -776,7 +769,7 @@ Object.assign(NYM.prototype, {
                     if ((Math.floor(Date.now() / 1000) - promoteTsSec) > 10) {
                         this._addNotificationToHistory(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
                     } else {
-                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
+                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo);
                     }
                 }
             }
@@ -813,7 +806,7 @@ Object.assign(NYM.prototype, {
                     if ((Math.floor(Date.now() / 1000) - revokeTsSec) > 10) {
                         this._addNotificationToHistory(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
                     } else {
-                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
+                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo);
                     }
                 }
             }
@@ -851,7 +844,7 @@ Object.assign(NYM.prototype, {
                     if ((Math.floor(Date.now() / 1000) - transferTsSec) > 10) {
                         this._addNotificationToHistory(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
                     } else {
-                        this.showNotification(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
+                        this.showNotification(transferTitle, transferBody, transferChannelInfo);
                     }
                 }
             }
@@ -950,13 +943,8 @@ Object.assign(NYM.prototype, {
         list.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (list.length > this.pmStorageLimit) {
-            const dropped = list.slice(0, list.length - this.pmStorageLimit);
-            for (const d of dropped) this._unindexMessage(d);
-            list = list.slice(-this.pmStorageLimit);
-        }
+        if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
         this.pmMessages.set(groupConvKey, list);
-        this._indexMessage(groupConvKey, msg);
         this.persistPMMessages(groupConvKey);
 
         // Update or create group conversation entry
@@ -1002,14 +990,14 @@ Object.assign(NYM.prototype, {
                         this.showNotification(`${groupName}: ${msg.author}`, messageContent, {
                             type: 'group',
                             groupId,
-                            id: event.id,
+                            id: groupConvKey,
                             pubkey: senderPubkey
-                        }, msg.timestamp.getTime());
+                        });
                     } else {
                         this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, {
                             type: 'group',
                             groupId,
-                            id: event.id,
+                            id: groupConvKey,
                             pubkey: senderPubkey
                         }, msg.timestamp.getTime());
                     }
@@ -1017,6 +1005,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        // Send read receipt back to sender so they can show our avatar as "read"
+        if (!isOwn && !msg.isHistorical && this._canSendGiftWraps() && nymMsgId) {
+            this.sendNymReceipt(nymMsgId, 'read', senderPubkey, 'group');
+            this.recordOwnActivity();
+        }
     },
 
     // Create a new private group and send invites to all members via NIP-17 gift wraps.
@@ -1300,12 +1293,7 @@ Object.assign(NYM.prototype, {
         groupList.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (groupList.length > this.pmStorageLimit) {
-            const dropped = groupList.slice(0, groupList.length - this.pmStorageLimit);
-            for (const d of dropped) this._unindexMessage(d);
-            this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
-        }
-        this._indexMessage(groupConvKey, msg);
+        if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
         this.channelDOMCache.delete(groupConvKey);
         this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);
@@ -1374,12 +1362,15 @@ Object.assign(NYM.prototype, {
                 await this._sendGiftWrapsAsync(otherMembers, rumor, null, groupId);
             }
         }
+        // Track the left group so it doesn't reappear from stale relay data
         this.leftGroups.add(groupId);
         this._saveLeftGroups();
 
+        // Clean up ephemeral keys for this group
         this.groupEphemeralKeys.delete(groupId);
         this._saveEphemeralKeys();
 
+        // Remove persisted entry
         try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) { }
         this.groupConversations.delete(groupId);
         this._saveGroupConversations();
@@ -1387,18 +1378,7 @@ Object.assign(NYM.prototype, {
         const groupConvKey = this.getGroupConversationKey(groupId);
         this.pmMessages.delete(groupConvKey);
         this.channelDOMCache.delete(groupConvKey);
-        if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', groupConvKey);
-        if (this._persistedPMIds) this._persistedPMIds.delete(groupConvKey);
-
-        this.unreadCounts?.delete(groupConvKey);
-        this.channelLastRead?.delete(groupConvKey);
-        this.channelLastActivity?.delete(groupConvKey);
-        if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
-
-        if (typeof this.pruneNotificationsForContext === 'function') {
-            this.pruneNotificationsForContext({ type: 'group', groupId });
-        }
-
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', groupConvKey);
         const pmList = document.getElementById('pmList');
         const item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
         if (item) item.remove();
@@ -2231,11 +2211,6 @@ Object.assign(NYM.prototype, {
 
         const groupConvKey = this.getGroupConversationKey(groupId);
         this.clearUnreadCount(groupConvKey);
-
-        if (typeof this._updateNotificationBadge === 'function') {
-            this._updateNotificationBadge();
-        }
-
         this.loadPMMessages(groupConvKey);
 
         // Restore any unsent input previously typed for this conversation
