@@ -377,6 +377,7 @@
 
         state.overlay.classList.add('active');
         state.overlay.style.display = 'flex';
+        state.overlay.removeAttribute('aria-hidden');
         state.started = true;
         state.idx = 0;
 
@@ -410,8 +411,14 @@
 
     function endTutorial(markSeen) {
         // Hide
+        if (state.overlay && state.overlay.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
         state.overlay?.classList.remove('active');
-        if (state.overlay) state.overlay.style.display = 'none';
+        if (state.overlay) {
+            state.overlay.style.display = 'none';
+            state.overlay.setAttribute('aria-hidden', 'true');
+        }
         if (state.highlight) state.highlight.style.display = 'none';
 
         // Save flag
@@ -3516,7 +3523,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.397';
+const NYMCHAT_VERSION = 'v3.66.398';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');

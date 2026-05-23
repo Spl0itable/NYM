@@ -2115,11 +2115,10 @@ Object.assign(NYM.prototype, {
         // Find the message-content element and update its content
         const contentEl = msgEl.querySelector('.message-content');
         if (contentEl) {
-            // Rebuild bubble-time-inner with edited indicator
             const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
+            const hoverButtonsEl = contentEl.querySelector('.msg-hover-buttons');
             const formattedContent = this.formatMessageWithQuotes(newContent);
             if (bubbleTimeEl) {
-                // Add edited indicator inside bubble-time-inner (for bubble layout)
                 if (!bubbleTimeEl.querySelector('.edited-indicator')) {
                     const bubbleEdited = document.createElement('span');
                     bubbleEdited.className = 'edited-indicator';
@@ -2128,9 +2127,9 @@ Object.assign(NYM.prototype, {
                     bubbleTimeEl.insertBefore(bubbleEdited, bubbleTimeEl.firstChild);
                     bubbleTimeEl.insertBefore(document.createTextNode(' '), bubbleEdited.nextSibling);
                 }
-                contentEl.innerHTML = formattedContent + bubbleTimeEl.outerHTML;
+                contentEl.innerHTML = formattedContent + bubbleTimeEl.outerHTML + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
             } else {
-                contentEl.innerHTML = formattedContent;
+                contentEl.innerHTML = formattedContent + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
             }
         }
 
