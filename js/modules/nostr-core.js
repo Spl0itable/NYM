@@ -38,22 +38,9 @@ Object.assign(NYM.prototype, {
     _getMinerWorker() {
         if (this._minerWorker || this._minerWorkerFailed) return this._minerWorker;
         try {
-            const nostrToolsUrl = new URL('js/nostr-tools.js', location.href).href;
-            const src = `importScripts(${JSON.stringify(nostrToolsUrl)});
-self.onmessage = (e) => {
-    const { event, difficulty, jobId } = e.data;
-    try {
-        const mined = NostrTools.nip13.minePow(event, difficulty);
-        self.postMessage({ jobId, event: mined });
-    } catch (err) {
-        self.postMessage({ jobId, error: String(err && err.message || err) });
-    }
-};`;
-            const blob = new Blob([src], { type: 'application/javascript' });
-            const url = URL.createObjectURL(blob);
-            this._minerWorker = new Worker(url);
             this._minerJobs = new Map();
             this._minerJobSeq = 0;
+            this._minerWorker = new Worker('js/workers/nip13-miner.js');
             this._minerWorker.onmessage = (e) => {
                 const { jobId, event, error } = e.data || {};
                 const job = this._minerJobs.get(jobId);
@@ -64,6 +51,11 @@ self.onmessage = (e) => {
             };
             this._minerWorker.onerror = () => {
                 this._minerWorkerFailed = true;
+                for (const job of this._minerJobs.values()) {
+                    job.reject(new Error('nip13-miner worker errored'));
+                }
+                this._minerJobs.clear();
+                try { this._minerWorker.terminate(); } catch (_) { }
                 this._minerWorker = null;
             };
         } catch (_) {
