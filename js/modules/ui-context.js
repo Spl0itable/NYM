@@ -964,15 +964,18 @@ Object.assign(NYM.prototype, {
         });
 
         input.addEventListener('input', (e) => {
+            const el = e.target;
+            // Serialize the contenteditable once and pass the cached value to
+            // downstream consumers — each `el.value` getter walks the DOM tree.
+            let val = el.value;
             // Drop browser filler nodes so :empty placeholder styling works.
-            if (!e.target.value && e.target.innerHTML !== '') e.target.innerHTML = '';
+            if (!val && el.innerHTML !== '') el.innerHTML = '';
             // Render a just-completed :shortcode: as its custom emoji image.
-            this._maybeRenderTypedEmoji(e.target);
-            this.handleInputChange(e.target.value);
-            this.autoResizeTextarea(e.target);
-            this.updateTranslateInputBtn();
-            // Signal typing for PMs, groups, and public channels
-            if (e.target.value.trim().length > 0) {
+            if (this._maybeRenderTypedEmoji(el, val)) val = el.value;
+            this.handleInputChange(val);
+            this.autoResizeTextarea(el);
+            this.updateTranslateInputBtn(val);
+            if (val.length > 0 && val.trim().length > 0) {
                 if (this.inPMMode) {
                     this.handleTypingSignal();
                 } else if (this.currentGeohash) {
@@ -1608,6 +1611,9 @@ Object.assign(NYM.prototype, {
     },
 
     autoResizeTextarea(textarea) {
+        // The contenteditable input grows via CSS min/max-height; setting style.height
+        // here forces two reflows per keystroke on iOS.
+        if (!textarea || textarea.isContentEditable) return;
         textarea.style.height = 'auto';
         textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
     },
@@ -1818,14 +1824,15 @@ Object.assign(NYM.prototype, {
     // emoji, re-render so it becomes an inline image. The :shortcode: token and
     // its emoji image share the same model length, so the caret offset is
     // unchanged by the re-render.
-    _maybeRenderTypedEmoji(el) {
-        if (!this.customEmojis || this.customEmojis.size === 0) return;
+    _maybeRenderTypedEmoji(el, cachedValue) {
+        if (!this.customEmojis || this.customEmojis.size === 0) return false;
+        const value = cachedValue != null ? cachedValue : el.value;
         const caret = el.selectionStart;
-        const value = el.value;
         const m = value.slice(0, caret).match(/:([a-zA-Z0-9_]+):$/);
-        if (!m || !this.customEmojis.has(m[1])) return;
+        if (!m || !this.customEmojis.has(m[1])) return false;
         el.value = value;
         el.selectionStart = el.selectionEnd = caret;
+        return true;
     },
 
     // Insert plain text at the caret (used for Shift+Enter newlines and pastes)
