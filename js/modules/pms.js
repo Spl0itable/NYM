@@ -348,7 +348,7 @@ Object.assign(NYM.prototype, {
             // Track for automatic retry if delivery receipt not received
             this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
 
-            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
+            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now(), { reopen: true });
             this.movePMToTop(recipientPubkey);
 
             if (this.inPMMode && this.currentPM === recipientPubkey) {
@@ -459,7 +459,7 @@ Object.assign(NYM.prototype, {
             // Track for automatic retry if delivery receipt not received
             this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
 
-            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
+            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now(), { reopen: true });
             this.movePMToTop(recipientPubkey);
 
             if (this.inPMMode && this.currentPM === recipientPubkey) {
@@ -1136,9 +1136,11 @@ Object.assign(NYM.prototype, {
                 this.sendNymReceipt(nymMsgId, 'delivered', senderPubkey);
             }
 
-            // Use sender's profile name for conversation
+            // Only revive a previously deleted PM when the inbound message is
+            // fresh — historical backlog should not bring back deleted threads.
             const peerName = this.getNymFromPubkey(peerPubkey);
-            this.addPMConversation(peerName, peerPubkey, tsSec * 1000);
+            const reopenAllowed = isOwn || !msg.isHistorical;
+            this.addPMConversation(peerName, peerPubkey, tsSec * 1000, { reopen: reopenAllowed });
             this.movePMToTop(peerPubkey, tsSec * 1000);
 
             // Clear typing indicator for sender (they sent a message, so they stopped typing)
@@ -1182,24 +1184,22 @@ Object.assign(NYM.prototype, {
                 if (!isOwn) {
                     const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author);
                     if (!msg.isHistorical) {
-                        // Live message: full notification with sound/popup
                         this.updateUnreadCount(conversationKey);
                         if (!pmSenderBlocked) {
                             this.showNotification(`PM from ${msg.author}`, messageContent, {
                                 type: 'pm',
                                 nym: msg.author,
                                 pubkey: peerPubkey,
-                                id: conversationKey
-                            });
+                                id: event.id
+                            }, msg.timestamp.getTime());
                         }
                     } else {
-                        // Historical message: silently add to notification history
                         if (!pmSenderBlocked) {
                             this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, {
                                 type: 'pm',
                                 nym: msg.author,
                                 pubkey: peerPubkey,
-                                id: conversationKey
+                                id: event.id
                             }, msg.timestamp.getTime());
                         }
                     }
@@ -1751,14 +1751,17 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    addPMConversation(nym, pubkey, timestamp = Date.now()) {
-        // Prefer known profile name if available
+    addPMConversation(nym, pubkey, timestamp = Date.now(), opts = {}) {
         let baseNym = this.users.has(pubkey)
             ? this.parseNymFromDisplay(this.users.get(pubkey).nym)
             : this.parseNymFromDisplay(nym);
 
+        // Stay closed unless the caller explicitly opts in to reopening — this
+        // is the path that prevents deleted PMs from reappearing after reload
+        // or when stale relay backlog re-delivers an old gift wrap.
+        if (this.closedPMs.has(pubkey) && !opts.reopen) return;
+
         if (!this.pmConversations.has(pubkey)) {
-            // Re-open closed PMs when a new conversation is initiated
             if (this.closedPMs.has(pubkey)) {
                 this.closedPMs.delete(pubkey);
                 try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
@@ -1881,47 +1884,44 @@ Object.assign(NYM.prototype, {
 
     deletePM(pubkey) {
         if (confirm('Delete this PM conversation?')) {
-            // Remove from conversations
-            this.pmConversations.delete(pubkey);
-
-            // Remove messages
-            const conversationKey = this.getPMConversationKey(pubkey);
-            this.pmMessages.delete(conversationKey);
-            if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', conversationKey);
-
-            // Persist closed state so PM doesn't reappear on reload
-            this.closedPMs.add(pubkey);
-            try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
-            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-
-            // Remove from UI
-            const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
-            if (item) item.remove();
-
-            // If currently viewing this PM, switch to bar
-            if (this.inPMMode && this.currentPM === pubkey) {
-                this.switchChannel('nymchat', 'nymchat');
-            }
-
+            this._tearDownPM(pubkey);
             this.displaySystemMessage('PM conversation deleted');
         }
     },
 
     // Delete a PM without confirmation (used by /leave command)
     deletePMDirect(pubkey) {
+        this._tearDownPM(pubkey);
+        this.displaySystemMessage('PM conversation deleted');
+    },
+
+    _tearDownPM(pubkey) {
         this.pmConversations.delete(pubkey);
         const conversationKey = this.getPMConversationKey(pubkey);
         this.pmMessages.delete(conversationKey);
+        this.channelDOMCache?.delete(conversationKey);
+        if (this._persistedPMIds) this._persistedPMIds.delete(conversationKey);
         if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', conversationKey);
+
+        this.unreadCounts?.delete(conversationKey);
+        this.channelLastRead?.delete(conversationKey);
+        this.channelLastActivity?.delete(conversationKey);
+        if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
+
         this.closedPMs.add(pubkey);
         try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+
+        if (typeof this.pruneNotificationsForContext === 'function') {
+            this.pruneNotificationsForContext({ type: 'pm', pubkey });
+        }
+
         const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
         if (item) item.remove();
+        this.updateViewMoreButton?.('pmList');
         if (this.inPMMode && this.currentPM === pubkey) {
             this.switchChannel('nymchat', 'nymchat');
         }
-        this.displaySystemMessage('PM conversation deleted');
     },
 
     openPM(nym, pubkey) {
@@ -2098,8 +2098,7 @@ Object.assign(NYM.prototype, {
             this._debouncedNostrSettingsSave();
         }
 
-        // Add to PM conversations if not exists
-        this.addPMConversation(baseNym, pubkey);
+        this.addPMConversation(baseNym, pubkey, Date.now(), { reopen: true });
         // Open the PM
         this.openPM(baseNym, pubkey);
 

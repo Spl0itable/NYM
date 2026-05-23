@@ -1316,7 +1316,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     // Counter is derived from cached messages newer than lastRead so it
-    // can't drift from the actual cache contents.
+    // can't drift from the actual cache contents. Historical messages are
+    // excluded so backlog hydration/sync can't inflate the badge with
+    // messages the user already saw on another device.
     _recomputeUnreadCount(channel) {
         if (!this.channelLastRead) this.channelLastRead = new Map();
         const lastRead = this.channelLastRead.get(channel) || 0;
@@ -1331,6 +1333,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         for (const m of messages) {
             if (!m || m.isOwn) continue;
             if (m._spamGated) continue;
+            if (m.isHistorical) continue;
             if ((m.created_at || 0) <= lastRead) continue;
             if (this.blockedUsers && m.pubkey && this.blockedUsers.has(m.pubkey)) continue;
             count++;

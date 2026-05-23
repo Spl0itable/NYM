@@ -495,7 +495,7 @@ Object.assign(NYM.prototype, {
             const unbanBody = `${actorName} unbanned you from "${groupName}". You may be re-invited.`;
             const unbanChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
             if (!unbanIsHistorical) {
-                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo);
+                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
             } else {
                 this._addNotificationToHistory(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
             }
@@ -589,14 +589,14 @@ Object.assign(NYM.prototype, {
                     this.showNotification(`Group invite: ${groupName}`, inviteBody, {
                         type: 'group',
                         groupId,
-                        id: groupConvKeyForNotif,
+                        id: event.id,
                         pubkey: senderPubkey
-                    });
+                    }, inviteTsSec * 1000);
                 } else {
                     this._addNotificationToHistory(`Group invite: ${groupName}`, inviteBody, {
                         type: 'group',
                         groupId,
-                        id: groupConvKeyForNotif,
+                        id: event.id,
                         pubkey: senderPubkey
                     }, inviteTsSec * 1000);
                 }
@@ -683,7 +683,6 @@ Object.assign(NYM.prototype, {
             const removedName = this.getNymFromPubkey(removedPubkey);
             const removerName = this.getNymFromPubkey(senderPubkey);
             if (removedPubkey === this.pubkey) {
-                // We were removed — track as left so it doesn't reappear
                 this.leftGroups.add(groupId);
                 this._saveLeftGroups();
                 this.groupConversations.delete(groupId);
@@ -694,6 +693,13 @@ Object.assign(NYM.prototype, {
                 this.channelDOMCache.delete(gck);
                 if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', gck);
                 if (this._persistedPMIds) this._persistedPMIds.delete(gck);
+                this.unreadCounts?.delete(gck);
+                this.channelLastRead?.delete(gck);
+                this.channelLastActivity?.delete(gck);
+                if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
+                if (typeof this.pruneNotificationsForContext === 'function') {
+                    this.pruneNotificationsForContext({ type: 'group', groupId });
+                }
                 document.getElementById('pmList')?.querySelector(`[data-group-id="${groupId}"]`)?.remove();
                 this.updateViewMoreButton('pmList');
                 if (this.currentGroup === groupId) {
@@ -711,7 +717,7 @@ Object.assign(NYM.prototype, {
                 const removeSelfTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
                 const removeSelfIsHistorical = (Math.floor(Date.now() / 1000) - removeSelfTsSec) > 10;
                 if (!removeSelfIsHistorical) {
-                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo);
+                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
                 } else {
                     this._addNotificationToHistory(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
                 }
@@ -770,7 +776,7 @@ Object.assign(NYM.prototype, {
                     if ((Math.floor(Date.now() / 1000) - promoteTsSec) > 10) {
                         this._addNotificationToHistory(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
                     } else {
-                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo);
+                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
                     }
                 }
             }
@@ -807,7 +813,7 @@ Object.assign(NYM.prototype, {
                     if ((Math.floor(Date.now() / 1000) - revokeTsSec) > 10) {
                         this._addNotificationToHistory(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
                     } else {
-                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo);
+                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
                     }
                 }
             }
@@ -845,7 +851,7 @@ Object.assign(NYM.prototype, {
                     if ((Math.floor(Date.now() / 1000) - transferTsSec) > 10) {
                         this._addNotificationToHistory(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
                     } else {
-                        this.showNotification(transferTitle, transferBody, transferChannelInfo);
+                        this.showNotification(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
                     }
                 }
             }
@@ -991,14 +997,14 @@ Object.assign(NYM.prototype, {
                         this.showNotification(`${groupName}: ${msg.author}`, messageContent, {
                             type: 'group',
                             groupId,
-                            id: groupConvKey,
+                            id: event.id,
                             pubkey: senderPubkey
-                        });
+                        }, msg.timestamp.getTime());
                     } else {
                         this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, {
                             type: 'group',
                             groupId,
-                            id: groupConvKey,
+                            id: event.id,
                             pubkey: senderPubkey
                         }, msg.timestamp.getTime());
                     }
@@ -1363,15 +1369,12 @@ Object.assign(NYM.prototype, {
                 await this._sendGiftWrapsAsync(otherMembers, rumor, null, groupId);
             }
         }
-        // Track the left group so it doesn't reappear from stale relay data
         this.leftGroups.add(groupId);
         this._saveLeftGroups();
 
-        // Clean up ephemeral keys for this group
         this.groupEphemeralKeys.delete(groupId);
         this._saveEphemeralKeys();
 
-        // Remove persisted entry
         try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) { }
         this.groupConversations.delete(groupId);
         this._saveGroupConversations();
@@ -1381,6 +1384,16 @@ Object.assign(NYM.prototype, {
         this.channelDOMCache.delete(groupConvKey);
         if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', groupConvKey);
         if (this._persistedPMIds) this._persistedPMIds.delete(groupConvKey);
+
+        this.unreadCounts?.delete(groupConvKey);
+        this.channelLastRead?.delete(groupConvKey);
+        this.channelLastActivity?.delete(groupConvKey);
+        if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
+
+        if (typeof this.pruneNotificationsForContext === 'function') {
+            this.pruneNotificationsForContext({ type: 'group', groupId });
+        }
+
         const pmList = document.getElementById('pmList');
         const item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
         if (item) item.remove();

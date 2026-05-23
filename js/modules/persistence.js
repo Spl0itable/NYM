@@ -657,13 +657,11 @@
                 if (typeof this.addPMConversation === 'function') {
                     for (const [convKey, msgs] of this.pmMessages.entries()) {
                         if (!Array.isArray(msgs) || msgs.length === 0) continue;
-                        // Skip groups — _loadGroupConversations handles those
-                        // via its own metadata store.
                         if (msgs.some(m => m && m.isGroup)) continue;
-                        // Find any message that exposes the peer pubkey.
                         const sample = msgs.find(m => m && m.conversationPubkey);
                         if (!sample || !sample.conversationPubkey) continue;
                         const peer = sample.conversationPubkey;
+                        if (this.closedPMs && this.closedPMs.has(peer)) continue;
                         const last = msgs[msgs.length - 1];
                         const ts = ((last && last.created_at) || (sample.created_at || 0)) * 1000;
                         const nym = this.users.has(peer)

@@ -105,7 +105,7 @@ Object.assign(NYM.prototype, {
             emojiPackFavorites: this._getEmojiPackFavorites(),
             emojiCategoryFavorites: this._getDefaultCategoryFavorites(),
             ...(this._getFavoriteGifs().length ? { favoriteGifs: this._getFavoriteGifs().slice(0, 100) } : {}),
-            recentEmojis: Array.isArray(this.recentEmojis) ? this.recentEmojis.slice(0, 20) : [],
+            recentEmojis: Array.isArray(this.recentEmojis) ? this.recentEmojis.slice(0, 24) : [],
             gesturesEnabled: this.settings.gesturesEnabled !== false,
             swipeLeftAction: this.settings.swipeLeftAction || 'quote',
             swipeRightAction: this.settings.swipeRightAction || 'translate',
@@ -117,6 +117,7 @@ Object.assign(NYM.prototype, {
             notifyFriendsOnly: this.notifyFriendsOnly || false,
             closedPMs: Array.from(this.closedPMs || []),
             leftGroups: Array.from(this.leftGroups || []),
+            channelLastRead: this._buildChannelLastReadSync() || undefined,
             acceptPMs: this.settings.acceptPMs || 'enabled',
             syncMLSHistory: this.settings.syncMLSHistory !== false,
             showStatus: this.settings.showStatus !== false,
@@ -148,6 +149,53 @@ Object.assign(NYM.prototype, {
         if (typeof applyNostrSettings === 'function') {
             Promise.resolve(applyNostrSettings(buf.newestSettings)).catch(() => { });
         }
+    },
+
+    // Serialize PM conversation metadata so a new device can rebuild its
+    // PM sidebar without depending on the original gift wraps still living
+    // on relays.
+    _buildPMConversationsSync() {
+        if (!this.pmConversations || this.pmConversations.size === 0) return null;
+        const data = {};
+        for (const [pubkey, conv] of this.pmConversations) {
+            if (!pubkey || this.closedPMs?.has(pubkey)) continue;
+            data[pubkey] = {
+                nym: conv.nym,
+                lastMessageTime: conv.lastMessageTime
+            };
+        }
+        return Object.keys(data).length > 0 ? data : null;
+    },
+
+    // Serialize PM message history per conversation. Mirrors the group
+    // history sync so PMs hydrate on fresh devices just like group chats.
+    _buildPMHistorySync() {
+        if (!this.pmMessages || this.pmMessages.size === 0) return null;
+        const data = {};
+        for (const [convKey, messages] of this.pmMessages) {
+            if (!convKey.startsWith('pm-') || messages.length === 0) continue;
+            const peer = messages.find(m => m && m.conversationPubkey)?.conversationPubkey;
+            if (peer && this.closedPMs?.has(peer)) continue;
+            data[convKey] = messages.slice(-200).map(m => ({
+                id: m.id,
+                pubkey: m.pubkey,
+                content: m.content,
+                created_at: m.created_at,
+                isOwn: m.isOwn,
+                conversationPubkey: m.conversationPubkey,
+                nymMessageId: m.nymMessageId
+            }));
+        }
+        return Object.keys(data).length > 0 ? data : null;
+    },
+
+    _buildChannelLastReadSync() {
+        if (!this.channelLastRead || this.channelLastRead.size === 0) return null;
+        const data = {};
+        for (const [k, v] of this.channelLastRead) {
+            if (typeof v === 'number' && v > 0) data[k] = v;
+        }
+        return Object.keys(data).length > 0 ? data : null;
     },
 
     // Serialize group conversation metadata for cross-device sync
@@ -283,6 +331,37 @@ Object.assign(NYM.prototype, {
                     return true;
                 };
                 await this._publishCategoryWrap({ groupMessageHistory }, 'nymchat-history', now, [trimOldestHistory]);
+            }
+        } catch (_) { }
+
+        // PM conversation metadata → nymchat-pms
+        try {
+            const pmConversations = this._buildPMConversationsSync();
+            if (pmConversations) {
+                await this._publishCategoryWrap({ pmConversations }, 'nymchat-pms', now);
+            }
+        } catch (_) { }
+
+        // PM message history → nymchat-pm-history
+        try {
+            const pmMessageHistory = this._buildPMHistorySync();
+            if (pmMessageHistory) {
+                const trimOldestPMHistory = (p) => {
+                    const hist = p.pmMessageHistory || {};
+                    let biggestKey = null, biggestLen = 0;
+                    for (const [k, arr] of Object.entries(hist)) {
+                        if (Array.isArray(arr) && arr.length > biggestLen) {
+                            biggestLen = arr.length;
+                            biggestKey = k;
+                        }
+                    }
+                    if (!biggestKey || biggestLen <= 1) return false;
+                    const next = hist[biggestKey].slice(Math.max(1, Math.ceil(biggestLen * 0.1)));
+                    if (next.length === 0) delete hist[biggestKey];
+                    else hist[biggestKey] = next;
+                    return true;
+                };
+                await this._publishCategoryWrap({ pmMessageHistory }, 'nymchat-pm-history', now, [trimOldestPMHistory]);
             }
         } catch (_) { }
 
