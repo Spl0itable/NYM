@@ -17,7 +17,7 @@
 
 body.light-mode .channel-context-menu {
     background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(30px) saturate(1.5);
+    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -230,8 +230,8 @@ body.light-mode .verified-badge::before {
         flex-direction: column;
         gap: 10px;
         background: var(--glass-bg);
-        backdrop-filter: blur(30px) saturate(1.5);
-        -webkit-backdrop-filter: blur(30px) saturate(1.5);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
         border-top: 1px solid var(--glass-border);
         z-index: 500;
         flex-shrink: 0;
@@ -482,7 +482,7 @@ body.light-mode::after {
 body.light-mode .modal-content,
 body.light-mode .shop-content {
     background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(40px) saturate(1.5);
+    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
@@ -497,7 +497,7 @@ body.light-mode .message:hover {
 
 body.light-mode .sidebar {
     background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(40px) saturate(1.5);
+    backdrop-filter: blur(20px);
 }
 
 body.light-mode input,
@@ -917,7 +917,7 @@ body.light-mode .modal-content {
 body.light-mode .geohash-explorer-content {
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.12);
     background: var(--glass-bg);
-    backdrop-filter: blur(40px) saturate(1.5);
+    backdrop-filter: blur(20px);
 }
 
 body.light-mode .geohash-join-btn:hover,
@@ -969,7 +969,7 @@ body.light-mode ::-webkit-scrollbar-thumb:hover {
 
 body.light-mode .context-menu {
     background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(40px) saturate(1.5);
+    backdrop-filter: blur(20px);
     box-shadow: -4px 0 24px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -1012,14 +1012,14 @@ body.light-mode .message.mentioned {
 body.light-mode .autocomplete-dropdown,
 body.light-mode .emoji-autocomplete {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
+    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .command-palette {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
+    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -1027,21 +1027,21 @@ body.light-mode .command-palette {
 body.light-mode .reaction-picker,
 body.light-mode .enhanced-emoji-modal {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
+    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .emoji-picker {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
+    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .gif-picker {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
+    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -1068,7 +1068,7 @@ body.light-mode .reaction-badge[title]:hover::after {
 
 body.light-mode .reactors-modal {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
+    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }

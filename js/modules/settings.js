@@ -576,7 +576,7 @@ Object.assign(NYM.prototype, {
         } else {
             document.body.classList.remove('light-mode');
         }
-        // Re-apply current theme to pick up light/dark color variants
+        this._isLightMode = resolved === 'light';
         this.applyTheme(this.settings.theme);
 
         // Re-apply wallpaper so custom overlays match the new mode

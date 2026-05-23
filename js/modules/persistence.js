@@ -353,15 +353,19 @@
                     } catch (_) { }
                 }
 
-                // Channel messages
                 const loadedChannelKeys = [];
                 for (const c of channels) {
                     if (!c || !c.key || !Array.isArray(c.messages)) continue;
                     if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
                     const msgs = c.messages.map(m => this._hydrateMessage(m));
                     this.messages.set(c.key, msgs);
+                    if (!this.channelMessageIds.has(c.key)) this.channelMessageIds.set(c.key, new Set());
+                    const idSet = this.channelMessageIds.get(c.key);
+                    for (const m of msgs) {
+                        if (m && m.id) idSet.add(m.id);
+                        if (typeof this._indexMessage === 'function') this._indexMessage(c.key, m);
+                    }
                     loadedChannelKeys.push(c.key);
-                    // Rebuild spam-gate counts from cache
                     if (typeof this._trackPubkeyMessage === 'function') {
                         for (const m of msgs) {
                             if (m && m.pubkey && m.id) {
@@ -388,13 +392,15 @@
                     if (lastTs > 0) this.channelLastActivity.set(key, lastTs);
                 }
 
-                // PM/group messages
                 if (cachePMsAllowed) {
                     for (const p of pms) {
                         if (!p || !p.key || !Array.isArray(p.messages)) continue;
                         if (this.pmMessages.has(p.key) && this.pmMessages.get(p.key).length > 0) continue;
                         const msgs = p.messages.map(m => this._hydrateMessage(m));
                         this.pmMessages.set(p.key, msgs);
+                        if (typeof this._indexMessage === 'function') {
+                            for (const m of msgs) this._indexMessage(p.key, m);
+                        }
                     }
                 } else {
                     this.clearPMCache().catch(() => { });

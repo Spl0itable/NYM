@@ -1,13 +1,17 @@
 // nostr-core.js - Event signing, NIP-44/59 encryption, gift wraps, profile fetch, presence, typing indicators
 
 const _RX_REGEX_ESCAPE_NC = /[.*+?^${}()|[\]\\]/g;
+const _QUOTE_MENTION_CACHE_MAX = 64;
 const _quoteMentionCache = new Map();
 function _getQuoteMentionPattern(author) {
     let pattern = _quoteMentionCache.get(author);
-    if (pattern) return pattern;
+    if (pattern) {
+        _quoteMentionCache.delete(author);
+        _quoteMentionCache.set(author, pattern);
+        return pattern;
+    }
     pattern = new RegExp(`^@${author.replace(_RX_REGEX_ESCAPE_NC, '\\$&')}\\s*`);
-    if (_quoteMentionCache.size >= 256) {
-        // Evict oldest insertion
+    if (_quoteMentionCache.size >= _QUOTE_MENTION_CACHE_MAX) {
         const firstKey = _quoteMentionCache.keys().next().value;
         _quoteMentionCache.delete(firstKey);
     }
@@ -136,17 +140,19 @@ Object.assign(NYM.prototype, {
             event.created_at = Math.floor(Date.now() / 1000);
         }
 
-        // Early deduplication for channel messages to prevent re-processing on reconnect
         if (event.kind === 20000 || event.kind === 23333) {
             if (this.processedMessageEventIds.has(event.id)) {
-                return; // Already processed this message
+                return;
             }
             this.processedMessageEventIds.add(event.id);
 
-            // Prune if too large (keep last 5000 event IDs)
             if (this.processedMessageEventIds.size > 5000) {
-                const idsArray = Array.from(this.processedMessageEventIds);
-                this.processedMessageEventIds = new Set(idsArray.slice(-4000));
+                const it = this.processedMessageEventIds.values();
+                for (let i = 0; i < 1000; i++) {
+                    const v = it.next();
+                    if (v.done) break;
+                    this.processedMessageEventIds.delete(v.value);
+                }
             }
         }
 
@@ -154,11 +160,9 @@ Object.assign(NYM.prototype, {
         const isHistorical = messageAge > 10000; // Older than 10 seconds
 
         if (event.pubkey === this.pubkey) {
-            // For channel messages (kind 20000 geohash, 23333 named)
             if (event.kind === 20000 || event.kind === 23333) {
-                // Check if message already displayed in DOM
-                if (document.querySelector(`[data-message-id="${event.id}"]`)) {
-                    return; // Already displayed optimistically, skip
+                if (this.renderedMessageIds && this.renderedMessageIds.has(event.id)) {
+                    return;
                 }
             }
 

@@ -4,30 +4,25 @@ Object.assign(NYM.prototype, {
 
     setupMobileGestures() {
         if (window.innerWidth <= 768) {
-            // Touch events for swipe to open menu
             document.addEventListener('touchstart', (e) => {
                 const touch = e.touches[0];
-                // Only track swipes starting from left edge
                 if (touch.clientX < 50) {
                     this.swipeStartX = touch.clientX;
                 }
-            });
+            }, { passive: true });
 
             document.addEventListener('touchmove', (e) => {
-                if (this.swipeStartX !== null) {
-                    const touch = e.touches[0];
-                    const swipeDistance = touch.clientX - this.swipeStartX;
-
-                    if (swipeDistance > this.swipeThreshold) {
-                        this.toggleSidebar();
-                        this.swipeStartX = null;
-                    }
+                if (this.swipeStartX === null) return;
+                const touch = e.touches[0];
+                if (touch.clientX - this.swipeStartX > this.swipeThreshold) {
+                    this.toggleSidebar();
+                    this.swipeStartX = null;
                 }
-            });
+            }, { passive: true });
 
             document.addEventListener('touchend', () => {
                 this.swipeStartX = null;
-            });
+            }, { passive: true });
         }
     },
 
@@ -1533,15 +1528,18 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Cancel long-press react if the pointer moves (e.g. text selection drag)
+        let msgMoveCheckTs = 0;
         messagesEl.addEventListener('mousemove', (e) => {
             if (!msgLongPressTimer) return;
+            const now = performance.now();
+            if (now - msgMoveCheckTs < 50) return;
+            msgMoveCheckTs = now;
             const dx = e.clientX - msgLongPressStartX;
             const dy = e.clientY - msgLongPressStartY;
             if (dx * dx + dy * dy > MSG_LONG_PRESS_MOVE_THRESHOLD * MSG_LONG_PRESS_MOVE_THRESHOLD) {
                 cancelMsgLongPress();
             }
-        });
+        }, { passive: true });
         // Cancel long-press react if a swipe gesture is detected
         messagesEl.addEventListener('touchmove', cancelMsgLongPress, { passive: true });
         messagesEl.addEventListener('mouseup', cancelMsgLongPress);

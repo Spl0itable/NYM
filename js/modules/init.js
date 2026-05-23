@@ -60,27 +60,17 @@ Object.assign(NYM.prototype, {
 
     async initialize() {
         try {
-            // Check if nostr-tools is loaded
             if (typeof window.NostrTools === 'undefined') {
                 throw new Error('nostr-tools not loaded');
             }
 
             this._appInitTime = Date.now();
-
-            // Setup event listeners
             this.setupEventListeners();
             this.setupCommands();
-            this.setupEmojiPicker();
-            this.initCustomEmojis();
             this.setupContextMenu();
             this.setupMobileGestures();
-            this.setupTranslateInput();
-            this.populateTranslateLanguageSelect();
-            this.setupSidebarSectionReorder();
             this.setupSidebarSectionCollapse();
             this.setupSidebarItemMenus();
-
-            // Load saved preferences
             this.applyColorMode();
             this.setupColorModeListener();
             this.loadBlockedUsers();
@@ -94,24 +84,25 @@ Object.assign(NYM.prototype, {
             applyMessageLayout(this.settings.chatLayout);
             document.body.classList.toggle('status-hidden', this.settings.showStatus === false);
 
-            // Hydrate channel/PM/profile/reaction caches from IndexedDB
+            // Defer truly optional UI scaffolding to idle
+            this._scheduleIdle(() => {
+                this.setupEmojiPicker();
+                this.initCustomEmojis();
+                this.setupTranslateInput();
+                this.populateTranslateLanguageSelect();
+                this.setupSidebarSectionReorder();
+            }, 800);
+
             try {
                 await Promise.race([
                     this.hydrateFromCache(),
-                    new Promise(r => setTimeout(r, 1500))
+                    new Promise(r => setTimeout(r, 1000))
                 ]);
             } catch (_) { }
 
-            // Load lightning address
             await this.loadLightningAddress();
-
-            // Clean up old localStorage format
             this.cleanupOldLightningAddress();
-
-            // Network change detection
             this.setupNetworkMonitoring();
-
-            // Visibility change detection
             this.setupVisibilityMonitoring();
 
         } catch (error) {

@@ -50,12 +50,20 @@
     padding: 10px 14px;
     border-left: none;
     border-radius: var(--radius-sm);
-    transition: all var(--transition);
+    transition: background-color var(--transition), border-color var(--transition), opacity var(--transition);
     animation: messageIn 0.3s;
     position: relative;
     flex-wrap: wrap;
     align-items: flex-start;
     font-size: var(--user-text-size);
+    content-visibility: auto;
+    contain-intrinsic-size: 0 80px;
+}
+
+.message-content img,
+.message-content video {
+    content-visibility: auto;
+    contain-intrinsic-size: 320px 240px;
 }
 
 .message.blocked {
@@ -64,7 +72,6 @@
 
 .message.flooded {
     opacity: 0.3;
-    filter: blur(2px);
 }
 
 .message.mentioned {
@@ -499,8 +506,8 @@
 .reactors-modal {
     position: fixed;
     background: var(--glass-bg);
-    backdrop-filter: blur(40px) saturate(1.5);
-    -webkit-backdrop-filter: blur(40px) saturate(1.5);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg), var(--shadow-glow), 0 0 0 1px rgba(255, 255, 255, 0.05);
@@ -1186,8 +1193,8 @@ body.chat-bubbles .read-more-btn {
     padding: 12px 16px;
     border-top: 1px solid var(--glass-border);
     background: var(--glass-bg);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     display: flex;
     gap: 10px;
     align-items: stretch;

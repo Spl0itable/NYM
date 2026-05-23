@@ -35,7 +35,9 @@ Object.assign(NYM.prototype, {
             hash = pubkey.charCodeAt(i) + ((hash << 5) - hash);
         }
         const bucket = Math.abs(hash) % 1000;
-        const isLight = document.body.classList.contains('light-mode');
+        const isLight = this._isLightMode === undefined
+            ? document.body.classList.contains('light-mode')
+            : this._isLightMode;
         this._ensureBitchatColorSheet(isLight);
         return `bitchat-user-${isLight ? 'l' : 'd'}${bucket}`;
     },
