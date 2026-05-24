@@ -11,11 +11,9 @@ Object.assign(NYM.prototype, {
         }
         this._insertMessageSorted(list, msg);
         this._indexMessage(conversationKey, msg);
-        if (list.length > this.pmStorageLimit) {
-            const drop = list.length - this.pmStorageLimit;
-            for (let i = 0; i < drop; i++) this._unindexMessage(list[i]);
-            list.splice(0, drop);
-        }
+        // Drop anything over the per-conversation cap. _pruneStorageKey also
+        // sweeps cached DOM fragments and live nodes.
+        this._pruneStorageKey(conversationKey, this.pmMessages, this.pmStorageLimit, 0);
         return list;
     },
 
