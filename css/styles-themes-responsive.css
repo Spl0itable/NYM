@@ -17,7 +17,6 @@
 
 body.light-mode .channel-context-menu {
     background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -230,8 +229,6 @@ body.light-mode .verified-badge::before {
         flex-direction: column;
         gap: 10px;
         background: var(--glass-bg);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
         border-top: 1px solid var(--glass-border);
         z-index: 500;
         flex-shrink: 0;
@@ -482,13 +479,11 @@ body.light-mode::after {
 body.light-mode .modal-content,
 body.light-mode .shop-content {
     background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
 body.light-mode .modal {
     background: rgba(0, 0, 0, 0.25);
-    backdrop-filter: blur(10px);
 }
 
 body.light-mode .message:hover {
@@ -497,7 +492,6 @@ body.light-mode .message:hover {
 
 body.light-mode .sidebar {
     background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(20px);
 }
 
 body.light-mode input,
@@ -594,7 +588,6 @@ body.light-mode.theme-ghost {
 
 body.light-mode .image-modal {
     background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(20px);
 }
 
 body.light-mode .image-modal img {
@@ -603,23 +596,19 @@ body.light-mode .image-modal img {
 
 body.light-mode .geohash-explorer-modal {
     background: rgba(0, 0, 0, 0.3);
-    backdrop-filter: blur(15px);
 }
 
 body.light-mode .geohash-info-panel {
     background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(30px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
 body.light-mode .geohash-control-btn {
     background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: blur(20px);
 }
 
 body.light-mode .geohash-legend {
     background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: blur(20px);
 }
 
 body.light-mode .geohash-info-item {
@@ -628,7 +617,6 @@ body.light-mode .geohash-info-item {
 
 body.light-mode .shop-modal {
     background: rgba(0, 0, 0, 0.25);
-    backdrop-filter: blur(15px);
 }
 
 body.light-mode .mobile-overlay {
@@ -641,7 +629,6 @@ body.light-mode .tutorial-highlight {
 
 body.light-mode .tutorial-card {
     background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(30px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
@@ -917,7 +904,6 @@ body.light-mode .modal-content {
 body.light-mode .geohash-explorer-content {
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.12);
     background: var(--glass-bg);
-    backdrop-filter: blur(20px);
 }
 
 body.light-mode .geohash-join-btn:hover,
@@ -969,7 +955,6 @@ body.light-mode ::-webkit-scrollbar-thumb:hover {
 
 body.light-mode .context-menu {
     background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(20px);
     box-shadow: -4px 0 24px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -1012,14 +997,12 @@ body.light-mode .message.mentioned {
 body.light-mode .autocomplete-dropdown,
 body.light-mode .emoji-autocomplete {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .command-palette {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -1027,48 +1010,41 @@ body.light-mode .command-palette {
 body.light-mode .reaction-picker,
 body.light-mode .enhanced-emoji-modal {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .emoji-picker {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .gif-picker {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .upload-progress {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .reaction-btn,
 body.light-mode .translate-msg-btn {
     background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .reaction-badge[title]:hover::after {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
     color: var(--text);
 }
 
 body.light-mode .reactors-modal {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -1083,21 +1059,18 @@ body.light-mode .reactors-modal-user:hover {
 
 body.light-mode .message-time:hover::after {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
     color: var(--text);
 }
 
 body.light-mode .image-modal-close,
 body.light-mode .image-modal-download {
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .mobile-menu-toggle,
 body.light-mode .mobile-notif-toggle {
     background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
@@ -1416,14 +1389,6 @@ body.light-mode .typing-indicator {
     }
 }
 
-body.performance-mode,
-body.performance-mode *,
-body.performance-mode *::before,
-body.performance-mode *::after {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-}
-
 body.performance-mode .sidebar {
     background: var(--bg-secondary);
 }
@@ -1536,6 +1501,19 @@ body.performance-mode .message.flooded {
     opacity: 0.2;
 }
 
+html.is-scrolling .zap-badge,
+html.is-scrolling .status-dot,
+html.is-scrolling .translate-input-btn.translating,
+html.is-scrolling [class*="rainbow"],
+html.is-scrolling [class*="aurora"],
+html.is-scrolling .matrix-text,
+html.is-scrolling .neon-text,
+html.is-scrolling .ghost-text,
+html.is-scrolling .fire-text,
+html.is-scrolling .glitch-text {
+    animation-play-state: paused !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .status-dot {
         animation: none;
@@ -1561,13 +1539,6 @@ body.solid-ui.light-mode {
     --glass-bg: #ffffff;
     --bg-secondary: #ffffff;
     --bg-tertiary: #f0f0ed;
-}
-
-body.solid-ui *,
-body.solid-ui *::before,
-body.solid-ui *::after {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
 }
 
 body.solid-ui .messages-container {

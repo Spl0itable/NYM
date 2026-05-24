@@ -533,14 +533,16 @@ Object.assign(NYM.prototype, {
     },
 
     // Show/hide the translate input button based on whether the input has text.
-    updateTranslateInputBtn() {
+    updateTranslateInputBtn(cachedValue) {
         const input = document.getElementById('messageInput');
         const btn = document.getElementById('translateInputBtn');
         if (!btn || !input) return;
-        const hasText = input.value.trim().length > 0;
+        const value = cachedValue != null ? cachedValue : input.value;
+        const hasText = value.length > 0 && value.trim().length > 0;
+        if (this._translateBtnVisible === hasText) return;
+        this._translateBtnVisible = hasText;
         btn.style.display = hasText ? 'flex' : 'none';
         input.style.paddingRight = hasText ? '38px' : '';
-        // Hide dropdown when button hides
         if (!hasText) {
             const dropdown = document.getElementById('translateInputDropdown');
             if (dropdown) dropdown.classList.remove('active');
