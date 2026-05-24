@@ -494,6 +494,7 @@ Object.assign(NYM.prototype, {
             if (willOpen) {
                 searchInput.value = '';
                 this._renderTranslateDropdownList();
+                setTimeout(() => searchInput.focus(), 30);
             }
         });
 

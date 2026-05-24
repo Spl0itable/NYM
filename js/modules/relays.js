@@ -2397,7 +2397,6 @@ Object.assign(NYM.prototype, {
         }
 
         filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
-        filters.push({ kinds: [30078], "#t": ["nym-vouches"], limit: 1000 });
         filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
 
         // NIP-30 custom emoji packs from across Nostr

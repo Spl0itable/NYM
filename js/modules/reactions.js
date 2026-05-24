@@ -9,22 +9,20 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _recentEmojiLimit() {
-        return window.innerWidth <= 768 ? 20 : 24;
-    },
-
     saveRecentEmojis() {
-        const limit = this._recentEmojiLimit();
-        localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, limit)));
+        localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, 20)));
         if (typeof this._debouncedNostrSettingsSave === 'function') {
             this._debouncedNostrSettingsSave();
         }
     },
 
     addToRecentEmojis(emoji) {
+        // Remove if already exists
         this.recentEmojis = this.recentEmojis.filter(e => e !== emoji);
+        // Add to beginning
         this.recentEmojis.unshift(emoji);
-        this.recentEmojis = this.recentEmojis.slice(0, this._recentEmojiLimit());
+        // Keep only 20 recent
+        this.recentEmojis = this.recentEmojis.slice(0, 20);
         this.saveRecentEmojis();
     },
 
@@ -90,10 +88,23 @@ Object.assign(NYM.prototype, {
 
         const messageId = eTag[1];
 
+        // When no kTag is present, verify this reaction targets a known Nymchat message
+        // to avoid showing notifications for reactions from other Nostr apps
         if (!kTag) {
-            const inDom = this.renderedMessageIds && this.renderedMessageIds.has(messageId);
-            const indexed = this.messageIndex && this.messageIndex.has(messageId);
-            if (!inDom && !indexed) return;
+            const inDom = !!document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+            let inMessages = false;
+            if (!inDom) {
+                for (const msgs of this.messages.values()) {
+                    if (msgs.some(m => m.id === messageId)) { inMessages = true; break; }
+                }
+            }
+            let inPMs = false;
+            if (!inDom && !inMessages) {
+                for (const msgs of this.pmMessages.values()) {
+                    if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) { inPMs = true; break; }
+                }
+            }
+            if (!inDom && !inMessages && !inPMs) return;
         }
 
         const reactorNym = this.getNymFromPubkey(event.pubkey);
@@ -270,15 +281,13 @@ Object.assign(NYM.prototype, {
             if (isHistorical) {
                 this._addNotificationToHistory(reactorNym, body, channelInfo, event.created_at * 1000);
             } else {
-                this.showNotification(reactorNym, body, channelInfo, event.created_at * 1000);
+                this.showNotification(reactorNym, body, channelInfo);
             }
         }
     },
 
-    updateMessageReactions(messageId, messageEl) {
-        if (!messageEl) {
-            messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
-        }
+    updateMessageReactions(messageId) {
+        const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
         if (!messageEl) return false;
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed
@@ -297,7 +306,7 @@ Object.assign(NYM.prototype, {
                     reactionsRow.remove();
                 }
             }
-            this.updateMessageZaps(messageId, messageEl);
+            this.updateMessageZaps(messageId);
             return true;
         }
 
@@ -569,7 +578,7 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.slice(0, this._recentEmojiLimit()).map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
+            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
@@ -692,7 +701,7 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.slice(0, this._recentEmojiLimit()).map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
+            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
@@ -1082,7 +1091,7 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             html += `<div class="emoji-picker-section" data-category="recent">
                 <div class="emoji-picker-section-title">Recent</div>
                 <div class="emoji-picker-grid">
-                    ${this.recentEmojis.slice(0, this._recentEmojiLimit()).map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
+                    ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
                 </div>
             </div>`;
         }
