@@ -712,15 +712,6 @@ export async function onRequest(context) {
             if (seenOKs.has(eventId)) return;
             seenOKs.add(eventId);
           }
-          const okMatch = raw.match(/^\["OK","[^"]+",\s*(true|false)\s*,\s*"((?:[^"\\]|\\.)*)"/);
-          if (okMatch && okMatch[1] === 'false') {
-            const reason = okMatch[2];
-            if (isPermanentRejection(reason)) {
-              markPermanentlySkipped(relayUrl, `event-rejected: ${reason}`);
-              sendToClient(JSON.stringify(['OK', eventId, false, reason, relayUrl]));
-              return;
-            }
-          }
           sendToClient(raw);
 
         // EOSE, AUTH, NOTICE, CLOSED, or anything else

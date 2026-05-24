@@ -3534,23 +3534,9 @@ Object.assign(NYM.prototype, {
 
                 this.handleEvent(event);
                 break;
-            case 'OK': {
-                const accepted = data[1];
-                const reason = data[2] || '';
-                const attributedRelay = (typeof data[3] === 'string' && data[3].startsWith('wss://'))
-                    ? data[3] : relayUrl;
-                if (accepted === false) {
-                    if (this._isPermanentRejection(reason)) {
-                        this._permanentlyBlacklistRelay(attributedRelay, reason);
-                    } else if (typeof reason === 'string' && /rate-?limit|too many|concurrent/i.test(reason)) {
-                        this._noteRateLimit(attributedRelay);
-                        this._recordRelayError(attributedRelay, reason);
-                    } else if (typeof reason === 'string' && /error|invalid/i.test(reason)) {
-                        this._recordRelayError(attributedRelay, reason);
-                    }
-                }
+            case 'OK':
+                // Event was accepted
                 break;
-            }
             case 'EOSE': {
                 const eoseSubId = data[0];
                 if (this._eoseWaiters && this._eoseWaiters.has(eoseSubId)) {
