@@ -632,11 +632,10 @@ class NYM {
         this._deviceCapabilities = this._detectDeviceCapabilities();
         this._applyPerformanceMode();
         this.channelSubscriptionBatchSize = 10;
-        this.channelMessageLimit = 50;
+        this.channelMessageLimit = 100;
         this.pmStorageLimit = 1000;
-        this.pmPageSize = 50;
+        this.pmPageSize = 100;
         this.pmLoadMoreSize = 50;
-        this.messageMaxAgeMs = 24 * 60 * 60 * 1000;
         this.pmRenderedStart = new Map();
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
         if (this.settings.groupChatPMOnlyMode) {
@@ -1018,8 +1017,6 @@ class NYM {
         this._avatarSvgCache = new Map();
         this.bannerBlobCache = new Map();
         this.bannerBlobInflight = new Map();
-        this.emojiBlobCache = new Map();
-        this.emojiBlobInflight = new Map();
         this._proxyFetchQueue = [];
         this._proxyFetchActive = 0;
         this._proxyFetchMaxConcurrent = 3;
@@ -3526,7 +3523,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.409';
+const NYMCHAT_VERSION = 'v3.66.408';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -4784,13 +4781,6 @@ async function nostrSettingsSave() {
     }
     if (!nym || !nym.pubkey) return;
 
-    // Don't publish while the initial settings pull is still in flight — see
-    // saveSyncedSettings for the full reasoning.
-    if (nym._settingsLoadInProgress) {
-        nym._pendingSettingsSave = true;
-        return;
-    }
-
     try {
         await nym._publishEncryptedSettings(nym._buildSettingsPayload());
     } catch (err) {
@@ -4815,19 +4805,6 @@ function nostrSettingsLoad() {
     // Buffer settings events during the initial REQ
     nym._settingsLoadBuffer = nym._settingsLoadBuffer || new Map();
     nym._settingsLoadBuffer.set(subId, { newestSettings: null, newestTs: 0 });
-
-    // Mark a settings pull as in flight
-    nym._settingsLoadInProgress = true;
-    if (nym._settingsLoadSafetyTimer) clearTimeout(nym._settingsLoadSafetyTimer);
-    nym._settingsLoadSafetyTimer = setTimeout(() => {
-        if (!nym._settingsLoadInProgress) return;
-        nym._settingsLoadInProgress = false;
-        nym._settingsLoadSafetyTimer = null;
-        if (nym._pendingSettingsSave) {
-            nym._pendingSettingsSave = false;
-            nostrSettingsSave();
-        }
-    }, 15000);
 
     // Pool mode: send REQ through the multiplexed pool workers
     if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
