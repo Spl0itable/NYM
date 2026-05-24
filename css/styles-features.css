@@ -3140,6 +3140,22 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     font-size: 11px;
 }
 
+.relay-stats-type {
+    font-family: var(--font-sans);
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.relay-stats-type.write {
+    background: rgb(from var(--purple) r g b / 0.12);
+    color: var(--purple);
+}
+
 .relay-stats-events {
     font-family: var(--font-mono);
     font-size: 11px;

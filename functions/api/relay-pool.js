@@ -5,12 +5,12 @@
 // Client connects to: wss://<host>/api/relay-pool
 //
 // Protocol (client → proxy):
-//   ["RELAYS", { relays: [...], dmRelays: [...] }]
+//   ["RELAYS", { relays: [...], writeOnly: [...], dmRelays: [...] }]
 //   ["EVENT", eventObj]          - fans out to all connected relays
 //   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
 //   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
-//   ["REQ", subId, ...filters]   - fans out to all relays
-//   ["CLOSE", subId]             - fans out to all relays
+//   ["REQ", subId, ...filters]   - fans out to read relays only
+//   ["CLOSE", subId]             - fans out to read relays only
 //   ["KIND_BLACKLIST", { "wss://relay": [kind, ...], ... }] - skip relay for REQs whose kinds are all in its set
 //
 // Protocol (proxy → client):
@@ -55,6 +55,7 @@ export async function onRequest(context) {
   const seenOKs = new Set();         // eventId (only forward first OK per event)
   const seenEOSE = new Set();        // subId (only forward first EOSE per subscription)
   const relayLatency = new Map();    // relayUrl -> latency ms
+  let writeOnlyRelays = new Set();
   let dmRelays = [];
   const kindBlacklist = new Map();
   let serverOpen = true;
@@ -206,21 +207,6 @@ export async function onRequest(context) {
       || /\bpaid\b/i.test(reason)
       || /\bpow\b/i.test(reason)
       || /\bprotected\b/i.test(reason)
-      || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
-      || /\binvalid query\b/i.test(reason);
-  }
-
-  function isRelayWideRejection(reason) {
-    if (typeof reason !== 'string') return false;
-    return /auth[\s\-_:]*required/i.test(reason)
-      || /\bauthentic/i.test(reason)
-      || /nip-?42/i.test(reason)
-      || /\bblocked\b/i.test(reason)
-      || /\bbanned\b/i.test(reason)
-      || /\bforbidden\b/i.test(reason)
-      || /\bunauthorized\b/i.test(reason)
-      || /payment[\s\-_:]*required/i.test(reason)
-      || /\bpaid\b/i.test(reason)
       || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
       || /\binvalid query\b/i.test(reason);
   }
@@ -635,6 +621,7 @@ export async function onRequest(context) {
   }
 
   function replaySubscriptions(relayUrl, ws) {
+    if (writeOnlyRelays.has(relayUrl)) return;
     for (const [subId, reqMsg] of activeSubscriptions) {
       try {
         ws.send(reqMsg);
@@ -648,7 +635,7 @@ export async function onRequest(context) {
   function connectUpstream(relayUrl, type) {
     if (upstreams.has(relayUrl)) return;
     if (!validateRelayUrl(relayUrl)) return;
-    if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://sendit.nosflare.com') return;
+    if (relayUrl === 'wss://relay.nosflare.com') return;
     if (shouldSkipRelay(relayUrl)) return;
 
     const info = { ws: null, type, status: 'connecting', eventCount: 0, handled: false };
@@ -728,12 +715,8 @@ export async function onRequest(context) {
           const okMatch = raw.match(/^\["OK","[^"]+",\s*(true|false)\s*,\s*"((?:[^"\\]|\\.)*)"/);
           if (okMatch && okMatch[1] === 'false') {
             const reason = okMatch[2];
-            if (isRelayWideRejection(reason)) {
-              markPermanentlySkipped(relayUrl, `event-rejected: ${reason}`);
-              sendToClient(JSON.stringify(['OK', eventId, false, reason, relayUrl]));
-              return;
-            }
             if (isPermanentRejection(reason)) {
+              markPermanentlySkipped(relayUrl, `event-rejected: ${reason}`);
               sendToClient(JSON.stringify(['OK', eventId, false, reason, relayUrl]));
               return;
             }
@@ -853,11 +836,14 @@ export async function onRequest(context) {
             const config = msg[1];
             if (!config || typeof config !== 'object') return;
 
+            const writeOnly = config.writeOnly || [];
             dmRelays = config.dmRelays || [];
+            writeOnlyRelays = new Set(writeOnly);
 
             const requestedRelays = config.relays || [];
 
-            const newRelaySet = new Set(requestedRelays);
+            // Disconnect relays no longer in the list
+            const newRelaySet = new Set([...requestedRelays, ...writeOnly]);
             for (const [url, info] of upstreams) {
               if (!newRelaySet.has(url)) {
                 intentionallyClosed.add(url);
@@ -866,76 +852,70 @@ export async function onRequest(context) {
               }
             }
 
+            // Cancel ALL pending reconnect timers
             for (const [, timerId] of reconnectTimers) {
               clearTimeout(timerId);
             }
             reconnectTimers.clear();
             pendingReconnect.clear();
 
+            // Connect all relays immediately (geo relays first in the array)
             for (const url of requestedRelays) {
               if (!upstreams.has(url)) {
-                queueConnection(url, 'read');
+                queueConnection(url, writeOnlyRelays.has(url) ? 'write' : 'read');
+              }
+            }
+            for (const url of writeOnly) {
+              if (!upstreams.has(url)) {
+                queueConnection(url, 'write');
               }
             }
           } else if (msgType === 'EVENT') {
-            const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
-            sendToUpstreams(event.data, (url) => {
-              if (evtKind < 0) return true;
-              const blocked = kindBlacklist.get(url);
-              return !(blocked && blocked.has(evtKind));
-            });
+            sendToUpstreams(event.data);
           } else if (msgType === 'GEO_EVENT') {
-            const geoEvt = msg[1];
-            const evtKind = geoEvt && typeof geoEvt.kind === 'number' ? geoEvt.kind : -1;
-            const isBlockedFor = (url) => {
-              if (evtKind < 0) return false;
-              const blocked = kindBlacklist.get(url);
-              return !!(blocked && blocked.has(evtKind));
-            };
-            const geoMsg = JSON.stringify(['EVENT', geoEvt]);
+            const geoMsg = JSON.stringify(['EVENT', msg[1]]);
             const geoUrls = msg[2] || [];
             const geoSet = new Set(geoUrls);
             const sentGeo = new Set();
+            // Send to connected geo relays first
             upstreams.forEach((info, url) => {
-              if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+              if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
                 try { info.ws.send(geoMsg); sentGeo.add(url); } catch { /* noop */ }
               }
             });
+            // For geo relays that aren't connected yet, ensure they get connected
+            // and buffer the event so it gets sent when they open
+            // (critical for ephemeral kind 20000 which relays don't store)
             for (const url of geoUrls) {
               if (sentGeo.has(url)) continue;
-              if (isBlockedFor(url)) continue;
               const info = upstreams.get(url);
               if (info && info.status === 'connecting') {
+                // Relay is connecting — buffer this event for delivery on open
                 if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
                 pendingGeoEvents.get(url).push(geoMsg);
               } else if (!info && validateRelayUrl(url)) {
+                // Relay not in upstreams at all — queue connection and buffer
                 queueConnection(url, 'read');
                 if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
                 pendingGeoEvents.get(url).push(geoMsg);
               }
             }
+            // Then send to all other connected relays
             upstreams.forEach((info, url) => {
-              if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+              if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
                 try { info.ws.send(geoMsg); } catch { /* noop */ }
               }
             });
           } else if (msgType === 'DM_EVENT') {
-            const dmEvt = msg[1];
-            const evtKind = dmEvt && typeof dmEvt.kind === 'number' ? dmEvt.kind : -1;
-            const isBlockedFor = (url) => {
-              if (evtKind < 0) return false;
-              const blocked = kindBlacklist.get(url);
-              return !!(blocked && blocked.has(evtKind));
-            };
-            const dmMsg = JSON.stringify(['EVENT', dmEvt]);
+            const dmMsg = JSON.stringify(['EVENT', msg[1]]);
             const dmSet = new Set(dmRelays);
             upstreams.forEach((info, url) => {
-              if (dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+              if (dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
               }
             });
             upstreams.forEach((info, url) => {
-              if (!dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+              if (!dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
               }
             });
@@ -951,7 +931,8 @@ export async function onRequest(context) {
                 for (const k of f.kinds) reqKinds.add(k);
               }
             }
-            sendToUpstreams(event.data, (url) => {
+            sendToUpstreams(event.data, (url, info) => {
+              if (info.type === 'write') return false;
               if (reqKinds.size > 0) {
                 const blocked = kindBlacklist.get(url);
                 if (blocked && blocked.size > 0) {
@@ -982,7 +963,7 @@ export async function onRequest(context) {
             subRelays.delete(subId);
             seenEOSE.delete(subId);
             if (targets && targets.size > 0) {
-              sendToUpstreams(event.data, (url) => targets.has(url));
+              sendToUpstreams(event.data, (url, info) => info.type !== 'write' && targets.has(url));
             }
           }
     } catch {
