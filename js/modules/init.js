@@ -37,11 +37,16 @@ Object.assign(NYM.prototype, {
     },
 
     _detectDeviceCapabilities() {
-        const caps = { tier: 'high', cores: 4, memory: 8, mobile: false };
+        const caps = { tier: 'high', cores: 4, memory: 8, mobile: false, ios: false };
         try {
             caps.cores = navigator.hardwareConcurrency || 2;
             caps.memory = navigator.deviceMemory || 4;
-            caps.mobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+            const ua = navigator.userAgent || '';
+            caps.ios = /iPad|iPhone|iPod/.test(ua)
+                // iPadOS 13+ reports as desktop Safari; the touch-Mac combo is the tell.
+                || (ua.includes('Macintosh') && navigator.maxTouchPoints > 1);
+            caps.mobile = caps.ios
+                || /Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua)
                 || (navigator.maxTouchPoints > 1 && window.innerWidth <= 1024);
 
             if (caps.cores <= 2 || caps.memory <= 2 || (caps.mobile && caps.cores <= 4 && caps.memory <= 4)) {
@@ -56,10 +61,15 @@ Object.assign(NYM.prototype, {
     _applyPerformanceMode() {
         this.performanceMode = true;
         document.body.classList.add('performance-mode');
-        // Keep enough chat DOM cached to hold "all" channels a typical user joins
-        // while still bounding memory on weaker devices. Eviction is LRU.
+        // Mobile (and iOS in particular) gets a tight cap: each cached chat
+        // holds up to channelMessageLimit message DOM trees, and iOS Safari
+        // will evict the page (and localStorage with it) under memory
+        // pressure. Desktop has the headroom to keep many more chats warm.
         const tier = this._deviceCapabilities && this._deviceCapabilities.tier;
-        this._channelDOMCacheLimit = tier === 'low' ? 30 : tier === 'mid' ? 75 : 150;
+        const mobile = this._deviceCapabilities && this._deviceCapabilities.mobile;
+        this._channelDOMCacheLimit = mobile
+            ? (tier === 'low' ? 5 : tier === 'mid' ? 8 : 12)
+            : (tier === 'low' ? 20 : tier === 'mid' ? 50 : 100);
     },
 
     async initialize() {
@@ -98,8 +108,39 @@ Object.assign(NYM.prototype, {
             }, 800);
 
             this._hydrationPromise = this.hydrateFromCache()
-                .then(() => { this._hydrationComplete = true; this._onHydrationComplete(); })
+                .then(() => {
+                    this._hydrationComplete = true;
+                    this._onHydrationComplete();
+                    // First age-sweep after hydration; drops anything older than
+                    // messageMaxAgeMs (24h) from memory, cache, and storage.
+                    if (typeof this.pruneOldMessages === 'function') {
+                        try { this.pruneOldMessages(); } catch (_) { }
+                    }
+                })
                 .catch(() => { this._hydrationComplete = true; });
+
+            // Recurring sweep — every 30 minutes the app drops anything that
+            // crossed the age cutoff while the tab was open. The same tick
+            // also tells the service worker to trim its emoji cache.
+            const sweep = () => {
+                try { if (typeof this.pruneOldMessages === 'function') this.pruneOldMessages(); } catch (_) { }
+                try {
+                    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                        navigator.serviceWorker.controller.postMessage({ type: 'trim-emoji', limit: 500 });
+                    }
+                } catch (_) { }
+            };
+            this._setManagedInterval('msgAgeSweep', sweep, 30 * 60 * 1000);
+
+            // Also run when the tab returns to the foreground after being
+            // backgrounded for a while — covers the case where a phone sat
+            // overnight on the chat screen.
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState !== 'visible') return;
+                if (typeof this.pruneOldMessages === 'function') {
+                    try { this.pruneOldMessages(); } catch (_) { }
+                }
+            });
 
             await this.loadLightningAddress();
             this.cleanupOldLightningAddress();

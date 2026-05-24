@@ -38,6 +38,16 @@ Object.assign(NYM.prototype, {
             if (keypairMode === 'random' || keypairMode === 'hardcore') return;
         }
 
+        // Don't publish a settings event while an initial pull is still in
+        // flight — we'd publish our just-loaded defaults with a newer
+        // created_at than the remote copy, and that would clobber it on the
+        // very devices we're trying to sync with. Queue the request so it
+        // runs once the load resolves (or its safety timer fires).
+        if (this._settingsLoadInProgress) {
+            this._pendingSettingsSave = true;
+            return;
+        }
+
         try {
             await this._publishEncryptedSettings(this._buildSettingsPayload());
         } catch (error) {
@@ -129,6 +139,13 @@ Object.assign(NYM.prototype, {
     // Debounced nostrSettingsSave — coalesces rapid state changes (e.g. incoming
     // group messages) into a single Nostr publish.  Delay defaults to 5 seconds.
     _debouncedNostrSettingsSave(delayMs = 5000) {
+        // Same gate as saveSyncedSettings: holding off the publish while the
+        // initial settings pull is still resolving prevents a fresh-device
+        // boot from overwriting the synced state with its own defaults.
+        if (this._settingsLoadInProgress) {
+            this._pendingSettingsSave = true;
+            return;
+        }
         if (this._settingsSaveTimer) clearTimeout(this._settingsSaveTimer);
         this._settingsSaveTimer = setTimeout(() => {
             this._settingsSaveTimer = null;
@@ -142,12 +159,30 @@ Object.assign(NYM.prototype, {
         const buf = this._settingsLoadBuffer.get(subId);
         if (!buf) return;
         this._settingsLoadBuffer.delete(subId);
-        if (!buf.newestSettings || !buf.newestTs) return;
-        if (buf.newestTs <= (this._lastSettingsSyncTs || 0)) return;
-        this._lastSettingsSyncTs = buf.newestTs;
-        try { localStorage.setItem('nym_last_settings_sync_ts', String(buf.newestTs)); } catch (_) { }
-        if (typeof applyNostrSettings === 'function') {
-            Promise.resolve(applyNostrSettings(buf.newestSettings)).catch(() => { });
+
+        // Mark the load as done and chain any save the user (or background
+        // events) tried to fire while we were waiting on the relay.
+        const wasInProgress = this._settingsLoadInProgress;
+        this._settingsLoadInProgress = false;
+        if (this._settingsLoadSafetyTimer) {
+            clearTimeout(this._settingsLoadSafetyTimer);
+            this._settingsLoadSafetyTimer = null;
+        }
+
+        let applyPromise = Promise.resolve();
+        if (buf.newestSettings && buf.newestTs && buf.newestTs > (this._lastSettingsSyncTs || 0)) {
+            this._lastSettingsSyncTs = buf.newestTs;
+            try { localStorage.setItem('nym_last_settings_sync_ts', String(buf.newestTs)); } catch (_) { }
+            if (typeof applyNostrSettings === 'function') {
+                applyPromise = Promise.resolve(applyNostrSettings(buf.newestSettings)).catch(() => { });
+            }
+        }
+
+        if (wasInProgress && this._pendingSettingsSave) {
+            this._pendingSettingsSave = false;
+            applyPromise.then(() => {
+                if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+            });
         }
     },
 

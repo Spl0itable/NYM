@@ -1200,7 +1200,17 @@ Object.assign(NYM.prototype, {
     },
 
     // Internal: build and send a typing indicator gift-wrap
-    async _sendTypingEvent(status) {
+    _sendTypingEvent(status) {
+        if (!this._canSendGiftWraps()) return;
+        // nip59WrapEvent is synchronous and runs ~10 crypto ops per recipient
+        // (sign, ECDH, encrypt × 2). Defer the whole publish to the next task
+        // so the input event that triggered us paints first and the keystroke
+        // doesn't visibly stall — especially in groups where this loops over
+        // every member on the main thread.
+        setTimeout(() => { this._doSendTypingEvent(status); }, 0);
+    },
+
+    async _doSendTypingEvent(status) {
         if (!this._canSendGiftWraps()) return;
 
         const now = Math.floor(Date.now() / 1000);
@@ -1214,10 +1224,33 @@ Object.assign(NYM.prototype, {
             if (otherMembers.length === 0) return;
 
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
+            // Hand the wrap loop to the crypto worker so a 5-member group
+            // doesn't stall the main thread for 150-400ms every typing tick.
+            // Falls back to the original async path if the worker is
+            // unavailable (private mode, extension/NIP-46 signer).
+            if (this.privkey && window.cryptoWorkerClient && window.cryptoWorkerClient.isAvailable()) {
+                const recipients = otherMembers.map(pk => ({
+                    pubkey: this._getEncryptionPubkey(this.currentGroup, pk)
+                }));
+                try {
+                    const wraps = await window.cryptoWorkerClient.nip59WrapBatch(rumor, this.privkey, recipients);
+                    for (const r of wraps) {
+                        if (r && r.ok && r.wrapped) this.sendDMToRelays(['EVENT', r.wrapped]);
+                    }
+                    return;
+                } catch (_) { /* fall through to main-thread path */ }
+            }
             await this._sendGiftWrapsAsync(otherMembers, rumor, null);
         } else if (this.currentPM) {
             tags.push(['p', this.currentPM]);
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
+            if (this.privkey && window.cryptoWorkerClient && window.cryptoWorkerClient.isAvailable()) {
+                try {
+                    const wrapped = await window.cryptoWorkerClient.nip59Wrap(rumor, this.privkey, this.currentPM, null);
+                    this.sendDMToRelays(['EVENT', wrapped]);
+                    return;
+                } catch (_) { /* fall through */ }
+            }
             if (this.privkey) {
                 const wrapped = this.nip59WrapEvent(rumor, this.privkey, this.currentPM, null);
                 this.sendDMToRelays(['EVENT', wrapped]);
@@ -1362,7 +1395,16 @@ Object.assign(NYM.prototype, {
             || (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected);
     },
 
-    async _sendChannelTypingEvent(status, geohash) {
+    _sendChannelTypingEvent(status, geohash) {
+        if (!geohash || !this._canPublishChannelEvent()) return;
+        // signEvent calls NostrTools.finalizeEvent which hashes + schnorr-signs
+        // synchronously when the local privkey is present. Defer so the
+        // keystroke that triggered us can paint before we stall the main
+        // thread for the sign.
+        setTimeout(() => { this._doSendChannelTypingEvent(status, geohash); }, 0);
+    },
+
+    async _doSendChannelTypingEvent(status, geohash) {
         if (!geohash || !this._canPublishChannelEvent()) return;
         const wire = this.channelWire(geohash);
         const event = {
@@ -1377,7 +1419,15 @@ Object.assign(NYM.prototype, {
             pubkey: this.pubkey
         };
         try {
-            const signed = await this.signEvent(event);
+            // signEvent is sync (~5-15ms on iOS) for the local-privkey path.
+            // Push it to the worker when we can, so even the lightest typing
+            // event doesn't share a frame with the keystroke that triggered it.
+            let signed;
+            if (this.privkey && window.cryptoWorkerClient && window.cryptoWorkerClient.isAvailable()) {
+                signed = await window.cryptoWorkerClient.signEvent(event, this.privkey);
+            } else {
+                signed = await this.signEvent(event);
+            }
             this.sendToRelay(["EVENT", signed]);
             if (wire.isGeohash) this.ensureGeoRelayDelivery(signed, geohash);
         } catch (_) { }

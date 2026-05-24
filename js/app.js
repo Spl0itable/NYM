@@ -632,10 +632,13 @@ class NYM {
         this._deviceCapabilities = this._detectDeviceCapabilities();
         this._applyPerformanceMode();
         this.channelSubscriptionBatchSize = 10;
-        this.channelMessageLimit = 100;
+        this.channelMessageLimit = 50;
         this.pmStorageLimit = 1000;
-        this.pmPageSize = 100;
+        this.pmPageSize = 50;
         this.pmLoadMoreSize = 50;
+        // Messages older than this are evicted from memory, the DOM cache, and
+        // IndexedDB on the periodic sweep / on visibility change.
+        this.messageMaxAgeMs = 24 * 60 * 60 * 1000;
         this.pmRenderedStart = new Map();
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
         if (this.settings.groupChatPMOnlyMode) {
@@ -714,8 +717,12 @@ class NYM {
         this.statusHiddenUsers = new Set();
         this.typingUsers = new Map();
         this._typingThrottleTime = 0;
-        this._typingSendInterval = 3000;
-        this._typingExpireMs = 5000;
+        // Each typing event runs a synchronous NIP-59 wrap (PM/group) or
+        // schnorr sign (channel) on the main thread, so we stretch the
+        // refresh cadence and lengthen the receiver-side expiry to keep the
+        // indicator visible between sends. Bigger groups feel this most.
+        this._typingSendInterval = 6000;
+        this._typingExpireMs = 8000;
         this._typingStopTimer = null;
         this.notificationHistory = this._loadNotificationHistory();
         this.notificationLastReadTime = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
@@ -3523,7 +3530,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.408';
+const NYMCHAT_VERSION = 'v3.66.409';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -4781,6 +4788,13 @@ async function nostrSettingsSave() {
     }
     if (!nym || !nym.pubkey) return;
 
+    // Don't publish while the initial settings pull is still in flight — see
+    // saveSyncedSettings for the full reasoning.
+    if (nym._settingsLoadInProgress) {
+        nym._pendingSettingsSave = true;
+        return;
+    }
+
     try {
         await nym._publishEncryptedSettings(nym._buildSettingsPayload());
     } catch (err) {
@@ -4805,6 +4819,24 @@ function nostrSettingsLoad() {
     // Buffer settings events during the initial REQ
     nym._settingsLoadBuffer = nym._settingsLoadBuffer || new Map();
     nym._settingsLoadBuffer.set(subId, { newestSettings: null, newestTs: 0 });
+
+    // Mark a settings pull as in flight so that any save attempt during this
+    // window (a channel auto-join, a profile fetch, a background event) gets
+    // queued instead of publishing our local defaults to the relays — that
+    // was wiping the synced state on every fresh-device boot. A safety
+    // timeout force-clears the flag if no relay path ever reaches its 10s
+    // per-relay cleanup (offline, all relays unreachable, etc.).
+    nym._settingsLoadInProgress = true;
+    if (nym._settingsLoadSafetyTimer) clearTimeout(nym._settingsLoadSafetyTimer);
+    nym._settingsLoadSafetyTimer = setTimeout(() => {
+        if (!nym._settingsLoadInProgress) return;
+        nym._settingsLoadInProgress = false;
+        nym._settingsLoadSafetyTimer = null;
+        if (nym._pendingSettingsSave) {
+            nym._pendingSettingsSave = false;
+            nostrSettingsSave();
+        }
+    }, 15000);
 
     // Pool mode: send REQ through the multiplexed pool workers
     if (nym.useRelayProxy && nym._isAnyPoolOpen()) {

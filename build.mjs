@@ -142,18 +142,35 @@ async function run() {
 
   const version = sha8(Buffer.from([...assetMap.values()].sort().join('|')));
   const sw = `const CACHE = 'nym-${version}';
+const EMOJI_CACHE = 'nym-emoji';
+const KEEP = new Set([CACHE, EMOJI_CACHE]);
 const PRECACHE = ${JSON.stringify(precache)};
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => !KEEP.has(k)).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
+// Proxied NIP-30 custom emoji land on /api/proxy?emoji=1&url=... — they're
+// immutable (the proxy stamps a 30-day Cache-Control), so cache-first against
+// a long-lived store survives iOS Safari HTTP-cache evictions.
+const isProxiedEmoji = (url) => url.pathname === '/api/proxy' && url.searchParams.get('emoji') === '1';
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  if (isProxiedEmoji(url)) {
+    e.respondWith(
+      caches.open(EMOJI_CACHE).then((c) => c.match(req).then((cached) => cached || fetch(req).then((res) => {
+        if (res && res.ok && res.status === 200) {
+          try { c.put(req, res.clone()); } catch (_) {}
+        }
+        return res;
+      })))
+    );
+    return;
+  }
   if (url.pathname.startsWith('/api/')) return;
   if (req.mode === 'navigate') {
     e.respondWith(
@@ -174,6 +191,18 @@ self.addEventListener('fetch', (e) => {
       return res;
     }))
   );
+});
+// Lightweight LRU-ish trim: when the emoji cache grows past N entries,
+// drop the oldest by Date headers (or just by insertion order via keys()).
+self.addEventListener('message', (e) => {
+  if (!e.data || e.data.type !== 'trim-emoji') return;
+  const limit = e.data.limit || 500;
+  e.waitUntil(caches.open(EMOJI_CACHE).then(async (c) => {
+    const keys = await c.keys();
+    if (keys.length <= limit) return;
+    const evict = keys.slice(0, keys.length - Math.floor(limit * 0.9));
+    await Promise.all(evict.map((k) => c.delete(k)));
+  }));
 });
 `;
   await emit('sw.js', sw);
