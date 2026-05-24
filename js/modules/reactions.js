@@ -9,22 +9,20 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _recentEmojiLimit() {
-        return window.innerWidth <= 768 ? 20 : 24;
-    },
-
     saveRecentEmojis() {
-        const limit = this._recentEmojiLimit();
-        localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, limit)));
+        localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, 20)));
         if (typeof this._debouncedNostrSettingsSave === 'function') {
             this._debouncedNostrSettingsSave();
         }
     },
 
     addToRecentEmojis(emoji) {
+        // Remove if already exists
         this.recentEmojis = this.recentEmojis.filter(e => e !== emoji);
+        // Add to beginning
         this.recentEmojis.unshift(emoji);
-        this.recentEmojis = this.recentEmojis.slice(0, this._recentEmojiLimit());
+        // Keep only 20 recent
+        this.recentEmojis = this.recentEmojis.slice(0, 20);
         this.saveRecentEmojis();
     },
 
@@ -90,10 +88,23 @@ Object.assign(NYM.prototype, {
 
         const messageId = eTag[1];
 
+        // When no kTag is present, verify this reaction targets a known Nymchat message
+        // to avoid showing notifications for reactions from other Nostr apps
         if (!kTag) {
-            const inDom = this.renderedMessageIds && this.renderedMessageIds.has(messageId);
-            const indexed = this.messageIndex && this.messageIndex.has(messageId);
-            if (!inDom && !indexed) return;
+            const inDom = !!document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+            let inMessages = false;
+            if (!inDom) {
+                for (const msgs of this.messages.values()) {
+                    if (msgs.some(m => m.id === messageId)) { inMessages = true; break; }
+                }
+            }
+            let inPMs = false;
+            if (!inDom && !inMessages) {
+                for (const msgs of this.pmMessages.values()) {
+                    if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) { inPMs = true; break; }
+                }
+            }
+            if (!inDom && !inMessages && !inPMs) return;
         }
 
         const reactorNym = this.getNymFromPubkey(event.pubkey);
@@ -127,7 +138,21 @@ Object.assign(NYM.prototype, {
                 }
             }
             this.persistReactions(messageId);
-            this._updateMessageReactionsEverywhere(messageId);
+            const reactionApplied = this.updateMessageReactions(messageId);
+            if (!reactionApplied) {
+                for (const [key, msgs] of this.messages.entries()) {
+                    if (msgs.some(m => m.id === messageId)) {
+                        this.channelDOMCache.delete(key);
+                        break;
+                    }
+                }
+                for (const [key, msgs] of this.pmMessages.entries()) {
+                    if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
+                        this.channelDOMCache.delete(key);
+                        break;
+                    }
+                }
+            }
             return;
         }
 
@@ -145,10 +170,26 @@ Object.assign(NYM.prototype, {
         messageReactions.get(reactionContent).set(event.pubkey, reactorNym);
         this.persistReactions(messageId);
 
-        // Patch every matching message element — live DOM and any cached
-        // chat fragments — so reaction state stays consistent without
-        // dropping channel caches.
-        this._updateMessageReactionsEverywhere(messageId);
+        // Update UI if message is visible, otherwise invalidate DOM cache
+        // so the reaction appears when the user switches to that channel
+        const reactionApplied = this.updateMessageReactions(messageId);
+        if (!reactionApplied) {
+            // Message not in current DOM — find which channel owns it and
+            // invalidate that channel's cached DOM so it re-renders with the
+            // new reaction when the user navigates there.
+            for (const [key, msgs] of this.messages.entries()) {
+                if (msgs.some(m => m.id === messageId)) {
+                    this.channelDOMCache.delete(key);
+                    break;
+                }
+            }
+            for (const [key, msgs] of this.pmMessages.entries()) {
+                if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
+                    this.channelDOMCache.delete(key);
+                    break;
+                }
+            }
+        }
 
         // Notify if someone reacted to OUR message (not our own reaction)
         if (pTag && pTag[1] === this.pubkey && event.pubkey !== this.pubkey) {
@@ -240,46 +281,17 @@ Object.assign(NYM.prototype, {
             if (isHistorical) {
                 this._addNotificationToHistory(reactorNym, body, channelInfo, event.created_at * 1000);
             } else {
-                this.showNotification(reactorNym, body, channelInfo, event.created_at * 1000);
+                this.showNotification(reactorNym, body, channelInfo);
             }
         }
     },
 
-    // Apply reaction updates to every matching message element — both the
-    // live DOM and any cached channel/PM/group fragments. Replaces the older
-    // "wipe the cached channel" fallback so a single reaction event no longer
-    // blows away the entire chat's cached render.
-    _updateMessageReactionsEverywhere(messageId) {
-        if (!messageId) return false;
-        const safeId = String(messageId).replace(/"/g, '\\"');
-        const selector = `[data-message-id="${safeId}"]`;
-        let updated = false;
-        document.querySelectorAll(selector).forEach(el => {
-            this.updateMessageReactions(messageId, el);
-            updated = true;
-        });
-        if (this.channelDOMCache && this.channelDOMCache.size > 0) {
-            for (const cached of this.channelDOMCache.values()) {
-                if (!cached || !cached.fragment) continue;
-                cached.fragment.querySelectorAll(selector).forEach(el => {
-                    this.updateMessageReactions(messageId, el);
-                    updated = true;
-                });
-            }
-        }
-        return updated;
-    },
-
-    updateMessageReactions(messageId, messageEl) {
-        if (!messageEl) {
-            messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
-        }
+    updateMessageReactions(messageId) {
+        const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
         if (!messageEl) return false;
 
-        // Skip scroll preservation when patching a detached cached fragment —
-        // the live scroller belongs to a different channel right now.
-        const isLive = messageEl.isConnected;
-        const container = isLive ? document.getElementById('messagesScroller') : null;
+        // Capture scroll state before modifying DOM so we can auto-scroll if needed
+        const container = document.getElementById('messagesScroller');
         const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
 
         const reactions = this.reactions.get(messageId);
@@ -294,7 +306,7 @@ Object.assign(NYM.prototype, {
                     reactionsRow.remove();
                 }
             }
-            this.updateMessageZaps(messageId, messageEl);
+            this.updateMessageZaps(messageId);
             return true;
         }
 
@@ -566,7 +578,7 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.slice(0, this._recentEmojiLimit()).map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
+            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
@@ -689,7 +701,7 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.slice(0, this._recentEmojiLimit()).map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
+            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
@@ -1079,7 +1091,7 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             html += `<div class="emoji-picker-section" data-category="recent">
                 <div class="emoji-picker-section-title">Recent</div>
                 <div class="emoji-picker-grid">
-                    ${this.recentEmojis.slice(0, this._recentEmojiLimit()).map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
+                    ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
                 </div>
             </div>`;
         }
