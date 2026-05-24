@@ -33,6 +33,96 @@ function isNymchatClient(request) {
   return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
 }
 
+// Regular (id-keyed), replaceable (pubkey-keyed), and parameterized
+// replaceable (pubkey+d-tag-keyed) kinds we index. Anything not listed
+// here (besides 1059 gift wraps, handled separately) is skipped.
+const INDEXED_REGULAR_KINDS = new Set([5, 7, 9735, 20000, 23333]);
+const REPLACEABLE_KINDS = new Set([0]);
+const PARAM_REPLACEABLE_KINDS = new Set([30030, 30078]);
+
+const INDEX_MAX_EVENT_BYTES = 32 * 1024;
+// Skip indexing events older than this; new connections re-fetch a 24h
+// window of history at start-up and we don't want each one re-writing
+// thousands of stale events through R2 PUTs.
+const INDEX_MAX_AGE_SEC = 3600;
+
+// Per-connection R2 write budget. A WebSocket counts as one Worker
+// invocation, and each invocation is capped at 1000 subrequests on the
+// paid plan (50 on free). We leave a healthy margin for other
+// subrequests (upstream WebSocket opens, deletions, etc.).
+const MAX_WRITES_PER_CONNECTION = 800;
+// Soft per-second rate limit per connection. If a burst of events
+// arrives, drop indexing for that second rather than queueing more
+// PUTs through waitUntil. The bucket only needs eventual coverage.
+const MAX_WRITES_PER_SECOND = 20;
+
+const RECENTLY_INDEXED_MAX = 20000;
+const recentlyIndexed = new Set();
+// Per-replaceable-key latest created_at seen in this isolate. Used to
+// avoid clobbering newer state with an older event arriving out of order.
+const replaceableLatest = new Map();
+const REPLACEABLE_MAX = 10000;
+
+function markRecentlyIndexed(eventId) {
+  if (recentlyIndexed.size >= RECENTLY_INDEXED_MAX) {
+    const it = recentlyIndexed.values();
+    for (let i = 0; i < 5000; i++) {
+      const v = it.next();
+      if (v.done) break;
+      recentlyIndexed.delete(v.value);
+    }
+  }
+  recentlyIndexed.add(eventId);
+}
+
+function trimReplaceableCache() {
+  if (replaceableLatest.size <= REPLACEABLE_MAX) return;
+  const it = replaceableLatest.keys();
+  for (let i = 0; i < 2000; i++) {
+    const v = it.next();
+    if (v.done) break;
+    replaceableLatest.delete(v.value);
+  }
+}
+
+function extractEventObjectJSON(raw) {
+  const start = raw.indexOf('{');
+  if (start === -1) return null;
+  const end = raw.lastIndexOf('}');
+  if (end <= start) return null;
+  return raw.substring(start, end + 1);
+}
+
+function extractEventCreatedAt(raw) {
+  const braceIdx = raw.indexOf('{');
+  if (braceIdx === -1) return 0;
+  const idx = raw.indexOf('"created_at":', braceIdx);
+  if (idx === -1) return 0;
+  let i = idx + 13;
+  while (raw.charCodeAt(i) === 32) i++;
+  let n = 0;
+  let saw = false;
+  while (i < raw.length) {
+    const c = raw.charCodeAt(i);
+    if (c < 48 || c > 57) break;
+    n = n * 10 + (c - 48);
+    saw = true;
+    i++;
+  }
+  return saw ? n : 0;
+}
+
+function extractEventPubkey(raw) {
+  const braceIdx = raw.indexOf('{');
+  if (braceIdx === -1) return null;
+  const idx = raw.indexOf('"pubkey":"', braceIdx);
+  if (idx === -1) return null;
+  const start = idx + 10;
+  const end = raw.indexOf('"', start);
+  if (end === -1 || end - start !== 64) return null;
+  return raw.substring(start, end);
+}
+
 export async function onRequest(context) {
   const { request, env } = context;
 
@@ -563,6 +653,196 @@ export async function onRequest(context) {
     return false;
   }
 
+  // Per-connection R2 op accounting so a single long-lived WebSocket
+  // can't exhaust its 1000-subrequest invocation budget on indexer
+  // writes alone.
+  let r2WriteCount = 0;
+  let r2WriteSecond = 0;
+  let r2WritesThisSecond = 0;
+
+  function canConsumeWriteSlot() {
+    if (r2WriteCount >= MAX_WRITES_PER_CONNECTION) return false;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (nowSec !== r2WriteSecond) {
+      r2WriteSecond = nowSec;
+      r2WritesThisSecond = 0;
+    }
+    if (r2WritesThisSecond >= MAX_WRITES_PER_SECOND) return false;
+    return true;
+  }
+
+  function consumeWriteSlot() {
+    r2WriteCount++;
+    r2WritesThisSecond++;
+  }
+
+  function schedulePut(key, body, metadata) {
+    consumeWriteSlot();
+    const put = env.R2_BUCKET.put(key, body, {
+      httpMetadata: { contentType: 'application/json' },
+      customMetadata: metadata
+    }).catch(() => { /* noop */ });
+    if (context && typeof context.waitUntil === 'function') {
+      try { context.waitUntil(put); } catch { /* noop */ }
+    }
+  }
+
+  function indexEventToR2(raw, eventId) {
+    if (!env || !env.R2_BUCKET || !eventId) return;
+    if (raw.length > INDEX_MAX_EVENT_BYTES) return;
+    const kind = extractEventKind(raw);
+    if (kind < 0) return;
+
+    const isGiftWrap = kind === 1059;
+    const isRegular = INDEXED_REGULAR_KINDS.has(kind);
+    const isReplaceable = REPLACEABLE_KINDS.has(kind);
+    const isParamReplaceable = PARAM_REPLACEABLE_KINDS.has(kind);
+    if (!isGiftWrap && !isRegular && !isReplaceable && !isParamReplaceable) return;
+
+    const createdAt = extractEventCreatedAt(raw);
+    const ageSec = Math.floor(Date.now() / 1000) - createdAt;
+    if (createdAt > 0 && ageSec > INDEX_MAX_AGE_SEC) return;
+
+    let key;
+    const metadata = {
+      kind: String(kind),
+      created_at: String(createdAt),
+      ts: String(Date.now())
+    };
+
+    if (isGiftWrap) {
+      const pTag = extractTagValue(raw, 'p');
+      if (!pTag || pTag.length !== 64) return;
+      if (recentlyIndexed.has(eventId)) return;
+      key = `idx/1059/p/${pTag}/${eventId}`;
+      metadata.p = pTag;
+    } else if (isRegular) {
+      if (recentlyIndexed.has(eventId)) return;
+      const pk = extractEventPubkey(raw);
+      if (pk) metadata.pubkey = pk;
+      key = `idx/${kind}/${eventId}`;
+    } else if (isReplaceable) {
+      const pubkey = extractEventPubkey(raw);
+      if (!pubkey) return;
+      const dedupKey = `${kind}:${pubkey}`;
+      const prevTs = replaceableLatest.get(dedupKey) || 0;
+      if (createdAt <= prevTs) return;
+      // Reserve the slot before committing to the cache so a denied write
+      // doesn't poison future attempts from this isolate.
+      if (!canConsumeWriteSlot()) return;
+      replaceableLatest.set(dedupKey, createdAt);
+      trimReplaceableCache();
+      key = `idx/${kind}/${pubkey}`;
+      metadata.pubkey = pubkey;
+      const body = extractEventObjectJSON(raw);
+      if (!body) return;
+      schedulePut(key, body, metadata);
+      return;
+    } else {
+      const pubkey = extractEventPubkey(raw);
+      if (!pubkey) return;
+      const dTag = extractTagValue(raw, 'd') || '';
+      const safeD = encodeURIComponent(dTag).slice(0, 256);
+      const dedupKey = `${kind}:${pubkey}:${safeD}`;
+      const prevTs = replaceableLatest.get(dedupKey) || 0;
+      if (createdAt <= prevTs) return;
+      if (!canConsumeWriteSlot()) return;
+      replaceableLatest.set(dedupKey, createdAt);
+      trimReplaceableCache();
+      key = `idx/${kind}/${pubkey}/${safeD}`;
+      metadata.pubkey = pubkey;
+      metadata.d = safeD;
+      const body = extractEventObjectJSON(raw);
+      if (!body) return;
+      schedulePut(key, body, metadata);
+      return;
+    }
+
+    // Regular kinds + gift wraps fall through here. Reserve the write slot
+    // and the in-isolate dedup mark together so a budgeted-out event can
+    // still be picked up by another connection.
+    if (!canConsumeWriteSlot()) return;
+    markRecentlyIndexed(eventId);
+    const body = extractEventObjectJSON(raw);
+    if (!body) return;
+    schedulePut(key, body, metadata);
+  }
+
+  // NIP-09: when a kind 5 event arrives, remove the referenced events
+  // (e-tags) and replaceable coordinates (a-tags) from R2 — but only if
+  // the deleter's pubkey owns the targets (verified via stored metadata,
+  // falling back to a body read when metadata is absent).
+  async function handleDeletionInR2(raw) {
+    if (!env || !env.R2_BUCKET) return;
+    let evt;
+    try { evt = JSON.parse(raw); } catch { return; }
+    const event = Array.isArray(evt) ? evt[2] : evt;
+    if (!event || event.kind !== 5 || !Array.isArray(event.tags)) return;
+    const deleterPubkey = event.pubkey;
+    if (typeof deleterPubkey !== 'string' || deleterPubkey.length !== 64) return;
+
+    const eIds = [];
+    const aCoords = [];
+    for (const t of event.tags) {
+      if (!Array.isArray(t) || typeof t[1] !== 'string') continue;
+      if (t[0] === 'e' && /^[a-f0-9]{64}$/.test(t[1])) eIds.push(t[1]);
+      else if (t[0] === 'a') aCoords.push(t[1]);
+    }
+
+    const candidateKinds = [...INDEXED_REGULAR_KINDS].filter(k => k !== 5);
+
+    const eLimit = Math.min(eIds.length, 50);
+    for (let i = 0; i < eLimit; i++) {
+      const eid = eIds[i];
+      for (const k of candidateKinds) {
+        const key = `idx/${k}/${eid}`;
+        try {
+          const head = await env.R2_BUCKET.head(key);
+          if (!head) continue;
+          let ownerPk = head.customMetadata && head.customMetadata.pubkey;
+          if (!ownerPk) {
+            const obj = await env.R2_BUCKET.get(key);
+            if (!obj) continue;
+            const text = await obj.text();
+            const m = text.match(/"pubkey":"([a-f0-9]{64})"/);
+            ownerPk = m ? m[1] : null;
+          }
+          if (ownerPk === deleterPubkey) {
+            await env.R2_BUCKET.delete(key);
+          }
+        } catch { /* noop */ }
+      }
+      const gwKey = `idx/1059/p/${deleterPubkey}/${eid}`;
+      try { await env.R2_BUCKET.delete(gwKey); } catch { /* noop */ }
+    }
+
+    const aLimit = Math.min(aCoords.length, 50);
+    for (let i = 0; i < aLimit; i++) {
+      const parts = aCoords[i].split(':');
+      if (parts.length < 2) continue;
+      const k = parseInt(parts[0], 10);
+      const pk = parts[1];
+      if (pk !== deleterPubkey || !Number.isFinite(k)) continue;
+      let key;
+      if (REPLACEABLE_KINDS.has(k)) {
+        key = `idx/${k}/${pk}`;
+      } else if (PARAM_REPLACEABLE_KINDS.has(k)) {
+        const d = parts.slice(2).join(':') || '';
+        const safeD = encodeURIComponent(d).slice(0, 256);
+        key = `idx/${k}/${pk}/${safeD}`;
+      } else continue;
+      try { await env.R2_BUCKET.delete(key); } catch { /* noop */ }
+    }
+  }
+
+  function scheduleDeletionFromR2(raw) {
+    if (!env || !env.R2_BUCKET) return;
+    const p = handleDeletionInR2(raw).catch(() => { /* noop */ });
+    if (context && typeof context.waitUntil === 'function') {
+      try { context.waitUntil(p); } catch { /* noop */ }
+    }
+  }
+
   // Connect to a relay immediately (no staggering)
   function queueConnection(relayUrl, type) {
     if (upstreams.has(relayUrl)) return;
@@ -704,6 +984,8 @@ export async function onRequest(context) {
           }
           info.eventCount++;
           sendToClient(raw);
+          indexEventToR2(raw, eventId);
+          if (extractEventKind(raw) === 5) scheduleDeletionFromR2(raw);
 
         // OK: ["OK","eventId",bool,"msg"]
         } else if (raw.charCodeAt(2) === 79 && raw.startsWith('["OK"')) {
