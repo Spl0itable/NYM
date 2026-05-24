@@ -1353,10 +1353,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (channel.startsWith('pm-')) {
             const keys = channel.substring(3).split('-');
             const otherPubkey = keys.find(k => k !== this.pubkey);
-            if (otherPubkey) item = document.querySelector(`#pmList .pm-item[data-pubkey="${otherPubkey}"]`);
+            if (otherPubkey) item = document.querySelector(`[data-pubkey="${otherPubkey}"]`);
         } else if (channel.startsWith('group-')) {
             const groupId = channel.substring(6);
-            item = document.querySelector(`#pmList [data-group-id="${groupId}"]`);
+            item = document.querySelector(`[data-group-id="${groupId}"]`);
         } else if (channel.startsWith('#')) {
             item = document.querySelector(`[data-geohash="${channel.substring(1)}"]`);
         } else {
