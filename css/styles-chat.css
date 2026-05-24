@@ -1460,7 +1460,7 @@ body.chat-bubbles .edited-indicator-irc {
     resize: vertical;
     min-height: 42px;
     max-height: 120px;
-    transition: all var(--transition);
+    transition: border-color var(--transition), background-color var(--transition), box-shadow var(--transition);
 }
 
 .message-input:focus {

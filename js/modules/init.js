@@ -56,6 +56,10 @@ Object.assign(NYM.prototype, {
     _applyPerformanceMode() {
         this.performanceMode = true;
         document.body.classList.add('performance-mode');
+        // Keep enough chat DOM cached to hold "all" channels a typical user joins
+        // while still bounding memory on weaker devices. Eviction is LRU.
+        const tier = this._deviceCapabilities && this._deviceCapabilities.tier;
+        this._channelDOMCacheLimit = tier === 'low' ? 30 : tier === 'mid' ? 75 : 150;
     },
 
     async initialize() {
