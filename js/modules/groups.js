@@ -950,11 +950,13 @@ Object.assign(NYM.prototype, {
         list.sort((a, b) => {
             return this._compareMessages(a, b);
         });
+        if (list.length > this.pmStorageLimit) {
+            const dropped = list.slice(0, list.length - this.pmStorageLimit);
+            for (const d of dropped) this._unindexMessage(d);
+            list = list.slice(-this.pmStorageLimit);
+        }
         this.pmMessages.set(groupConvKey, list);
         this._indexMessage(groupConvKey, msg);
-        // Prune in-place; the pruner walks the array referenced by the map
-        // and also sweeps cached + live DOM for the dropped messages.
-        this._pruneStorageKey(groupConvKey, this.pmMessages, this.pmStorageLimit, 0);
         this.persistPMMessages(groupConvKey);
 
         // Update or create group conversation entry
@@ -1298,10 +1300,12 @@ Object.assign(NYM.prototype, {
         groupList.sort((a, b) => {
             return this._compareMessages(a, b);
         });
+        if (groupList.length > this.pmStorageLimit) {
+            const dropped = groupList.slice(0, groupList.length - this.pmStorageLimit);
+            for (const d of dropped) this._unindexMessage(d);
+            this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
+        }
         this._indexMessage(groupConvKey, msg);
-        this._pruneStorageKey(groupConvKey, this.pmMessages, this.pmStorageLimit, 0);
-        // No cache drop: this is an append. If a cached fragment exists for
-        // this group, restoration's trailing-append path picks the new msg up.
         this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);
 
@@ -1816,11 +1820,7 @@ Object.assign(NYM.prototype, {
         return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge nm-hidden">0</span></div>`;
     },
 
-    // Record a group read receipt and surface the reader's avatar only on the
-    // message that is now their newest-read in this conversation. If they were
-    // previously displayed on an older message, that one is updated too — and
-    // nothing else. The DOM cache is left intact; per-message reconciliation
-    // walks both live nodes and cached fragments via _queryAllAcrossCache.
+    // Record a group read receipt and surface the reader's avatar
     recordGroupReadReceipt(nymMessageId, readerPubkey, readerName, groupConvKey) {
         if (!nymMessageId || !readerPubkey || !groupConvKey) return;
         if (!this.groupMessageReaders.has(nymMessageId)) {
@@ -1846,9 +1846,7 @@ Object.assign(NYM.prototype, {
         this._syncGroupReadersFor(nymMessageId);
     },
 
-    // Re-sync the avatars for a single group message both in live DOM and any
-    // cached fragments. Called from recordGroupReadReceipt; safe to call when
-    // the message isn't currently rendered (the lookup is a no-op).
+    // Re-sync the avatars for a single group message
     _syncGroupReadersFor(nymMessageId) {
         const els = this._queryAllAcrossCache(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
         if (els.length === 0) return;
@@ -1862,8 +1860,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Back-compat: callers may still invoke updateGroupReaderAvatars(msgId)
-    // before learning about recordGroupReadReceipt. Defer to the syncer.
     updateGroupReaderAvatars(nymMessageId) {
         this._syncGroupReadersFor(nymMessageId);
     },
@@ -1935,10 +1931,7 @@ Object.assign(NYM.prototype, {
         return visible.length > 0;
     },
 
-    // Record a channel read receipt with the same waterfall semantics as
-    // groups. The receipt is stored against `messageId` (so the "Seen by"
-    // modal lists everyone who confirmed reading), but the avatar is only
-    // rendered on the message that is now this reader's newest-read.
+    // Record a channel read receipt
     recordChannelReadReceipt(messageId, readerPubkey, readerName, geohash) {
         if (!messageId || !readerPubkey || !geohash) return;
         if (!this.channelMessageReaders.has(messageId)) {
@@ -2070,9 +2063,7 @@ Object.assign(NYM.prototype, {
         this._showReadersModalFromMap(readers, anchorEl);
     },
 
-    // Returns the inner HTML for a .group-readers span at initial render time.
-    // Applies the same "latest message per reader" waterfall as the live
-    // updates so freshly rendered (or cache-restored) DOM is consistent.
+    // Returns the inner HTML for a .group-readers span at initial render time
     _buildGroupReadersHtml(nymMessageId) {
         const displayMap = this._getDisplayedGroupReadersFor(nymMessageId);
         if (!displayMap || displayMap.size === 0) return '';
