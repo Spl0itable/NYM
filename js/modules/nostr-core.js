@@ -33,92 +33,6 @@ Object.assign(NYM.prototype, {
         return pow >= minimumDifficulty;
     },
 
-    // Lazy-create a single shared Worker for NIP-13 mining. The worker loads
-    // nostr-tools itself so mining doesn't compete with the UI thread.
-    _getMinerWorker() {
-        if (this._minerWorker || this._minerWorkerFailed) return this._minerWorker;
-        try {
-            const nostrToolsUrl = new URL('js/nostr-tools.js', location.href).href;
-            const src = `importScripts(${JSON.stringify(nostrToolsUrl)});
-self.onmessage = (e) => {
-    const { event, difficulty, jobId } = e.data;
-    try {
-        const mined = NostrTools.nip13.minePow(event, difficulty);
-        self.postMessage({ jobId, event: mined });
-    } catch (err) {
-        self.postMessage({ jobId, error: String(err && err.message || err) });
-    }
-};`;
-            const blob = new Blob([src], { type: 'application/javascript' });
-            const url = URL.createObjectURL(blob);
-            this._minerWorker = new Worker(url);
-            this._minerJobs = new Map();
-            this._minerJobSeq = 0;
-            this._minerWorker.onmessage = (e) => {
-                const { jobId, event, error } = e.data || {};
-                const job = this._minerJobs.get(jobId);
-                if (!job) return;
-                this._minerJobs.delete(jobId);
-                if (error) job.reject(new Error(error));
-                else job.resolve(event);
-            };
-            this._minerWorker.onerror = () => {
-                this._minerWorkerFailed = true;
-                this._minerWorker = null;
-            };
-        } catch (_) {
-            this._minerWorkerFailed = true;
-            this._minerWorker = null;
-        }
-        return this._minerWorker;
-    },
-
-    _minePowInWorker(event, difficulty) {
-        const worker = this._getMinerWorker();
-        if (!worker) return null;
-        return new Promise((resolve, reject) => {
-            const jobId = ++this._minerJobSeq;
-            this._minerJobs.set(jobId, { resolve, reject });
-            worker.postMessage({ event, difficulty, jobId });
-        });
-    },
-
-    async _minePowCooperative(event, difficulty) {
-        let nonceIdx = event.tags.findIndex(t => Array.isArray(t) && t[0] === 'nonce');
-        if (nonceIdx < 0) {
-            event.tags.push(['nonce', '0', String(difficulty)]);
-            nonceIdx = event.tags.length - 1;
-        } else {
-            event.tags[nonceIdx] = ['nonce', '0', String(difficulty)];
-        }
-        let nonce = 0;
-        while (true) {
-            const start = performance.now();
-            while (performance.now() - start < 4) {
-                event.tags[nonceIdx][1] = String(nonce);
-                event.id = NostrTools.getEventHash(event);
-                if (NostrTools.nip13.getPow(event.id) >= difficulty) return event;
-                nonce++;
-            }
-            await new Promise(r => setTimeout(r, 0));
-        }
-    },
-
-    async _minePow(event, difficulty) {
-        if (!difficulty || difficulty <= 0) return event;
-        const workerPromise = this._minePowInWorker(event, difficulty);
-        if (workerPromise) {
-            try { return await workerPromise; } catch (_) { /* fall through */ }
-        }
-        return this._minePowCooperative(event, difficulty);
-    },
-
-    _effectivePowDifficulty() {
-        const userPow = (this.enablePow && this.powDifficulty > 0) ? this.powDifficulty : 0;
-        const floor = this.nymchatPowFloor || 0;
-        return Math.max(userPow, floor);
-    },
-
     async saveToNostrProfile() {
         if (!this.pubkey) return;
 
@@ -331,14 +245,6 @@ self.onmessage = (e) => {
 
             if (event.pubkey !== this.pubkey) {
                 this._trackPubkeyMessage(event.pubkey, event.id);
-                // NIP-13 PoW that meets the nymchat floor is treated as
-                // self-attestation that the sender is using a nymchat client.
-                if (this.nymchatPowFloor > 0 && this.validatePow(event, this.nymchatPowFloor)) {
-                    this._markNymchatPubkey(event.pubkey);
-                    if (typeof this._observeNymchatPubkey === 'function') {
-                        this._observeNymchatPubkey(event.pubkey);
-                    }
-                }
             }
 
             // Check flooding FOR THIS CHANNEL (only for non-historical messages)
@@ -529,8 +435,6 @@ self.onmessage = (e) => {
                 this.handlePollEvent(event);
             } else if (tTag && tTag[1] === 'nym-poll-vote') {
                 this.handlePollVoteEvent(event);
-            } else if (tTag && tTag[1] === 'nym-vouches') {
-                this.handleVouchEvent(event);
             }
         } else if (event.kind === 24420) {
             this.handleChannelTypingEvent(event);
@@ -1515,9 +1419,6 @@ self.onmessage = (e) => {
         if (this.blockedUsers.has(event.pubkey)) return;
 
         this._markNymchatPubkey(event.pubkey);
-        if (typeof this._observeNymchatPubkey === 'function') {
-            this._observeNymchatPubkey(event.pubkey);
-        }
 
         if (!this.channelMessageReaders.has(messageId)) {
             this.channelMessageReaders.set(messageId, new Map());
@@ -2210,45 +2111,50 @@ self.onmessage = (e) => {
                 pubkey: this.pubkey
             };
 
-            const tempId = '_optim_' + Math.random().toString(36).slice(2) + nowMs.toString(36);
+            // Mine PoW if enabled (NIP-13)
+            if (this.enablePow && this.powDifficulty > 0) {
+                event = NostrTools.nip13.minePow(event, this.powDifficulty);
+            }
+
+            // Sign event (after mining PoW)
+            const signedEvent = await this.signEvent(event);
+
             const optimisticMessage = {
-                id: tempId,
+                id: signedEvent.id, // Use the signed event ID
                 content: content,
                 author: this.nym,
                 pubkey: this.pubkey,
-                created_at: now,
+                created_at: signedEvent.created_at,
                 _ms: nowMs,
                 _seq: ++this._msgSeq,
-                timestamp: new Date(now * 1000),
+                timestamp: new Date(signedEvent.created_at * 1000),
                 channel: channel,
                 geohash: geohash,
                 isOwn: true,
                 isHistorical: false,
                 isPM: false,
-                _optimistic: true,
-                _storageKey: geohash ? `#${geohash}` : channel
             };
 
+            // Display immediately (optimistic)
             this.displayMessage(optimisticMessage);
+
+            // Send to relay (async - UI already updated)
+            this.sendToRelay(["EVENT", signedEvent]);
+
+            // Ensure geo relays for this channel also receive the event
+            if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
+
+            // Bump our own presence so status stays "online" and other clients
+            // see us as recently active.
             this.recordOwnActivity();
 
-            (async () => {
-                try {
-                    const difficulty = this._effectivePowDifficulty();
-                    if (difficulty > 0) event = await this._minePow(event, difficulty);
-                    const signedEvent = await this.signEvent(event);
-                    this._replaceOptimisticMessage(tempId, signedEvent, optimisticMessage._storageKey, false);
-                    this.sendToRelay(["EVENT", signedEvent]);
-                    if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
-
-                    if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                        const eventIdToDelete = signedEvent.id;
-                        setTimeout(() => this.publishDeletionEvent(eventIdToDelete), 600000);
-                    }
-                } catch (err) {
-                    this._markOptimisticFailed(tempId, optimisticMessage._storageKey, err);
-                }
-            })();
+            // Schedule deletion if redacted cosmetic is active
+            if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                const eventIdToDelete = signedEvent.id;
+                setTimeout(() => {
+                    this.publishDeletionEvent(eventIdToDelete);
+                }, 600000); // 10 minutes
+            }
 
             return true;
         } catch (error) {
@@ -2340,9 +2246,9 @@ self.onmessage = (e) => {
                 pubkey: ephPk
             };
 
-            const psDifficulty = this._effectivePowDifficulty();
-            if (psDifficulty > 0) {
-                event = await this._minePow(event, psDifficulty);
+            // Mine PoW if enabled (NIP-13)
+            if (this.enablePow && this.powDifficulty > 0) {
+                event = NostrTools.nip13.minePow(event, this.powDifficulty);
             }
 
             // Sign with the ephemeral key (bypasses Nostr login signing)
@@ -2377,68 +2283,6 @@ self.onmessage = (e) => {
         } catch (error) {
             this.displaySystemMessage('Failed to send pseudonymous message: ' + error.message);
             return false;
-        }
-    },
-
-    // Record an observation that a peer is running nymchat (valid PoW or read
-    // receipt). Drives transitive trust via the kind-30078 vouch list.
-    _observeNymchatPubkey(pubkey) {
-        if (!pubkey || pubkey === this.pubkey) return;
-        if (!this.nymchatVouches) this.nymchatVouches = new Set();
-        if (this.nymchatVouches.has(pubkey)) return;
-        this.nymchatVouches.add(pubkey);
-        if (this.nymchatVouches.size > 5000) {
-            this.nymchatVouches = new Set(Array.from(this.nymchatVouches).slice(-4000));
-        }
-        if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
-        this._scheduleVouchPublish();
-    },
-
-    _scheduleVouchPublish() {
-        if (this._vouchPublishTimer) return;
-        const sinceLast = Date.now() - (this._lastVouchPublishAt || 0);
-        const delay = sinceLast < 60000 ? 60000 - sinceLast : 5000;
-        this._vouchPublishTimer = setTimeout(() => {
-            this._vouchPublishTimer = null;
-            this.publishNymchatVouches();
-        }, delay);
-    },
-
-    async publishNymchatVouches() {
-        try {
-            if (!this.connected || !this.pubkey) return;
-            const list = Array.from(this.nymchatVouches || []);
-            if (list.length === 0) return;
-            const tags = [
-                ['d', 'nym-vouches'],
-                ['t', 'nym-vouches']
-            ];
-            const event = {
-                kind: 30078,
-                created_at: Math.floor(Date.now() / 1000),
-                tags,
-                content: JSON.stringify(list),
-                pubkey: this.pubkey
-            };
-            const signed = await this.signEvent(event);
-            this.sendToRelay(['EVENT', signed]);
-            this._lastVouchPublishAt = Date.now();
-        } catch (_) { /* best-effort */ }
-    },
-
-    handleVouchEvent(event) {
-        if (!event || event.pubkey === this.pubkey) return;
-        // Only accept vouches from peers we already trust as nymchat, so the
-        // trust graph stays rooted in the seeded developer/bot pubkeys.
-        if (!this.nymchatPubkeys || !this.nymchatPubkeys.has(event.pubkey)) return;
-        let list;
-        try { list = JSON.parse(event.content || '[]'); }
-        catch (_) { return; }
-        if (!Array.isArray(list)) return;
-        for (const pk of list) {
-            if (typeof pk !== 'string' || !/^[0-9a-f]{64}$/i.test(pk)) continue;
-            if (pk === this.pubkey) continue;
-            this._markNymchatPubkey(pk);
         }
     },
 

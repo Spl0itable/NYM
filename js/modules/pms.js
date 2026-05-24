@@ -5,10 +5,6 @@ Object.assign(NYM.prototype, {
     _addPMMessage(conversationKey, msg) {
         if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
         const list = this.pmMessages.get(conversationKey);
-        if (list.length >= this.pmStorageLimit && list.length > 0
-            && (msg.created_at || 0) < (list[0].created_at || 0)) {
-            return null;
-        }
         this._insertMessageSorted(list, msg);
         this._indexMessage(conversationKey, msg);
         if (list.length > this.pmStorageLimit) {
@@ -1123,7 +1119,6 @@ Object.assign(NYM.prototype, {
             };
 
             list = this._addPMMessage(conversationKey, msg);
-            if (!list) return;
             this.persistPMMessages(conversationKey);
 
             // Send DELIVERED receipt back to Bitchat user
@@ -2575,7 +2570,6 @@ Object.assign(NYM.prototype, {
 
         // Re-render with the expanded message window
         container.innerHTML = '';
-        this.renderedMessageIds.clear();
         const renderMessages = messages.slice(newStart);
 
         if (newStart > 0) {
