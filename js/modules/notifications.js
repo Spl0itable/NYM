@@ -195,23 +195,16 @@ Object.assign(NYM.prototype, {
 
         if (!this.notificationsEnabled) {
             [desktopBadge, mobileBadge].forEach(badge => {
-                if (badge) badge.classList.add('nm-hidden');
+                if (badge) badge.style.display = 'none';
             });
             return;
         }
 
-        let viewedChanged = false;
-        for (const n of this.notificationHistory) {
-            if (n && !n.viewed && this._isViewingNotificationContext(n)) {
-                n.viewed = true;
-                viewedChanged = true;
-            }
-        }
-        if (viewedChanged) this._saveNotificationHistory();
-
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         const unreadCount = this.notificationHistory.filter(n => {
             if (n.timestamp <= cutoff24h) return false;
+            // Treat as read if either the per-item viewed flag is set or the
+            // legacy bulk read marker covers it (kept for backwards compat).
             if (n.viewed) return false;
             if (n.timestamp <= (this.notificationLastReadTime || 0)) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
@@ -223,28 +216,11 @@ Object.assign(NYM.prototype, {
             if (!badge) return;
             if (unreadCount > 0) {
                 badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
-                badge.classList.remove('nm-hidden');
+                badge.style.display = '';
             } else {
-                badge.classList.add('nm-hidden');
+                badge.style.display = 'none';
             }
         });
-    },
-
-    _isViewingNotificationContext(n) {
-        const ci = n && n.channelInfo;
-        if (!ci) return false;
-        const matchGeohash = (gh) => !this.inPMMode && gh && this.currentGeohash === gh;
-        const matchPM = (pk) => this.inPMMode && pk && this.currentPM === pk;
-        const matchGroup = (gid) => this.inPMMode && gid && this.currentGroup === gid;
-        if (ci.type === 'geohash') return matchGeohash(ci.geohash);
-        if (ci.type === 'pm') return matchPM(ci.pubkey);
-        if (ci.type === 'group') return matchGroup(ci.groupId);
-        if (ci.type === 'reaction') {
-            if (ci.sourceType === 'geohash') return matchGeohash(ci.sourceGeohash);
-            if (ci.sourceType === 'pm') return matchPM(ci.sourcePubkey);
-            if (ci.sourceType === 'group') return matchGroup(ci.sourceGroupId);
-        }
-        return false;
     },
 
     openNotificationsModal() {

@@ -273,10 +273,8 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    updateMessageReactions(messageId, messageEl) {
-        if (!messageEl) {
-            messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
-        }
+    updateMessageReactions(messageId) {
+        const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
         if (!messageEl) return false;
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed
@@ -295,7 +293,7 @@ Object.assign(NYM.prototype, {
                     reactionsRow.remove();
                 }
             }
-            this.updateMessageZaps(messageId, messageEl);
+            this.updateMessageZaps(messageId);
             return true;
         }
 

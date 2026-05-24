@@ -1034,6 +1034,14 @@ Object.assign(NYM.prototype, {
             if (readersEl) this._bindReaderLongPress(readersEl, message.nymMessageId);
         }
 
+        // Apply any reactions we already know about
+        if (this.reactions && typeof this.updateMessageReactions === 'function') {
+            const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
+            if (reactionMsgId && this.reactions.has(reactionMsgId)) {
+                this.updateMessageReactions(reactionMsgId);
+            }
+        }
+
         if (!this._pendingFragment) {
             const domMessages = container.querySelectorAll('.message[data-message-id]');
             const domLimit = message.isPM ? this.pmStorageLimit : this.channelMessageLimit;
@@ -1050,18 +1058,23 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        // Add existing reactions if any (for both channel messages and PMs)
+        // For PMs, reactions are keyed by nymMessageId (shared across recipients)
         const reactionKey = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         if (reactionKey && this.reactions.has(reactionKey)) {
-            this.updateMessageReactions(reactionKey, messageEl);
+            this.updateMessageReactions(reactionKey);
         }
+        // Reactions may still be keyed by the event ID if they arrived before
+        // nymMessageId was known — migrate so the key matches the rendered DOM ID.
         if (message.isPM && message.nymMessageId && message.nymMessageId !== message.id) {
             if (this._migrateReactionKey(message.id, message.nymMessageId)) {
-                this.updateMessageReactions(message.nymMessageId, messageEl);
+                this.updateMessageReactions(message.nymMessageId);
             }
         }
 
+        // Add zaps display - check if this message has any zaps
         if (message.id && this.zaps.has(message.id)) {
-            this.updateMessageZaps(message.id, messageEl);
+            this.updateMessageZaps(message.id);
         }
 
         const videos = messageEl.querySelectorAll('video.message-video');
