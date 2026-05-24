@@ -24,8 +24,8 @@
 .sidebar {
     width: 290px;
     background: var(--glass-bg);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(40px) saturate(1.5);
+    -webkit-backdrop-filter: blur(40px) saturate(1.5);
     border-right: 1px solid var(--glass-border);
     display: flex;
     flex-direction: column;
@@ -619,8 +619,8 @@ body.sidebar-reorder-mode .nav-title {
     height: 100vh;
     height: 100dvh;
     background: var(--glass-bg);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(40px) saturate(1.5);
+    -webkit-backdrop-filter: blur(40px) saturate(1.5);
     border-left: 1px solid var(--glass-border);
     box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
     z-index: 10100;
@@ -691,8 +691,8 @@ body.sidebar-reorder-mode .nav-title {
 .channel-context-menu {
     position: fixed;
     background: rgba(20, 20, 35, 0.85);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(30px) saturate(1.5);
+    -webkit-backdrop-filter: blur(30px) saturate(1.5);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.05);
@@ -752,8 +752,8 @@ body.sidebar-reorder-mode .nav-title {
     justify-content: space-between;
     align-items: center;
     background: var(--glass-bg);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(30px) saturate(1.5);
+    -webkit-backdrop-filter: blur(30px) saturate(1.5);
 }
 
 .channel-info {
@@ -872,7 +872,4 @@ body.sidebar-reorder-mode .nav-title {
     font-size: 14px;
     background-color: rgba(0, 0, 0, 0.15);
     contain: layout style paint;
-    overflow-anchor: auto;
-    overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
 }

@@ -413,18 +413,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     filterChannels(searchTerm) {
-        if (this._channelFilterRAF) cancelAnimationFrame(this._channelFilterRAF);
-        this._channelFilterRAF = requestAnimationFrame(() => {
-            this._channelFilterRAF = null;
-            this._filterChannelsNow(searchTerm);
-        });
-    },
-
-    _filterChannelsNow(searchTerm) {
         const items = document.querySelectorAll('.channel-item');
-        const term = (searchTerm || '').toLowerCase();
+        const term = searchTerm.toLowerCase();
         const list = document.getElementById('channelList');
 
+        // Update wrapper has-value class for clear button visibility
         const wrapper = document.getElementById('channelSearchWrapper');
         if (wrapper) {
             wrapper.classList.toggle('has-value', term.length > 0);
@@ -432,12 +425,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const validChannelPattern = /^#[\p{L}\p{N}]+$/u;
         items.forEach(item => {
-            let channelName = item._cachedLowerName;
-            if (channelName === undefined) {
-                const channelNameEl = item.querySelector('.channel-name');
-                channelName = channelNameEl ? channelNameEl.textContent.toLowerCase() : '';
-                item._cachedLowerName = channelName;
-            }
+            const channelNameEl = item.querySelector('.channel-name');
+            const channelName = channelNameEl ? channelNameEl.textContent.toLowerCase() : '';
+            // Hide channels with invalid names (spaces, special chars, URLs)
             if (!validChannelPattern.test(channelName)) {
                 item.style.display = 'none';
                 item.classList.add('search-hidden');
@@ -450,6 +440,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         });
 
+        // Hide view more button during search
         const viewMoreBtn = list.querySelector('.view-more-btn');
         if (viewMoreBtn) {
             viewMoreBtn.style.display = term ? 'none' : 'block';

@@ -2,24 +2,7 @@
 
 Object.assign(NYM.prototype, {
 
-    _addPMMessage(conversationKey, msg) {
-        if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
-        const list = this.pmMessages.get(conversationKey);
-        this._insertMessageSorted(list, msg);
-        this._indexMessage(conversationKey, msg);
-        if (list.length > this.pmStorageLimit) {
-            const drop = list.length - this.pmStorageLimit;
-            for (let i = 0; i < drop; i++) this._unindexMessage(list[i]);
-            list.splice(0, drop);
-        }
-        return list;
-    },
-
-    _lookupPMReceipt(idType, rawId) {
-        const key = idType + ':' + String(rawId).toUpperCase();
-        return this.messageIndex.get(key);
-    },
-
+    // Update the delivery checkmark on a PM message in-place
     _updateDeliveryStatusEl(messageId, receiptType) {
         const msgEl = this.findMessageElementAnywhere(messageId);
         if (!msgEl) return;
@@ -321,7 +304,9 @@ Object.assign(NYM.prototype, {
             }
 
             const conversationKey = this.getPMConversationKey(recipientPubkey);
-            this._addPMMessage(conversationKey, {
+            if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+            const pmList = this.pmMessages.get(conversationKey);
+            pmList.push({
                 id: wrapped.id,
                 author: this.nym,
                 pubkey: this.pubkey,
@@ -335,10 +320,17 @@ Object.assign(NYM.prototype, {
                 conversationKey,
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
-                bitchatMessageId,
-                nymMessageId,
-                deliveryStatus: 'sent'
+                bitchatMessageId,  // For tracking Bitchat delivery/read receipts
+                nymMessageId,  // Always store for reaction matching (peer may react using nymMessageId from x tag)
+                deliveryStatus: 'sent'  // sent -> delivered -> read
             });
+            pmList.sort((a, b) => {
+                return this._compareMessages(a, b);
+            });
+            // Cap PM conversations at pmStorageLimit messages
+            if (pmList.length > this.pmStorageLimit) {
+                this.pmMessages.set(conversationKey, pmList.slice(-this.pmStorageLimit));
+            }
             this.persistPMMessages(conversationKey);
 
             // Track for automatic retry if delivery receipt not received
@@ -433,7 +425,9 @@ Object.assign(NYM.prototype, {
             // Show locally — reuse the rumor's created_at (now) so the local
             // message sorts identically to how the recipient sees it.
             const conversationKey = this.getPMConversationKey(recipientPubkey);
-            this._addPMMessage(conversationKey, {
+            if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+            const extPmList = this.pmMessages.get(conversationKey);
+            extPmList.push({
                 id: wrapped.id,
                 author: this.nym,
                 pubkey: this.pubkey,
@@ -447,9 +441,16 @@ Object.assign(NYM.prototype, {
                 conversationKey,
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
-                nymMessageId,
-                deliveryStatus: 'sent'
+                nymMessageId,  // For tracking Nymchat delivery/read receipts
+                deliveryStatus: 'sent'  // sent -> delivered -> read
             });
+            extPmList.sort((a, b) => {
+                return this._compareMessages(a, b);
+            });
+            // Cap PM conversations at pmStorageLimit messages
+            if (extPmList.length > this.pmStorageLimit) {
+                this.pmMessages.set(conversationKey, extPmList.slice(-this.pmStorageLimit));
+            }
             this.persistPMMessages(conversationKey);
 
             // Track for automatic retry if delivery receipt not received
@@ -851,30 +852,33 @@ Object.assign(NYM.prototype, {
 
                     if (receiptType === 'read') this.recordUserActivity(senderPubkey);
 
-                    const hit = this._lookupPMReceipt('nm', receiptId);
-                    if (hit && hit.msg && hit.msg.isOwn) {
-                        const { msg, convKey } = hit;
-                        const statusOrder = { sent: 0, delivered: 1, read: 2 };
-                        if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
-                            msg.deliveryStatus = receiptType;
-                            this.pendingDMs.delete(msg.id);
+                    for (const [convKey, messages] of this.pmMessages) {
+                        const msg = messages.find(m => m.nymMessageId?.toUpperCase() === receiptId);
+                        if (msg && msg.isOwn) {
+                            const statusOrder = { sent: 0, delivered: 1, read: 2 };
+                            if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
+                                msg.deliveryStatus = receiptType;
+                                this.pendingDMs.delete(msg.id);
 
-                            if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
-                                if (!this.groupMessageReaders.has(msg.nymMessageId)) {
-                                    this.groupMessageReaders.set(msg.nymMessageId, new Map());
-                                }
-                                const readerNym = this.getNymFromPubkey(senderPubkey);
-                                this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
-                                if (this.inPMMode && this.currentGroup &&
-                                    convKey === this.getGroupConversationKey(this.currentGroup)) {
-                                    this.updateGroupReaderAvatars(msg.nymMessageId);
+                                if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
+                                    // Group read receipt: store the reader's avatar instead of checkmarks
+                                    if (!this.groupMessageReaders.has(msg.nymMessageId)) {
+                                        this.groupMessageReaders.set(msg.nymMessageId, new Map());
+                                    }
+                                    const readerNym = this.getNymFromPubkey(senderPubkey);
+                                    this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
+                                    if (this.inPMMode && this.currentGroup &&
+                                        convKey === this.getGroupConversationKey(this.currentGroup)) {
+                                        this.updateGroupReaderAvatars(msg.nymMessageId);
+                                    } else {
+                                        this.channelDOMCache.delete(convKey);
+                                    }
                                 } else {
-                                    this.channelDOMCache.delete(convKey);
+                                    const domId = msg.nymMessageId || msg.id;
+                                    this._updateDeliveryStatusEl(domId, receiptType);
                                 }
-                            } else {
-                                const domId = msg.nymMessageId || msg.id;
-                                this._updateDeliveryStatusEl(domId, receiptType);
                             }
+                            break;
                         }
                     }
                 }
@@ -891,15 +895,17 @@ Object.assign(NYM.prototype, {
                     if (receiptType === 'read') this.recordUserActivity(senderPubkey);
 
                     if (receiptId) {
-                        const hit = this._lookupPMReceipt('bc', receiptId);
-                        if (hit && hit.msg && hit.msg.isOwn) {
-                            const msg = hit.msg;
-                            const statusOrder = { sent: 0, delivered: 1, read: 2 };
-                            if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
-                                msg.deliveryStatus = receiptType;
-                                this.pendingDMs.delete(msg.id);
-                                const domId = msg.nymMessageId || msg.id;
-                                this._updateDeliveryStatusEl(domId, receiptType);
+                        for (const [, messages] of this.pmMessages) {
+                            const msg = messages.find(m => m.bitchatMessageId?.toUpperCase() === receiptId);
+                            if (msg && msg.isOwn) {
+                                const statusOrder = { sent: 0, delivered: 1, read: 2 };
+                                if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
+                                    msg.deliveryStatus = receiptType;
+                                    this.pendingDMs.delete(msg.id);
+                                    const domId = msg.nymMessageId || msg.id;
+                                    this._updateDeliveryStatusEl(domId, receiptType);
+                                }
+                                break;
                             }
                         }
                     }
@@ -960,9 +966,15 @@ Object.assign(NYM.prototype, {
                         this.persistReactions(reactionMessageId);
                         this.updateMessageReactions(reactionMessageId);
                     }
-                    if (!this.renderedMessageIds.has(reactionMessageId)) {
-                        const hit = this.messageIndex.get(reactionMessageId);
-                        if (hit && hit.convKey) this.channelDOMCache.delete(hit.convKey);
+                    // If the target bubble isn't in the current DOM, drop its
+                    // cached render so the reaction shows after channel switch.
+                    if (!document.querySelector(`[data-message-id="${CSS.escape(reactionMessageId)}"]`)) {
+                        for (const [key, msgs] of this.pmMessages.entries()) {
+                            if (msgs.some(m => m.id === reactionMessageId || m.nymMessageId === reactionMessageId)) {
+                                this.channelDOMCache.delete(key);
+                                break;
+                            }
+                        }
                     }
                 }
                 return;
@@ -993,11 +1005,9 @@ Object.assign(NYM.prototype, {
             const conversationKey = this.getPMConversationKey(peerPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
 
+            // Deduplicate within the correct conversation
             let list = this.pmMessages.get(conversationKey);
-            if (this.messageIndex.has(event.id)) {
-                const hit = this.messageIndex.get(event.id);
-                if (hit && hit.convKey === conversationKey) return;
-            }
+            if (list.some(m => m.id === event.id)) return;
 
             const nowSec = Math.floor(Date.now() / 1000);
             const originalTsSec = Math.floor(rumor.created_at) || nowSec;
@@ -1116,7 +1126,15 @@ Object.assign(NYM.prototype, {
                 nymMessageId: nymMsgId  // For sending Nymchat read receipts
             };
 
-            list = this._addPMMessage(conversationKey, msg);
+            list.push(msg);
+            list.sort((a, b) => {
+                return this._compareMessages(a, b);
+            });
+            // Cap PM conversations at pmStorageLimit messages to prevent memory bloat
+            if (list.length > this.pmStorageLimit) {
+                list = list.slice(-this.pmStorageLimit);
+            }
+            this.pmMessages.set(conversationKey, list);
             this.persistPMMessages(conversationKey);
 
             // Send DELIVERED receipt back to Bitchat user
@@ -1223,6 +1241,7 @@ Object.assign(NYM.prototype, {
         } catch (error) {
             // Store the failed message in pmMessages so it persists across navigation
             const conversationKey = this.getPMConversationKey(recipientPubkey);
+            if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
             const failedId = 'failed-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
             const _nowFail = Math.floor(Date.now() / 1000);
             const failedMsg = {
@@ -1241,7 +1260,12 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 deliveryStatus: 'failed'
             };
-            this._addPMMessage(conversationKey, failedMsg);
+            const failList = this.pmMessages.get(conversationKey);
+            failList.push(failedMsg);
+            failList.sort((a, b) => {
+                return this._compareMessages(a, b);
+            });
+            // Invalidate cached DOM for this conversation
             this.channelDOMCache.delete(conversationKey);
             this.persistPMMessages(conversationKey);
             // Display the failed message if currently viewing this PM
@@ -1362,8 +1386,6 @@ Object.assign(NYM.prototype, {
         const conversationKey = this.getPMConversationKey(pubkey);
         this._setBotPmClearedAt(Math.floor(Date.now() / 1000));
         this._clearBotServerThread();
-        const prev = this.pmMessages.get(conversationKey) || [];
-        for (const m of prev) this._unindexMessage(m);
         this.pmMessages.set(conversationKey, []);
         this.channelDOMCache.delete(conversationKey);
         if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
@@ -1373,7 +1395,6 @@ Object.assign(NYM.prototype, {
             if (container) {
                 container.innerHTML = '';
                 container.dataset.lastChannel = '';
-                this.renderedMessageIds.clear();
             }
             this.loadPMMessages(conversationKey, true);
         }
@@ -2100,30 +2121,19 @@ Object.assign(NYM.prototype, {
     },
 
     filterPMs(searchTerm) {
-        if (this._pmFilterRAF) cancelAnimationFrame(this._pmFilterRAF);
-        this._pmFilterRAF = requestAnimationFrame(() => {
-            this._pmFilterRAF = null;
-            this._filterPMsNow(searchTerm);
-        });
-    },
-
-    _filterPMsNow(searchTerm) {
         const items = document.querySelectorAll('.pm-item');
-        const term = (searchTerm || '').toLowerCase();
+        const term = searchTerm.toLowerCase();
         const list = document.getElementById('pmList');
 
+        // Update wrapper has-value class for clear button visibility
         const wrapper = document.getElementById('pmSearchWrapper');
         if (wrapper) {
             wrapper.classList.toggle('has-value', term.length > 0);
         }
 
         items.forEach(item => {
-            let pmName = item._cachedLowerName;
-            if (pmName === undefined) {
-                const pmNameEl = item.querySelector('.pm-name');
-                pmName = pmNameEl ? pmNameEl.textContent.toLowerCase() : '';
-                item._cachedLowerName = pmName;
-            }
+            const pmNameEl = item.querySelector('.pm-name');
+            const pmName = pmNameEl ? pmNameEl.textContent.toLowerCase() : '';
             if (term.length === 0 || pmName.includes(term)) {
                 item.style.display = 'flex';
                 item.classList.remove('search-hidden');
@@ -2133,6 +2143,7 @@ Object.assign(NYM.prototype, {
             }
         });
 
+        // Hide view more button during search
         const viewMoreBtn = list.querySelector('.view-more-btn');
         if (viewMoreBtn) {
             viewMoreBtn.style.display = term ? 'none' : 'block';
@@ -2527,18 +2538,25 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Get filtered PM messages for a conversation key
     getFilteredPMMessages(conversationKey) {
         const pmMessages = this.pmMessages.get(conversationKey) || [];
 
         return pmMessages.filter(msg => {
+            // Check if message has been deleted
             if (this.deletedEventIds.has(msg.id)) return false;
+            // Check if message is from blocked user
             if (this.blockedUsers.has(msg.pubkey) || msg.blocked) return false;
+            // Check if message content or nickname matches blocked keywords
             if (this.hasBlockedKeyword(msg.content, msg.author)) return false;
+            // Check if message content is spam
             if (this.isSpamMessage(msg.content)) return false;
             if (msg.conversationKey !== conversationKey) return false;
+            // For 1:1 PMs, restrict to the two participants. Group messages have
+            // multiple senders so skip this check for them.
             if (!msg.isGroup && msg.pubkey !== this.pubkey && msg.pubkey !== this.currentPM) return false;
             return true;
-        });
+        }).sort((a, b) => this._compareMessages(a, b));
     },
 
     // Load older PM/group messages when user scrolls to top

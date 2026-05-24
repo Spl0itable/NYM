@@ -80,83 +80,6 @@ Object.assign(NYM.prototype, {
         return (a._seq || 0) - (b._seq || 0);
     },
 
-    _insertMessageSorted(arr, msg) {
-        if (arr.length === 0 || this._compareMessages(arr[arr.length - 1], msg) <= 0) {
-            arr.push(msg);
-            return arr.length - 1;
-        }
-        let lo = 0, hi = arr.length;
-        while (lo < hi) {
-            const mid = (lo + hi) >>> 1;
-            if (this._compareMessages(arr[mid], msg) <= 0) lo = mid + 1;
-            else hi = mid;
-        }
-        arr.splice(lo, 0, msg);
-        return lo;
-    },
-
-    _indexMessage(convKey, msg) {
-        if (!msg) return;
-        if (msg.id) this.messageIndex.set(msg.id, { convKey, msg });
-        if (msg.nymMessageId && msg.nymMessageId !== msg.id) {
-            this.messageIndex.set(msg.nymMessageId, { convKey, msg });
-        }
-        if (msg.bitchatMessageId) {
-            this.messageIndex.set('bc:' + String(msg.bitchatMessageId).toUpperCase(), { convKey, msg });
-        }
-        if (msg.nymMessageId) {
-            this.messageIndex.set('nm:' + String(msg.nymMessageId).toUpperCase(), { convKey, msg });
-        }
-    },
-
-    _unindexMessage(msg) {
-        if (!msg) return;
-        if (msg.id) this.messageIndex.delete(msg.id);
-        if (msg.nymMessageId && msg.nymMessageId !== msg.id) {
-            this.messageIndex.delete(msg.nymMessageId);
-        }
-        if (msg.bitchatMessageId) {
-            this.messageIndex.delete('bc:' + String(msg.bitchatMessageId).toUpperCase());
-        }
-        if (msg.nymMessageId) {
-            this.messageIndex.delete('nm:' + String(msg.nymMessageId).toUpperCase());
-        }
-    },
-
-    _findDomInsertionPoint(container, msgCreatedAt, msgMs, msgSeq) {
-        const nodes = container.children;
-        const n = nodes.length;
-        if (n === 0) return null;
-        const last = nodes[n - 1];
-        if (last.dataset && last.dataset.createdAt !== undefined) {
-            const lc = parseInt(last.dataset.createdAt) || 0;
-            const lm = parseInt(last.dataset.ms) || (lc * 1000);
-            const ls = parseInt(last.dataset.seq) || 0;
-            if (msgCreatedAt > lc
-                || (msgCreatedAt === lc && msgMs > lm)
-                || (msgCreatedAt === lc && msgMs === lm && msgSeq >= ls)) {
-                return null;
-            }
-        }
-        let lo = 0, hi = n;
-        while (lo < hi) {
-            const mid = (lo + hi) >>> 1;
-            const node = nodes[mid];
-            if (!node.dataset || node.dataset.createdAt === undefined) { lo = mid + 1; continue; }
-            const ec = parseInt(node.dataset.createdAt) || 0;
-            const em = parseInt(node.dataset.ms) || (ec * 1000);
-            const es = parseInt(node.dataset.seq) || 0;
-            if (ec < msgCreatedAt
-                || (ec === msgCreatedAt && em < msgMs)
-                || (ec === msgCreatedAt && em === msgMs && es < msgSeq)) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        return lo < n ? nodes[lo] : null;
-    },
-
     hasBlockedKeyword(text, nickname) {
         const lowerText = text.toLowerCase();
         const lowerNick = nickname ? this.parseNymFromDisplay(nickname).toLowerCase() : '';
@@ -465,13 +388,15 @@ Object.assign(NYM.prototype, {
                 !this.nymchatPubkeys.has(message.pubkey) &&
                 this._isPubkeyGated(message.pubkey);
 
+            // Always store channel messages in memory regardless of current view
             if (!this.messages.has(storageKey)) {
                 this.messages.set(storageKey, []);
-                this.channelMessageIds.set(storageKey, new Set());
             }
-            const idSet = this.channelMessageIds.get(storageKey);
-            const exists = idSet.has(message.id);
+
+            // Check if message already exists
+            const exists = this.messages.get(storageKey).some(m => m.id === message.id);
             if (!exists) {
+                // Track most recent message time for channel sort ordering
                 const msgTime = (message.created_at || 0) * 1000;
                 const prevActivity = this.channelLastActivity.get(storageKey) || 0;
                 if (!isGated && msgTime > prevActivity) {
@@ -479,29 +404,28 @@ Object.assign(NYM.prototype, {
                     if (typeof this._persistUnreadCounts === 'function') {
                         this._persistUnreadCounts();
                     }
+                    // Throttled sort so discovered/historical channels order by activity
                     if (typeof this._scheduleChannelSort === 'function') {
                         this._scheduleChannelSort();
                     }
                 }
 
-                const arr = this.messages.get(storageKey);
-                this._insertMessageSorted(arr, message);
-                idSet.add(message.id);
-                this._indexMessage(storageKey, message);
+                // Add message and sort chronologically: created_at seconds, then
+                // the millisecond 'ms' stamp, then arrival sequence as a tiebreaker.
+                this.messages.get(storageKey).push(message);
+                this.messages.get(storageKey).sort((a, b) => this._compareMessages(a, b));
 
-                if (arr.length > this.channelMessageLimit) {
-                    const drop = arr.length - this.channelMessageLimit;
-                    for (let i = 0; i < drop; i++) {
-                        const removed = arr[i];
-                        if (removed && removed.id) {
-                            idSet.delete(removed.id);
-                            this._unindexMessage(removed);
-                        }
-                    }
-                    arr.splice(0, drop);
+                // Prune in-memory messages if exceeding the tier-aware limit
+                const messages = this.messages.get(storageKey);
+                if (messages && messages.length > this.channelMessageLimit) {
+                    this.messages.set(storageKey, messages.slice(-this.channelMessageLimit));
                 }
 
+                // Persist to IndexedDB (debounced) so this channel's
+                // history is available instantly on next launch.
                 this.persistChannelMessages(storageKey);
+
+                // Schedule zap receipt subscription update with new event IDs
                 this._scheduleZapResubscribe();
 
                 if (this.geohashMap && message.geohash && this.isValidGeohash && this.isValidGeohash(message.geohash)) {
@@ -552,8 +476,10 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        // Don't re-add if already displayed in DOM
+        // For group messages use the shared nymMessageId so duplicates from multiple relays are caught
         const _dedupeId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-        if (this.renderedMessageIds.has(_dedupeId)) {
+        if (document.querySelector(`[data-message-id="${_dedupeId}"]`)) {
             return;
         }
 
@@ -994,13 +920,38 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        if (this._pendingFragment) {
-            this._pendingFragment.appendChild(messageEl);
-        } else {
+        // Always insert messages in correct chronological order to prevent
+        // out-of-order display: created_at seconds, then the millisecond 'ms'
+        // stamp, then arrival sequence (_seq) — consistent with the in-memory sort.
+        {
+            const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
             const msgCreatedAt = message.created_at || 0;
             const msgMs = this._messageMs(message);
             const msgSeq = message._seq || 0;
-            const insertBefore = this._findDomInsertionPoint(container, msgCreatedAt, msgMs, msgSeq);
+
+            let insertBefore = null;
+            for (const existing of existingMessages) {
+                const existingCreatedAt = parseInt(existing.dataset.createdAt) || 0;
+                if (msgCreatedAt < existingCreatedAt) {
+                    insertBefore = existing;
+                    break;
+                }
+                if (msgCreatedAt === existingCreatedAt) {
+                    const existingMs = parseInt(existing.dataset.ms) || (existingCreatedAt * 1000);
+                    if (msgMs < existingMs) {
+                        insertBefore = existing;
+                        break;
+                    }
+                    if (msgMs === existingMs) {
+                        const existingSeq = parseInt(existing.dataset.seq) || 0;
+                        if (msgSeq < existingSeq) {
+                            insertBefore = existing;
+                            break;
+                        }
+                    }
+                }
+            }
+
             if (insertBefore && insertBefore.parentNode) {
                 insertBefore.parentNode.insertBefore(messageEl, insertBefore);
             } else {
@@ -1008,7 +959,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        this.renderedMessageIds.add(_dedupeId);
         this._updateBubbleGrouping(messageEl);
 
         // Sending your own channel message should always jump to the latest,
@@ -1042,17 +992,18 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        if (!this._pendingFragment) {
+        // Prune oldest messages from DOM to stay within limits. With the
+        // reverse-column scroll container, removing elements above the
+        // viewport keeps the reading position stable on its own.
+        {
             const domMessages = container.querySelectorAll('[data-message-id]');
             const domLimit = message.isPM ? this.pmStorageLimit : this.channelMessageLimit;
             if (domMessages.length > domLimit) {
                 const toRemove = domMessages.length - domLimit;
                 for (let i = 0; i < toRemove; i++) {
-                    const removed = domMessages[i];
-                    const rid = removed.dataset && removed.dataset.messageId;
-                    if (rid) this.renderedMessageIds.delete(rid);
-                    removed.remove();
+                    domMessages[i].remove();
                 }
+                // The new first message lost its previous sibling — recompute its grouping.
                 const firstAfterPrune = container.querySelector('[data-message-id]');
                 if (firstAfterPrune) this._updateBubbleGrouping(firstAfterPrune);
             }
@@ -1077,6 +1028,11 @@ Object.assign(NYM.prototype, {
             this.updateMessageZaps(message.id);
         }
 
+        // iOS Safari: explicitly load videos inserted via innerHTML. Safari
+        // requires Range request support (206) to play videos; if the server
+        // doesn't support it, fall back to fetching the video as a blob URL.
+        // The reverse-column scroll container keeps the latest message pinned
+        // as media grows the list, so no scroll handling is needed here.
         const videos = messageEl.querySelectorAll('video.message-video');
         if (videos.length > 0) {
             videos.forEach(vid => {
@@ -1101,7 +1057,7 @@ Object.assign(NYM.prototype, {
                     source.addEventListener('error', blobFallback, { once: true });
                     vid.addEventListener('error', blobFallback, { once: true });
                 }
-                this._observeLazyVideo(vid);
+                vid.load();
             });
         }
 
@@ -1684,7 +1640,11 @@ Object.assign(NYM.prototype, {
 
     _updateBubbleGrouping(messageEl) {
         if (!messageEl) return;
-        if (this._suppressBubbleRewrap) return;
+        if (this._suppressBubbleRewrap) {
+            this._applyBubbleGroupingTo(messageEl);
+            this._applyBubbleGroupingTo(messageEl.nextElementSibling);
+            return;
+        }
         const container = document.getElementById('messagesContainer');
         if (container && (container.contains(messageEl) || messageEl.parentNode === null)) {
             this._rewrapBubbleGroups(container);
@@ -1714,9 +1674,9 @@ Object.assign(NYM.prototype, {
         const wrappers = Array.from(container.children).filter(c => c.classList && c.classList.contains('message-group'));
         const salvagedAvatars = new Map();
         for (const wrapper of wrappers) {
-            if (this._sharedGroupRO && wrapper._observedStack) {
-                this._sharedGroupRO.unobserve(wrapper._observedStack);
-                wrapper._observedStack = null;
+            if (wrapper._resizeObserver) {
+                wrapper._resizeObserver.disconnect();
+                wrapper._resizeObserver = null;
             }
             const pk = wrapper.dataset.pubkey || '';
             const avatarImg = wrapper.querySelector(':scope > .message-group-avatar > img.avatar-bubble');
@@ -1774,7 +1734,7 @@ Object.assign(NYM.prototype, {
 
         const finalWrappers = container.querySelectorAll(':scope > .message-group');
         for (const wrapper of finalWrappers) {
-            this._scheduleGroupAvatarSync(wrapper);
+            this._syncMessageGroupAvatarOffset(wrapper);
         }
     },
 
@@ -1793,59 +1753,14 @@ Object.assign(NYM.prototype, {
             avatarBox.style.marginBottom = '';
             return;
         }
+        // Align the avatar's bottom flush with the bubble's bottom. Use
+        // bounding rects so the .message's margin-bottom and any siblings
+        // below the bubble (reactions row, edited indicator) are accounted
+        // for, which offsetTop/offsetHeight on its own misses.
         const wrapperRect = wrapper.getBoundingClientRect();
         const contentRect = contentEl.getBoundingClientRect();
         const below = wrapperRect.bottom - contentRect.bottom;
         avatarBox.style.marginBottom = below > 0 ? below + 'px' : '';
-    },
-
-    _scheduleGroupAvatarSync(wrapper) {
-        if (!wrapper) return;
-        if (!this._pendingAvatarSyncs) this._pendingAvatarSyncs = new Set();
-        this._pendingAvatarSyncs.add(wrapper);
-        if (this._avatarSyncRAF) return;
-        this._avatarSyncRAF = requestAnimationFrame(() => {
-            this._avatarSyncRAF = null;
-            const wrappers = this._pendingAvatarSyncs;
-            this._pendingAvatarSyncs = new Set();
-            for (const w of wrappers) {
-                if (w.isConnected) this._syncMessageGroupAvatarOffset(w);
-            }
-        });
-    },
-
-    _ensureSharedGroupResizeObserver() {
-        if (this._sharedGroupRO || typeof ResizeObserver === 'undefined') return this._sharedGroupRO;
-        this._sharedGroupRO = new ResizeObserver(entries => {
-            for (const entry of entries) {
-                const stack = entry.target;
-                const wrapper = stack.closest && stack.closest('.message-group');
-                if (wrapper) this._scheduleGroupAvatarSync(wrapper);
-            }
-        });
-        return this._sharedGroupRO;
-    },
-
-    _ensureLazyVideoObserver() {
-        if (this._lazyVideoIO || typeof IntersectionObserver === 'undefined') return this._lazyVideoIO;
-        this._lazyVideoIO = new IntersectionObserver(entries => {
-            for (const e of entries) {
-                if (!e.isIntersecting) continue;
-                const vid = e.target;
-                this._lazyVideoIO.unobserve(vid);
-                if (!vid.dataset.lazyLoaded) {
-                    vid.dataset.lazyLoaded = '1';
-                    try { vid.load(); } catch (_) {}
-                }
-            }
-        }, { rootMargin: '300px 0px' });
-        return this._lazyVideoIO;
-    },
-
-    _observeLazyVideo(vid) {
-        const io = this._ensureLazyVideoObserver();
-        if (io) io.observe(vid);
-        else { try { vid.load(); } catch (_) {} }
     },
 
     _createMessageGroupWrapper(firstMessageEl, reusableAvatarImg = null) {
@@ -1891,10 +1806,10 @@ Object.assign(NYM.prototype, {
         wrapper.appendChild(avatarBox);
         wrapper.appendChild(stack);
 
-        const ro = this._ensureSharedGroupResizeObserver();
-        if (ro) {
+        if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(() => this._syncMessageGroupAvatarOffset(wrapper));
             ro.observe(stack);
-            wrapper._observedStack = stack;
+            wrapper._resizeObserver = ro;
         }
 
         return wrapper;
@@ -2661,7 +2576,6 @@ Object.assign(NYM.prototype, {
         while (container.firstChild) {
             fragment.appendChild(container.firstChild);
         }
-        this.renderedMessageIds.clear();
 
         // Get message count and fingerprint for cache invalidation
         const messages = this.messages.get(previousKey) || this.pmMessages.get(previousKey) || [];
@@ -2730,9 +2644,9 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        // Cache miss or stale - render fresh
         this.channelDOMCache.delete(storageKey);
         container.innerHTML = '';
-        this.renderedMessageIds.clear();
 
         if (channelMessages.length === 0) {
             this.displaySystemMessage(`Joined ${displayName}`);
@@ -2761,13 +2675,7 @@ Object.assign(NYM.prototype, {
         if (compareFp !== cached.messageFingerprint) return false;
 
         container.innerHTML = '';
-        this.renderedMessageIds.clear();
         container.appendChild(cached.fragment);
-        const restored = container.querySelectorAll('[data-message-id]');
-        for (let i = 0; i < restored.length; i++) {
-            const rid = restored[i].dataset && restored[i].dataset.messageId;
-            if (rid) this.renderedMessageIds.add(rid);
-        }
         this.channelDOMCache.delete(storageKey);
 
         if (cached.virtualScrollState) {
@@ -2811,11 +2719,13 @@ Object.assign(NYM.prototype, {
 
     // Initialize virtual scroll for a container
 
+    // Get filtered messages for a storage key (applies block filters)
     getFilteredMessages(storageKey) {
         const messages = this.messages.get(storageKey) || [];
 
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
+            // Spam gate
             if (!msg.isOwn && !this.isFriend(msg.pubkey) &&
                 !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
                 return false;
@@ -2824,60 +2734,72 @@ Object.assign(NYM.prototype, {
             if (this.hasBlockedKeyword(msg.content, msg.author)) return false;
             if (this.isSpamMessage(msg.content)) return false;
             return true;
-        });
+        }).sort((a, b) => this._compareMessages(a, b));
     },
 
+    // Render all messages for a channel or PM conversation
+    // isPM: if true, uses pmMessages with conversationKey instead of messages with storageKey
     renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false) {
         const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
 
+        // Store context for scroll handlers
         container.dataset.virtualScrollKey = storageKey;
         container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
 
+        // Clear container
         container.innerHTML = '';
-        this.renderedMessageIds.clear();
 
         if (messages.length === 0) {
             return;
         }
 
-        const fragment = document.createDocumentFragment();
-
+        // If this channel has reached the message limit, show a notice at the top
         if (!isPM && messages.length >= this.channelMessageLimit) {
             const notice = document.createElement('div');
             notice.className = 'system-message channel-history-limit';
             notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void — only the latest 100 messages are shown.';
-            fragment.appendChild(notice);
+            container.appendChild(notice);
         }
 
+        // For PMs/groups, only render the latest pmPageSize messages initially
+        // and track the start index for pagination
         let renderMessages = messages;
         if (isPM && messages.length > this.pmPageSize) {
             const startIdx = messages.length - this.pmPageSize;
             renderMessages = messages.slice(startIdx);
             this.pmRenderedStart.set(storageKey, startIdx);
+            // Show "load older" notice at top
             const loadNotice = document.createElement('div');
             loadNotice.className = 'system-message pm-load-older';
             loadNotice.textContent = `Scroll up to load older messages (${startIdx} more)`;
-            fragment.appendChild(loadNotice);
+            container.appendChild(loadNotice);
         } else if (isPM) {
             this.pmRenderedStart.set(storageKey, 0);
         }
 
+        // Render all messages sorted by timestamp
         this.virtualScroll.suppressAutoScroll = true;
+
+
+
+        // Suppress notification sounds during bulk rendering of stored messages
+        // (e.g. when opening a conversation) to avoid replaying sounds
         this._suppressSound = true;
         this._suppressBubbleRewrap = true;
-        this._pendingFragment = fragment;
 
         for (let i = 0; i < renderMessages.length; i++) {
             this.displayMessage(renderMessages[i]);
         }
 
-        this._pendingFragment = null;
-        container.appendChild(fragment);
-
         this._suppressSound = false;
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
 
+        // Per-message grouping during a bulk render is evaluated against the
+        // siblings that exist at the moment of insertion, which is fragile if
+        // any message slips in out of order or if `body.chat-bubbles` is set
+        // after this render finishes (settings sync arriving later). Final pass
+        // guarantees grouping is consistent for the whole batch.
         this._recomputeAllBubbleGrouping(container);
 
         // Scroll to bottom if requested. The reverse-column container keeps

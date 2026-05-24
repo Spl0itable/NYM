@@ -88,10 +88,23 @@ Object.assign(NYM.prototype, {
 
         const messageId = eTag[1];
 
+        // When no kTag is present, verify this reaction targets a known Nymchat message
+        // to avoid showing notifications for reactions from other Nostr apps
         if (!kTag) {
-            const inDom = this.renderedMessageIds && this.renderedMessageIds.has(messageId);
-            const indexed = this.messageIndex && this.messageIndex.has(messageId);
-            if (!inDom && !indexed) return;
+            const inDom = !!document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+            let inMessages = false;
+            if (!inDom) {
+                for (const msgs of this.messages.values()) {
+                    if (msgs.some(m => m.id === messageId)) { inMessages = true; break; }
+                }
+            }
+            let inPMs = false;
+            if (!inDom && !inMessages) {
+                for (const msgs of this.pmMessages.values()) {
+                    if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) { inPMs = true; break; }
+                }
+            }
+            if (!inDom && !inMessages && !inPMs) return;
         }
 
         const reactorNym = this.getNymFromPubkey(event.pubkey);

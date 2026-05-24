@@ -562,9 +562,6 @@ class NYM {
         this._navigating = false;
         try { history.replaceState({ _nym_nav: -1 }, ''); } catch { }
         this.messages = new Map();
-        this.channelMessageIds = new Map();
-        this.renderedMessageIds = new Set();
-        this.messageIndex = new Map();
         this._msgSeq = 0;
         this.channelDOMCache = new Map();
         this.virtualScroll = {
@@ -3323,9 +3320,6 @@ async function clearLocalStorageCache() {
     // state instead of showing stale data until the next reload.
     try {
         if (nym.messages && typeof nym.messages.clear === 'function') nym.messages.clear();
-        if (nym.channelMessageIds && typeof nym.channelMessageIds.clear === 'function') nym.channelMessageIds.clear();
-        if (nym.renderedMessageIds && typeof nym.renderedMessageIds.clear === 'function') nym.renderedMessageIds.clear();
-        if (nym.messageIndex && typeof nym.messageIndex.clear === 'function') nym.messageIndex.clear();
         if (nym.pmMessages && typeof nym.pmMessages.clear === 'function') nym.pmMessages.clear();
         if (nym.reactions && typeof nym.reactions.clear === 'function') nym.reactions.clear();
         if (nym.userBios && typeof nym.userBios.clear === 'function') nym.userBios.clear();
@@ -3512,7 +3506,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.392';
+const NYMCHAT_VERSION = 'v3.66.391';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');

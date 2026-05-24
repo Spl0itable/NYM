@@ -4,8 +4,8 @@
 
 .shop-content {
     background: var(--glass-bg);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(40px) saturate(1.5);
+    -webkit-backdrop-filter: blur(40px) saturate(1.5);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xl);
     padding: 0;
@@ -825,8 +825,8 @@
     bottom: calc(100% + 5px);
     right: 0;
     background: rgba(20, 20, 35, 0.9);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(30px) saturate(1.5);
+    -webkit-backdrop-filter: blur(30px) saturate(1.5);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 12px;
@@ -1959,8 +1959,8 @@ body.status-hidden .ctx-status-row,
     gap: 4px;
     padding: 6px 8px;
     background: rgba(20, 20, 35, 0.92);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px) saturate(1.5);
+    -webkit-backdrop-filter: blur(20px) saturate(1.5);
     border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
     border-radius: 24px;
     z-index: 10001;
@@ -2028,8 +2028,8 @@ body.status-hidden .ctx-status-row,
     min-width: 200px;
     padding: 4px;
     background: rgba(20, 20, 35, 0.92);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px) saturate(1.5);
+    -webkit-backdrop-filter: blur(20px) saturate(1.5);
     border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
     border-radius: 14px;
     z-index: 10001;
