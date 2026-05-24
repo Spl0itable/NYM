@@ -97,10 +97,6 @@ Object.assign(NYM.prototype, {
                 .then(() => { this._hydrationComplete = true; this._onHydrationComplete(); })
                 .catch(() => { this._hydrationComplete = true; });
 
-            if (typeof this.loadFromIndexer === 'function') {
-                this.loadFromIndexer({ includeGiftWraps: false }).catch(() => { });
-            }
-
             await this.loadLightningAddress();
             this.cleanupOldLightningAddress();
             this.setupNetworkMonitoring();

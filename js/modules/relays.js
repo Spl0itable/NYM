@@ -1016,10 +1016,6 @@ Object.assign(NYM.prototype, {
             this.updateConnectionStatus('Connecting...');
             this.startAppRelayWatchdog();
 
-            if (typeof this.loadFromIndexer === 'function') {
-                this.loadFromIndexer({ includeGiftWraps: true }).catch(() => { });
-            }
-
             // Use multiplexed relay pool when running on Cloudflare (or remote proxy)
             if (this.useRelayProxy) {
                 let poolConnected = false;
@@ -3497,67 +3493,6 @@ Object.assign(NYM.prototype, {
             setTimeout(() => {
                 this.subscribeToChannelBatch(batch);
             }, Math.floor(i / batchSize) * 500);
-        }
-    },
-
-    _getIndexerBaseUrl() {
-        if (!this._isCloudflareHost) return null;
-        const host = this._getApiHost();
-        if (!host) return null;
-        return `https://${host}/api/indexer`;
-    },
-
-    async _fetchIndexerKind(kind, { limit, p } = {}) {
-        const base = this._getIndexerBaseUrl();
-        if (!base) return [];
-        const params = new URLSearchParams({ kind: String(kind) });
-        if (limit) params.set('limit', String(limit));
-        if (p) params.set('p', p);
-        try {
-            const res = await fetch(`${base}?${params.toString()}`, { method: 'GET' });
-            if (!res.ok) return [];
-            const data = await res.json();
-            return Array.isArray(data && data.events) ? data.events : [];
-        } catch (_) {
-            return [];
-        }
-    },
-
-    async loadFromIndexer({ includeGiftWraps = true } = {}) {
-        if (!this._isCloudflareHost) return;
-
-        const tasks = [];
-        if (!this._indexerPublicLoaded) {
-            this._indexerPublicLoaded = true;
-            const publicKinds = [
-                { kind: 20000, limit: 1000 },
-                { kind: 23333, limit: 500 },
-                { kind: 7, limit: 500 },
-                { kind: 5, limit: 200 },
-                { kind: 0, limit: 500 },
-                { kind: 9735, limit: 200 },
-                { kind: 30030, limit: 100 },
-                { kind: 30078, limit: 200 },
-            ];
-            for (const k of publicKinds) {
-                tasks.push(this._fetchIndexerKind(k.kind, { limit: k.limit }));
-            }
-        }
-
-        if (includeGiftWraps && !this._indexerGiftWrapsLoaded
-                && this.pubkey && /^[a-f0-9]{64}$/.test(this.pubkey)) {
-            this._indexerGiftWrapsLoaded = true;
-            tasks.push(this._fetchIndexerKind(1059, { limit: 500, p: this.pubkey }));
-        }
-
-        if (tasks.length === 0) return;
-
-        const results = await Promise.all(tasks);
-        for (const events of results) {
-            if (!Array.isArray(events) || events.length === 0) continue;
-            for (const ev of events) {
-                try { this.handleEvent(ev); } catch (_) { /* noop */ }
-            }
         }
     },
 
