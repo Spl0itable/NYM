@@ -4,30 +4,25 @@ Object.assign(NYM.prototype, {
 
     setupMobileGestures() {
         if (window.innerWidth <= 768) {
-            // Touch events for swipe to open menu
             document.addEventListener('touchstart', (e) => {
                 const touch = e.touches[0];
-                // Only track swipes starting from left edge
                 if (touch.clientX < 50) {
                     this.swipeStartX = touch.clientX;
                 }
-            });
+            }, { passive: true });
 
             document.addEventListener('touchmove', (e) => {
-                if (this.swipeStartX !== null) {
-                    const touch = e.touches[0];
-                    const swipeDistance = touch.clientX - this.swipeStartX;
-
-                    if (swipeDistance > this.swipeThreshold) {
-                        this.toggleSidebar();
-                        this.swipeStartX = null;
-                    }
+                if (this.swipeStartX === null) return;
+                const touch = e.touches[0];
+                if (touch.clientX - this.swipeStartX > this.swipeThreshold) {
+                    this.toggleSidebar();
+                    this.swipeStartX = null;
                 }
-            });
+            }, { passive: true });
 
             document.addEventListener('touchend', () => {
                 this.swipeStartX = null;
-            });
+            }, { passive: true });
         }
     },
 
@@ -703,12 +698,18 @@ Object.assign(NYM.prototype, {
             }
             if (!data || data.error) return null;
 
-            // Cache result
+            // Cache result in memory and persist to IndexedDB so it survives
+            // reloads (and iOS Safari HTTP-cache evictions).
             this._unfurlCache.set(url, data);
-            // Trim cache to max 200 entries
-            if (this._unfurlCache.size > 200) {
+            if (this._unfurlCache.size > 500) {
                 const first = this._unfurlCache.keys().next().value;
                 this._unfurlCache.delete(first);
+                if (typeof this.deleteCachedUnfurl === 'function') {
+                    this.deleteCachedUnfurl(first);
+                }
+            }
+            if (typeof this.persistUnfurl === 'function') {
+                this.persistUnfurl(url, data);
             }
             return data;
         } catch {
@@ -969,15 +970,18 @@ Object.assign(NYM.prototype, {
         });
 
         input.addEventListener('input', (e) => {
+            const el = e.target;
+            // Serialize the contenteditable once and pass the cached value to
+            // downstream consumers — each `el.value` getter walks the DOM tree.
+            let val = el.value;
             // Drop browser filler nodes so :empty placeholder styling works.
-            if (!e.target.value && e.target.innerHTML !== '') e.target.innerHTML = '';
+            if (!val && el.innerHTML !== '') el.innerHTML = '';
             // Render a just-completed :shortcode: as its custom emoji image.
-            this._maybeRenderTypedEmoji(e.target);
-            this.handleInputChange(e.target.value);
-            this.autoResizeTextarea(e.target);
-            this.updateTranslateInputBtn();
-            // Signal typing for PMs, groups, and public channels
-            if (e.target.value.trim().length > 0) {
+            if (this._maybeRenderTypedEmoji(el, val)) val = el.value;
+            this.handleInputChange(val);
+            this.autoResizeTextarea(el);
+            this.updateTranslateInputBtn(val);
+            if (val.length > 0 && val.trim().length > 0) {
                 if (this.inPMMode) {
                     this.handleTypingSignal();
                 } else if (this.currentGeohash) {
@@ -1533,15 +1537,18 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Cancel long-press react if the pointer moves (e.g. text selection drag)
+        let msgMoveCheckTs = 0;
         messagesEl.addEventListener('mousemove', (e) => {
             if (!msgLongPressTimer) return;
+            const now = performance.now();
+            if (now - msgMoveCheckTs < 50) return;
+            msgMoveCheckTs = now;
             const dx = e.clientX - msgLongPressStartX;
             const dy = e.clientY - msgLongPressStartY;
             if (dx * dx + dy * dy > MSG_LONG_PRESS_MOVE_THRESHOLD * MSG_LONG_PRESS_MOVE_THRESHOLD) {
                 cancelMsgLongPress();
             }
-        });
+        }, { passive: true });
         // Cancel long-press react if a swipe gesture is detected
         messagesEl.addEventListener('touchmove', cancelMsgLongPress, { passive: true });
         messagesEl.addEventListener('mouseup', cancelMsgLongPress);
@@ -1610,6 +1617,9 @@ Object.assign(NYM.prototype, {
     },
 
     autoResizeTextarea(textarea) {
+        // The contenteditable input grows via CSS min/max-height; setting style.height
+        // here forces two reflows per keystroke on iOS.
+        if (!textarea || textarea.isContentEditable) return;
         textarea.style.height = 'auto';
         textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
     },
@@ -1681,14 +1691,48 @@ Object.assign(NYM.prototype, {
 
     _richSelectionOffset(el, container, offsetInContainer) {
         if (!container || !el.contains(container)) return null;
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        try {
-            range.setEnd(container, offsetInContainer);
-        } catch (_) {
-            return null;
-        }
-        return this._richNodeLength(range.cloneContents());
+        // Walk the live DOM accumulating the model-character length of every
+        // node we pass on the way to the caret. Avoids allocating a Range or
+        // cloning the prefix subtree on each call — the original cloneContents
+        // path made every iOS keystroke do an O(n) DOM clone + character walk.
+        let total = 0;
+        let found = false;
+        const walk = (node) => {
+            if (found) return;
+            if (node === container) {
+                if (container.nodeType === Node.TEXT_NODE) {
+                    total += offsetInContainer;
+                } else {
+                    const kids = container.childNodes;
+                    const upto = Math.min(offsetInContainer, kids.length);
+                    for (let i = 0; i < upto; i++) {
+                        total += this._richNodeLength(kids[i]);
+                    }
+                }
+                found = true;
+                return;
+            }
+            if (node.nodeType === Node.TEXT_NODE) {
+                total += node.nodeValue.length;
+                return;
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+            if (node.tagName === 'IMG') {
+                total += this._emojiTokenForImg(node).length;
+                return;
+            }
+            if (node.tagName === 'BR') {
+                total += 1;
+                return;
+            }
+            const kids = node.childNodes;
+            for (let i = 0; i < kids.length; i++) {
+                walk(kids[i]);
+                if (found) return;
+            }
+        };
+        walk(el);
+        return found ? total : null;
     },
 
     _richLocate(el, target) {
@@ -1745,19 +1789,29 @@ Object.assign(NYM.prototype, {
         // The caret only lives in window.getSelection() while the input is
         // focused; opening the emoji picker moves focus away. Remember the last
         // in-input caret so insertions land where the user left off.
+        // We deliberately skip the 'input' event here — the input handler
+        // already reads inputEl.selectionStart, whose getter updates
+        // _savedSelStart as a side effect. Running saveSel on 'input' too
+        // doubled the selection offset walk on every keystroke.
         const saveSel = () => {
             const sel = window.getSelection();
             if (!sel || !sel.rangeCount) return;
             const r = sel.getRangeAt(0);
             if (!el.contains(r.startContainer)) return;
             const s = self._richSelectionOffset(el, r.startContainer, r.startOffset);
-            const e = self._richSelectionOffset(el, r.endContainer, r.endOffset);
             if (s != null) el._savedSelStart = s;
-            if (e != null) el._savedSelEnd = e;
+            // Only compute the end offset when a real selection exists — for a
+            // collapsed caret it equals the start and is the common case while
+            // typing on iOS.
+            if (r.collapsed) {
+                el._savedSelEnd = el._savedSelStart;
+            } else {
+                const e = self._richSelectionOffset(el, r.endContainer, r.endOffset);
+                if (e != null) el._savedSelEnd = e;
+            }
         };
         el.addEventListener('keyup', saveSel);
         el.addEventListener('mouseup', saveSel);
-        el.addEventListener('input', saveSel);
         el.addEventListener('focus', saveSel);
 
         Object.defineProperty(el, 'value', {
@@ -1820,14 +1874,15 @@ Object.assign(NYM.prototype, {
     // emoji, re-render so it becomes an inline image. The :shortcode: token and
     // its emoji image share the same model length, so the caret offset is
     // unchanged by the re-render.
-    _maybeRenderTypedEmoji(el) {
-        if (!this.customEmojis || this.customEmojis.size === 0) return;
+    _maybeRenderTypedEmoji(el, cachedValue) {
+        if (!this.customEmojis || this.customEmojis.size === 0) return false;
+        const value = cachedValue != null ? cachedValue : el.value;
         const caret = el.selectionStart;
-        const value = el.value;
         const m = value.slice(0, caret).match(/:([a-zA-Z0-9_]+):$/);
-        if (!m || !this.customEmojis.has(m[1])) return;
+        if (!m || !this.customEmojis.has(m[1])) return false;
         el.value = value;
         el.selectionStart = el.selectionEnd = caret;
+        return true;
     },
 
     // Insert plain text at the caret (used for Shift+Enter newlines and pastes)
@@ -1866,6 +1921,23 @@ Object.assign(NYM.prototype, {
 <div id="gifResults" class="gif-grid"></div>
 <div class="gif-attribution">Powered by <a href="https://giphy.com" target="_blank">GIPHY</a></div>
 `;
+
+        const button = document.querySelector('.icon-btn.input-btn[title="GIF"]');
+        document.body.appendChild(gifPicker);
+        gifPicker.style.position = 'fixed';
+        if (window.innerWidth <= 768) {
+            gifPicker.style.bottom = '60px';
+            gifPicker.style.left = '50%';
+            gifPicker.style.transform = 'translateX(-50%)';
+            gifPicker.style.right = 'auto';
+            gifPicker.style.maxWidth = '90%';
+        } else if (button) {
+            const rect = button.getBoundingClientRect();
+            gifPicker.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
+            gifPicker.style.right = Math.min(window.innerWidth - rect.right + 50, 10) + 'px';
+            gifPicker.style.left = '';
+            gifPicker.style.transform = '';
+        }
 
         gifPicker.classList.add('active');
 
@@ -2027,6 +2099,7 @@ Object.assign(NYM.prototype, {
         const wasOpen = gifPicker.classList.contains('active');
         gifPicker.classList.remove('active');
         gifPicker.innerHTML = '';
+        gifPicker.style.cssText = '';
         if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
