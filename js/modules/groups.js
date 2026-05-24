@@ -1864,31 +1864,27 @@ Object.assign(NYM.prototype, {
 
         // Update each visible own message's reader avatars
         for (const msg of ownMessages) {
-            const els = this._queryAllAcrossCache(`.group-readers[data-nym-msg-id="${msg.nymMessageId}"]`);
-            if (els.length === 0) continue;
+            const el = document.querySelector(`.group-readers[data-nym-msg-id="${msg.nymMessageId}"]`);
+            if (!el) continue;
             const waterfallReaders = displayReaders.get(msg.nymMessageId);
-            for (const el of els) {
-                const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
-                if (hasReaders && !el._readerLongPressBound) {
-                    this._bindReaderLongPress(el, msg.nymMessageId);
-                    el._readerLongPressBound = true;
-                }
+            const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+            if (hasReaders && !el._readerLongPressBound) {
+                this._bindReaderLongPress(el, msg.nymMessageId);
+                el._readerLongPressBound = true;
             }
         }
     },
 
     // Fallback: update a single message's reader avatars without waterfall
     _updateSingleGroupReaders(nymMessageId) {
-        const els = this._queryAllAcrossCache(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
-        if (els.length === 0) return;
+        const el = document.querySelector(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
+        if (!el) return;
         const readers = this.groupMessageReaders.get(nymMessageId);
         if (!readers || readers.size === 0) return;
-        for (const el of els) {
-            this._syncReaderAvatars(el, readers);
-            if (!el._readerLongPressBound) {
-                this._bindReaderLongPress(el, nymMessageId);
-                el._readerLongPressBound = true;
-            }
+        this._syncReaderAvatars(el, readers);
+        if (!el._readerLongPressBound) {
+            this._bindReaderLongPress(el, nymMessageId);
+            el._readerLongPressBound = true;
         }
     },
 
@@ -1994,30 +1990,26 @@ Object.assign(NYM.prototype, {
         }
 
         for (const msg of ownMessages) {
-            const els = this._queryAllAcrossCache(`.channel-readers[data-msg-id="${msg.id}"]`);
-            if (els.length === 0) continue;
+            const el = document.querySelector(`.channel-readers[data-msg-id="${msg.id}"]`);
+            if (!el) continue;
             const waterfallReaders = displayReaders.get(msg.id);
-            for (const el of els) {
-                const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
-                if (hasReaders && !el._readerLongPressBound) {
-                    this._bindChannelReaderLongPress(el, msg.id);
-                    el._readerLongPressBound = true;
-                }
+            const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+            if (hasReaders && !el._readerLongPressBound) {
+                this._bindChannelReaderLongPress(el, msg.id);
+                el._readerLongPressBound = true;
             }
         }
     },
 
     _updateSingleChannelReaders(messageId) {
-        const els = this._queryAllAcrossCache(`.channel-readers[data-msg-id="${messageId}"]`);
-        if (els.length === 0) return;
+        const el = document.querySelector(`.channel-readers[data-msg-id="${messageId}"]`);
+        if (!el) return;
         const readers = this.channelMessageReaders.get(messageId);
         if (!readers || readers.size === 0) return;
-        for (const el of els) {
-            this._syncReaderAvatars(el, readers);
-            if (!el._readerLongPressBound) {
-                this._bindChannelReaderLongPress(el, messageId);
-                el._readerLongPressBound = true;
-            }
+        this._syncReaderAvatars(el, readers);
+        if (!el._readerLongPressBound) {
+            this._bindChannelReaderLongPress(el, messageId);
+            el._readerLongPressBound = true;
         }
     },
 

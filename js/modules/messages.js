@@ -2890,19 +2890,6 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    _queryAllAcrossCache(selector) {
-        const results = [];
-        document.querySelectorAll(selector).forEach(el => results.push(el));
-        if (this.channelDOMCache && this.channelDOMCache.size > 0) {
-            for (const cached of this.channelDOMCache.values()) {
-                if (cached && cached.fragment) {
-                    cached.fragment.querySelectorAll(selector).forEach(el => results.push(el));
-                }
-            }
-        }
-        return results;
-    },
-
     loadChannelMessages(displayName) {
         const container = document.getElementById('messagesContainer');
         const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
