@@ -1017,6 +1017,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        // Send read receipt back to sender so they can show our avatar as "read"
+        if (!isOwn && !msg.isHistorical && this._canSendGiftWraps() && nymMsgId) {
+            this.sendNymReceipt(nymMsgId, 'read', senderPubkey, 'group');
+            this.recordOwnActivity();
+        }
     },
 
     // Create a new private group and send invites to all members via NIP-17 gift wraps.
