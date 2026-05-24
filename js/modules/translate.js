@@ -494,6 +494,7 @@ Object.assign(NYM.prototype, {
             if (willOpen) {
                 searchInput.value = '';
                 this._renderTranslateDropdownList();
+                setTimeout(() => searchInput.focus(), 30);
             }
         });
 
@@ -533,16 +534,14 @@ Object.assign(NYM.prototype, {
     },
 
     // Show/hide the translate input button based on whether the input has text.
-    updateTranslateInputBtn(cachedValue) {
+    updateTranslateInputBtn() {
         const input = document.getElementById('messageInput');
         const btn = document.getElementById('translateInputBtn');
         if (!btn || !input) return;
-        const value = cachedValue != null ? cachedValue : input.value;
-        const hasText = value.length > 0 && value.trim().length > 0;
-        if (this._translateBtnVisible === hasText) return;
-        this._translateBtnVisible = hasText;
+        const hasText = input.value.trim().length > 0;
         btn.style.display = hasText ? 'flex' : 'none';
         input.style.paddingRight = hasText ? '38px' : '';
+        // Hide dropdown when button hides
         if (!hasText) {
             const dropdown = document.getElementById('translateInputDropdown');
             if (dropdown) dropdown.classList.remove('active');
