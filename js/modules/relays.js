@@ -357,13 +357,12 @@ Object.assign(NYM.prototype, {
                 // and sends only defaults + DM relays + active geo relays
                 this._poolSendRelayConfig();
             } else {
-                // Direct mode: disconnect all relays except the 5 defaults,
-                // active geo relays for the current channel, and write-only relays
+                // Direct mode: disconnect all relays except the 5 defaults
+                // and active geo relays for the current channel
                 const keepRelays = new Set(this.defaultRelays);
                 for (const url of this.currentGeoRelays) {
                     keepRelays.add(url);
                 }
-                keepRelays.add('wss://sendit.nosflare.com');
                 for (const [url, relay] of this.relayPool) {
                     if (!keepRelays.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                         relay.ws.close();
@@ -426,7 +425,6 @@ Object.assign(NYM.prototype, {
 
         // Build set of relays that should never be disconnected
         const keepRelays = new Set(this.defaultRelays);
-        keepRelays.add('wss://sendit.nosflare.com');
 
         for (const url of previousGeoRelays) {
             if (!stillNeededRelays.has(url) && !keepRelays.has(url)) {
@@ -465,19 +463,14 @@ Object.assign(NYM.prototype, {
         if (!listEl) return;
 
         const connectedRelays = [];
-        const writeOnlyRelays = [];
 
         this.relayPool.forEach((relay, url) => {
-            if (relay.type === 'write') {
-                writeOnlyRelays.push(url);
-            } else {
-                connectedRelays.push(url);
-            }
+            connectedRelays.push(url);
         });
 
         let html = '';
 
-        if (connectedRelays.length > 0 || writeOnlyRelays.length > 0) {
+        if (connectedRelays.length > 0) {
             html += '<div class="nm-relay-1"><strong class="nm-primary">Connected Relays:</strong><br/>';
             connectedRelays.slice(0, 20).forEach(url => {
                 html += `<div class="nm-relay-2">• ${this.escapeHtml(url)}</div>`;
@@ -485,9 +478,6 @@ Object.assign(NYM.prototype, {
             if (connectedRelays.length > 20) {
                 html += `<div class="nm-relay-3">... and ${connectedRelays.length - 20} more</div>`;
             }
-            writeOnlyRelays.forEach(url => {
-                html += `<div class="nm-relay-2">• ${this.escapeHtml(url)} (write-only)</div>`;
-            });
             html += '</div>';
         }
 
@@ -710,8 +700,7 @@ Object.assign(NYM.prototype, {
             // Retry any disconnected relays from allRelayUrls (skipped in low data mode)
             if (!this.settings || !this.settings.lowDataMode) {
                 const missingRelays = [...this.allRelayUrls].filter(url =>
-                    !this.relayPool.has(url) &&
-                    url !== 'wss://sendit.nosflare.com'
+                    !this.relayPool.has(url)
                 );
 
                 if (missingRelays.length > 0) {
@@ -1235,14 +1224,6 @@ Object.assign(NYM.prototype, {
                 }
             }, 100);
 
-            // Connect to sendit.nosflare.com for write-only (no subscriptions)
-            const senditRelay = 'wss://sendit.nosflare.com';
-            if (this.shouldRetryRelay(senditRelay)) {
-                this.connectToRelay(senditRelay, 'write').then(() => {
-                    this.updateConnectionStatus();
-                });
-            }
-
             // Connect to remaining default relays in background
             this.defaultRelays.forEach(relayUrl => {
                 if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
@@ -1283,7 +1264,6 @@ Object.assign(NYM.prototype, {
                             .filter(url =>
                                 !this.relayPool.has(url) &&
                                 !this.blacklistedRelays.has(url) &&
-                                url !== 'wss://sendit.nosflare.com' &&
                                 this.shouldRetryRelay(url))
                             .slice(0, this.maxRelaysForReq);
                         relaysToConnect.forEach((relayUrl, index) => {
@@ -1335,10 +1315,7 @@ Object.assign(NYM.prototype, {
         }
 
         this.relayPool.forEach((relay, url) => {
-            if (relay.type === 'write') return; // write-only
             if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
-
-            // Close existing subscriptions before resubscribing
             this.closeSubscriptionsForRelay(url);
             this.subscribeToSingleRelay(url);
         });
@@ -1354,10 +1331,6 @@ Object.assign(NYM.prototype, {
         const relay = this.relayPool.get(relayUrl);
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
-        // Never send subscriptions to nosflare (write-only)
-        if (relay.type === 'write') return;
-
-        // Close all active subscriptions for this relay
         if (relay.subscriptions) {
             relay.subscriptions.forEach(subId => {
                 this._safeWsSend(relay.ws, JSON.stringify(["CLOSE", subId]), { critical: true });
@@ -1378,9 +1351,6 @@ Object.assign(NYM.prototype, {
     subscribeToSingleRelay(relayUrl) {
         const relay = this.relayPool.get(relayUrl);
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
-
-        // Never send REQ to nosflare (write-only)
-        if (relay.type === 'write') return;
 
         const ws = relay.ws;
         const since24h = Math.floor(Date.now() / 1000) - 86400;
@@ -1418,7 +1388,7 @@ Object.assign(NYM.prototype, {
         const reqStr = JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters]));
         const targets = [];
         this.relayPool.forEach((relay) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                 if (!relay.subscriptions) relay.subscriptions = new Set();
                 relay.subscriptions.add(subId);
                 targets.push(relay);
@@ -1699,10 +1669,9 @@ Object.assign(NYM.prototype, {
 
     // Shard relays into role-based worker groups, splitting large groups into chunks
     _shardRelaysByRole(allRelays, geoRelayUrls, dmRelays) {
-        const blocked = new Set(['wss://relay.nosflare.com', 'wss://relay.nostraddress.com', 'wss://nostr-server-production.up.railway.app']);
-        const writeOnly = new Set(['wss://sendit.nosflare.com']);
+        const blocked = new Set(['wss://relay.nosflare.com', 'wss://sendit.nosflare.com', 'wss://relay.nostraddress.com', 'wss://nostr-server-production.up.railway.app']);
         const permanent = this._permanentBlacklist || new Set();
-        const isValid = (url) => !blocked.has(url) && !writeOnly.has(url) && !permanent.has(url);
+        const isValid = (url) => !blocked.has(url) && !permanent.has(url);
 
         // Categorize relays by role
         const geoSet = new Set(geoRelayUrls || []);
@@ -1762,11 +1731,6 @@ Object.assign(NYM.prototype, {
                     dmRelays: []
                 });
             });
-        }
-
-        // Write-only relays go to the first critical shard
-        if (shards.length > 0) {
-            shards[0].writeOnly = [...writeOnly];
         }
 
         return shards;
@@ -2037,7 +2001,6 @@ Object.assign(NYM.prototype, {
                 role: shard.role,
                 relays: shard.relays,
                 dmRelays: shard.dmRelays || [],
-                writeOnly: shard.writeOnly || [],
                 connectedRelays: [],
                 lastMessage: Date.now()
             };
@@ -2064,10 +2027,8 @@ Object.assign(NYM.prototype, {
                 clearTimeout(timeout);
                 wasOpen = true;
 
-                // Send RELAYS config for this shard
                 ws.send(JSON.stringify(['RELAYS', {
                     relays: shard.relays,
-                    writeOnly: shard.writeOnly || [],
                     dmRelays: shard.dmRelays || []
                 }]));
 
@@ -2195,10 +2156,9 @@ Object.assign(NYM.prototype, {
         // Sync relayPool map for UI status tracking
         this.relayPool.clear();
         for (const url of this.poolConnectedRelays) {
-            const relayType = url === 'wss://sendit.nosflare.com' ? 'write' : 'relay';
             this.relayPool.set(url, {
                 ws: this.poolSocket,
-                type: relayType,
+                type: 'relay',
                 status: 'connected',
                 connectedAt: Date.now()
             });
@@ -2309,6 +2269,35 @@ Object.assign(NYM.prototype, {
             if (!set.has(k)) { set.add(k); added = true; }
         }
         if (added) this._sendKindBlacklistToWorkers();
+    },
+
+    _trackSentEventKind(message) {
+        if (!Array.isArray(message) || message[0] !== 'EVENT') return;
+        const evt = message[1];
+        if (!evt || typeof evt.id !== 'string' || typeof evt.kind !== 'number') return;
+        if (!this._sentEventKinds) this._sentEventKinds = new Map();
+        if (this._sentEventKinds.has(evt.id)) this._sentEventKinds.delete(evt.id);
+        this._sentEventKinds.set(evt.id, evt.kind);
+        if (this._sentEventKinds.size > 1000) {
+            const firstKey = this._sentEventKinds.keys().next().value;
+            this._sentEventKinds.delete(firstKey);
+        }
+    },
+
+    _recordEventKindRejection(relayUrl, eventId) {
+        if (!relayUrl || relayUrl === 'relay-pool' || !eventId) return;
+        const kind = this._sentEventKinds && this._sentEventKinds.get(eventId);
+        if (typeof kind !== 'number') return;
+        if (!this._relayUnsupportedKinds) this._relayUnsupportedKinds = new Map();
+        let set = this._relayUnsupportedKinds.get(relayUrl);
+        if (!set) {
+            set = new Set();
+            this._relayUnsupportedKinds.set(relayUrl, set);
+        }
+        if (!set.has(kind)) {
+            set.add(kind);
+            this._sendKindBlacklistToWorkers();
+        }
     },
 
     _sendKindBlacklistToWorkers() {
@@ -2500,7 +2489,7 @@ Object.assign(NYM.prototype, {
         } else {
             const req = JSON.stringify(this._normalizeReqPayload(['REQ', subId, filter]));
             this.relayPool.forEach(relay => {
-                if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
+                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                     this._safeWsSend(relay.ws, req, { critical: true });
                 }
             });
@@ -2541,7 +2530,7 @@ Object.assign(NYM.prototype, {
             } else {
                 const msg = JSON.stringify(this._normalizeReqPayload(['REQ', subId, filter]));
                 this.relayPool.forEach((relay) => {
-                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
+                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                         this._safeWsSend(relay.ws, msg, { critical: true });
                     }
                 });
@@ -2631,14 +2620,11 @@ Object.assign(NYM.prototype, {
             if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
                 const sameRelays = arraysEqual(existing.relays, shard.relays);
                 const sameDm = arraysEqual(existing.dmRelays || [], shard.dmRelays || []);
-                const sameWrite = arraysEqual(existing.writeOnly || [], shard.writeOnly || []);
-                if (sameRelays && sameDm && sameWrite) continue;
+                if (sameRelays && sameDm) continue;
                 existing.relays = shard.relays;
                 existing.dmRelays = shard.dmRelays || [];
-                existing.writeOnly = shard.writeOnly || [];
                 existing.ws.send(JSON.stringify(['RELAYS', {
                     relays: shard.relays,
-                    writeOnly: shard.writeOnly || [],
                     dmRelays: shard.dmRelays || []
                 }]));
             } else if (!existingIds.has(shard.id)) {
@@ -2668,8 +2654,8 @@ Object.assign(NYM.prototype, {
         if (relayUrl === this.appRelay) return;
 
         // Block known-bad relays entirely - never connect
-        if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com' || relayUrl === 'wss://nostr-server-production.up.railway.app') {
-            return; // Silently skip blocked relays
+        if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://sendit.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com' || relayUrl === 'wss://nostr-server-production.up.railway.app') {
+            return;
         }
 
         // Skip blacklisted/retry-throttled relays (no pending tracking needed)
@@ -2838,10 +2824,7 @@ Object.assign(NYM.prototype, {
                                     const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
                                     if (isConnected) {
-                                        // Re-subscribe after reconnection (except write-only relays)
-                                        if (type !== 'write') {
-                                            this.subscribeToSingleRelay(relayUrl);
-                                        }
+                                        this.subscribeToSingleRelay(relayUrl);
                                         this.updateConnectionStatus();
                                         this.reconnectingRelays.delete(relayUrl);
 
@@ -2980,6 +2963,7 @@ Object.assign(NYM.prototype, {
     _mergeDiscoveredRelays(urls) {
         const blocked = new Set([
             'wss://relay.nosflare.com',
+            'wss://sendit.nosflare.com',
             'wss://relay.nostraddress.com',
             'wss://nostr-server-production.up.railway.app'
         ]);
@@ -3115,7 +3099,6 @@ Object.assign(NYM.prototype, {
         for (const relay of this.allRelayUrls) {
             if (!this.relayPool.has(relay) &&
                 !this.blacklistedRelays.has(relay) &&
-                relay !== 'wss://sendit.nosflare.com' &&
                 this.shouldRetryRelay(relay)) {
                 relaysToTry.push(relay);
             }
@@ -3232,11 +3215,9 @@ Object.assign(NYM.prototype, {
         const msg = JSON.stringify(message);
 
         if (Array.isArray(message) && message[0] === 'EVENT') {
-            // For EVENT messages, send to broadcast relays and nosflare
             this.broadcastEvent(message);
         } else if (Array.isArray(message) && message[0] === 'REQ') {
-            // For REQ messages, send to all relays EXCEPT sendit.nosflare.com
-            this.sendRequestToAllRelaysExceptNosflare(message);
+            this.sendRequestToAllRelays(message);
         } else {
             const targets = [];
             this.relayPool.forEach((relay) => {
@@ -3249,7 +3230,7 @@ Object.assign(NYM.prototype, {
 
     // Send DM events (kind 1059) with priority to the default relays
     sendDMToRelays(message) {
-        // Multiplexed pool mode: proxy handles DM relay prioritization
+        this._trackSentEventKind(message);
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             const eventObj = Array.isArray(message) && message[0] === 'EVENT' ? message[1] : message;
             this._poolSend(['DM_EVENT', eventObj]);
@@ -3280,8 +3261,7 @@ Object.assign(NYM.prototype, {
         return sent.size;
     },
 
-    sendRequestToAllRelaysExceptNosflare(message) {
-        // Multiplexed pool mode: proxy already excludes write-only relays from REQ
+    sendRequestToAllRelays(message) {
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSend(message);
             return;
@@ -3290,7 +3270,7 @@ Object.assign(NYM.prototype, {
         const msg = JSON.stringify(message);
         const targets = [];
         this.relayPool.forEach((relay) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                 targets.push(relay);
             }
         });
@@ -3309,7 +3289,7 @@ Object.assign(NYM.prototype, {
         const subId = Array.isArray(message) && message[0] === 'REQ' ? message[1] : null;
 
         const sendTo = (relay, url) => {
-            if (relay.ws && relay.ws.readyState === WebSocket.OPEN && relay.type !== 'write') {
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                 if (this._safeWsSend(relay.ws, msg, { critical: true })) {
                     if (subId) {
                         if (!relay.subscriptions) relay.subscriptions = new Set();
@@ -3357,7 +3337,7 @@ Object.assign(NYM.prototype, {
     },
 
     broadcastEvent(message) {
-        // Multiplexed pool mode: proxy handles fan-out to all relays
+        this._trackSentEventKind(message);
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             let evt = null;
             try {
@@ -3422,8 +3402,6 @@ Object.assign(NYM.prototype, {
                 const relay = this.relayPool.get(relayUrl);
                 if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) targets.push(relay);
             });
-            const nosflare = this.relayPool.get('wss://sendit.nosflare.com');
-            if (nosflare && nosflare.ws && nosflare.ws.readyState === WebSocket.OPEN) targets.push(nosflare);
             this._broadcastAsync(targets, msg, { critical: true });
         }
     },
@@ -3439,9 +3417,8 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Get all relays except nosflare
         const readableRelays = Array.from(this.relayPool.entries())
-            .filter(([url, relay]) => relay.type !== 'write' && relay.ws && relay.ws.readyState === WebSocket.OPEN);
+            .filter(([url, relay]) => relay.ws && relay.ws.readyState === WebSocket.OPEN);
 
         if (readableRelays.length === 0) {
             return;
@@ -3535,13 +3512,16 @@ Object.assign(NYM.prototype, {
                 this.handleEvent(event);
                 break;
             case 'OK': {
+                const okEventId = data[0];
                 const accepted = data[1];
                 const reason = data[2] || '';
                 const attributedRelay = (typeof data[3] === 'string' && data[3].startsWith('wss://'))
                     ? data[3] : relayUrl;
                 if (accepted === false) {
-                    if (this._isPermanentRejection(reason)) {
+                    if (this._isRelayWideRejection(reason)) {
                         this._permanentlyBlacklistRelay(attributedRelay, reason);
+                    } else if (this._isPermanentRejection(reason)) {
+                        this._recordEventKindRejection(attributedRelay, okEventId);
                     } else if (typeof reason === 'string' && /rate-?limit|too many|concurrent/i.test(reason)) {
                         this._noteRateLimit(attributedRelay);
                         this._recordRelayError(attributedRelay, reason);
@@ -3755,6 +3735,22 @@ Object.assign(NYM.prototype, {
 
     _isUnsupportedKind(reason) {
         return typeof reason === 'string' && /kinds?\s*not\s*supported/i.test(reason);
+    },
+
+    _isRelayWideRejection(reason) {
+        if (typeof reason !== 'string') return false;
+        return /auth[\s\-_:]*required/i.test(reason)
+            || /\bauthentic/i.test(reason)
+            || /nip-?42/i.test(reason)
+            || /\bblocked\b/i.test(reason)
+            || /\bbanned\b/i.test(reason)
+            || /\bforbidden\b/i.test(reason)
+            || /\bunauthorized\b/i.test(reason)
+            || /payment[\s\-_:]*required/i.test(reason)
+            || /\bpaid\b/i.test(reason)
+            || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
+            || /\binvalid query\b/i.test(reason)
+            || /\bconnection-failed\b/i.test(reason);
     },
 
     // Count error responses per relay. If a relay sends 5+ errors within

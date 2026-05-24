@@ -3523,7 +3523,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.406';
+const NYMCHAT_VERSION = 'v3.66.407';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -6286,7 +6286,6 @@ function renderRelayList(pool, stats) {
             if (url === 'relay-pool') return;
             entries.push({
                 url,
-                write: url === 'wss://sendit.nosflare.com',
                 open: true,
                 events: stats.eventsPerRelay.get(url) || 0,
                 latency: stats.latencyPerRelay.get(url) || null
@@ -6297,7 +6296,6 @@ function renderRelayList(pool, stats) {
             const isOpen = relay.ws && relay.ws.readyState === WebSocket.OPEN;
             entries.push({
                 url,
-                write: relay.type === 'write',
                 open: isOpen,
                 events: stats.eventsPerRelay.get(url) || 0,
                 latency: stats.latencyPerRelay.get(url) || null
@@ -6325,7 +6323,6 @@ function renderRelayList(pool, stats) {
             html += `<div class="relay-stats-row" data-rs-idx="${i}">` +
                 `<span class="relay-stats-dot ${e.open ? 'open' : 'closed'}"></span>` +
                 `<span class="relay-stats-url" title="${nym.escapeHtml(e.url)}">${nym.escapeHtml(shortUrl)}</span>` +
-                (e.write ? `<span class="relay-stats-type write">write</span>` : '') +
                 `<span class="relay-stats-latency">${e.latency !== null ? e.latency + 'ms' : '--'}</span>` +
                 `<span class="relay-stats-events">${e.events} evt</span>` +
                 `</div>`;
