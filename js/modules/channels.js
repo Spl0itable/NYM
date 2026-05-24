@@ -413,11 +413,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     filterChannels(searchTerm) {
+        if (this._channelFilterRAF) cancelAnimationFrame(this._channelFilterRAF);
+        this._channelFilterRAF = requestAnimationFrame(() => {
+            this._channelFilterRAF = null;
+            this._filterChannelsNow(searchTerm);
+        });
+    },
+
+    _filterChannelsNow(searchTerm) {
         const items = document.querySelectorAll('.channel-item');
-        const term = searchTerm.toLowerCase();
+        const term = (searchTerm || '').toLowerCase();
         const list = document.getElementById('channelList');
 
-        // Update wrapper has-value class for clear button visibility
         const wrapper = document.getElementById('channelSearchWrapper');
         if (wrapper) {
             wrapper.classList.toggle('has-value', term.length > 0);
@@ -425,9 +432,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const validChannelPattern = /^#[\p{L}\p{N}]+$/u;
         items.forEach(item => {
-            const channelNameEl = item.querySelector('.channel-name');
-            const channelName = channelNameEl ? channelNameEl.textContent.toLowerCase() : '';
-            // Hide channels with invalid names (spaces, special chars, URLs)
+            let channelName = item._cachedLowerName;
+            if (channelName === undefined) {
+                const channelNameEl = item.querySelector('.channel-name');
+                channelName = channelNameEl ? channelNameEl.textContent.toLowerCase() : '';
+                item._cachedLowerName = channelName;
+            }
             if (!validChannelPattern.test(channelName)) {
                 item.style.display = 'none';
                 item.classList.add('search-hidden');
@@ -440,7 +450,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         });
 
-        // Hide view more button during search
         const viewMoreBtn = list.querySelector('.view-more-btn');
         if (viewMoreBtn) {
             viewMoreBtn.style.display = term ? 'none' : 'block';
@@ -945,6 +954,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const unreadKey = geohash ? `#${geohash}` : channel;
         this.clearUnreadCount(unreadKey);
 
+        if (typeof this._updateNotificationBadge === 'function') {
+            this._updateNotificationBadge();
+        }
+
         // Re-sort sidebar so the active channel moves to the top while we're
         // viewing it (and the previous channel falls back to its activity slot)
         this.sortChannelsByActivity();
@@ -1303,7 +1316,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     // Counter is derived from cached messages newer than lastRead so it
-    // can't drift from the actual cache contents.
+    // can't drift from the actual cache contents. Historical messages are
+    // excluded so backlog hydration/sync can't inflate the badge with
+    // messages the user already saw on another device.
     _recomputeUnreadCount(channel) {
         if (!this.channelLastRead) this.channelLastRead = new Map();
         const lastRead = this.channelLastRead.get(channel) || 0;
@@ -1318,6 +1333,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         for (const m of messages) {
             if (!m || m.isOwn) continue;
             if (m._spamGated) continue;
+            if (m.isHistorical) continue;
             if ((m.created_at || 0) <= lastRead) continue;
             if (this.blockedUsers && m.pubkey && this.blockedUsers.has(m.pubkey)) continue;
             count++;
@@ -1340,10 +1356,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (channel.startsWith('pm-')) {
             const keys = channel.substring(3).split('-');
             const otherPubkey = keys.find(k => k !== this.pubkey);
-            if (otherPubkey) item = document.querySelector(`[data-pubkey="${otherPubkey}"]`);
+            if (otherPubkey) item = document.querySelector(`#pmList .pm-item[data-pubkey="${otherPubkey}"]`);
         } else if (channel.startsWith('group-')) {
             const groupId = channel.substring(6);
-            item = document.querySelector(`[data-group-id="${groupId}"]`);
+            item = document.querySelector(`#pmList [data-group-id="${groupId}"]`);
         } else if (channel.startsWith('#')) {
             item = document.querySelector(`[data-geohash="${channel.substring(1)}"]`);
         } else {

@@ -2,15 +2,14 @@
 
 (function () {
     const DB_NAME = 'nym-cache';
-    const DB_VERSION = 2;
+    const DB_VERSION = 3;
     const STORES = ['meta', 'profiles', 'channels', 'pms', 'reactions', 'avatars', 'banners'];
+    const MESSAGE_STORES = new Set(['channels', 'pms']);
 
     const PERSIST_DEBOUNCE_MS = 1500;
 
     const STORE_LIMITS = {
         profiles: 2000,
-        channels: 50,
-        pms: 100,
         reactions: 5000,
         avatars: 500,
         banners: 200
@@ -23,6 +22,7 @@
     const META_PROCESSED_PM_EVENT_IDS = 'processedPMEventIds';
     const META_DELETED_EVENT_IDS = 'deletedEventIds';
     const META_NYMCHAT_PUBKEYS = 'nymchatPubkeys';
+    const META_NYMCHAT_VOUCHES = 'nymchatVouches';
 
     Object.assign(NYM.prototype, {
 
@@ -42,13 +42,40 @@
                 }
                 req.onupgradeneeded = (e) => {
                     const db = e.target.result;
+                    const tx = e.target.transaction;
                     if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
                     if (!db.objectStoreNames.contains('profiles')) db.createObjectStore('profiles', { keyPath: 'pubkey' });
-                    if (!db.objectStoreNames.contains('channels')) db.createObjectStore('channels', { keyPath: 'key' });
-                    if (!db.objectStoreNames.contains('pms')) db.createObjectStore('pms', { keyPath: 'key' });
                     if (!db.objectStoreNames.contains('reactions')) db.createObjectStore('reactions', { keyPath: 'messageId' });
                     if (!db.objectStoreNames.contains('avatars')) db.createObjectStore('avatars', { keyPath: 'pubkey' });
                     if (!db.objectStoreNames.contains('banners')) db.createObjectStore('banners', { keyPath: 'pubkey' });
+
+                    const upgradeMessageStore = (storeName) => {
+                        const hadOld = db.objectStoreNames.contains(storeName);
+                        if (!hadOld) {
+                            const newStore = db.createObjectStore(storeName, { keyPath: 'id' });
+                            newStore.createIndex('conv', 'conv', { unique: false });
+                            return;
+                        }
+                        const oldStore = tx.objectStore(storeName);
+                        // Only migrate if the existing store is the legacy per-conversation shape (keyPath 'key').
+                        if (oldStore.keyPath === 'id') return;
+                        const getReq = oldStore.getAll();
+                        getReq.onsuccess = () => {
+                            const oldRecords = getReq.result || [];
+                            db.deleteObjectStore(storeName);
+                            const newStore = db.createObjectStore(storeName, { keyPath: 'id' });
+                            newStore.createIndex('conv', 'conv', { unique: false });
+                            for (const r of oldRecords) {
+                                if (!r || !r.key || !Array.isArray(r.messages)) continue;
+                                for (const m of r.messages) {
+                                    if (!m || !m.id) continue;
+                                    try { newStore.put({ ...m, conv: r.key, lastTouched: r.lastTouched || Date.now() }); } catch (_) { }
+                                }
+                            }
+                        };
+                    };
+                    upgradeMessageStore('channels');
+                    upgradeMessageStore('pms');
                 };
                 req.onsuccess = () => resolve(req.result);
                 req.onerror = () => reject(req.error);
@@ -127,6 +154,99 @@
             } catch (_) { }
         },
 
+        async _cacheSyncMessages(storeName, putRecords, deleteIds) {
+            if (this._cacheDisabled) return;
+            if (!MESSAGE_STORES.has(storeName)) return;
+            if ((!putRecords || putRecords.length === 0) && (!deleteIds || deleteIds.length === 0)) return;
+            try {
+                const db = await this._cacheOpen();
+                return await new Promise((resolve) => {
+                    try {
+                        const tx = db.transaction(storeName, 'readwrite');
+                        const store = tx.objectStore(storeName);
+                        const stamp = Date.now();
+                        if (putRecords) {
+                            for (const r of putRecords) {
+                                if (!r || !r.id) continue;
+                                store.put({ ...r, lastTouched: stamp });
+                            }
+                        }
+                        if (deleteIds) {
+                            for (const id of deleteIds) {
+                                if (!id) continue;
+                                store.delete(id);
+                            }
+                        }
+                        tx.oncomplete = () => resolve();
+                        tx.onabort = () => resolve();
+                        tx.onerror = () => resolve();
+                    } catch (_) {
+                        resolve();
+                    }
+                });
+            } catch (_) { }
+        },
+
+        async _cacheGetMessagesByConv(storeName) {
+            const result = new Map();
+            if (this._cacheDisabled || !MESSAGE_STORES.has(storeName)) return result;
+            try {
+                const db = await this._cacheOpen();
+                return await new Promise((resolve) => {
+                    try {
+                        const tx = db.transaction(storeName, 'readonly');
+                        const store = tx.objectStore(storeName);
+                        const req = store.openCursor();
+                        req.onsuccess = (e) => {
+                            const cursor = e.target.result;
+                            if (!cursor) return;
+                            const v = cursor.value;
+                            const conv = v && v.conv;
+                            if (conv) {
+                                let arr = result.get(conv);
+                                if (!arr) { arr = []; result.set(conv, arr); }
+                                arr.push(v);
+                            }
+                            cursor.continue();
+                        };
+                        tx.oncomplete = () => resolve(result);
+                        tx.onabort = () => resolve(result);
+                        tx.onerror = () => resolve(result);
+                    } catch (_) {
+                        resolve(result);
+                    }
+                });
+            } catch (_) {
+                return result;
+            }
+        },
+
+        async _cacheDeleteConv(storeName, conv) {
+            if (this._cacheDisabled || !MESSAGE_STORES.has(storeName) || !conv) return;
+            try {
+                const db = await this._cacheOpen();
+                return await new Promise((resolve) => {
+                    try {
+                        const tx = db.transaction(storeName, 'readwrite');
+                        const store = tx.objectStore(storeName);
+                        const idx = store.index('conv');
+                        const req = idx.openCursor(IDBKeyRange.only(conv));
+                        req.onsuccess = (e) => {
+                            const cursor = e.target.result;
+                            if (!cursor) return;
+                            cursor.delete();
+                            cursor.continue();
+                        };
+                        tx.oncomplete = () => resolve();
+                        tx.onabort = () => resolve();
+                        tx.onerror = () => resolve();
+                    } catch (_) {
+                        resolve();
+                    }
+                });
+            } catch (_) { }
+        },
+
         async _cacheClearStore(storeName) {
             if (this._cacheDisabled) return;
             if (!STORES.includes(storeName)) return;
@@ -188,6 +308,7 @@
 
         async clearPMCache() {
             await this._cacheClearStore('pms');
+            if (this._persistedPMIds) this._persistedPMIds.clear();
         },
 
         // Public: wipe the entire cache. Useful on logout / nuke.
@@ -195,6 +316,8 @@
             for (const s of STORES) {
                 await this._cacheClearStore(s);
             }
+            if (this._persistedChannelIds) this._persistedChannelIds.clear();
+            if (this._persistedPMIds) this._persistedPMIds.clear();
         },
 
         async _trimStore(storeName) {
@@ -213,7 +336,7 @@
                 if (storeName === 'avatars') return r.pubkey;
                 if (storeName === 'banners') return r.pubkey;
                 if (storeName === 'reactions') return r.messageId;
-                return r.key; // channels, pms, meta
+                return null;
             };
 
             for (const r of toEvict) {
@@ -261,6 +384,12 @@
                         ids: Array.from(this.nymchatPubkeys)
                     });
                 }
+                if (this.nymchatVouches && this.nymchatVouches.size > 0) {
+                    this._cachePut('meta', {
+                        key: META_NYMCHAT_VOUCHES,
+                        ids: Array.from(this.nymchatVouches)
+                    });
+                }
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
@@ -275,6 +404,8 @@
                         for (const id of m.ids) this.deletedEventIds.add(id);
                     } else if (m.key === META_NYMCHAT_PUBKEYS && this.nymchatPubkeys) {
                         for (const id of m.ids) this.nymchatPubkeys.add(id);
+                    } else if (m.key === META_NYMCHAT_VOUCHES && this.nymchatVouches) {
+                        for (const id of m.ids) this.nymchatVouches.add(id);
                     }
                 }
             } catch (_) { }
@@ -285,10 +416,10 @@
             if (this._cacheDisabled) return;
             const cachePMsAllowed = this.settings && this.settings.cachePMs !== false;
             try {
-                const [profiles, channels, pms, reactions, avatars, banners] = await Promise.all([
+                const [profiles, channelMsgs, pmMsgs, reactions, avatars, banners] = await Promise.all([
                     this._cacheGetAll('profiles'),
-                    this._cacheGetAll('channels'),
-                    cachePMsAllowed ? this._cacheGetAll('pms') : Promise.resolve([]),
+                    this._cacheGetMessagesByConv('channels'),
+                    cachePMsAllowed ? this._cacheGetMessagesByConv('pms') : Promise.resolve(new Map()),
                     this._cacheGetAll('reactions'),
                     this._cacheGetAll('avatars'),
                     this._cacheGetAll('banners')
@@ -353,22 +484,46 @@
                     } catch (_) { }
                 }
 
-                // Channel messages
                 const loadedChannelKeys = [];
-                for (const c of channels) {
-                    if (!c || !c.key || !Array.isArray(c.messages)) continue;
-                    if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
-                    const msgs = c.messages.map(m => this._hydrateMessage(m));
-                    this.messages.set(c.key, msgs);
-                    loadedChannelKeys.push(c.key);
-                    // Rebuild spam-gate counts from cache
-                    if (typeof this._trackPubkeyMessage === 'function') {
-                        for (const m of msgs) {
-                            if (m && m.pubkey && m.id) {
-                                this._trackPubkeyMessage(m.pubkey, m.id, true);
+                const channelLimit = this.channelMessageLimit || 100;
+                const channelPersistedMap = this._persistedSetFor('channels');
+                for (const [convKey, records] of channelMsgs.entries()) {
+                    if (!convKey || !Array.isArray(records) || records.length === 0) continue;
+                    if (!this.messages.has(convKey)) this.messages.set(convKey, []);
+                    if (!this.channelMessageIds.has(convKey)) this.channelMessageIds.set(convKey, new Set());
+                    const arr = this.messages.get(convKey);
+                    const idSet = this.channelMessageIds.get(convKey);
+                    let persistedSet = channelPersistedMap.get(convKey);
+                    if (!persistedSet) { persistedSet = new Set(); channelPersistedMap.set(convKey, persistedSet); }
+                    let added = 0;
+                    for (const raw of records) {
+                        if (raw && raw.id) persistedSet.add(raw.id);
+                        const m = this._hydrateMessage(raw);
+                        if (!m || !m.id || idSet.has(m.id)) continue;
+                        if (typeof this._insertMessageSorted === 'function') {
+                            this._insertMessageSorted(arr, m);
+                        } else {
+                            arr.push(m);
+                        }
+                        idSet.add(m.id);
+                        if (typeof this._indexMessage === 'function') this._indexMessage(convKey, m);
+                        if (typeof this._trackPubkeyMessage === 'function' && m.pubkey) {
+                            this._trackPubkeyMessage(m.pubkey, m.id, true);
+                        }
+                        added++;
+                    }
+                    if (arr.length > channelLimit) {
+                        const drop = arr.length - channelLimit;
+                        for (let i = 0; i < drop; i++) {
+                            const removed = arr[i];
+                            if (removed && removed.id) {
+                                idSet.delete(removed.id);
+                                if (typeof this._unindexMessage === 'function') this._unindexMessage(removed);
                             }
                         }
+                        arr.splice(0, drop);
                     }
+                    if (added > 0) loadedChannelKeys.push(convKey);
                 }
 
                 for (const key of loadedChannelKeys) {
@@ -388,13 +543,38 @@
                     if (lastTs > 0) this.channelLastActivity.set(key, lastTs);
                 }
 
-                // PM/group messages
                 if (cachePMsAllowed) {
-                    for (const p of pms) {
-                        if (!p || !p.key || !Array.isArray(p.messages)) continue;
-                        if (this.pmMessages.has(p.key) && this.pmMessages.get(p.key).length > 0) continue;
-                        const msgs = p.messages.map(m => this._hydrateMessage(m));
-                        this.pmMessages.set(p.key, msgs);
+                    const pmLimit = this.pmStorageLimit || 1000;
+                    const pmPersistedMap = this._persistedSetFor('pms');
+                    for (const [convKey, records] of pmMsgs.entries()) {
+                        if (!convKey || !Array.isArray(records) || records.length === 0) continue;
+                        if (!this.pmMessages.has(convKey)) this.pmMessages.set(convKey, []);
+                        const arr = this.pmMessages.get(convKey);
+                        const seen = new Set(arr.map(m => m && m.id).filter(Boolean));
+                        let persistedSet = pmPersistedMap.get(convKey);
+                        if (!persistedSet) { persistedSet = new Set(); pmPersistedMap.set(convKey, persistedSet); }
+                        for (const raw of records) {
+                            if (raw && raw.id) persistedSet.add(raw.id);
+                            const m = this._hydrateMessage(raw);
+                            if (!m || !m.id || seen.has(m.id)) continue;
+                            if (typeof this._insertMessageSorted === 'function') {
+                                this._insertMessageSorted(arr, m);
+                            } else {
+                                arr.push(m);
+                            }
+                            seen.add(m.id);
+                            if (typeof this._indexMessage === 'function') this._indexMessage(convKey, m);
+                        }
+                        if (arr.length > pmLimit) {
+                            const drop = arr.length - pmLimit;
+                            for (let i = 0; i < drop; i++) {
+                                const removed = arr[i];
+                                if (removed && typeof this._unindexMessage === 'function') {
+                                    this._unindexMessage(removed);
+                                }
+                            }
+                            arr.splice(0, drop);
+                        }
                     }
                 } else {
                     this.clearPMCache().catch(() => { });
@@ -434,6 +614,30 @@
             this._trimAllStores().catch(() => { });
         },
 
+        _onHydrationComplete() {
+            try {
+                const container = document.getElementById('messagesContainer');
+                if (!container) return;
+                if (this.inPMMode && this.currentPM) {
+                    if (typeof this.loadPMMessages === 'function') {
+                        const peer = this.currentPM;
+                        container.dataset.lastChannel = '';
+                        this.loadPMMessages(peer);
+                    }
+                    return;
+                }
+                const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                if (!storageKey) return;
+                const arr = this.messages.get(storageKey);
+                if (!arr || arr.length === 0) return;
+                if (typeof this.loadChannelMessages === 'function') {
+                    container.dataset.lastChannel = '';
+                    if (this.channelDOMCache) this.channelDOMCache.delete(storageKey);
+                    this.loadChannelMessages(this.currentGeohash ? this.currentGeohash : this.currentChannel);
+                }
+            } catch (_) { }
+        },
+
         _populateSidebarFromHydration() {
             try {
                 if (typeof this.addChannel === 'function') {
@@ -453,13 +657,11 @@
                 if (typeof this.addPMConversation === 'function') {
                     for (const [convKey, msgs] of this.pmMessages.entries()) {
                         if (!Array.isArray(msgs) || msgs.length === 0) continue;
-                        // Skip groups — _loadGroupConversations handles those
-                        // via its own metadata store.
                         if (msgs.some(m => m && m.isGroup)) continue;
-                        // Find any message that exposes the peer pubkey.
                         const sample = msgs.find(m => m && m.conversationPubkey);
                         if (!sample || !sample.conversationPubkey) continue;
                         const peer = sample.conversationPubkey;
+                        if (this.closedPMs && this.closedPMs.has(peer)) continue;
                         const last = msgs[msgs.length - 1];
                         const ts = ((last && last.created_at) || (sample.created_at || 0)) * 1000;
                         const nym = this.users.has(peer)
@@ -525,42 +727,68 @@
             }
         },
 
+        _persistedSetFor(storeName) {
+            if (storeName === 'channels') {
+                if (!this._persistedChannelIds) this._persistedChannelIds = new Map();
+                return this._persistedChannelIds;
+            }
+            if (storeName === 'pms') {
+                if (!this._persistedPMIds) this._persistedPMIds = new Map();
+                return this._persistedPMIds;
+            }
+            return null;
+        },
+
+        async _syncMessagesToCache(storeName, key, sourceMap, limit) {
+            const persistedMap = this._persistedSetFor(storeName);
+            if (!persistedMap) return;
+            const messages = sourceMap.get(key);
+            if (!messages || messages.length === 0) {
+                if (persistedMap.has(key)) {
+                    await this._cacheDeleteConv(storeName, key);
+                    persistedMap.delete(key);
+                }
+                return;
+            }
+            const startIdx = Math.max(0, messages.length - limit);
+            const liveIds = new Set();
+            const toPut = [];
+            let persistedSet = persistedMap.get(key);
+            if (!persistedSet) {
+                persistedSet = new Set();
+                persistedMap.set(key, persistedSet);
+            }
+            for (let i = startIdx; i < messages.length; i++) {
+                const m = messages[i];
+                if (!m || !m.id) continue;
+                liveIds.add(m.id);
+                if (!persistedSet.has(m.id) || m._dirty) toPut.push(m);
+            }
+            const toDelete = [];
+            for (const id of persistedSet) {
+                if (!liveIds.has(id)) toDelete.push(id);
+            }
+            if (toPut.length === 0 && toDelete.length === 0) return;
+            const records = toPut.map(m => ({ ...this._serialiseMessage(m), conv: key }));
+            await this._cacheSyncMessages(storeName, records, toDelete);
+            for (const m of toPut) { persistedSet.add(m.id); delete m._dirty; }
+            for (const id of toDelete) persistedSet.delete(id);
+        },
+
         persistChannelMessages(key) {
             if (!key || this._cacheDisabled) return;
             this._schedulePersist('ch', key, () => {
-                const messages = this.messages.get(key);
-                if (!messages || messages.length === 0) {
-                    this._cacheDelete('channels', key);
-                    return;
-                }
                 const limit = this.channelMessageLimit || 100;
-                const trimmed = messages.length > limit ? messages.slice(-limit) : messages;
-                this._cachePut('channels', {
-                    key,
-                    messages: trimmed.map(m => this._serialiseMessage(m))
-                });
-                this._scheduleTrim();
+                this._syncMessagesToCache('channels', key, this.messages, limit).catch(() => { });
             });
         },
 
         persistPMMessages(key) {
             if (!key || this._cacheDisabled) return;
-            // Honour the opt-out setting: don't write decrypted PM/group
-            // content to disk if the user disabled it.
             if (this.settings && this.settings.cachePMs === false) return;
             this._schedulePersist('pm', key, () => {
-                const messages = this.pmMessages.get(key);
-                if (!messages || messages.length === 0) {
-                    this._cacheDelete('pms', key);
-                    return;
-                }
                 const limit = this.pmStorageLimit || 500;
-                const trimmed = messages.length > limit ? messages.slice(-limit) : messages;
-                this._cachePut('pms', {
-                    key,
-                    messages: trimmed.map(m => this._serialiseMessage(m))
-                });
-                this._scheduleTrim();
+                this._syncMessagesToCache('pms', key, this.pmMessages, limit).catch(() => { });
             });
         },
 
