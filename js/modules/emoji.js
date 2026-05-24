@@ -101,7 +101,6 @@ Object.assign(NYM.prototype, {
         if (this.emojiMap && this.emojiMap[shortcode.toLowerCase()]) return;
         if (this.customEmojis.get(shortcode) === url) return;
         this.customEmojis.set(shortcode, url);
-        this.invalidateFormatCache();
         this._saveCustomEmojiMap();
         this._scheduleEmojiDomRefresh();
         this._prefetchCustomEmojiImages();

@@ -588,10 +588,7 @@ Object.assign(NYM.prototype, {
             if (primary && fallbacks.length) {
                 const existing = this.mediaFallbacks.get(primary) || [];
                 const merged = Array.from(new Set([...existing, ...fallbacks]));
-                if (merged.length !== existing.length) {
-                    this.mediaFallbacks.set(primary, merged);
-                    this.invalidateFormatCache();
-                }
+                this.mediaFallbacks.set(primary, merged);
             }
         }
     },
@@ -911,14 +908,13 @@ Object.assign(NYM.prototype, {
                 const predicted = BLOSSOM_SERVERS
                     .filter(s => s !== u.server)
                     .map(s => this._predictMirrorUrl(s, u.hashHex, u.url));
-                if (predicted.length) { this.mediaFallbacks.set(u.url, predicted); this.invalidateFormatCache(); }
+                if (predicted.length) this.mediaFallbacks.set(u.url, predicted);
 
                 this._mirrorBlobBackground(u.hashHex, u.url, u.server)
                     .then(mirrors => {
                         if (mirrors && mirrors.length) {
                             const existing = this.mediaFallbacks.get(u.url) || [];
                             this.mediaFallbacks.set(u.url, Array.from(new Set([...mirrors, ...existing])));
-                            this.invalidateFormatCache();
                         }
                     })
                     .catch(() => { });
