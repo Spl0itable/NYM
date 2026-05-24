@@ -2,26 +2,7 @@
 
 Object.assign(NYM.prototype, {
 
-    _addPMMessage(conversationKey, msg) {
-        if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
-        const list = this.pmMessages.get(conversationKey);
-        if (list.length >= this.pmStorageLimit && list.length > 0
-            && (msg.created_at || 0) < (list[0].created_at || 0)) {
-            return null;
-        }
-        this._insertMessageSorted(list, msg);
-        this._indexMessage(conversationKey, msg);
-        // Drop anything over the per-conversation cap. _pruneStorageKey also
-        // sweeps cached DOM fragments and live nodes.
-        this._pruneStorageKey(conversationKey, this.pmMessages, this.pmStorageLimit, 0);
-        return list;
-    },
-
-    _lookupPMReceipt(idType, rawId) {
-        const key = idType + ':' + String(rawId).toUpperCase();
-        return this.messageIndex.get(key);
-    },
-
+    // Update the delivery checkmark on a PM message in-place
     _updateDeliveryStatusEl(messageId, receiptType) {
         const msgEl = this.findMessageElementAnywhere(messageId);
         if (!msgEl) return;
@@ -323,7 +304,9 @@ Object.assign(NYM.prototype, {
             }
 
             const conversationKey = this.getPMConversationKey(recipientPubkey);
-            this._addPMMessage(conversationKey, {
+            if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+            const pmList = this.pmMessages.get(conversationKey);
+            pmList.push({
                 id: wrapped.id,
                 author: this.nym,
                 pubkey: this.pubkey,
@@ -337,16 +320,23 @@ Object.assign(NYM.prototype, {
                 conversationKey,
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
-                bitchatMessageId,
-                nymMessageId,
-                deliveryStatus: 'sent'
+                bitchatMessageId,  // For tracking Bitchat delivery/read receipts
+                nymMessageId,  // Always store for reaction matching (peer may react using nymMessageId from x tag)
+                deliveryStatus: 'sent'  // sent -> delivered -> read
             });
+            pmList.sort((a, b) => {
+                return this._compareMessages(a, b);
+            });
+            // Cap PM conversations at pmStorageLimit messages
+            if (pmList.length > this.pmStorageLimit) {
+                this.pmMessages.set(conversationKey, pmList.slice(-this.pmStorageLimit));
+            }
             this.persistPMMessages(conversationKey);
 
             // Track for automatic retry if delivery receipt not received
             this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
 
-            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now(), { reopen: true });
+            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
             this.movePMToTop(recipientPubkey);
 
             if (this.inPMMode && this.currentPM === recipientPubkey) {
@@ -435,7 +425,9 @@ Object.assign(NYM.prototype, {
             // Show locally — reuse the rumor's created_at (now) so the local
             // message sorts identically to how the recipient sees it.
             const conversationKey = this.getPMConversationKey(recipientPubkey);
-            this._addPMMessage(conversationKey, {
+            if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
+            const extPmList = this.pmMessages.get(conversationKey);
+            extPmList.push({
                 id: wrapped.id,
                 author: this.nym,
                 pubkey: this.pubkey,
@@ -449,15 +441,22 @@ Object.assign(NYM.prototype, {
                 conversationKey,
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
-                nymMessageId,
-                deliveryStatus: 'sent'
+                nymMessageId,  // For tracking Nymchat delivery/read receipts
+                deliveryStatus: 'sent'  // sent -> delivered -> read
             });
+            extPmList.sort((a, b) => {
+                return this._compareMessages(a, b);
+            });
+            // Cap PM conversations at pmStorageLimit messages
+            if (extPmList.length > this.pmStorageLimit) {
+                this.pmMessages.set(conversationKey, extPmList.slice(-this.pmStorageLimit));
+            }
             this.persistPMMessages(conversationKey);
 
             // Track for automatic retry if delivery receipt not received
             this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
 
-            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now(), { reopen: true });
+            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
             this.movePMToTop(recipientPubkey);
 
             if (this.inPMMode && this.currentPM === recipientPubkey) {
@@ -673,15 +672,12 @@ Object.assign(NYM.prototype, {
             // Check if content is Bitchat format (v2: prefix)
             const isBitchatFormat = (content) => content.startsWith('v2:');
 
-            const cw = window.cryptoWorkerClient;
-            const decryptN44 = cw && cw.isAvailable()
-                ? (ct, key) => cw.nip44Decrypt(ct, key)
-                : (ct, key) => Promise.resolve(NT.nip44.decrypt(ct, key));
-
-            const unwrapWithLocal = async () => {
+            // Unwrap local privkey path
+            const unwrapWithLocal = () => {
                 let sealJson, seal, rumorJson, rumor;
 
                 if (isBitchatFormat(event.content)) {
+                    // Bitchat raw XChaCha20-Poly1305 format
                     sealJson = decryptBitchat(event.content, event.pubkey);
                     seal = JSON.parse(sealJson);
 
@@ -689,16 +685,17 @@ Object.assign(NYM.prototype, {
                         rumorJson = decryptBitchat(seal.content, seal.pubkey);
                     } else {
                         const ckSeal = NT.nip44.getConversationKey(this.privkey, seal.pubkey);
-                        rumorJson = await decryptN44(seal.content, ckSeal);
+                        rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
                     }
                     rumor = JSON.parse(rumorJson);
                 } else {
+                    // Standard NIP-44 format
                     const ckWrap = NT.nip44.getConversationKey(this.privkey, event.pubkey);
-                    sealJson = await decryptN44(event.content, ckWrap);
+                    sealJson = NT.nip44.decrypt(event.content, ckWrap);
                     seal = JSON.parse(sealJson);
 
                     const ckSeal = NT.nip44.getConversationKey(this.privkey, seal.pubkey);
-                    rumorJson = await decryptN44(seal.content, ckSeal);
+                    rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
                     rumor = JSON.parse(rumorJson);
                 }
 
@@ -724,7 +721,7 @@ Object.assign(NYM.prototype, {
             let seal, rumor;
             if (this.privkey) {
                 try {
-                    ({ seal, rumor } = await unwrapWithLocal());
+                    ({ seal, rumor } = unwrapWithLocal());
                 } catch (_realKeyErr) {
                     // Real privkey failed — try ephemeral keys (timing-attack mitigation scheme)
                     const ephResult = this._tryDecryptWithEphemeralKeys(event);
@@ -855,23 +852,33 @@ Object.assign(NYM.prototype, {
 
                     if (receiptType === 'read') this.recordUserActivity(senderPubkey);
 
-                    const hit = this._lookupPMReceipt('nm', receiptId);
-                    if (hit && hit.msg && hit.msg.isOwn) {
-                        const { msg, convKey } = hit;
-                        const statusOrder = { sent: 0, delivered: 1, read: 2 };
-                        if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
-                            msg.deliveryStatus = receiptType;
-                            this.pendingDMs.delete(msg.id);
+                    for (const [convKey, messages] of this.pmMessages) {
+                        const msg = messages.find(m => m.nymMessageId?.toUpperCase() === receiptId);
+                        if (msg && msg.isOwn) {
+                            const statusOrder = { sent: 0, delivered: 1, read: 2 };
+                            if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
+                                msg.deliveryStatus = receiptType;
+                                this.pendingDMs.delete(msg.id);
 
-                            if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
-                                const readerNym = this.getNymFromPubkey(senderPubkey);
-                                if (typeof this.recordGroupReadReceipt === 'function') {
-                                    this.recordGroupReadReceipt(msg.nymMessageId, senderPubkey, readerNym, convKey);
+                                if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
+                                    // Group read receipt: store the reader's avatar instead of checkmarks
+                                    if (!this.groupMessageReaders.has(msg.nymMessageId)) {
+                                        this.groupMessageReaders.set(msg.nymMessageId, new Map());
+                                    }
+                                    const readerNym = this.getNymFromPubkey(senderPubkey);
+                                    this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
+                                    if (this.inPMMode && this.currentGroup &&
+                                        convKey === this.getGroupConversationKey(this.currentGroup)) {
+                                        this.updateGroupReaderAvatars(msg.nymMessageId);
+                                    } else {
+                                        this.channelDOMCache.delete(convKey);
+                                    }
+                                } else {
+                                    const domId = msg.nymMessageId || msg.id;
+                                    this._updateDeliveryStatusEl(domId, receiptType);
                                 }
-                            } else {
-                                const domId = msg.nymMessageId || msg.id;
-                                this._updateDeliveryStatusEl(domId, receiptType);
                             }
+                            break;
                         }
                     }
                 }
@@ -888,15 +895,17 @@ Object.assign(NYM.prototype, {
                     if (receiptType === 'read') this.recordUserActivity(senderPubkey);
 
                     if (receiptId) {
-                        const hit = this._lookupPMReceipt('bc', receiptId);
-                        if (hit && hit.msg && hit.msg.isOwn) {
-                            const msg = hit.msg;
-                            const statusOrder = { sent: 0, delivered: 1, read: 2 };
-                            if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
-                                msg.deliveryStatus = receiptType;
-                                this.pendingDMs.delete(msg.id);
-                                const domId = msg.nymMessageId || msg.id;
-                                this._updateDeliveryStatusEl(domId, receiptType);
+                        for (const [, messages] of this.pmMessages) {
+                            const msg = messages.find(m => m.bitchatMessageId?.toUpperCase() === receiptId);
+                            if (msg && msg.isOwn) {
+                                const statusOrder = { sent: 0, delivered: 1, read: 2 };
+                                if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
+                                    msg.deliveryStatus = receiptType;
+                                    this.pendingDMs.delete(msg.id);
+                                    const domId = msg.nymMessageId || msg.id;
+                                    this._updateDeliveryStatusEl(domId, receiptType);
+                                }
+                                break;
                             }
                         }
                     }
@@ -957,11 +966,14 @@ Object.assign(NYM.prototype, {
                         this.persistReactions(reactionMessageId);
                         this.updateMessageReactions(reactionMessageId);
                     }
-                    if (!this.renderedMessageIds.has(reactionMessageId)) {
-                        // Patch the reaction in any cached chat fragments so we
-                        // don't have to throw away the whole cache.
-                        if (typeof this._updateMessageReactionsEverywhere === 'function') {
-                            this._updateMessageReactionsEverywhere(reactionMessageId);
+                    // If the target bubble isn't in the current DOM, drop its
+                    // cached render so the reaction shows after channel switch.
+                    if (!document.querySelector(`[data-message-id="${CSS.escape(reactionMessageId)}"]`)) {
+                        for (const [key, msgs] of this.pmMessages.entries()) {
+                            if (msgs.some(m => m.id === reactionMessageId || m.nymMessageId === reactionMessageId)) {
+                                this.channelDOMCache.delete(key);
+                                break;
+                            }
                         }
                     }
                 }
@@ -993,11 +1005,9 @@ Object.assign(NYM.prototype, {
             const conversationKey = this.getPMConversationKey(peerPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
 
+            // Deduplicate within the correct conversation
             let list = this.pmMessages.get(conversationKey);
-            if (this.messageIndex.has(event.id)) {
-                const hit = this.messageIndex.get(event.id);
-                if (hit && hit.convKey === conversationKey) return;
-            }
+            if (list.some(m => m.id === event.id)) return;
 
             const nowSec = Math.floor(Date.now() / 1000);
             const originalTsSec = Math.floor(rumor.created_at) || nowSec;
@@ -1116,8 +1126,15 @@ Object.assign(NYM.prototype, {
                 nymMessageId: nymMsgId  // For sending Nymchat read receipts
             };
 
-            list = this._addPMMessage(conversationKey, msg);
-            if (!list) return;
+            list.push(msg);
+            list.sort((a, b) => {
+                return this._compareMessages(a, b);
+            });
+            // Cap PM conversations at pmStorageLimit messages to prevent memory bloat
+            if (list.length > this.pmStorageLimit) {
+                list = list.slice(-this.pmStorageLimit);
+            }
+            this.pmMessages.set(conversationKey, list);
             this.persistPMMessages(conversationKey);
 
             // Send DELIVERED receipt back to Bitchat user
@@ -1130,11 +1147,9 @@ Object.assign(NYM.prototype, {
                 this.sendNymReceipt(nymMsgId, 'delivered', senderPubkey);
             }
 
-            // Only revive a previously deleted PM when the inbound message is
-            // fresh — historical backlog should not bring back deleted threads.
+            // Use sender's profile name for conversation
             const peerName = this.getNymFromPubkey(peerPubkey);
-            const reopenAllowed = isOwn || !msg.isHistorical;
-            this.addPMConversation(peerName, peerPubkey, tsSec * 1000, { reopen: reopenAllowed });
+            this.addPMConversation(peerName, peerPubkey, tsSec * 1000);
             this.movePMToTop(peerPubkey, tsSec * 1000);
 
             // Clear typing indicator for sender (they sent a message, so they stopped typing)
@@ -1155,6 +1170,21 @@ Object.assign(NYM.prototype, {
                 if (typeof this._markChannelRead === 'function') {
                     this._markChannelRead(conversationKey, msg.created_at);
                 }
+                // Send READ receipt if viewing the conversation, and mark
+                // the message so openPM doesn't re-send on next open.
+                if (!isOwn) {
+                    let sent = false;
+                    if (parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
+                        this.sendBitchatReceipt(parsed.messageId, 0x02, senderPubkey); // 0x02 = READ
+                        sent = true;
+                    }
+                    if (nymMsgId && this.nymUsers.has(senderPubkey)) {
+                        this.sendNymReceipt(nymMsgId, 'read', senderPubkey);
+                        sent = true;
+                    }
+                    if (sent) msg.readReceiptSent = true;
+                    this.recordOwnActivity();
+                }
             } else {
                 // Not viewing this conversation — leave the cached DOM in
                 // place. loadPMMessages does a partial-cache restore that
@@ -1163,22 +1193,24 @@ Object.assign(NYM.prototype, {
                 if (!isOwn) {
                     const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author);
                     if (!msg.isHistorical) {
+                        // Live message: full notification with sound/popup
                         this.updateUnreadCount(conversationKey);
                         if (!pmSenderBlocked) {
                             this.showNotification(`PM from ${msg.author}`, messageContent, {
                                 type: 'pm',
                                 nym: msg.author,
                                 pubkey: peerPubkey,
-                                id: event.id
-                            }, msg.timestamp.getTime());
+                                id: conversationKey
+                            });
                         }
                     } else {
+                        // Historical message: silently add to notification history
                         if (!pmSenderBlocked) {
                             this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, {
                                 type: 'pm',
                                 nym: msg.author,
                                 pubkey: peerPubkey,
-                                id: event.id
+                                id: conversationKey
                             }, msg.timestamp.getTime());
                         }
                     }
@@ -1209,6 +1241,7 @@ Object.assign(NYM.prototype, {
         } catch (error) {
             // Store the failed message in pmMessages so it persists across navigation
             const conversationKey = this.getPMConversationKey(recipientPubkey);
+            if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
             const failedId = 'failed-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
             const _nowFail = Math.floor(Date.now() / 1000);
             const failedMsg = {
@@ -1227,11 +1260,15 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 deliveryStatus: 'failed'
             };
-            this._addPMMessage(conversationKey, failedMsg);
+            const failList = this.pmMessages.get(conversationKey);
+            failList.push(failedMsg);
+            failList.sort((a, b) => {
+                return this._compareMessages(a, b);
+            });
+            // Invalidate cached DOM for this conversation
+            this.channelDOMCache.delete(conversationKey);
             this.persistPMMessages(conversationKey);
-            // Display the failed message if currently viewing this PM.
-            // Cached fragments for this conversation (if any) are still valid:
-            // restoration's trailing-append path renders the new message.
+            // Display the failed message if currently viewing this PM
             if (this.inPMMode && this.currentPM === recipientPubkey) {
                 this.displayMessage(failedMsg);
             }
@@ -1349,18 +1386,15 @@ Object.assign(NYM.prototype, {
         const conversationKey = this.getPMConversationKey(pubkey);
         this._setBotPmClearedAt(Math.floor(Date.now() / 1000));
         this._clearBotServerThread();
-        const prev = this.pmMessages.get(conversationKey) || [];
-        for (const m of prev) this._unindexMessage(m);
         this.pmMessages.set(conversationKey, []);
         this.channelDOMCache.delete(conversationKey);
-        if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', conversationKey);
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
         this.persistPMMessages(conversationKey);
         if (this.inPMMode && this.currentPM === pubkey) {
             const container = document.getElementById('messagesContainer');
             if (container) {
                 container.innerHTML = '';
                 container.dataset.lastChannel = '';
-                this.renderedMessageIds.clear();
             }
             this.loadPMMessages(conversationKey, true);
         }
@@ -1449,16 +1483,17 @@ Object.assign(NYM.prototype, {
         const messages = this.pmMessages.get(convKey);
         if (!messages) return;
         const statusOrder = { sent: 0, delivered: 1, read: 2 };
+        let changed = false;
         for (const msg of messages) {
             if (!msg.isOwn || msg.deliveryStatus === 'failed') continue;
             if ((statusOrder[status] || 0) > (statusOrder[msg.deliveryStatus] || 0)) {
                 msg.deliveryStatus = status;
                 this.pendingDMs.delete(msg.id);
-                // _updateDeliveryStatusEl uses findMessageElementAnywhere, which
-                // also reaches into cached fragments — no cache drop needed.
                 this._updateDeliveryStatusEl(msg.nymMessageId || msg.id, status);
+                changed = true;
             }
         }
+        if (changed) this.channelDOMCache.delete(convKey);
     },
 
     // Update the cached Nymbot credit count and the chat-header indicator
@@ -1730,17 +1765,14 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    addPMConversation(nym, pubkey, timestamp = Date.now(), opts = {}) {
+    addPMConversation(nym, pubkey, timestamp = Date.now()) {
+        // Prefer known profile name if available
         let baseNym = this.users.has(pubkey)
             ? this.parseNymFromDisplay(this.users.get(pubkey).nym)
             : this.parseNymFromDisplay(nym);
 
-        // Stay closed unless the caller explicitly opts in to reopening — this
-        // is the path that prevents deleted PMs from reappearing after reload
-        // or when stale relay backlog re-delivers an old gift wrap.
-        if (this.closedPMs.has(pubkey) && !opts.reopen) return;
-
         if (!this.pmConversations.has(pubkey)) {
+            // Re-open closed PMs when a new conversation is initiated
             if (this.closedPMs.has(pubkey)) {
                 this.closedPMs.delete(pubkey);
                 try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
@@ -1863,44 +1895,47 @@ Object.assign(NYM.prototype, {
 
     deletePM(pubkey) {
         if (confirm('Delete this PM conversation?')) {
-            this._tearDownPM(pubkey);
+            // Remove from conversations
+            this.pmConversations.delete(pubkey);
+
+            // Remove messages
+            const conversationKey = this.getPMConversationKey(pubkey);
+            this.pmMessages.delete(conversationKey);
+            if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
+
+            // Persist closed state so PM doesn't reappear on reload
+            this.closedPMs.add(pubkey);
+            try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+
+            // Remove from UI
+            const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
+            if (item) item.remove();
+
+            // If currently viewing this PM, switch to bar
+            if (this.inPMMode && this.currentPM === pubkey) {
+                this.switchChannel('nymchat', 'nymchat');
+            }
+
             this.displaySystemMessage('PM conversation deleted');
         }
     },
 
     // Delete a PM without confirmation (used by /leave command)
     deletePMDirect(pubkey) {
-        this._tearDownPM(pubkey);
-        this.displaySystemMessage('PM conversation deleted');
-    },
-
-    _tearDownPM(pubkey) {
         this.pmConversations.delete(pubkey);
         const conversationKey = this.getPMConversationKey(pubkey);
         this.pmMessages.delete(conversationKey);
-        this.channelDOMCache?.delete(conversationKey);
-        if (this._persistedPMIds) this._persistedPMIds.delete(conversationKey);
-        if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', conversationKey);
-
-        this.unreadCounts?.delete(conversationKey);
-        this.channelLastRead?.delete(conversationKey);
-        this.channelLastActivity?.delete(conversationKey);
-        if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
-
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
         this.closedPMs.add(pubkey);
         try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-
-        if (typeof this.pruneNotificationsForContext === 'function') {
-            this.pruneNotificationsForContext({ type: 'pm', pubkey });
-        }
-
         const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
         if (item) item.remove();
-        this.updateViewMoreButton?.('pmList');
         if (this.inPMMode && this.currentPM === pubkey) {
             this.switchChannel('nymchat', 'nymchat');
         }
+        this.displaySystemMessage('PM conversation deleted');
     },
 
     openPM(nym, pubkey) {
@@ -1974,12 +2009,24 @@ Object.assign(NYM.prototype, {
         const conversationKey = this.getPMConversationKey(pubkey);
         this.clearUnreadCount(conversationKey);
 
-        if (typeof this._updateNotificationBadge === 'function') {
-            this._updateNotificationBadge();
-        }
-
         // Load PM messages
         this.loadPMMessages(conversationKey);
+
+        // Send READ receipts only for messages we haven't acknowledged
+        const pmMsgs = this.pmMessages.get(conversationKey) || [];
+        for (const msg of pmMsgs) {
+            if (msg.isOwn || msg.readReceiptSent) continue;
+            let sent = false;
+            if (msg.bitchatMessageId && this.bitchatUsers.has(msg.pubkey)) {
+                this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
+                sent = true;
+            }
+            if (msg.nymMessageId && this.nymUsers.has(msg.pubkey)) {
+                this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey);
+                sent = true;
+            }
+            if (sent) msg.readReceiptSent = true;
+        }
         this.recordOwnActivity();
 
         // Restore any unsent input previously typed for this conversation
@@ -2061,7 +2108,8 @@ Object.assign(NYM.prototype, {
             this._debouncedNostrSettingsSave();
         }
 
-        this.addPMConversation(baseNym, pubkey, Date.now(), { reopen: true });
+        // Add to PM conversations if not exists
+        this.addPMConversation(baseNym, pubkey);
         // Open the PM
         this.openPM(baseNym, pubkey);
 
@@ -2073,30 +2121,19 @@ Object.assign(NYM.prototype, {
     },
 
     filterPMs(searchTerm) {
-        if (this._pmFilterRAF) cancelAnimationFrame(this._pmFilterRAF);
-        this._pmFilterRAF = requestAnimationFrame(() => {
-            this._pmFilterRAF = null;
-            this._filterPMsNow(searchTerm);
-        });
-    },
-
-    _filterPMsNow(searchTerm) {
         const items = document.querySelectorAll('.pm-item');
-        const term = (searchTerm || '').toLowerCase();
+        const term = searchTerm.toLowerCase();
         const list = document.getElementById('pmList');
 
+        // Update wrapper has-value class for clear button visibility
         const wrapper = document.getElementById('pmSearchWrapper');
         if (wrapper) {
             wrapper.classList.toggle('has-value', term.length > 0);
         }
 
         items.forEach(item => {
-            let pmName = item._cachedLowerName;
-            if (pmName === undefined) {
-                const pmNameEl = item.querySelector('.pm-name');
-                pmName = pmNameEl ? pmNameEl.textContent.toLowerCase() : '';
-                item._cachedLowerName = pmName;
-            }
+            const pmNameEl = item.querySelector('.pm-name');
+            const pmName = pmNameEl ? pmNameEl.textContent.toLowerCase() : '';
             if (term.length === 0 || pmName.includes(term)) {
                 item.style.display = 'flex';
                 item.classList.remove('search-hidden');
@@ -2106,6 +2143,7 @@ Object.assign(NYM.prototype, {
             }
         });
 
+        // Hide view more button during search
         const viewMoreBtn = list.querySelector('.view-more-btn');
         if (viewMoreBtn) {
             viewMoreBtn.style.display = term ? 'none' : 'block';
@@ -2198,8 +2236,6 @@ Object.assign(NYM.prototype, {
                 if (msg) {
                     msg.content = newContent;
                     msg.isEdited = true;
-                    msg._dirty = true;
-                    this.persistPMMessages(conversationKey);
                 }
             }
 
@@ -2502,18 +2538,25 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Get filtered PM messages for a conversation key
     getFilteredPMMessages(conversationKey) {
         const pmMessages = this.pmMessages.get(conversationKey) || [];
 
         return pmMessages.filter(msg => {
+            // Check if message has been deleted
             if (this.deletedEventIds.has(msg.id)) return false;
+            // Check if message is from blocked user
             if (this.blockedUsers.has(msg.pubkey) || msg.blocked) return false;
+            // Check if message content or nickname matches blocked keywords
             if (this.hasBlockedKeyword(msg.content, msg.author)) return false;
+            // Check if message content is spam
             if (this.isSpamMessage(msg.content)) return false;
             if (msg.conversationKey !== conversationKey) return false;
+            // For 1:1 PMs, restrict to the two participants. Group messages have
+            // multiple senders so skip this check for them.
             if (!msg.isGroup && msg.pubkey !== this.pubkey && msg.pubkey !== this.currentPM) return false;
             return true;
-        });
+        }).sort((a, b) => this._compareMessages(a, b));
     },
 
     // Load older PM/group messages when user scrolls to top
@@ -2539,7 +2582,6 @@ Object.assign(NYM.prototype, {
 
         // Re-render with the expanded message window
         container.innerHTML = '';
-        this.renderedMessageIds.clear();
         const renderMessages = messages.slice(newStart);
 
         if (newStart > 0) {

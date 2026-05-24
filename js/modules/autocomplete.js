@@ -22,105 +22,76 @@ Object.assign(NYM.prototype, {
         input.focus();
     },
 
-    _buildEmojiAutocompleteIndex() {
-        const entries = [];
-        const seenEmoji = new Set();
-        for (const name in this.emojiMap) {
-            const emoji = this.emojiMap[name];
-            entries.push({ name, nameLower: name.toLowerCase(), emoji, priority: 1 });
-            seenEmoji.add(emoji);
-        }
-        for (const category in this.allEmojis) {
-            const list = this.allEmojis[category];
-            for (let i = 0; i < list.length; i++) {
-                const emoji = list[i];
-                if (seenEmoji.has(emoji)) continue;
-                seenEmoji.add(emoji);
-                entries.push({ name: emoji, nameLower: emoji, emoji, priority: 2 });
-            }
-        }
-        // Custom emoji entries are appended at search time so they stay live
-        // without rebuilding the cached unicode/shortcode index.
-        this._emojiAcEntries = entries;
-        this._emojiAcEntriesCustomSize = 0;
-        this._emojiAcShortcodeIndex = null;
-    },
-
-    invalidateEmojiAutocompleteCache() {
-        this._emojiAcEntries = null;
-        this._emojiAcShortcodeIndex = null;
-    },
-
-    _emojiShortcodeForEmoji(emoji) {
-        if (!this._emojiAcShortcodeIndex) {
-            const idx = new Map();
-            for (const name in this.emojiMap) idx.set(this.emojiMap[name], name);
-            this._emojiAcShortcodeIndex = idx;
-        }
-        return this._emojiAcShortcodeIndex.get(emoji) || emoji;
-    },
-
-    _getEmojiAutocompleteEntries() {
-        if (!this._emojiAcEntries) this._buildEmojiAutocompleteIndex();
-        const customSize = this.customEmojis ? this.customEmojis.size : 0;
-        if (customSize !== this._emojiAcEntriesCustomSize) {
-            // Drop previously-appended custom entries and re-append the current set.
-            const base = this._emojiAcEntries;
-            const baseLen = base.length - this._emojiAcEntriesCustomSize;
-            base.length = baseLen;
-            if (this.customEmojis) {
-                this.customEmojis.forEach((url, shortcode) => {
-                    base.push({
-                        name: shortcode,
-                        nameLower: shortcode.toLowerCase(),
-                        emoji: `:${shortcode}:`,
-                        priority: 1,
-                        customUrl: url
-                    });
-                });
-            }
-            this._emojiAcEntriesCustomSize = customSize;
-        }
-        return this._emojiAcEntries;
-    },
-
     showEmojiAutocomplete(search) {
         const dropdown = document.getElementById('emojiAutocomplete');
-        const allEmojiEntries = this._getEmojiAutocompleteEntries();
 
-        let matches;
+        // Build complete emoji list from all categories
+        const allEmojiEntries = [];
+
+        // Add emoji shortcodes
+        Object.entries(this.emojiMap).forEach(([name, emoji]) => {
+            allEmojiEntries.push({ name, emoji, priority: 1 });
+        });
+
+        // Add all categorized emojis with searchable names
+        Object.entries(this.allEmojis).forEach(([category, emojis]) => {
+            emojis.forEach(emoji => {
+                // Try to find a name for this emoji in emojiMap
+                const existingEntry = allEmojiEntries.find(e => e.emoji === emoji);
+                if (!existingEntry) {
+                    // Generate a searchable name from the emoji itself
+                    allEmojiEntries.push({
+                        name: emoji,
+                        emoji,
+                        priority: 2
+                    });
+                }
+            });
+        });
+
+        // Add NIP-30 custom emoji (inserted as :shortcode: tokens)
+        if (this.customEmojis) {
+            this.customEmojis.forEach((url, shortcode) => {
+                allEmojiEntries.push({ name: shortcode, emoji: `:${shortcode}:`, priority: 1, customUrl: url });
+            });
+        }
+
+        // Filter based on search
+        let matches = [];
         if (search === '') {
+            // Show recent emojis first, then common ones
             const recentSet = new Set(this.recentEmojis);
-            const recent = this.recentEmojis.map(emoji => ({
-                name: this._emojiShortcodeForEmoji(emoji),
-                emoji
-            }));
-            const fill = [];
-            for (let i = 0; i < allEmojiEntries.length && fill.length < 10; i++) {
-                if (!recentSet.has(allEmojiEntries[i].emoji)) fill.push(allEmojiEntries[i]);
-            }
-            matches = recent.concat(fill).slice(0, 8);
+            matches = [
+                ...this.recentEmojis.map(emoji => ({
+                    name: Object.entries(this.emojiMap).find(([n, e]) => e === emoji)?.[0] || emoji,
+                    emoji
+                })),
+                ...allEmojiEntries.filter(e => !recentSet.has(e.emoji)).slice(0, 10)
+            ].slice(0, 8);
         } else {
             const searchLower = search.toLowerCase();
-            const filtered = [];
-            for (let i = 0; i < allEmojiEntries.length; i++) {
-                const entry = allEmojiEntries[i];
-                if (entry.nameLower.indexOf(searchLower) !== -1 ||
-                    entry.emoji.indexOf(search) !== -1) {
-                    filtered.push(entry);
-                }
-            }
-            filtered.sort((a, b) => {
-                const aExact = a.nameLower === searchLower ? 0 : 1;
-                const bExact = b.nameLower === searchLower ? 0 : 1;
-                if (aExact !== bExact) return aExact - bExact;
-                const aPrefix = a.nameLower.startsWith(searchLower) ? 0 : 1;
-                const bPrefix = b.nameLower.startsWith(searchLower) ? 0 : 1;
-                if (aPrefix !== bPrefix) return aPrefix - bPrefix;
-                if (a.priority !== b.priority) return a.priority - b.priority;
-                return a.nameLower.length - b.nameLower.length;
-            });
-            matches = filtered.slice(0, 8);
+            matches = allEmojiEntries
+                .filter(entry =>
+                    entry.name.toLowerCase().includes(searchLower) ||
+                    entry.emoji.includes(search)
+                )
+                .sort((a, b) => {
+                    const aName = a.name.toLowerCase();
+                    const bName = b.name.toLowerCase();
+                    // Exact match first
+                    const aExact = aName === searchLower ? 0 : 1;
+                    const bExact = bName === searchLower ? 0 : 1;
+                    if (aExact !== bExact) return aExact - bExact;
+                    // Prefix match before substring match
+                    const aPrefix = aName.startsWith(searchLower) ? 0 : 1;
+                    const bPrefix = bName.startsWith(searchLower) ? 0 : 1;
+                    if (aPrefix !== bPrefix) return aPrefix - bPrefix;
+                    // Then by priority (emojiMap entries before category-only)
+                    if (a.priority !== b.priority) return a.priority - b.priority;
+                    // Shorter names first (more likely what user wants)
+                    return aName.length - bName.length;
+                })
+                .slice(0, 8);
         }
 
         if (matches.length > 0) {
@@ -167,7 +138,7 @@ Object.assign(NYM.prototype, {
 
     hideEmojiAutocomplete() {
         const el = document.getElementById('emojiAutocomplete');
-        if (el && el.classList.contains('active')) {
+        if (el) {
             el.classList.remove('active');
             el.replaceChildren();
         }
@@ -425,7 +396,7 @@ Object.assign(NYM.prototype, {
 
     hideAutocomplete() {
         const dropdown = document.getElementById('autocompleteDropdown');
-        if (dropdown && dropdown.classList.contains('active')) {
+        if (dropdown) {
             dropdown.classList.remove('active');
             dropdown.replaceChildren();
         }
@@ -582,7 +553,7 @@ Object.assign(NYM.prototype, {
 
     hideChannelAutocomplete() {
         const el = document.getElementById('channelAutocomplete');
-        if (el && el.classList.contains('active')) {
+        if (el) {
             el.classList.remove('active');
             el.replaceChildren();
         }
