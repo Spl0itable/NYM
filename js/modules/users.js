@@ -35,7 +35,9 @@ Object.assign(NYM.prototype, {
             hash = pubkey.charCodeAt(i) + ((hash << 5) - hash);
         }
         const bucket = Math.abs(hash) % 1000;
-        const isLight = document.body.classList.contains('light-mode');
+        const isLight = this._isLightMode === undefined
+            ? document.body.classList.contains('light-mode')
+            : this._isLightMode;
         this._ensureBitchatColorSheet(isLight);
         return `bitchat-user-${isLight ? 'l' : 'd'}${bucket}`;
     },
@@ -481,12 +483,64 @@ Object.assign(NYM.prototype, {
         return `${base}?url=${encodeURIComponent(originalUrl)}`;
     },
 
-    // Proxied URL for a custom emoji image. The emoji flag tells the proxy to
-    // apply a long edge-cache TTL so emoji render instantly on repeat views.
+    // Returns the best <img src> for a custom emoji's source URL. If we've
+    // already cached the bytes in IndexedDB (blob: URL in memory after
+    // hydration), return that — renders with zero network involvement.
+    // Otherwise fall back to the proxied URL and kick off a background fetch
+    // so the next render hits the blob cache.
     getProxiedEmojiUrl(originalUrl) {
+        if (!originalUrl) return originalUrl;
+        if (this.emojiBlobCache && this.emojiBlobCache.has(originalUrl)) {
+            // LRU bump so frequently-used emoji aren't evicted first.
+            const blobUrl = this.emojiBlobCache.get(originalUrl);
+            this.emojiBlobCache.delete(originalUrl);
+            this.emojiBlobCache.set(originalUrl, blobUrl);
+            return blobUrl;
+        }
         const base = this._getProxyBaseUrl();
-        if (!base) return originalUrl;
-        return `${base}?emoji=1&url=${encodeURIComponent(originalUrl)}`;
+        const proxied = base ? `${base}?emoji=1&url=${encodeURIComponent(originalUrl)}` : originalUrl;
+        // Fire-and-forget: warm the cache so the next render uses the blob URL.
+        if (typeof this._cacheEmojiBlob === 'function') {
+            this._cacheEmojiBlob(originalUrl, proxied);
+        }
+        return proxied;
+    },
+
+    _cacheEmojiBlob(sourceUrl, proxiedUrl) {
+        if (!sourceUrl || !this.emojiBlobCache) return;
+        if (this.emojiBlobCache.has(sourceUrl)) return;
+        if (this.emojiBlobInflight && this.emojiBlobInflight.has(sourceUrl)) return;
+        if (!this.emojiBlobInflight) this.emojiBlobInflight = new Map();
+        const url = proxiedUrl || sourceUrl;
+        const p = this._throttledProxyFetch(url, { mode: 'cors' })
+            .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+            .then(blob => {
+                const old = this.emojiBlobCache.get(sourceUrl);
+                if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+                const objectUrl = URL.createObjectURL(blob);
+                this.emojiBlobCache.set(sourceUrl, objectUrl);
+                this._evictEmojiBlobIfFull();
+                if (typeof this.persistEmojiBlob === 'function') {
+                    this.persistEmojiBlob(sourceUrl, blob);
+                }
+            })
+            .catch(() => { })
+            .finally(() => { this.emojiBlobInflight.delete(sourceUrl); });
+        this.emojiBlobInflight.set(sourceUrl, p);
+    },
+
+    _evictEmojiBlobIfFull() {
+        const MAX = 500;
+        if (!this.emojiBlobCache || this.emojiBlobCache.size <= MAX) return;
+        const it = this.emojiBlobCache.keys();
+        while (this.emojiBlobCache.size > MAX) {
+            const k = it.next().value;
+            if (k === undefined) break;
+            const url = this.emojiBlobCache.get(k);
+            this.emojiBlobCache.delete(k);
+            if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+            if (typeof this.deleteCachedEmoji === 'function') this.deleteCachedEmoji(k);
+        }
     },
 
     _getBlossomUploadUrl(server) {
@@ -588,7 +642,10 @@ Object.assign(NYM.prototype, {
             if (primary && fallbacks.length) {
                 const existing = this.mediaFallbacks.get(primary) || [];
                 const merged = Array.from(new Set([...existing, ...fallbacks]));
-                this.mediaFallbacks.set(primary, merged);
+                if (merged.length !== existing.length) {
+                    this.mediaFallbacks.set(primary, merged);
+                    this.invalidateFormatCache();
+                }
             }
         }
     },
@@ -908,13 +965,14 @@ Object.assign(NYM.prototype, {
                 const predicted = BLOSSOM_SERVERS
                     .filter(s => s !== u.server)
                     .map(s => this._predictMirrorUrl(s, u.hashHex, u.url));
-                if (predicted.length) this.mediaFallbacks.set(u.url, predicted);
+                if (predicted.length) { this.mediaFallbacks.set(u.url, predicted); this.invalidateFormatCache(); }
 
                 this._mirrorBlobBackground(u.hashHex, u.url, u.server)
                     .then(mirrors => {
                         if (mirrors && mirrors.length) {
                             const existing = this.mediaFallbacks.get(u.url) || [];
                             this.mediaFallbacks.set(u.url, Array.from(new Set([...mirrors, ...existing])));
+                            this.invalidateFormatCache();
                         }
                     })
                     .catch(() => { });
