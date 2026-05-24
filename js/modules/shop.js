@@ -1167,14 +1167,9 @@ ${code ? `
         }
     },
 
-    async handleSettingsTransferEvent(event) {
+    handleSettingsTransferEvent(event) {
         try {
-            if (!event._giftWrapped) {
-                const ok = window.cryptoWorkerClient && window.cryptoWorkerClient.isAvailable()
-                    ? await window.cryptoWorkerClient.verifyEvent(event)
-                    : window.NostrTools.verifyEvent(event);
-                if (!ok) return;
-            }
+            if (!event._giftWrapped && !window.NostrTools.verifyEvent(event)) return;
 
             const transferTo = event.tags.find(t => t[0] === 'settings-transfer-to');
             if (!transferTo || transferTo[1] !== this.pubkey) return;

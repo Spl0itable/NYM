@@ -54,44 +54,14 @@ async function run() {
   await fs.rm(dist, { recursive: true, force: true });
   await fs.mkdir(dist, { recursive: true });
 
+  // rel-from-root path -> hashed rel-from-root path
   const assetMap = new Map();
 
-  // Process nostr-tools first
-  {
-    const rel = 'js/nostr-tools.js';
-    const src = await fs.readFile(path.join(root, rel), 'utf8');
-    const { code } = await transform(src, { loader: 'js', minify: true, legalComments: 'none' });
-    const hashed = hashedName(rel, code);
-    await emit(hashed, code);
-    assetMap.set(rel, hashed);
-  }
-
-  // Workers next so their hashed URLs are known when client wrappers are processed.
-  const workerFiles = (await walk(path.join(root, 'js', 'workers'))).filter(f => f.endsWith('.js'));
-  for (const file of workerFiles) {
-    const rel = toPosix(path.relative(root, file));
-    let src = await fs.readFile(file, 'utf8');
-    const ntHashed = assetMap.get('js/nostr-tools.js');
-    if (ntHashed) src = src.split('../nostr-tools.js').join('../../' + ntHashed);
-    const { code } = await transform(src, { loader: 'js', minify: true, legalComments: 'none' });
-    const hashed = hashedName(rel, code);
-    await emit(hashed, code);
-    assetMap.set(rel, hashed);
-  }
-
-  // Per-file minify+hash for the remaining JS
-  const processed = new Set([...assetMap.keys()]);
+  // Minify + hash every JS file under js/.
   for (const file of await walk(path.join(root, 'js'))) {
     if (!file.endsWith('.js')) continue;
     const rel = toPosix(path.relative(root, file));
-    if (processed.has(rel)) continue;
-    let src = await fs.readFile(file, 'utf8');
-    for (const [orig, hashed] of assetMap.entries()) {
-      if (orig.startsWith('js/workers/')) {
-        src = src.split(`'${orig}'`).join(`'${hashed}'`)
-                 .split(`"${orig}"`).join(`"${hashed}"`);
-      }
-    }
+    const src = await fs.readFile(file, 'utf8');
     const { code } = await transform(src, { loader: 'js', minify: true, legalComments: 'none' });
     const hashed = hashedName(rel, code);
     await emit(hashed, code);
