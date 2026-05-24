@@ -1206,13 +1206,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
         }
-
-        // Resync badge state from the source-of-truth unreadCounts map. Items
-        // that were hidden inside the collapsed list could have skipped a
-        // mark-read pass and shown up here as falsely-unread on expand.
-        if (listId === 'channelList' && typeof this._syncChannelBadgesFromState === 'function') {
-            this._syncChannelBadgesFromState();
-        }
     },
 
     removeChannel(channel, geohash = '') {
