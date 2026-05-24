@@ -489,9 +489,10 @@ Object.assign(NYM.prototype, {
                         id: event.id,
                         pubkey: event.pubkey
                     };
-                    this.showNotification(nym, message.content, channelInfo, message.timestamp.getTime());
+                    this.showNotification(nym, message.content, channelInfo);
                 }
 
+                // Silently track historical mentions in notification history
                 if (isHistorical && !message.isOwn && !message._spamGated &&
                     this.isMentioned(message.content) && !this.blockedUsers.has(event.pubkey)) {
                     this._addNotificationToHistory(nym, message.content, {

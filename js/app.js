@@ -3523,7 +3523,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.401';
+const NYMCHAT_VERSION = 'v3.66.400';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -4798,8 +4798,8 @@ function nostrSettingsLoad() {
     const filter = {
         kinds: [1059],
         '#p': [pubkey],
-        '#d': ['nymchat-settings', 'nymchat-keys', 'nymchat-groups', 'nymchat-history', 'nymchat-notifications', 'nymchat-pms', 'nymchat-pm-history'],
-        limit: 32
+        '#d': ['nymchat-settings', 'nymchat-keys', 'nymchat-groups', 'nymchat-history', 'nymchat-notifications'],
+        limit: 24
     };
 
     // Buffer settings events during the initial REQ
@@ -5378,8 +5378,7 @@ async function applyNostrSettings(s) {
         for (const e of (nym.recentEmojis || [])) {
             if (typeof e === 'string' && !seen.has(e)) { seen.add(e); merged.push(e); }
         }
-        const cap = typeof nym._recentEmojiLimit === 'function' ? nym._recentEmojiLimit() : 24;
-        nym.recentEmojis = merged.slice(0, cap);
+        nym.recentEmojis = merged.slice(0, 20);
         nym.saveRecentEmojis();
     }
 
@@ -5518,88 +5517,6 @@ async function applyNostrSettings(s) {
             // messages, re-render it so the merged messages appear immediately.
             if (refreshedConvKeys.size > 0 && nym.inPMMode && nym.currentGroup) {
                 const activeKey = nym.getGroupConversationKey(nym.currentGroup);
-                if (refreshedConvKeys.has(activeKey)) {
-                    nym.loadPMMessages(activeKey);
-                }
-            }
-        } catch (_) { }
-    }
-
-    // Channel last-read timestamps (max-merge so reads on any device stick)
-    if (s.channelLastRead && typeof s.channelLastRead === 'object') {
-        if (!nym.channelLastRead) nym.channelLastRead = new Map();
-        let changed = false;
-        for (const [k, v] of Object.entries(s.channelLastRead)) {
-            if (typeof v !== 'number' || v <= 0) continue;
-            const cur = nym.channelLastRead.get(k) || 0;
-            if (v > cur) { nym.channelLastRead.set(k, v); changed = true; }
-        }
-        if (changed && typeof nym._persistUnreadCounts === 'function') {
-            nym._persistUnreadCounts(true);
-        }
-        if (changed && typeof nym.recomputeAllUnreadCounts === 'function') {
-            nym.recomputeAllUnreadCounts();
-        }
-    }
-
-    // PM conversation metadata
-    if (s.pmConversations && typeof s.pmConversations === 'object') {
-        try {
-            for (const [pubkey, conv] of Object.entries(s.pmConversations)) {
-                if (!pubkey || nym.closedPMs?.has(pubkey)) continue;
-                if (!nym.pmConversations.has(pubkey)) {
-                    nym.addPMConversation(conv.nym || `nym#${pubkey.slice(0, 4)}`, pubkey, conv.lastMessageTime || Date.now(), { reopen: true });
-                }
-            }
-        } catch (_) { }
-    }
-
-    // PM message history — mirror of the group-history apply path
-    if (s.pmMessageHistory && typeof s.pmMessageHistory === 'object') {
-        try {
-            const refreshedConvKeys = new Set();
-            for (const [convKey, backupMessages] of Object.entries(s.pmMessageHistory)) {
-                if (!Array.isArray(backupMessages) || backupMessages.length === 0) continue;
-                const peer = backupMessages.find(m => m && m.conversationPubkey)?.conversationPubkey;
-                if (peer && nym.closedPMs?.has(peer)) continue;
-
-                const inflated = backupMessages.map(m => Object.assign({
-                    author: nym.getNymFromPubkey(m.pubkey) || 'nym',
-                    timestamp: new Date((m.created_at || 0) * 1000),
-                    isPM: true,
-                    conversationKey: convKey,
-                    isHistorical: true,
-                    eventKind: 1059,
-                    _seq: ++nym._msgSeq
-                }, m));
-
-                const existing = nym.pmMessages.get(convKey) || [];
-                const existingIds = new Set(existing.map(m => m.id));
-                const newMsgs = inflated.filter(m => m.id && !existingIds.has(m.id));
-                if (newMsgs.length === 0) continue;
-
-                const merged = [...existing, ...newMsgs];
-                merged.sort((a, b) => nym._compareMessages(a, b));
-                const capped = merged.length > nym.pmStorageLimit
-                    ? merged.slice(-nym.pmStorageLimit)
-                    : merged;
-                nym.pmMessages.set(convKey, capped);
-                nym.channelDOMCache.delete(convKey);
-                refreshedConvKeys.add(convKey);
-
-                if (peer && !nym.pmConversations.has(peer) && !nym.closedPMs?.has(peer)) {
-                    const lastTs = (capped[capped.length - 1]?.created_at || 0) * 1000;
-                    nym.addPMConversation(
-                        nym.users.has(peer) ? nym.users.get(peer).nym : `nym#${peer.slice(0, 4)}`,
-                        peer,
-                        lastTs || Date.now(),
-                        { reopen: true }
-                    );
-                }
-            }
-
-            if (refreshedConvKeys.size > 0 && nym.inPMMode && nym.currentPM) {
-                const activeKey = nym.getPMConversationKey(nym.currentPM);
                 if (refreshedConvKeys.has(activeKey)) {
                     nym.loadPMMessages(activeKey);
                 }

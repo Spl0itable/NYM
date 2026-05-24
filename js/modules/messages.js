@@ -177,32 +177,37 @@ Object.assign(NYM.prototype, {
     },
 
     _findDomInsertionPoint(container, msgCreatedAt, msgMs, msgSeq) {
-        const msgs = container.querySelectorAll(':scope > .message[data-message-id], :scope > .message-group .message[data-message-id]');
-        const n = msgs.length;
+        const nodes = container.children;
+        const n = nodes.length;
         if (n === 0) return null;
-
-        const cmp = (node) => {
-            const ec = parseInt(node.dataset.createdAt) || 0;
-            const em = parseInt(node.dataset.ms) || (ec * 1000);
-            const es = parseInt(node.dataset.seq) || 0;
-            if (ec !== msgCreatedAt) return ec - msgCreatedAt;
-            if (em !== msgMs) return em - msgMs;
-            return es - msgSeq;
-        };
-
-        if (cmp(msgs[n - 1]) <= 0) return null;
-
+        const last = nodes[n - 1];
+        if (last.dataset && last.dataset.createdAt !== undefined) {
+            const lc = parseInt(last.dataset.createdAt) || 0;
+            const lm = parseInt(last.dataset.ms) || (lc * 1000);
+            const ls = parseInt(last.dataset.seq) || 0;
+            if (msgCreatedAt > lc
+                || (msgCreatedAt === lc && msgMs > lm)
+                || (msgCreatedAt === lc && msgMs === lm && msgSeq >= ls)) {
+                return null;
+            }
+        }
         let lo = 0, hi = n;
         while (lo < hi) {
             const mid = (lo + hi) >>> 1;
-            if (cmp(msgs[mid]) <= 0) lo = mid + 1;
-            else hi = mid;
+            const node = nodes[mid];
+            if (!node.dataset || node.dataset.createdAt === undefined) { lo = mid + 1; continue; }
+            const ec = parseInt(node.dataset.createdAt) || 0;
+            const em = parseInt(node.dataset.ms) || (ec * 1000);
+            const es = parseInt(node.dataset.seq) || 0;
+            if (ec < msgCreatedAt
+                || (ec === msgCreatedAt && em < msgMs)
+                || (ec === msgCreatedAt && em === msgMs && es < msgSeq)) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
         }
-        const successor = msgs[lo];
-        if (!successor) return null;
-        const wrapper = successor.closest('.message-group');
-        if (wrapper && wrapper.parentNode === container) return wrapper;
-        return successor.parentNode === container ? successor : null;
+        return lo < n ? nodes[lo] : null;
     },
 
     hasBlockedKeyword(text, nickname) {
@@ -1737,53 +1742,6 @@ Object.assign(NYM.prototype, {
         this._applyBubbleGroupingTo(messageEl.nextElementSibling);
     },
 
-    _sortContainerMessagesByTimestamp(container) {
-        if (!container) return;
-        const children = Array.from(container.children);
-        if (children.length < 2) return;
-
-        const hasTs = (el) => el && el.dataset && el.dataset.createdAt !== undefined;
-        const key = (el) => {
-            const c = parseInt(el.dataset.createdAt) || 0;
-            const m = el.dataset.ms !== undefined ? (parseInt(el.dataset.ms) || 0) : c * 1000;
-            const s = el.dataset.seq !== undefined ? (parseInt(el.dataset.seq) || 0) : 0;
-            return [c, m, s];
-        };
-        const cmp = (a, b) => {
-            const [ac, am, as] = key(a);
-            const [bc, bm, bs] = key(b);
-            if (ac !== bc) return ac - bc;
-            if (am !== bm) return am - bm;
-            return as - bs;
-        };
-
-        let i = 0;
-        let anyChange = false;
-        while (i < children.length) {
-            if (!hasTs(children[i])) { i++; continue; }
-            let j = i;
-            while (j < children.length && hasTs(children[j])) j++;
-            if (j - i > 1) {
-                const run = children.slice(i, j);
-                let outOfOrder = false;
-                for (let k = 1; k < run.length; k++) {
-                    if (cmp(run[k - 1], run[k]) > 0) { outOfOrder = true; break; }
-                }
-                if (outOfOrder) {
-                    run.sort(cmp);
-                    const anchor = children[j] || null;
-                    for (const el of run) {
-                        if (anchor) container.insertBefore(el, anchor);
-                        else container.appendChild(el);
-                    }
-                    anyChange = true;
-                }
-            }
-            i = j;
-        }
-        return anyChange;
-    },
-
     _recomputeAllBubbleGrouping(container) {
         if (!container) return;
         this._rewrapBubbleGroups(container);
@@ -1818,8 +1776,6 @@ Object.assign(NYM.prototype, {
             }
             wrapper.remove();
         }
-
-        this._sortContainerMessagesByTimestamp(container);
 
         if (!isBubble) return;
 

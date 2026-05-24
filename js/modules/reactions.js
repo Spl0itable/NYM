@@ -9,22 +9,20 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _recentEmojiLimit() {
-        return window.innerWidth <= 768 ? 20 : 24;
-    },
-
     saveRecentEmojis() {
-        const limit = this._recentEmojiLimit();
-        localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, limit)));
+        localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, 20)));
         if (typeof this._debouncedNostrSettingsSave === 'function') {
             this._debouncedNostrSettingsSave();
         }
     },
 
     addToRecentEmojis(emoji) {
+        // Remove if already exists
         this.recentEmojis = this.recentEmojis.filter(e => e !== emoji);
+        // Add to beginning
         this.recentEmojis.unshift(emoji);
-        this.recentEmojis = this.recentEmojis.slice(0, this._recentEmojiLimit());
+        // Keep only 20 recent
+        this.recentEmojis = this.recentEmojis.slice(0, 20);
         this.saveRecentEmojis();
     },
 
@@ -270,7 +268,7 @@ Object.assign(NYM.prototype, {
             if (isHistorical) {
                 this._addNotificationToHistory(reactorNym, body, channelInfo, event.created_at * 1000);
             } else {
-                this.showNotification(reactorNym, body, channelInfo, event.created_at * 1000);
+                this.showNotification(reactorNym, body, channelInfo);
             }
         }
     },
@@ -569,7 +567,7 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.slice(0, this._recentEmojiLimit()).map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
+            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
@@ -692,7 +690,7 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.slice(0, this._recentEmojiLimit()).map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
+            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
@@ -1082,7 +1080,7 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             html += `<div class="emoji-picker-section" data-category="recent">
                 <div class="emoji-picker-section-title">Recent</div>
                 <div class="emoji-picker-grid">
-                    ${this.recentEmojis.slice(0, this._recentEmojiLimit()).map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
+                    ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
                 </div>
             </div>`;
         }
