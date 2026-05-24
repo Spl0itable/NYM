@@ -15,6 +15,8 @@
     height: 40px;
     border-radius: 50%;
     background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     color: var(--primary);
     cursor: pointer;
@@ -153,6 +155,7 @@
     color: var(--lightning);
     font-weight: 600;
     animation: zapGlow 2s infinite;
+    backdrop-filter: blur(10px);
 }
 
 @keyframes zapGlow {
@@ -370,6 +373,7 @@
 .reaction-btn,
 .translate-msg-btn {
     background: rgba(20, 20, 35, 0.8);
+    backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xs);
     padding: 4px 8px;
@@ -452,6 +456,7 @@
     left: 50%;
     transform: translateX(-50%);
     background: rgba(20, 20, 35, 0.9);
+    backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xs);
     padding: 5px 10px;
@@ -493,6 +498,8 @@
 .reactors-modal {
     position: fixed;
     background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg), var(--shadow-glow), 0 0 0 1px rgba(255, 255, 255, 0.05);
@@ -970,6 +977,8 @@ body.chat-bubbles .read-more-btn {
     width: 30px;
     height: 30px;
     background: rgba(0, 0, 0, 0.6);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
     color: #fff;
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: var(--radius-sm);
@@ -1176,6 +1185,8 @@ body.chat-bubbles .read-more-btn {
     padding: 12px 16px;
     border-top: 1px solid var(--glass-border);
     background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     display: flex;
     gap: 10px;
     align-items: stretch;
@@ -1449,7 +1460,7 @@ body.chat-bubbles .edited-indicator-irc {
     resize: vertical;
     min-height: 42px;
     max-height: 120px;
-    transition: border-color var(--transition), background-color var(--transition), box-shadow var(--transition);
+    transition: all var(--transition);
 }
 
 .message-input:focus {
@@ -1709,6 +1720,8 @@ div.message-input .custom-emoji {
     width: 100%;
     height: 100%;
     background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     z-index: 10001;
     align-items: center;
     justify-content: center;

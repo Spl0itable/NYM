@@ -391,8 +391,8 @@
         state.btnSkip.onclick = () => endTutorial(true);
         state._onResize = () => positionStep();
         state._onScroll = () => positionStep();
-        window.addEventListener('resize', state._onResize, { passive: true });
-        window.addEventListener('scroll', state._onScroll, { capture: true, passive: true });
+        window.addEventListener('resize', state._onResize);
+        window.addEventListener('scroll', state._onScroll, true);
         document.addEventListener('keydown', keyHandler);
 
         renderStep();
@@ -632,13 +632,10 @@ class NYM {
         this._deviceCapabilities = this._detectDeviceCapabilities();
         this._applyPerformanceMode();
         this.channelSubscriptionBatchSize = 10;
-        this.channelMessageLimit = 50;
+        this.channelMessageLimit = 100;
         this.pmStorageLimit = 1000;
-        this.pmPageSize = 50;
+        this.pmPageSize = 100;
         this.pmLoadMoreSize = 50;
-        // Messages older than this are evicted from memory, the DOM cache, and
-        // IndexedDB on the periodic sweep / on visibility change.
-        this.messageMaxAgeMs = 24 * 60 * 60 * 1000;
         this.pmRenderedStart = new Map();
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
         if (this.settings.groupChatPMOnlyMode) {
@@ -717,12 +714,8 @@ class NYM {
         this.statusHiddenUsers = new Set();
         this.typingUsers = new Map();
         this._typingThrottleTime = 0;
-        // Each typing event runs a synchronous NIP-59 wrap (PM/group) or
-        // schnorr sign (channel) on the main thread, so we stretch the
-        // refresh cadence and lengthen the receiver-side expiry to keep the
-        // indicator visible between sends. Bigger groups feel this most.
-        this._typingSendInterval = 6000;
-        this._typingExpireMs = 8000;
+        this._typingSendInterval = 3000;
+        this._typingExpireMs = 5000;
         this._typingStopTimer = null;
         this.notificationHistory = this._loadNotificationHistory();
         this.notificationLastReadTime = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
@@ -3530,7 +3523,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.410';
+const NYMCHAT_VERSION = 'v3.66.405';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -4788,13 +4781,6 @@ async function nostrSettingsSave() {
     }
     if (!nym || !nym.pubkey) return;
 
-    // Don't publish while the initial settings pull is still in flight — see
-    // saveSyncedSettings for the full reasoning.
-    if (nym._settingsLoadInProgress) {
-        nym._pendingSettingsSave = true;
-        return;
-    }
-
     try {
         await nym._publishEncryptedSettings(nym._buildSettingsPayload());
     } catch (err) {
@@ -4819,24 +4805,6 @@ function nostrSettingsLoad() {
     // Buffer settings events during the initial REQ
     nym._settingsLoadBuffer = nym._settingsLoadBuffer || new Map();
     nym._settingsLoadBuffer.set(subId, { newestSettings: null, newestTs: 0 });
-
-    // Mark a settings pull as in flight so that any save attempt during this
-    // window (a channel auto-join, a profile fetch, a background event) gets
-    // queued instead of publishing our local defaults to the relays — that
-    // was wiping the synced state on every fresh-device boot. A safety
-    // timeout force-clears the flag if no relay path ever reaches its 10s
-    // per-relay cleanup (offline, all relays unreachable, etc.).
-    nym._settingsLoadInProgress = true;
-    if (nym._settingsLoadSafetyTimer) clearTimeout(nym._settingsLoadSafetyTimer);
-    nym._settingsLoadSafetyTimer = setTimeout(() => {
-        if (!nym._settingsLoadInProgress) return;
-        nym._settingsLoadInProgress = false;
-        nym._settingsLoadSafetyTimer = null;
-        if (nym._pendingSettingsSave) {
-            nym._pendingSettingsSave = false;
-            nostrSettingsSave();
-        }
-    }, 15000);
 
     // Pool mode: send REQ through the multiplexed pool workers
     if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
@@ -5950,19 +5918,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     const messagesScroller = document.getElementById('messagesScroller');
     const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
     if (messagesScroller && scrollToBottomBtn) {
-        let scrollRafPending = false;
-        let scrollEndTimer = null;
-        const docEl = document.documentElement;
-
-        const processScroll = () => {
-            scrollRafPending = false;
+        messagesScroller.addEventListener('scroll', () => {
             // Reverse-column container: scrollTop is 0 at the bottom (newest)
             // and negative scrolling up. Math.abs gives distance from bottom.
             const distanceFromBottom = Math.abs(messagesScroller.scrollTop);
             const distanceFromTop = (messagesScroller.scrollHeight - messagesScroller.clientHeight) - distanceFromBottom;
 
+            // When scrolled to the very top, load older messages or show history limit
             if (distanceFromTop <= 5) {
                 if (nym.inPMMode) {
+                    // PM/group pagination: load older messages on scroll-to-top
                     const convKey = nym.currentGroup
                         ? nym.getGroupConversationKey(nym.currentGroup)
                         : (nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null);
@@ -5977,6 +5942,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         }
                     }
                 } else if (messagesContainer) {
+                    // Channel mode: show history limit notice
                     const storageKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
                     const channelMessages = nym.messages.get(storageKey) || [];
                     if (channelMessages.length >= nym.channelMessageLimit && !messagesContainer.querySelector('.channel-history-limit')) {
@@ -5988,8 +5954,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
+            // Track whether user has intentionally scrolled away from the bottom
             nym.userScrolledUp = distanceFromBottom > 150;
 
+            // Once the user rests back at the latest messages, prune the older
+            // messages that lazy-loading appended so PMs/groups don't bloat the DOM.
             if (distanceFromBottom < 50 && nym.inPMMode) {
                 const collapseKey = nym.currentGroup
                     ? nym.getGroupConversationKey(nym.currentGroup)
@@ -6002,21 +5971,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
+            // Show/hide scroll-to-bottom button
             if (distanceFromBottom > 150) {
                 scrollToBottomBtn.classList.add('visible');
             } else {
                 scrollToBottomBtn.classList.remove('visible');
-            }
-        };
-
-        messagesScroller.addEventListener('scroll', () => {
-            if (!docEl.classList.contains('is-scrolling')) docEl.classList.add('is-scrolling');
-            clearTimeout(scrollEndTimer);
-            scrollEndTimer = setTimeout(() => docEl.classList.remove('is-scrolling'), 180);
-
-            if (!scrollRafPending) {
-                scrollRafPending = true;
-                requestAnimationFrame(processScroll);
             }
         }, { passive: true });
     }
@@ -6327,6 +6286,7 @@ function renderRelayList(pool, stats) {
             if (url === 'relay-pool') return;
             entries.push({
                 url,
+                write: url === 'wss://sendit.nosflare.com',
                 open: true,
                 events: stats.eventsPerRelay.get(url) || 0,
                 latency: stats.latencyPerRelay.get(url) || null
@@ -6337,6 +6297,7 @@ function renderRelayList(pool, stats) {
             const isOpen = relay.ws && relay.ws.readyState === WebSocket.OPEN;
             entries.push({
                 url,
+                write: relay.type === 'write',
                 open: isOpen,
                 events: stats.eventsPerRelay.get(url) || 0,
                 latency: stats.latencyPerRelay.get(url) || null
@@ -6364,6 +6325,7 @@ function renderRelayList(pool, stats) {
             html += `<div class="relay-stats-row" data-rs-idx="${i}">` +
                 `<span class="relay-stats-dot ${e.open ? 'open' : 'closed'}"></span>` +
                 `<span class="relay-stats-url" title="${nym.escapeHtml(e.url)}">${nym.escapeHtml(shortUrl)}</span>` +
+                (e.write ? `<span class="relay-stats-type write">write</span>` : '') +
                 `<span class="relay-stats-latency">${e.latency !== null ? e.latency + 'ms' : '--'}</span>` +
                 `<span class="relay-stats-events">${e.events} evt</span>` +
                 `</div>`;

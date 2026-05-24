@@ -698,18 +698,12 @@ Object.assign(NYM.prototype, {
             }
             if (!data || data.error) return null;
 
-            // Cache result in memory and persist to IndexedDB so it survives
-            // reloads (and iOS Safari HTTP-cache evictions).
+            // Cache result
             this._unfurlCache.set(url, data);
-            if (this._unfurlCache.size > 500) {
+            // Trim cache to max 200 entries
+            if (this._unfurlCache.size > 200) {
                 const first = this._unfurlCache.keys().next().value;
                 this._unfurlCache.delete(first);
-                if (typeof this.deleteCachedUnfurl === 'function') {
-                    this.deleteCachedUnfurl(first);
-                }
-            }
-            if (typeof this.persistUnfurl === 'function') {
-                this.persistUnfurl(url, data);
             }
             return data;
         } catch {
@@ -970,22 +964,15 @@ Object.assign(NYM.prototype, {
         });
 
         input.addEventListener('input', (e) => {
-            const el = e.target;
-            // Serialize the contenteditable once and pass the cached value to
-            // downstream consumers — each `el.value` getter walks the DOM tree.
-            let val = el.value;
             // Drop browser filler nodes so :empty placeholder styling works.
-            if (!val && el.innerHTML !== '') el.innerHTML = '';
+            if (!e.target.value && e.target.innerHTML !== '') e.target.innerHTML = '';
             // Render a just-completed :shortcode: as its custom emoji image.
-            let cursor = el.selectionStart;
-            if (this._maybeRenderTypedEmoji(el, val, cursor)) {
-                val = el.value;
-                cursor = el.selectionStart;
-            }
-            this.handleInputChange(val, cursor);
-            this.autoResizeTextarea(el);
-            this.updateTranslateInputBtn(val);
-            if (val.length > 0 && val.trim().length > 0) {
+            this._maybeRenderTypedEmoji(e.target);
+            this.handleInputChange(e.target.value);
+            this.autoResizeTextarea(e.target);
+            this.updateTranslateInputBtn();
+            // Signal typing for PMs, groups, and public channels
+            if (e.target.value.trim().length > 0) {
                 if (this.inPMMode) {
                     this.handleTypingSignal();
                 } else if (this.currentGeohash) {
@@ -1568,19 +1555,12 @@ Object.assign(NYM.prototype, {
 
     },
 
-    handleInputChange(value, cursorHint) {
-        // Use cursor position so autocomplete works mid-sentence. The hot path
-        // (input event) passes a cached cursor — reading selectionStart here
-        // would force a second DOM walk per keystroke.
-        let cursor;
-        if (typeof cursorHint === 'number') {
-            cursor = cursorHint;
-        } else {
-            const inputEl = document.getElementById('messageInput');
-            cursor = (inputEl && typeof inputEl.selectionStart === 'number')
-                ? inputEl.selectionStart
-                : value.length;
-        }
+    handleInputChange(value) {
+        // Use cursor position so autocomplete works mid-sentence
+        const inputEl = document.getElementById('messageInput');
+        const cursor = (inputEl && typeof inputEl.selectionStart === 'number')
+            ? inputEl.selectionStart
+            : value.length;
         const before = value.substring(0, cursor);
 
         // Check for @ mentions first (token immediately to the left of cursor)
@@ -1628,9 +1608,6 @@ Object.assign(NYM.prototype, {
     },
 
     autoResizeTextarea(textarea) {
-        // The contenteditable input grows via CSS min/max-height; setting style.height
-        // here forces two reflows per keystroke on iOS.
-        if (!textarea || textarea.isContentEditable) return;
         textarea.style.height = 'auto';
         textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
     },
@@ -1641,10 +1618,6 @@ Object.assign(NYM.prototype, {
     },
 
     _serializeRichInput(root) {
-        // Plain-text fast path — covers the typical keystroke. textContent is a
-        // native getter; the manual walk below only matters when the input has
-        // rendered emoji <img> nodes or block children.
-        if (!root.firstElementChild) return root.textContent;
         let out = '';
         const nodes = root.childNodes;
         for (let i = 0; i < nodes.length; i++) {
@@ -1655,6 +1628,7 @@ Object.assign(NYM.prototype, {
                 if (node.tagName === 'IMG') {
                     out += this._emojiTokenForImg(node);
                 } else if (node.tagName === 'BR') {
+                    // A lone trailing <br> is browser filler — ignore it.
                     if (i !== nodes.length - 1) out += '\n';
                 } else {
                     out += this._serializeRichInput(node);
@@ -1705,72 +1679,14 @@ Object.assign(NYM.prototype, {
 
     _richSelectionOffset(el, container, offsetInContainer) {
         if (!container || !el.contains(container)) return null;
-        // Plain-text fast path. When the input has no element children every
-        // child is a text node; the offset is the sum of preceding text-node
-        // lengths plus the offset within the caret's own text node. This skips
-        // the recursive walk on iOS where it runs 2-3× per keystroke.
-        if (!el.firstElementChild) {
-            const kids = el.childNodes;
-            if (container === el) {
-                let total = 0;
-                const upto = Math.min(offsetInContainer, kids.length);
-                for (let i = 0; i < upto; i++) {
-                    const k = kids[i];
-                    if (k.nodeType === Node.TEXT_NODE) total += k.nodeValue.length;
-                }
-                return total;
-            }
-            if (container.nodeType === Node.TEXT_NODE && container.parentNode === el) {
-                let total = 0;
-                for (let i = 0; i < kids.length; i++) {
-                    const k = kids[i];
-                    if (k === container) return total + offsetInContainer;
-                    if (k.nodeType === Node.TEXT_NODE) total += k.nodeValue.length;
-                }
-            }
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        try {
+            range.setEnd(container, offsetInContainer);
+        } catch (_) {
+            return null;
         }
-        // Walk the live DOM accumulating the model-character length of every
-        // node we pass on the way to the caret. Avoids allocating a Range or
-        // cloning the prefix subtree on each call — the original cloneContents
-        // path made every iOS keystroke do an O(n) DOM clone + character walk.
-        let total = 0;
-        let found = false;
-        const walk = (node) => {
-            if (found) return;
-            if (node === container) {
-                if (container.nodeType === Node.TEXT_NODE) {
-                    total += offsetInContainer;
-                } else {
-                    const kids = container.childNodes;
-                    const upto = Math.min(offsetInContainer, kids.length);
-                    for (let i = 0; i < upto; i++) {
-                        total += this._richNodeLength(kids[i]);
-                    }
-                }
-                found = true;
-                return;
-            }
-            if (node.nodeType === Node.TEXT_NODE) {
-                total += node.nodeValue.length;
-                return;
-            }
-            if (node.nodeType !== Node.ELEMENT_NODE) return;
-            if (node.tagName === 'IMG') {
-                total += this._emojiTokenForImg(node).length;
-                return;
-            }
-            if (node.tagName === 'BR') {
-                total += 1;
-                return;
-            }
-            const kids = node.childNodes;
-            for (let i = 0; i < kids.length; i++) {
-                walk(kids[i]);
-                if (found) return;
-            }
-        };
-        walk(el);
-        return found ? total : null;
+        return this._richNodeLength(range.cloneContents());
     },
 
     _richLocate(el, target) {
@@ -1827,29 +1743,19 @@ Object.assign(NYM.prototype, {
         // The caret only lives in window.getSelection() while the input is
         // focused; opening the emoji picker moves focus away. Remember the last
         // in-input caret so insertions land where the user left off.
-        // We deliberately skip the 'input' event here — the input handler
-        // already reads inputEl.selectionStart, whose getter updates
-        // _savedSelStart as a side effect. Running saveSel on 'input' too
-        // doubled the selection offset walk on every keystroke.
         const saveSel = () => {
             const sel = window.getSelection();
             if (!sel || !sel.rangeCount) return;
             const r = sel.getRangeAt(0);
             if (!el.contains(r.startContainer)) return;
             const s = self._richSelectionOffset(el, r.startContainer, r.startOffset);
+            const e = self._richSelectionOffset(el, r.endContainer, r.endOffset);
             if (s != null) el._savedSelStart = s;
-            // Only compute the end offset when a real selection exists — for a
-            // collapsed caret it equals the start and is the common case while
-            // typing on iOS.
-            if (r.collapsed) {
-                el._savedSelEnd = el._savedSelStart;
-            } else {
-                const e = self._richSelectionOffset(el, r.endContainer, r.endOffset);
-                if (e != null) el._savedSelEnd = e;
-            }
+            if (e != null) el._savedSelEnd = e;
         };
         el.addEventListener('keyup', saveSel);
         el.addEventListener('mouseup', saveSel);
+        el.addEventListener('input', saveSel);
         el.addEventListener('focus', saveSel);
 
         Object.defineProperty(el, 'value', {
@@ -1912,15 +1818,14 @@ Object.assign(NYM.prototype, {
     // emoji, re-render so it becomes an inline image. The :shortcode: token and
     // its emoji image share the same model length, so the caret offset is
     // unchanged by the re-render.
-    _maybeRenderTypedEmoji(el, cachedValue, cachedCursor) {
-        if (!this.customEmojis || this.customEmojis.size === 0) return false;
-        const value = cachedValue != null ? cachedValue : el.value;
-        const caret = typeof cachedCursor === 'number' ? cachedCursor : el.selectionStart;
+    _maybeRenderTypedEmoji(el) {
+        if (!this.customEmojis || this.customEmojis.size === 0) return;
+        const caret = el.selectionStart;
+        const value = el.value;
         const m = value.slice(0, caret).match(/:([a-zA-Z0-9_]+):$/);
-        if (!m || !this.customEmojis.has(m[1])) return false;
+        if (!m || !this.customEmojis.has(m[1])) return;
         el.value = value;
         el.selectionStart = el.selectionEnd = caret;
-        return true;
     },
 
     // Insert plain text at the caret (used for Shift+Enter newlines and pastes)
