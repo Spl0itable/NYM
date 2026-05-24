@@ -950,13 +950,11 @@ Object.assign(NYM.prototype, {
         list.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (list.length > this.pmStorageLimit) {
-            const dropped = list.slice(0, list.length - this.pmStorageLimit);
-            for (const d of dropped) this._unindexMessage(d);
-            list = list.slice(-this.pmStorageLimit);
-        }
         this.pmMessages.set(groupConvKey, list);
         this._indexMessage(groupConvKey, msg);
+        // Prune in-place; the pruner walks the array referenced by the map
+        // and also sweeps cached + live DOM for the dropped messages.
+        this._pruneStorageKey(groupConvKey, this.pmMessages, this.pmStorageLimit, 0);
         this.persistPMMessages(groupConvKey);
 
         // Update or create group conversation entry
@@ -1300,12 +1298,8 @@ Object.assign(NYM.prototype, {
         groupList.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (groupList.length > this.pmStorageLimit) {
-            const dropped = groupList.slice(0, groupList.length - this.pmStorageLimit);
-            for (const d of dropped) this._unindexMessage(d);
-            this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
-        }
         this._indexMessage(groupConvKey, msg);
+        this._pruneStorageKey(groupConvKey, this.pmMessages, this.pmStorageLimit, 0);
         this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);
 

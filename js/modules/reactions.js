@@ -246,7 +246,9 @@ Object.assign(NYM.prototype, {
     },
 
     // Apply reaction updates to every matching message element — both the
-    // live DOM and any cached channel/PM/group fragments
+    // live DOM and any cached channel/PM/group fragments. Replaces the older
+    // "wipe the cached channel" fallback so a single reaction event no longer
+    // blows away the entire chat's cached render.
     _updateMessageReactionsEverywhere(messageId) {
         if (!messageId) return false;
         const safeId = String(messageId).replace(/"/g, '\\"');
