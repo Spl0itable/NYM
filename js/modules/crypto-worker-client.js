@@ -53,15 +53,10 @@
             }));
         },
         nip44Decrypt(ciphertext, key) {
-            return call('nip44Decrypt', { ciphertext, key }).catch(() => {
-                return window.NostrTools.nip44.decrypt(ciphertext, key);
-            });
+            return call('nip44Decrypt', { ciphertext, key });
         },
         nip44DecryptBatch(items) {
-            return call('nip44DecryptBatch', { items }).catch(() => items.map(it => {
-                try { return { ok: true, plaintext: window.NostrTools.nip44.decrypt(it.ciphertext, it.key) }; }
-                catch (err) { return { ok: false, error: String(err && err.message || err) }; }
-            }));
+            return call('nip44DecryptBatch', { items });
         },
         isAvailable() {
             return !disabled && typeof Worker !== 'undefined';

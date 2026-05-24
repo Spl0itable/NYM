@@ -593,20 +593,13 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
+            // Add event tag only if this is a message zap (not profile zap)
             if (this.currentZapTarget.messageId) {
-                let eventTagId = this.currentZapTarget.messageId;
-                const hit = this.messageIndex && this.messageIndex.get(eventTagId);
-                if (hit && hit.msg && hit.msg.id && /^[0-9a-f]{64}$/i.test(hit.msg.id)) {
-                    eventTagId = hit.msg.id;
-                }
-                if (!/^[0-9a-f]{64}$/i.test(eventTagId)) {
-                    return null;
-                }
-                zapRequest.tags.unshift(['e', eventTagId]);
+                zapRequest.tags.unshift(['e', this.currentZapTarget.messageId]); // Event being zapped
 
-                let originalKind = '20000';
+                let originalKind = '20000'; // Default geohash
                 if (this.inPMMode) {
-                    originalKind = '1059';
+                    originalKind = '1059'; // PMs via NIP-17
                 } else if (this.currentGeohash) {
                     originalKind = String(this.channelWire(this.currentGeohash).kind);
                 }

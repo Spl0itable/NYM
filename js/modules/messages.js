@@ -1043,7 +1043,7 @@ Object.assign(NYM.prototype, {
         }
 
         if (!this._pendingFragment) {
-            const domMessages = container.querySelectorAll('.message[data-message-id]');
+            const domMessages = container.querySelectorAll('[data-message-id]');
             const domLimit = message.isPM ? this.pmStorageLimit : this.channelMessageLimit;
             if (domMessages.length > domLimit) {
                 const toRemove = domMessages.length - domLimit;
@@ -1053,7 +1053,7 @@ Object.assign(NYM.prototype, {
                     if (rid) this.renderedMessageIds.delete(rid);
                     removed.remove();
                 }
-                const firstAfterPrune = container.querySelector('.message[data-message-id]');
+                const firstAfterPrune = container.querySelector('[data-message-id]');
                 if (firstAfterPrune) this._updateBubbleGrouping(firstAfterPrune);
             }
         }

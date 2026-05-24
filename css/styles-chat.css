@@ -1410,17 +1410,9 @@ body.chat-bubbles .edited-indicator-irc {
 .swipe-reply-indicator svg {
     width: 16px;
     height: 16px;
-    color: var(--primary);
-    stroke: currentColor;
+    stroke: var(--primary);
     fill: none;
-    stroke-width: 1.5;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-}
-
-.swipe-reply-indicator svg[stroke="none"] {
-    stroke: none;
-    fill: currentColor;
+    stroke-width: 2;
 }
 
 .swipe-reply-indicator .swipe-react-emoji {
