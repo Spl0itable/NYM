@@ -866,9 +866,16 @@ Object.assign(NYM.prototype, {
                             this.pendingDMs.delete(msg.id);
 
                             if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
+                                if (!this.groupMessageReaders.has(msg.nymMessageId)) {
+                                    this.groupMessageReaders.set(msg.nymMessageId, new Map());
+                                }
                                 const readerNym = this.getNymFromPubkey(senderPubkey);
-                                if (typeof this.recordGroupReadReceipt === 'function') {
-                                    this.recordGroupReadReceipt(msg.nymMessageId, senderPubkey, readerNym, convKey);
+                                this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
+                                if (this.inPMMode && this.currentGroup &&
+                                    convKey === this.getGroupConversationKey(this.currentGroup)) {
+                                    this.updateGroupReaderAvatars(msg.nymMessageId);
+                                } else {
+                                    this.channelDOMCache.delete(convKey);
                                 }
                             } else {
                                 const domId = msg.nymMessageId || msg.id;
@@ -960,11 +967,8 @@ Object.assign(NYM.prototype, {
                         this.updateMessageReactions(reactionMessageId);
                     }
                     if (!this.renderedMessageIds.has(reactionMessageId)) {
-                        // Patch the reaction in any cached chat fragments so we
-                        // don't have to throw away the whole cache.
-                        if (typeof this._updateMessageReactionsEverywhere === 'function') {
-                            this._updateMessageReactionsEverywhere(reactionMessageId);
-                        }
+                        const hit = this.messageIndex.get(reactionMessageId);
+                        if (hit && hit.convKey) this.channelDOMCache.delete(hit.convKey);
                     }
                 }
                 return;
@@ -1230,10 +1234,9 @@ Object.assign(NYM.prototype, {
                 deliveryStatus: 'failed'
             };
             this._addPMMessage(conversationKey, failedMsg);
+            this.channelDOMCache.delete(conversationKey);
             this.persistPMMessages(conversationKey);
-            // Display the failed message if currently viewing this PM.
-            // Cached fragments for this conversation (if any) are still valid:
-            // restoration's trailing-append path renders the new message.
+            // Display the failed message if currently viewing this PM
             if (this.inPMMode && this.currentPM === recipientPubkey) {
                 this.displayMessage(failedMsg);
             }
@@ -1451,16 +1454,17 @@ Object.assign(NYM.prototype, {
         const messages = this.pmMessages.get(convKey);
         if (!messages) return;
         const statusOrder = { sent: 0, delivered: 1, read: 2 };
+        let changed = false;
         for (const msg of messages) {
             if (!msg.isOwn || msg.deliveryStatus === 'failed') continue;
             if ((statusOrder[status] || 0) > (statusOrder[msg.deliveryStatus] || 0)) {
                 msg.deliveryStatus = status;
                 this.pendingDMs.delete(msg.id);
-                // _updateDeliveryStatusEl uses findMessageElementAnywhere, which
-                // also reaches into cached fragments — no cache drop needed.
                 this._updateDeliveryStatusEl(msg.nymMessageId || msg.id, status);
+                changed = true;
             }
         }
+        if (changed) this.channelDOMCache.delete(convKey);
     },
 
     // Update the cached Nymbot credit count and the chat-header indicator

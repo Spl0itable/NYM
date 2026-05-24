@@ -1510,8 +1510,13 @@ Object.assign(NYM.prototype, {
             this._observeNymchatPubkey(event.pubkey);
         }
 
-        if (typeof this.recordChannelReadReceipt === 'function') {
-            this.recordChannelReadReceipt(messageId, event.pubkey, readerName, geohash);
+        if (!this.channelMessageReaders.has(messageId)) {
+            this.channelMessageReaders.set(messageId, new Map());
+        }
+        this.channelMessageReaders.get(messageId).set(event.pubkey, readerName);
+
+        if (!this.inPMMode && this.currentGeohash === geohash && typeof this.updateChannelReaderAvatars === 'function') {
+            this.updateChannelReaderAvatars(messageId);
         }
     },
 
@@ -1842,14 +1847,10 @@ Object.assign(NYM.prototype, {
                 const idx = msgs.findIndex(m => m.id === messageId);
                 if (idx !== -1) {
                     msgs.splice(idx, 1);
+                    this.channelDOMCache.delete(convKey);
                     this.persistPMMessages(convKey);
                 }
             });
-
-            // Drop the message from any cached fragments without invalidating them.
-            if (typeof this._removeMessageFromAllCaches === 'function') {
-                this._removeMessageFromAllCaches(messageId);
-            }
         } catch (error) {
             this.displaySystemMessage('Failed to delete message: ' + error.message);
         }
@@ -1893,13 +1894,10 @@ Object.assign(NYM.prototype, {
                 const idx = msgs.findIndex(m => m.id === deletedId);
                 if (idx !== -1) {
                     msgs.splice(idx, 1);
+                    this.channelDOMCache.delete(convKey);
                     this.persistPMMessages(convKey);
                 }
             });
-
-            if (typeof this._removeMessageFromAllCaches === 'function') {
-                this._removeMessageFromAllCaches(deletedId);
-            }
         }
     },
 

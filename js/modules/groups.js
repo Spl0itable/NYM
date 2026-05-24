@@ -1306,6 +1306,7 @@ Object.assign(NYM.prototype, {
             this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
         }
         this._indexMessage(groupConvKey, msg);
+        this.channelDOMCache.delete(groupConvKey);
         this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);
 
@@ -1732,10 +1733,7 @@ Object.assign(NYM.prototype, {
                     if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
                 }
                 list.splice(idx, 1);
-                if (typeof this._removeMessageFromAllCaches === 'function') {
-                    this._removeMessageFromAllCaches(domId);
-                    if (msg.id && msg.id !== domId) this._removeMessageFromAllCaches(msg.id);
-                }
+                this.channelDOMCache.delete(groupConvKey);
                 if (typeof this.persistPMMessages === 'function') this.persistPMMessages(groupConvKey);
             } else if (this.deletedEventIds && this.deletedEventIds.add) {
                 // Not in our local list yet — remember so a late-arriving copy stays gone.
@@ -1820,48 +1818,78 @@ Object.assign(NYM.prototype, {
         return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge nm-hidden">0</span></div>`;
     },
 
-    // Record a group read receipt and surface the reader's avatar
-    recordGroupReadReceipt(nymMessageId, readerPubkey, readerName, groupConvKey) {
-        if (!nymMessageId || !readerPubkey || !groupConvKey) return;
-        if (!this.groupMessageReaders.has(nymMessageId)) {
-            this.groupMessageReaders.set(nymMessageId, new Map());
-        }
-        this.groupMessageReaders.get(nymMessageId).set(readerPubkey, readerName);
-
-        if (!this.groupLatestReadByReader) this.groupLatestReadByReader = new Map();
-        if (!this.groupLatestReadByReader.has(groupConvKey)) {
-            this.groupLatestReadByReader.set(groupConvKey, new Map());
-        }
-        const latestMap = this.groupLatestReadByReader.get(groupConvKey);
-        const oldMsgId = latestMap.get(readerPubkey);
-        if (oldMsgId === nymMessageId) {
-            this._syncGroupReadersFor(nymMessageId);
+    // Update the stacked reader avatars for group messages using waterfall logic:
+    // Each reader's avatar only appears on the LATEST message they've read, since
+    // reading message N implies having read all prior messages.
+    updateGroupReaderAvatars(nymMessageId) {
+        // Find the current group conversation
+        if (!this.inPMMode || !this.currentGroup) {
+            // Fallback: just update the single message
+            this._updateSingleGroupReaders(nymMessageId);
             return;
         }
-        const newMs = this._readReceiptMessageMs(nymMessageId);
-        const oldMs = oldMsgId ? this._readReceiptMessageMs(oldMsgId) : 0;
-        if (newMs < oldMs) return;
-        latestMap.set(readerPubkey, nymMessageId);
-        if (oldMsgId) this._syncGroupReadersFor(oldMsgId);
-        this._syncGroupReadersFor(nymMessageId);
-    },
+        const groupConvKey = this.getGroupConversationKey(this.currentGroup);
+        const messages = this.pmMessages.get(groupConvKey);
+        if (!messages) {
+            this._updateSingleGroupReaders(nymMessageId);
+            return;
+        }
 
-    // Re-sync the avatars for a single group message
-    _syncGroupReadersFor(nymMessageId) {
-        const els = this._queryAllAcrossCache(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
-        if (els.length === 0) return;
-        const displayMap = this._getDisplayedGroupReadersFor(nymMessageId);
-        for (const el of els) {
-            const hasReaders = this._syncReaderAvatars(el, displayMap);
-            if (hasReaders && !el._readerLongPressBound) {
-                this._bindReaderLongPress(el, nymMessageId);
-                el._readerLongPressBound = true;
+        // Build a map: readerPubkey -> latest nymMessageId they've read
+        // by iterating own messages from newest to oldest
+        const latestReadByReader = new Map(); // pubkey -> nymMessageId
+        const ownMessages = messages
+            .filter(m => m.isOwn && m.nymMessageId && this.groupMessageReaders.has(m.nymMessageId))
+            .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()); // newest first
+
+        for (const msg of ownMessages) {
+            const readers = this.groupMessageReaders.get(msg.nymMessageId);
+            if (!readers) continue;
+            for (const [pk] of readers) {
+                if (!latestReadByReader.has(pk)) {
+                    latestReadByReader.set(pk, msg.nymMessageId);
+                }
+            }
+        }
+
+        // Now for each own message, compute which readers to DISPLAY on it
+        // (only those whose latest-read message is THIS message)
+        const displayReaders = new Map(); // nymMessageId -> Map(pk -> nym)
+        for (const [pk, msgId] of latestReadByReader) {
+            if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
+            const readers = this.groupMessageReaders.get(msgId);
+            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
+            displayReaders.get(msgId).set(pk, name);
+        }
+
+        // Update each visible own message's reader avatars
+        for (const msg of ownMessages) {
+            const els = this._queryAllAcrossCache(`.group-readers[data-nym-msg-id="${msg.nymMessageId}"]`);
+            if (els.length === 0) continue;
+            const waterfallReaders = displayReaders.get(msg.nymMessageId);
+            for (const el of els) {
+                const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+                if (hasReaders && !el._readerLongPressBound) {
+                    this._bindReaderLongPress(el, msg.nymMessageId);
+                    el._readerLongPressBound = true;
+                }
             }
         }
     },
 
-    updateGroupReaderAvatars(nymMessageId) {
-        this._syncGroupReadersFor(nymMessageId);
+    // Fallback: update a single message's reader avatars without waterfall
+    _updateSingleGroupReaders(nymMessageId) {
+        const els = this._queryAllAcrossCache(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
+        if (els.length === 0) return;
+        const readers = this.groupMessageReaders.get(nymMessageId);
+        if (!readers || readers.size === 0) return;
+        for (const el of els) {
+            this._syncReaderAvatars(el, readers);
+            if (!el._readerLongPressBound) {
+                this._bindReaderLongPress(el, nymMessageId);
+                el._readerLongPressBound = true;
+            }
+        }
     },
 
     // Build reader avatars HTML from a provided Map (used by waterfall)
@@ -1931,108 +1959,72 @@ Object.assign(NYM.prototype, {
         return visible.length > 0;
     },
 
-    // Record a channel read receipt
-    recordChannelReadReceipt(messageId, readerPubkey, readerName, geohash) {
-        if (!messageId || !readerPubkey || !geohash) return;
-        if (!this.channelMessageReaders.has(messageId)) {
-            this.channelMessageReaders.set(messageId, new Map());
-        }
-        this.channelMessageReaders.get(messageId).set(readerPubkey, readerName);
-
-        if (!this.channelLatestReadByReader) this.channelLatestReadByReader = new Map();
-        const storageKey = `#${geohash}`;
-        if (!this.channelLatestReadByReader.has(storageKey)) {
-            this.channelLatestReadByReader.set(storageKey, new Map());
-        }
-        const latestMap = this.channelLatestReadByReader.get(storageKey);
-        const oldMsgId = latestMap.get(readerPubkey);
-        if (oldMsgId === messageId) {
-            this._syncChannelReadersFor(messageId);
+    // Channel-message reader avatars (kind 20000 message IDs keyed in channelMessageReaders)
+    updateChannelReaderAvatars(messageId) {
+        if (this.inPMMode || !this.currentGeohash) {
+            this._updateSingleChannelReaders(messageId);
             return;
         }
-        const newMs = this._readReceiptMessageMs(messageId);
-        const oldMs = oldMsgId ? this._readReceiptMessageMs(oldMsgId) : 0;
-        if (newMs < oldMs) return;
-        latestMap.set(readerPubkey, messageId);
-        if (oldMsgId) this._syncChannelReadersFor(oldMsgId);
-        this._syncChannelReadersFor(messageId);
+        const storageKey = `#${this.currentGeohash}`;
+        const messages = this.messages.get(storageKey);
+        if (!messages) {
+            this._updateSingleChannelReaders(messageId);
+            return;
+        }
+
+        const latestReadByReader = new Map();
+        const ownMessages = messages
+            .filter(m => m.isOwn && m.id && this.channelMessageReaders.has(m.id))
+            .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+
+        for (const msg of ownMessages) {
+            const readers = this.channelMessageReaders.get(msg.id);
+            if (!readers) continue;
+            for (const [pk] of readers) {
+                if (!latestReadByReader.has(pk)) latestReadByReader.set(pk, msg.id);
+            }
+        }
+
+        const displayReaders = new Map();
+        for (const [pk, msgId] of latestReadByReader) {
+            if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
+            const readers = this.channelMessageReaders.get(msgId);
+            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
+            displayReaders.get(msgId).set(pk, name);
+        }
+
+        for (const msg of ownMessages) {
+            const els = this._queryAllAcrossCache(`.channel-readers[data-msg-id="${msg.id}"]`);
+            if (els.length === 0) continue;
+            const waterfallReaders = displayReaders.get(msg.id);
+            for (const el of els) {
+                const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+                if (hasReaders && !el._readerLongPressBound) {
+                    this._bindChannelReaderLongPress(el, msg.id);
+                    el._readerLongPressBound = true;
+                }
+            }
+        }
     },
 
-    _syncChannelReadersFor(messageId) {
+    _updateSingleChannelReaders(messageId) {
         const els = this._queryAllAcrossCache(`.channel-readers[data-msg-id="${messageId}"]`);
         if (els.length === 0) return;
-        const displayMap = this._getDisplayedChannelReadersFor(messageId);
+        const readers = this.channelMessageReaders.get(messageId);
+        if (!readers || readers.size === 0) return;
         for (const el of els) {
-            const hasReaders = this._syncReaderAvatars(el, displayMap);
-            if (hasReaders && !el._readerLongPressBound) {
+            this._syncReaderAvatars(el, readers);
+            if (!el._readerLongPressBound) {
                 this._bindChannelReaderLongPress(el, messageId);
                 el._readerLongPressBound = true;
             }
         }
     },
 
-    updateChannelReaderAvatars(messageId) {
-        this._syncChannelReadersFor(messageId);
-    },
-
-    // _ms for a known message, or 0 when it hasn't been indexed yet.
-    _readReceiptMessageMs(messageId) {
-        const idx = this.messageIndex && this.messageIndex.get(messageId);
-        const msg = idx && idx.msg;
-        if (!msg) return 0;
-        return this._messageMs ? this._messageMs(msg)
-            : ((msg._ms && msg._ms > 0) ? msg._ms : (msg.created_at || 0) * 1000);
-    },
-
-    _collectDisplayReaders(messageId, latestMap, fullReaderMap) {
-        if (!latestMap) return null;
-        let display = null;
-        for (const [pk, msgId] of latestMap) {
-            if (msgId !== messageId) continue;
-            if (!display) display = new Map();
-            const readers = fullReaderMap.get(messageId);
-            const name = (readers && readers.get(pk)) ||
-                (this.getNymFromPubkey ? this.getNymFromPubkey(pk) : pk);
-            display.set(pk, name);
-        }
-        return display;
-    },
-
-    _getDisplayedChannelReadersFor(messageId) {
-        if (!this.channelLatestReadByReader) return null;
-        const idx = this.messageIndex && this.messageIndex.get(messageId);
-        const convKey = idx && idx.convKey;
-        if (convKey) {
-            return this._collectDisplayReaders(messageId,
-                this.channelLatestReadByReader.get(convKey), this.channelMessageReaders);
-        }
-        // Receipt arrived before the message was indexed — scan all channels.
-        for (const latestMap of this.channelLatestReadByReader.values()) {
-            const found = this._collectDisplayReaders(messageId, latestMap, this.channelMessageReaders);
-            if (found) return found;
-        }
-        return null;
-    },
-
-    _getDisplayedGroupReadersFor(nymMessageId) {
-        if (!this.groupLatestReadByReader) return null;
-        const idx = this.messageIndex && this.messageIndex.get(nymMessageId);
-        const convKey = idx && idx.convKey;
-        if (convKey) {
-            return this._collectDisplayReaders(nymMessageId,
-                this.groupLatestReadByReader.get(convKey), this.groupMessageReaders);
-        }
-        for (const latestMap of this.groupLatestReadByReader.values()) {
-            const found = this._collectDisplayReaders(nymMessageId, latestMap, this.groupMessageReaders);
-            if (found) return found;
-        }
-        return null;
-    },
-
     _buildChannelReadersHtml(messageId) {
-        const displayMap = this._getDisplayedChannelReadersFor(messageId);
-        if (!displayMap || displayMap.size === 0) return '';
-        return this._buildGroupReadersHtmlFromMap(displayMap);
+        const readers = this.channelMessageReaders.get(messageId);
+        if (!readers || readers.size === 0) return '';
+        return this._buildGroupReadersHtmlFromMap(readers);
     },
 
     _bindChannelReaderLongPress(el, messageId) {
@@ -2063,11 +2055,22 @@ Object.assign(NYM.prototype, {
         this._showReadersModalFromMap(readers, anchorEl);
     },
 
-    // Returns the inner HTML for a .group-readers span at initial render time
+    // Returns the inner HTML for a .group-readers span: up to 3 avatars + overflow badge
     _buildGroupReadersHtml(nymMessageId) {
-        const displayMap = this._getDisplayedGroupReadersFor(nymMessageId);
-        if (!displayMap || displayMap.size === 0) return '';
-        return this._buildGroupReadersHtmlFromMap(displayMap);
+        const MAX_VISIBLE = 3;
+        const readers = this.groupMessageReaders.get(nymMessageId);
+        if (!readers || readers.size === 0) return '';
+        const entries = Array.from(readers.entries());
+        const visible = entries.slice(0, MAX_VISIBLE);
+        const overflow = readers.size - MAX_VISIBLE;
+        const avatarHtml = visible.map(([pk, name]) => {
+            const sk = this._safePubkey(pk);
+            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" loading="lazy">`;
+        }).join('');
+        const overflowHtml = overflow > 0
+            ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
+            : '';
+        return avatarHtml + overflowHtml;
     },
 
     // Attach a 500ms long-press to a .group-readers element to open the readers modal
