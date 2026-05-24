@@ -495,7 +495,7 @@ Object.assign(NYM.prototype, {
             const unbanBody = `${actorName} unbanned you from "${groupName}". You may be re-invited.`;
             const unbanChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
             if (!unbanIsHistorical) {
-                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo);
+                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
             } else {
                 this._addNotificationToHistory(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
             }
@@ -589,14 +589,14 @@ Object.assign(NYM.prototype, {
                     this.showNotification(`Group invite: ${groupName}`, inviteBody, {
                         type: 'group',
                         groupId,
-                        id: groupConvKeyForNotif,
+                        id: event.id,
                         pubkey: senderPubkey
-                    });
+                    }, inviteTsSec * 1000);
                 } else {
                     this._addNotificationToHistory(`Group invite: ${groupName}`, inviteBody, {
                         type: 'group',
                         groupId,
-                        id: groupConvKeyForNotif,
+                        id: event.id,
                         pubkey: senderPubkey
                     }, inviteTsSec * 1000);
                 }
@@ -683,7 +683,6 @@ Object.assign(NYM.prototype, {
             const removedName = this.getNymFromPubkey(removedPubkey);
             const removerName = this.getNymFromPubkey(senderPubkey);
             if (removedPubkey === this.pubkey) {
-                // We were removed — track as left so it doesn't reappear
                 this.leftGroups.add(groupId);
                 this._saveLeftGroups();
                 this.groupConversations.delete(groupId);
@@ -692,7 +691,15 @@ Object.assign(NYM.prototype, {
                 const gck = this.getGroupConversationKey(groupId);
                 this.pmMessages.delete(gck);
                 this.channelDOMCache.delete(gck);
-                if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', gck);
+                if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', gck);
+                if (this._persistedPMIds) this._persistedPMIds.delete(gck);
+                this.unreadCounts?.delete(gck);
+                this.channelLastRead?.delete(gck);
+                this.channelLastActivity?.delete(gck);
+                if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
+                if (typeof this.pruneNotificationsForContext === 'function') {
+                    this.pruneNotificationsForContext({ type: 'group', groupId });
+                }
                 document.getElementById('pmList')?.querySelector(`[data-group-id="${groupId}"]`)?.remove();
                 this.updateViewMoreButton('pmList');
                 if (this.currentGroup === groupId) {
@@ -710,7 +717,7 @@ Object.assign(NYM.prototype, {
                 const removeSelfTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
                 const removeSelfIsHistorical = (Math.floor(Date.now() / 1000) - removeSelfTsSec) > 10;
                 if (!removeSelfIsHistorical) {
-                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo);
+                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
                 } else {
                     this._addNotificationToHistory(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
                 }
@@ -769,7 +776,7 @@ Object.assign(NYM.prototype, {
                     if ((Math.floor(Date.now() / 1000) - promoteTsSec) > 10) {
                         this._addNotificationToHistory(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
                     } else {
-                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo);
+                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
                     }
                 }
             }
@@ -806,7 +813,7 @@ Object.assign(NYM.prototype, {
                     if ((Math.floor(Date.now() / 1000) - revokeTsSec) > 10) {
                         this._addNotificationToHistory(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
                     } else {
-                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo);
+                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
                     }
                 }
             }
@@ -844,7 +851,7 @@ Object.assign(NYM.prototype, {
                     if ((Math.floor(Date.now() / 1000) - transferTsSec) > 10) {
                         this._addNotificationToHistory(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
                     } else {
-                        this.showNotification(transferTitle, transferBody, transferChannelInfo);
+                        this.showNotification(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
                     }
                 }
             }
@@ -943,8 +950,11 @@ Object.assign(NYM.prototype, {
         list.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
         this.pmMessages.set(groupConvKey, list);
+        this._indexMessage(groupConvKey, msg);
+        // Prune in-place; the pruner walks the array referenced by the map
+        // and also sweeps cached + live DOM for the dropped messages.
+        this._pruneStorageKey(groupConvKey, this.pmMessages, this.pmStorageLimit, 0);
         this.persistPMMessages(groupConvKey);
 
         // Update or create group conversation entry
@@ -990,14 +1000,14 @@ Object.assign(NYM.prototype, {
                         this.showNotification(`${groupName}: ${msg.author}`, messageContent, {
                             type: 'group',
                             groupId,
-                            id: groupConvKey,
+                            id: event.id,
                             pubkey: senderPubkey
-                        });
+                        }, msg.timestamp.getTime());
                     } else {
                         this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, {
                             type: 'group',
                             groupId,
-                            id: groupConvKey,
+                            id: event.id,
                             pubkey: senderPubkey
                         }, msg.timestamp.getTime());
                     }
@@ -1005,11 +1015,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Send read receipt back to sender so they can show our avatar as "read"
-        if (!isOwn && !msg.isHistorical && this._canSendGiftWraps() && nymMsgId) {
-            this.sendNymReceipt(nymMsgId, 'read', senderPubkey, 'group');
-            this.recordOwnActivity();
-        }
     },
 
     // Create a new private group and send invites to all members via NIP-17 gift wraps.
@@ -1293,8 +1298,8 @@ Object.assign(NYM.prototype, {
         groupList.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
-        this.channelDOMCache.delete(groupConvKey);
+        this._indexMessage(groupConvKey, msg);
+        this._pruneStorageKey(groupConvKey, this.pmMessages, this.pmStorageLimit, 0);
         this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);
 
@@ -1362,15 +1367,12 @@ Object.assign(NYM.prototype, {
                 await this._sendGiftWrapsAsync(otherMembers, rumor, null, groupId);
             }
         }
-        // Track the left group so it doesn't reappear from stale relay data
         this.leftGroups.add(groupId);
         this._saveLeftGroups();
 
-        // Clean up ephemeral keys for this group
         this.groupEphemeralKeys.delete(groupId);
         this._saveEphemeralKeys();
 
-        // Remove persisted entry
         try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) { }
         this.groupConversations.delete(groupId);
         this._saveGroupConversations();
@@ -1378,7 +1380,18 @@ Object.assign(NYM.prototype, {
         const groupConvKey = this.getGroupConversationKey(groupId);
         this.pmMessages.delete(groupConvKey);
         this.channelDOMCache.delete(groupConvKey);
-        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', groupConvKey);
+        if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', groupConvKey);
+        if (this._persistedPMIds) this._persistedPMIds.delete(groupConvKey);
+
+        this.unreadCounts?.delete(groupConvKey);
+        this.channelLastRead?.delete(groupConvKey);
+        this.channelLastActivity?.delete(groupConvKey);
+        if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
+
+        if (typeof this.pruneNotificationsForContext === 'function') {
+            this.pruneNotificationsForContext({ type: 'group', groupId });
+        }
+
         const pmList = document.getElementById('pmList');
         const item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
         if (item) item.remove();
@@ -1713,7 +1726,10 @@ Object.assign(NYM.prototype, {
                     if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
                 }
                 list.splice(idx, 1);
-                this.channelDOMCache.delete(groupConvKey);
+                if (typeof this._removeMessageFromAllCaches === 'function') {
+                    this._removeMessageFromAllCaches(domId);
+                    if (msg.id && msg.id !== domId) this._removeMessageFromAllCaches(msg.id);
+                }
                 if (typeof this.persistPMMessages === 'function') this.persistPMMessages(groupConvKey);
             } else if (this.deletedEventIds && this.deletedEventIds.add) {
                 // Not in our local list yet — remember so a late-arriving copy stays gone.
@@ -1798,74 +1814,48 @@ Object.assign(NYM.prototype, {
         return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge nm-hidden">0</span></div>`;
     },
 
-    // Update the stacked reader avatars for group messages using waterfall logic:
-    // Each reader's avatar only appears on the LATEST message they've read, since
-    // reading message N implies having read all prior messages.
-    updateGroupReaderAvatars(nymMessageId) {
-        // Find the current group conversation
-        if (!this.inPMMode || !this.currentGroup) {
-            // Fallback: just update the single message
-            this._updateSingleGroupReaders(nymMessageId);
+    // Record a group read receipt and surface the reader's avatar
+    recordGroupReadReceipt(nymMessageId, readerPubkey, readerName, groupConvKey) {
+        if (!nymMessageId || !readerPubkey || !groupConvKey) return;
+        if (!this.groupMessageReaders.has(nymMessageId)) {
+            this.groupMessageReaders.set(nymMessageId, new Map());
+        }
+        this.groupMessageReaders.get(nymMessageId).set(readerPubkey, readerName);
+
+        if (!this.groupLatestReadByReader) this.groupLatestReadByReader = new Map();
+        if (!this.groupLatestReadByReader.has(groupConvKey)) {
+            this.groupLatestReadByReader.set(groupConvKey, new Map());
+        }
+        const latestMap = this.groupLatestReadByReader.get(groupConvKey);
+        const oldMsgId = latestMap.get(readerPubkey);
+        if (oldMsgId === nymMessageId) {
+            this._syncGroupReadersFor(nymMessageId);
             return;
         }
-        const groupConvKey = this.getGroupConversationKey(this.currentGroup);
-        const messages = this.pmMessages.get(groupConvKey);
-        if (!messages) {
-            this._updateSingleGroupReaders(nymMessageId);
-            return;
-        }
+        const newMs = this._readReceiptMessageMs(nymMessageId);
+        const oldMs = oldMsgId ? this._readReceiptMessageMs(oldMsgId) : 0;
+        if (newMs < oldMs) return;
+        latestMap.set(readerPubkey, nymMessageId);
+        if (oldMsgId) this._syncGroupReadersFor(oldMsgId);
+        this._syncGroupReadersFor(nymMessageId);
+    },
 
-        // Build a map: readerPubkey -> latest nymMessageId they've read
-        // by iterating own messages from newest to oldest
-        const latestReadByReader = new Map(); // pubkey -> nymMessageId
-        const ownMessages = messages
-            .filter(m => m.isOwn && m.nymMessageId && this.groupMessageReaders.has(m.nymMessageId))
-            .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()); // newest first
-
-        for (const msg of ownMessages) {
-            const readers = this.groupMessageReaders.get(msg.nymMessageId);
-            if (!readers) continue;
-            for (const [pk] of readers) {
-                if (!latestReadByReader.has(pk)) {
-                    latestReadByReader.set(pk, msg.nymMessageId);
-                }
-            }
-        }
-
-        // Now for each own message, compute which readers to DISPLAY on it
-        // (only those whose latest-read message is THIS message)
-        const displayReaders = new Map(); // nymMessageId -> Map(pk -> nym)
-        for (const [pk, msgId] of latestReadByReader) {
-            if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
-            const readers = this.groupMessageReaders.get(msgId);
-            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
-            displayReaders.get(msgId).set(pk, name);
-        }
-
-        // Update each visible own message's reader avatars
-        for (const msg of ownMessages) {
-            const el = document.querySelector(`.group-readers[data-nym-msg-id="${msg.nymMessageId}"]`);
-            if (!el) continue;
-            const waterfallReaders = displayReaders.get(msg.nymMessageId);
-            const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+    // Re-sync the avatars for a single group message
+    _syncGroupReadersFor(nymMessageId) {
+        const els = this._queryAllAcrossCache(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
+        if (els.length === 0) return;
+        const displayMap = this._getDisplayedGroupReadersFor(nymMessageId);
+        for (const el of els) {
+            const hasReaders = this._syncReaderAvatars(el, displayMap);
             if (hasReaders && !el._readerLongPressBound) {
-                this._bindReaderLongPress(el, msg.nymMessageId);
+                this._bindReaderLongPress(el, nymMessageId);
                 el._readerLongPressBound = true;
             }
         }
     },
 
-    // Fallback: update a single message's reader avatars without waterfall
-    _updateSingleGroupReaders(nymMessageId) {
-        const el = document.querySelector(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
-        if (!el) return;
-        const readers = this.groupMessageReaders.get(nymMessageId);
-        if (!readers || readers.size === 0) return;
-        this._syncReaderAvatars(el, readers);
-        if (!el._readerLongPressBound) {
-            this._bindReaderLongPress(el, nymMessageId);
-            el._readerLongPressBound = true;
-        }
+    updateGroupReaderAvatars(nymMessageId) {
+        this._syncGroupReadersFor(nymMessageId);
     },
 
     // Build reader avatars HTML from a provided Map (used by waterfall)
@@ -1935,68 +1925,108 @@ Object.assign(NYM.prototype, {
         return visible.length > 0;
     },
 
-    // Channel-message reader avatars (kind 20000 message IDs keyed in channelMessageReaders)
-    updateChannelReaderAvatars(messageId) {
-        if (this.inPMMode || !this.currentGeohash) {
-            this._updateSingleChannelReaders(messageId);
+    // Record a channel read receipt
+    recordChannelReadReceipt(messageId, readerPubkey, readerName, geohash) {
+        if (!messageId || !readerPubkey || !geohash) return;
+        if (!this.channelMessageReaders.has(messageId)) {
+            this.channelMessageReaders.set(messageId, new Map());
+        }
+        this.channelMessageReaders.get(messageId).set(readerPubkey, readerName);
+
+        if (!this.channelLatestReadByReader) this.channelLatestReadByReader = new Map();
+        const storageKey = `#${geohash}`;
+        if (!this.channelLatestReadByReader.has(storageKey)) {
+            this.channelLatestReadByReader.set(storageKey, new Map());
+        }
+        const latestMap = this.channelLatestReadByReader.get(storageKey);
+        const oldMsgId = latestMap.get(readerPubkey);
+        if (oldMsgId === messageId) {
+            this._syncChannelReadersFor(messageId);
             return;
         }
-        const storageKey = `#${this.currentGeohash}`;
-        const messages = this.messages.get(storageKey);
-        if (!messages) {
-            this._updateSingleChannelReaders(messageId);
-            return;
-        }
+        const newMs = this._readReceiptMessageMs(messageId);
+        const oldMs = oldMsgId ? this._readReceiptMessageMs(oldMsgId) : 0;
+        if (newMs < oldMs) return;
+        latestMap.set(readerPubkey, messageId);
+        if (oldMsgId) this._syncChannelReadersFor(oldMsgId);
+        this._syncChannelReadersFor(messageId);
+    },
 
-        const latestReadByReader = new Map();
-        const ownMessages = messages
-            .filter(m => m.isOwn && m.id && this.channelMessageReaders.has(m.id))
-            .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-
-        for (const msg of ownMessages) {
-            const readers = this.channelMessageReaders.get(msg.id);
-            if (!readers) continue;
-            for (const [pk] of readers) {
-                if (!latestReadByReader.has(pk)) latestReadByReader.set(pk, msg.id);
-            }
-        }
-
-        const displayReaders = new Map();
-        for (const [pk, msgId] of latestReadByReader) {
-            if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
-            const readers = this.channelMessageReaders.get(msgId);
-            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
-            displayReaders.get(msgId).set(pk, name);
-        }
-
-        for (const msg of ownMessages) {
-            const el = document.querySelector(`.channel-readers[data-msg-id="${msg.id}"]`);
-            if (!el) continue;
-            const waterfallReaders = displayReaders.get(msg.id);
-            const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+    _syncChannelReadersFor(messageId) {
+        const els = this._queryAllAcrossCache(`.channel-readers[data-msg-id="${messageId}"]`);
+        if (els.length === 0) return;
+        const displayMap = this._getDisplayedChannelReadersFor(messageId);
+        for (const el of els) {
+            const hasReaders = this._syncReaderAvatars(el, displayMap);
             if (hasReaders && !el._readerLongPressBound) {
-                this._bindChannelReaderLongPress(el, msg.id);
+                this._bindChannelReaderLongPress(el, messageId);
                 el._readerLongPressBound = true;
             }
         }
     },
 
-    _updateSingleChannelReaders(messageId) {
-        const el = document.querySelector(`.channel-readers[data-msg-id="${messageId}"]`);
-        if (!el) return;
-        const readers = this.channelMessageReaders.get(messageId);
-        if (!readers || readers.size === 0) return;
-        this._syncReaderAvatars(el, readers);
-        if (!el._readerLongPressBound) {
-            this._bindChannelReaderLongPress(el, messageId);
-            el._readerLongPressBound = true;
+    updateChannelReaderAvatars(messageId) {
+        this._syncChannelReadersFor(messageId);
+    },
+
+    // _ms for a known message, or 0 when it hasn't been indexed yet.
+    _readReceiptMessageMs(messageId) {
+        const idx = this.messageIndex && this.messageIndex.get(messageId);
+        const msg = idx && idx.msg;
+        if (!msg) return 0;
+        return this._messageMs ? this._messageMs(msg)
+            : ((msg._ms && msg._ms > 0) ? msg._ms : (msg.created_at || 0) * 1000);
+    },
+
+    _collectDisplayReaders(messageId, latestMap, fullReaderMap) {
+        if (!latestMap) return null;
+        let display = null;
+        for (const [pk, msgId] of latestMap) {
+            if (msgId !== messageId) continue;
+            if (!display) display = new Map();
+            const readers = fullReaderMap.get(messageId);
+            const name = (readers && readers.get(pk)) ||
+                (this.getNymFromPubkey ? this.getNymFromPubkey(pk) : pk);
+            display.set(pk, name);
         }
+        return display;
+    },
+
+    _getDisplayedChannelReadersFor(messageId) {
+        if (!this.channelLatestReadByReader) return null;
+        const idx = this.messageIndex && this.messageIndex.get(messageId);
+        const convKey = idx && idx.convKey;
+        if (convKey) {
+            return this._collectDisplayReaders(messageId,
+                this.channelLatestReadByReader.get(convKey), this.channelMessageReaders);
+        }
+        // Receipt arrived before the message was indexed — scan all channels.
+        for (const latestMap of this.channelLatestReadByReader.values()) {
+            const found = this._collectDisplayReaders(messageId, latestMap, this.channelMessageReaders);
+            if (found) return found;
+        }
+        return null;
+    },
+
+    _getDisplayedGroupReadersFor(nymMessageId) {
+        if (!this.groupLatestReadByReader) return null;
+        const idx = this.messageIndex && this.messageIndex.get(nymMessageId);
+        const convKey = idx && idx.convKey;
+        if (convKey) {
+            return this._collectDisplayReaders(nymMessageId,
+                this.groupLatestReadByReader.get(convKey), this.groupMessageReaders);
+        }
+        for (const latestMap of this.groupLatestReadByReader.values()) {
+            const found = this._collectDisplayReaders(nymMessageId, latestMap, this.groupMessageReaders);
+            if (found) return found;
+        }
+        return null;
     },
 
     _buildChannelReadersHtml(messageId) {
-        const readers = this.channelMessageReaders.get(messageId);
-        if (!readers || readers.size === 0) return '';
-        return this._buildGroupReadersHtmlFromMap(readers);
+        const displayMap = this._getDisplayedChannelReadersFor(messageId);
+        if (!displayMap || displayMap.size === 0) return '';
+        return this._buildGroupReadersHtmlFromMap(displayMap);
     },
 
     _bindChannelReaderLongPress(el, messageId) {
@@ -2027,22 +2057,11 @@ Object.assign(NYM.prototype, {
         this._showReadersModalFromMap(readers, anchorEl);
     },
 
-    // Returns the inner HTML for a .group-readers span: up to 3 avatars + overflow badge
+    // Returns the inner HTML for a .group-readers span at initial render time
     _buildGroupReadersHtml(nymMessageId) {
-        const MAX_VISIBLE = 3;
-        const readers = this.groupMessageReaders.get(nymMessageId);
-        if (!readers || readers.size === 0) return '';
-        const entries = Array.from(readers.entries());
-        const visible = entries.slice(0, MAX_VISIBLE);
-        const overflow = readers.size - MAX_VISIBLE;
-        const avatarHtml = visible.map(([pk, name]) => {
-            const sk = this._safePubkey(pk);
-            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" loading="lazy">`;
-        }).join('');
-        const overflowHtml = overflow > 0
-            ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
-            : '';
-        return avatarHtml + overflowHtml;
+        const displayMap = this._getDisplayedGroupReadersFor(nymMessageId);
+        if (!displayMap || displayMap.size === 0) return '';
+        return this._buildGroupReadersHtmlFromMap(displayMap);
     },
 
     // Attach a 500ms long-press to a .group-readers element to open the readers modal
@@ -2211,6 +2230,11 @@ Object.assign(NYM.prototype, {
 
         const groupConvKey = this.getGroupConversationKey(groupId);
         this.clearUnreadCount(groupConvKey);
+
+        if (typeof this._updateNotificationBadge === 'function') {
+            this._updateNotificationBadge();
+        }
+
         this.loadPMMessages(groupConvKey);
 
         // Restore any unsent input previously typed for this conversation

@@ -52,6 +52,17 @@ Object.assign(NYM.prototype, {
         }, 2000);
     },
 
+    _ensureEmojiImageHolder() {
+        if (this._emojiImageHolder && this._emojiImageHolder.isConnected) return this._emojiImageHolder;
+        const holder = document.createElement('div');
+        holder.id = 'nymCustomEmojiCache';
+        holder.setAttribute('aria-hidden', 'true');
+        holder.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none;left:-9999px;top:-9999px;';
+        document.body.appendChild(holder);
+        this._emojiImageHolder = holder;
+        return holder;
+    },
+
     _prefetchCustomEmojiImages() {
         if (this._emojiPrefetchTimer) return;
         if (this.settings && this.settings.lowDataMode) return;
@@ -59,21 +70,20 @@ Object.assign(NYM.prototype, {
             this._emojiPrefetchTimer = null;
             if (!this.customEmojis || this.customEmojis.size === 0) return;
             if (!this._prefetchedEmojiUrls) this._prefetchedEmojiUrls = new Set();
-            let budget = 60;
+            const holder = this._ensureEmojiImageHolder();
             for (const [, url] of this.customEmojis) {
-                if (budget <= 0) break;
                 if (this._prefetchedEmojiUrls.has(url)) continue;
                 this._prefetchedEmojiUrls.add(url);
-                budget--;
                 try {
-                    const img = new Image();
+                    const img = document.createElement('img');
                     img.decoding = 'async';
                     img.loading = 'eager';
                     img.referrerPolicy = 'no-referrer';
                     img.src = this.getProxiedEmojiUrl(url);
+                    holder.appendChild(img);
                 } catch (_) { }
             }
-        }, 3000);
+        }, 1000);
     },
 
     _saveCustomEmojiMap() {
@@ -101,6 +111,10 @@ Object.assign(NYM.prototype, {
         if (this.emojiMap && this.emojiMap[shortcode.toLowerCase()]) return;
         if (this.customEmojis.get(shortcode) === url) return;
         this.customEmojis.set(shortcode, url);
+        this.invalidateFormatCache();
+        if (typeof this.invalidateEmojiAutocompleteCache === 'function') {
+            this.invalidateEmojiAutocompleteCache();
+        }
         this._saveCustomEmojiMap();
         this._scheduleEmojiDomRefresh();
         this._prefetchCustomEmojiImages();
