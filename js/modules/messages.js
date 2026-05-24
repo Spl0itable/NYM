@@ -36,6 +36,17 @@ function _getQuoteToMePattern(cleanNym, suffix) {
     return pattern;
 }
 
+// Presence test for any emoji-bearing codepoint (pictographs, regional indicators,
+// keycap combiner). Lets formatMessage skip the heavy emoji-wrapping regex on plain text.
+const _RX_HAS_EMOJI = /\p{Extended_Pictographic}|[\u{1F1E6}-\u{1F1FF}]|\u{20E3}/u;
+
+// LRU cache for formatMessage output. Invalidated when the identity/channel context
+// changes, since that context can alter the rendered HTML (e.g. active-channel class).
+const _FORMAT_CACHE_MAX = 200;
+const _formatCache = new Map();
+let _formatCacheSig = null;
+let _formatCacheEpoch = 0;
+
 Object.assign(NYM.prototype, {
 
     // Millisecond sort key for a message. NYM clients stamp outgoing events with
@@ -59,14 +70,241 @@ Object.assign(NYM.prototype, {
         return (createdAtSec || 0) * 1000;
     },
 
-    // Chronological message comparator: created_at seconds, then millisecond
-    // 'ms' stamp, then local arrival sequence as a final tiebreaker.
+    // Chronological message comparator. We sort by the millisecond 'ms' tag
+    // first (falling back to created_at*1000) so messages stay in real send
+    // order even when two senders straddle a 1-second created_at boundary or
+    // one sender's clock drifts. Local arrival sequence is the final tiebreak.
     _compareMessages(a, b) {
-        const dt = (a.created_at || 0) - (b.created_at || 0);
-        if (dt !== 0) return dt;
         const dm = this._messageMs(a) - this._messageMs(b);
         if (dm !== 0) return dm;
         return (a._seq || 0) - (b._seq || 0);
+    },
+
+    _insertMessageSorted(arr, msg) {
+        if (arr.length === 0 || this._compareMessages(arr[arr.length - 1], msg) <= 0) {
+            arr.push(msg);
+            return arr.length - 1;
+        }
+        let lo = 0, hi = arr.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (this._compareMessages(arr[mid], msg) <= 0) lo = mid + 1;
+            else hi = mid;
+        }
+        arr.splice(lo, 0, msg);
+        return lo;
+    },
+
+    _indexMessage(convKey, msg) {
+        if (!msg) return;
+        if (msg.id) this.messageIndex.set(msg.id, { convKey, msg });
+        if (msg.nymMessageId && msg.nymMessageId !== msg.id) {
+            this.messageIndex.set(msg.nymMessageId, { convKey, msg });
+        }
+        if (msg.bitchatMessageId) {
+            this.messageIndex.set('bc:' + String(msg.bitchatMessageId).toUpperCase(), { convKey, msg });
+        }
+        if (msg.nymMessageId) {
+            this.messageIndex.set('nm:' + String(msg.nymMessageId).toUpperCase(), { convKey, msg });
+        }
+    },
+
+    _unindexMessage(msg) {
+        if (!msg) return;
+        if (msg.id) this.messageIndex.delete(msg.id);
+        if (msg.nymMessageId && msg.nymMessageId !== msg.id) {
+            this.messageIndex.delete(msg.nymMessageId);
+        }
+        if (msg.bitchatMessageId) {
+            this.messageIndex.delete('bc:' + String(msg.bitchatMessageId).toUpperCase());
+        }
+        if (msg.nymMessageId) {
+            this.messageIndex.delete('nm:' + String(msg.nymMessageId).toUpperCase());
+        }
+    },
+
+    _replaceOptimisticMessage(tempId, signedEvent, storageKey, isPM) {
+        const arr = isPM ? this.pmMessages.get(storageKey) : this.messages.get(storageKey);
+        if (!arr) return;
+        const idx = arr.findIndex(m => m && m.id === tempId);
+        if (idx < 0) return;
+        const msg = arr[idx];
+        const oldCreated = msg.created_at || 0;
+        msg.id = signedEvent.id;
+        msg.created_at = signedEvent.created_at;
+        msg.timestamp = new Date(signedEvent.created_at * 1000);
+        delete msg._optimistic;
+
+        const idSet = isPM ? null : this.channelMessageIds.get(storageKey);
+        if (idSet) idSet.add(signedEvent.id);
+        if (typeof this._indexMessage === 'function') this._indexMessage(storageKey, msg);
+        if (this.processedMessageEventIds) this.processedMessageEventIds.add(signedEvent.id);
+        if (this.renderedMessageIds) {
+            this.renderedMessageIds.delete(tempId);
+            this.renderedMessageIds.add(signedEvent.id);
+        }
+
+        if (oldCreated !== msg.created_at) {
+            arr.splice(idx, 1);
+            this._insertMessageSorted(arr, msg);
+        }
+
+        const escapedTempId = tempId.replace(/"/g, '\\"');
+        const el = document.querySelector(`[data-message-id="${escapedTempId}"]`);
+        if (el) {
+            el.dataset.messageId = signedEvent.id;
+            el.dataset.createdAt = String(signedEvent.created_at || 0);
+            el.classList.remove('optimistic-pending');
+
+            el.querySelectorAll(`[data-message-id="${escapedTempId}"]`).forEach(child => {
+                child.dataset.messageId = signedEvent.id;
+            });
+            const readersEl = el.querySelector(`.channel-readers[data-msg-id="${escapedTempId}"]`);
+            if (readersEl) readersEl.dataset.msgId = signedEvent.id;
+
+            if (oldCreated !== msg.created_at) {
+                const container = el.parentNode;
+                if (container) {
+                    const insertBefore = this._findDomInsertionPoint(container, msg.created_at, msg._ms || msg.created_at * 1000, msg._seq || 0);
+                    if (insertBefore !== el && insertBefore !== el.nextSibling) {
+                        if (insertBefore) container.insertBefore(el, insertBefore);
+                        else container.appendChild(el);
+                    }
+                }
+            }
+        }
+    },
+
+    _initSeenObserver() {
+        if (this._seenObserver !== undefined) return;
+        if (typeof IntersectionObserver === 'undefined') { this._seenObserver = null; return; }
+        const root = document.getElementById('messagesContainer') || null;
+        const cb = (entries) => {
+            if (document.hidden) return;
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                const el = entry.target;
+                this._seenObserver.unobserve(el);
+                this._handleMessageElementSeen(el);
+            }
+        };
+        this._seenObserver = new IntersectionObserver(cb, { root, threshold: 0.5 });
+        if (!this._seenObserverVisibilityBound) {
+            this._seenObserverVisibilityBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) return;
+                this._reobserveVisibleMessages();
+            });
+        }
+    },
+
+    _observeMessageSeen(messageEl, message) {
+        if (!messageEl || !message) return;
+        if (message.isOwn) return;
+        if (message.readReceiptSent) return;
+        if (this.blockedUsers && this.blockedUsers.has(message.pubkey)) return;
+        if (!message.isPM) {
+            if (!message.geohash) return;
+            if (!message.id || !/^[0-9a-f]{64}$/i.test(message.id)) return;
+        }
+        this._initSeenObserver();
+        if (!this._seenObserver) return;
+        this._seenObserver.observe(messageEl);
+    },
+
+    _reobserveVisibleMessages() {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+        const isPM = container.dataset.virtualScrollIsPM === 'true';
+        const arr = isPM
+            ? (this.currentGroup
+                ? this.pmMessages.get(this.getGroupConversationKey(this.currentGroup))
+                : this.pmMessages.get(this.getPMConversationKey(this.currentPM)))
+            : this.messages.get(this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel);
+        if (!arr || arr.length === 0) return;
+        const recent = arr.slice(-50);
+        for (const m of recent) {
+            if (!m || m.isOwn || m.readReceiptSent) continue;
+            const lookupId = (m.isPM && m.nymMessageId) ? m.nymMessageId : m.id;
+            const el = container.querySelector(`[data-message-id="${String(lookupId).replace(/"/g, '\\"')}"]`);
+            if (el) this._observeMessageSeen(el, m);
+        }
+    },
+
+    _handleMessageElementSeen(el) {
+        if (!el || !el.dataset) return;
+        const msgId = el.dataset.messageId;
+        if (!msgId) return;
+        const entry = this.messageIndex && this.messageIndex.get(msgId);
+        const msg = entry && entry.msg;
+        if (!msg || msg.isOwn) return;
+        if (this.blockedUsers && this.blockedUsers.has(msg.pubkey)) return;
+
+        if (msg.isPM) {
+            if (msg.readReceiptSent) return;
+            const context = msg.isGroup ? 'group' : 'pm';
+            let sent = false;
+            if (msg.bitchatMessageId && this.bitchatUsers && this.bitchatUsers.has(msg.pubkey)
+                && typeof this.sendBitchatReceipt === 'function') {
+                this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
+                sent = true;
+            }
+            if (msg.nymMessageId && this.nymUsers && this.nymUsers.has(msg.pubkey)
+                && typeof this.sendNymReceipt === 'function') {
+                this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey, context);
+                sent = true;
+            }
+            if (sent) {
+                msg.readReceiptSent = true;
+                if (entry.convKey && typeof this.persistPMMessages === 'function') {
+                    this.persistPMMessages(entry.convKey);
+                }
+                if (typeof this.recordOwnActivity === 'function') this.recordOwnActivity();
+            }
+        } else if (msg.geohash && msg.id && /^[0-9a-f]{64}$/i.test(msg.id)
+            && typeof this.sendChannelReadReceipt === 'function') {
+            this.sendChannelReadReceipt(msg.id, msg.pubkey, msg.geohash);
+            msg.readReceiptSent = true;
+            const storageKey = `#${msg.geohash}`;
+            if (typeof this.persistChannelMessages === 'function') this.persistChannelMessages(storageKey);
+            if (typeof this.recordOwnActivity === 'function') this.recordOwnActivity();
+        }
+    },
+
+    _markOptimisticFailed(tempId, storageKey, err) {
+        const el = document.querySelector(`[data-message-id="${tempId.replace(/"/g, '\\"')}"]`);
+        if (el) el.classList.add('optimistic-failed');
+        if (typeof this.displaySystemMessage === 'function') {
+            this.displaySystemMessage('Failed to send message: ' + (err && err.message || err));
+        }
+    },
+
+    _findDomInsertionPoint(container, msgCreatedAt, msgMs, msgSeq) {
+        const msgs = container.querySelectorAll(':scope > .message[data-message-id], :scope > .message-group .message[data-message-id]');
+        const n = msgs.length;
+        if (n === 0) return null;
+
+        const cmp = (node) => {
+            const ec = parseInt(node.dataset.createdAt) || 0;
+            const em = parseInt(node.dataset.ms) || (ec * 1000);
+            const es = parseInt(node.dataset.seq) || 0;
+            if (em !== msgMs) return em - msgMs;
+            return es - msgSeq;
+        };
+
+        if (cmp(msgs[n - 1]) <= 0) return null;
+
+        let lo = 0, hi = n;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (cmp(msgs[mid]) <= 0) lo = mid + 1;
+            else hi = mid;
+        }
+        const successor = msgs[lo];
+        if (!successor) return null;
+        const wrapper = successor.closest('.message-group');
+        if (wrapper && wrapper.parentNode === container) return wrapper;
+        return successor.parentNode === container ? successor : null;
     },
 
     hasBlockedKeyword(text, nickname) {
@@ -377,15 +615,13 @@ Object.assign(NYM.prototype, {
                 !this.nymchatPubkeys.has(message.pubkey) &&
                 this._isPubkeyGated(message.pubkey);
 
-            // Always store channel messages in memory regardless of current view
             if (!this.messages.has(storageKey)) {
                 this.messages.set(storageKey, []);
+                this.channelMessageIds.set(storageKey, new Set());
             }
-
-            // Check if message already exists
-            const exists = this.messages.get(storageKey).some(m => m.id === message.id);
+            const idSet = this.channelMessageIds.get(storageKey);
+            const exists = idSet.has(message.id);
             if (!exists) {
-                // Track most recent message time for channel sort ordering
                 const msgTime = (message.created_at || 0) * 1000;
                 const prevActivity = this.channelLastActivity.get(storageKey) || 0;
                 if (!isGated && msgTime > prevActivity) {
@@ -393,28 +629,25 @@ Object.assign(NYM.prototype, {
                     if (typeof this._persistUnreadCounts === 'function') {
                         this._persistUnreadCounts();
                     }
-                    // Throttled sort so discovered/historical channels order by activity
                     if (typeof this._scheduleChannelSort === 'function') {
                         this._scheduleChannelSort();
                     }
                 }
 
-                // Add message and sort chronologically: created_at seconds, then
-                // the millisecond 'ms' stamp, then arrival sequence as a tiebreaker.
-                this.messages.get(storageKey).push(message);
-                this.messages.get(storageKey).sort((a, b) => this._compareMessages(a, b));
-
-                // Prune in-memory messages if exceeding the tier-aware limit
-                const messages = this.messages.get(storageKey);
-                if (messages && messages.length > this.channelMessageLimit) {
-                    this.messages.set(storageKey, messages.slice(-this.channelMessageLimit));
+                const arr = this.messages.get(storageKey);
+                if (arr.length >= this.channelMessageLimit && arr.length > 0
+                    && (message.created_at || 0) < (arr[0].created_at || 0)) {
+                    return;
                 }
+                this._insertMessageSorted(arr, message);
+                idSet.add(message.id);
+                this._indexMessage(storageKey, message);
 
-                // Persist to IndexedDB (debounced) so this channel's
-                // history is available instantly on next launch.
+                // Drop anything over the per-channel cap. _pruneStorageKey
+                // also sweeps the cached DOM and the live nodes.
+                this._pruneStorageKey(storageKey, this.messages, this.channelMessageLimit, 0);
+
                 this.persistChannelMessages(storageKey);
-
-                // Schedule zap receipt subscription update with new event IDs
                 this._scheduleZapResubscribe();
 
                 if (this.geohashMap && message.geohash && this.isValidGeohash && this.isValidGeohash(message.geohash)) {
@@ -453,22 +686,10 @@ Object.assign(NYM.prototype, {
             if (typeof this._markChannelRead === 'function' && message.created_at) {
                 this._markChannelRead(storageKey, message.created_at);
             }
-
-            // Send a public read receipt (kind 24421) only for messages the
-            // user can actually see: fresh, in the current channel, tab
-            // visible, and not scrolled away from the bottom.
-            const canBeSeen = !document.hidden && !this.userScrolledUp;
-            if (canBeSeen && !message.isOwn && !message.isHistorical && message.geohash &&
-                message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
-                typeof this.sendChannelReadReceipt === 'function') {
-                this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);
-            }
         }
 
-        // Don't re-add if already displayed in DOM
-        // For group messages use the shared nymMessageId so duplicates from multiple relays are caught
         const _dedupeId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-        if (document.querySelector(`[data-message-id="${_dedupeId}"]`)) {
+        if (this.renderedMessageIds.has(_dedupeId)) {
             return;
         }
 
@@ -597,7 +818,8 @@ Object.assign(NYM.prototype, {
             // Check if this is a valid event ID (not temporary PM ID)
             // PM messages use nymMessageId (UUID) as the shared reaction key, so accept those too
             const isValidEventId = (message.isPM && message.nymMessageId)
-                || (message.id && /^[0-9a-f]{64}$/i.test(message.id));
+                || (message.id && /^[0-9a-f]{64}$/i.test(message.id))
+                || (message.isOwn && message.id);
             const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             const isMobile = window.innerWidth <= 768;
 
@@ -646,10 +868,10 @@ Object.assign(NYM.prototype, {
 
             // Delivery status for own PM messages
             let deliveryCheckmark = '';
-            if (message.isOwn && !message.isPM && message.geohash &&
-                message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
+            if (message.isOwn && !message.isPM && message.geohash && message.id &&
                 typeof this._buildChannelReadersHtml === 'function') {
-                const avatarHtml = this._buildChannelReadersHtml(message.id);
+                const isRealEventId = /^[0-9a-f]{64}$/i.test(message.id);
+                const avatarHtml = isRealEventId ? this._buildChannelReadersHtml(message.id) : '';
                 deliveryCheckmark = `<span class="channel-readers" data-msg-id="${message.id}">${avatarHtml}</span>`;
             } else if (message.isOwn && message.isPM) {
                 if (message.isGroup && message.nymMessageId) {
@@ -909,38 +1131,13 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Always insert messages in correct chronological order to prevent
-        // out-of-order display: created_at seconds, then the millisecond 'ms'
-        // stamp, then arrival sequence (_seq) — consistent with the in-memory sort.
-        {
-            const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
+        if (this._pendingFragment) {
+            this._pendingFragment.appendChild(messageEl);
+        } else {
             const msgCreatedAt = message.created_at || 0;
             const msgMs = this._messageMs(message);
             const msgSeq = message._seq || 0;
-
-            let insertBefore = null;
-            for (const existing of existingMessages) {
-                const existingCreatedAt = parseInt(existing.dataset.createdAt) || 0;
-                if (msgCreatedAt < existingCreatedAt) {
-                    insertBefore = existing;
-                    break;
-                }
-                if (msgCreatedAt === existingCreatedAt) {
-                    const existingMs = parseInt(existing.dataset.ms) || (existingCreatedAt * 1000);
-                    if (msgMs < existingMs) {
-                        insertBefore = existing;
-                        break;
-                    }
-                    if (msgMs === existingMs) {
-                        const existingSeq = parseInt(existing.dataset.seq) || 0;
-                        if (msgSeq < existingSeq) {
-                            insertBefore = existing;
-                            break;
-                        }
-                    }
-                }
-            }
-
+            const insertBefore = this._findDomInsertionPoint(container, msgCreatedAt, msgMs, msgSeq);
             if (insertBefore && insertBefore.parentNode) {
                 insertBefore.parentNode.insertBefore(messageEl, insertBefore);
             } else {
@@ -948,6 +1145,8 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        this.renderedMessageIds.add(_dedupeId);
+        this._observeMessageSeen(messageEl, message);
         this._updateBubbleGrouping(messageEl);
 
         // Sending your own channel message should always jump to the latest,
@@ -973,55 +1172,36 @@ Object.assign(NYM.prototype, {
             if (readersEl) this._bindReaderLongPress(readersEl, message.nymMessageId);
         }
 
-        // Apply any reactions we already know about
-        if (this.reactions && typeof this.updateMessageReactions === 'function') {
-            const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-            if (reactionMsgId && this.reactions.has(reactionMsgId)) {
-                this.updateMessageReactions(reactionMsgId);
-            }
-        }
-
-        // Prune oldest messages from DOM to stay within limits. With the
-        // reverse-column scroll container, removing elements above the
-        // viewport keeps the reading position stable on its own.
-        {
-            const domMessages = container.querySelectorAll('[data-message-id]');
+        if (!this._pendingFragment) {
+            const domMessages = container.querySelectorAll('.message[data-message-id]');
             const domLimit = message.isPM ? this.pmStorageLimit : this.channelMessageLimit;
             if (domMessages.length > domLimit) {
                 const toRemove = domMessages.length - domLimit;
                 for (let i = 0; i < toRemove; i++) {
-                    domMessages[i].remove();
+                    const removed = domMessages[i];
+                    const rid = removed.dataset && removed.dataset.messageId;
+                    if (rid) this.renderedMessageIds.delete(rid);
+                    removed.remove();
                 }
-                // The new first message lost its previous sibling — recompute its grouping.
-                const firstAfterPrune = container.querySelector('[data-message-id]');
+                const firstAfterPrune = container.querySelector('.message[data-message-id]');
                 if (firstAfterPrune) this._updateBubbleGrouping(firstAfterPrune);
             }
         }
 
-        // Add existing reactions if any (for both channel messages and PMs)
-        // For PMs, reactions are keyed by nymMessageId (shared across recipients)
         const reactionKey = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         if (reactionKey && this.reactions.has(reactionKey)) {
-            this.updateMessageReactions(reactionKey);
+            this.updateMessageReactions(reactionKey, messageEl);
         }
-        // Reactions may still be keyed by the event ID if they arrived before
-        // nymMessageId was known — migrate so the key matches the rendered DOM ID.
         if (message.isPM && message.nymMessageId && message.nymMessageId !== message.id) {
             if (this._migrateReactionKey(message.id, message.nymMessageId)) {
-                this.updateMessageReactions(message.nymMessageId);
+                this.updateMessageReactions(message.nymMessageId, messageEl);
             }
         }
 
-        // Add zaps display - check if this message has any zaps
         if (message.id && this.zaps.has(message.id)) {
-            this.updateMessageZaps(message.id);
+            this.updateMessageZaps(message.id, messageEl);
         }
 
-        // iOS Safari: explicitly load videos inserted via innerHTML. Safari
-        // requires Range request support (206) to play videos; if the server
-        // doesn't support it, fall back to fetching the video as a blob URL.
-        // The reverse-column scroll container keeps the latest message pinned
-        // as media grows the list, so no scroll handling is needed here.
         const videos = messageEl.querySelectorAll('video.message-video');
         if (videos.length > 0) {
             videos.forEach(vid => {
@@ -1046,7 +1226,7 @@ Object.assign(NYM.prototype, {
                     source.addEventListener('error', blobFallback, { once: true });
                     vid.addEventListener('error', blobFallback, { once: true });
                 }
-                vid.load();
+                this._observeLazyVideo(vid);
             });
         }
 
@@ -1225,16 +1405,33 @@ Object.assign(NYM.prototype, {
     },
 
     formatMessage(content) {
+        // LRU cache: reuse rendered HTML for identical content under the same
+        // identity/channel context. The signature invalidates the whole cache when
+        // that context changes (active-channel class etc. depends on it).
+        const sig = (this.pubkey || '') + '|' + (this.currentChannel || '') + '|' + (this.currentGeohash || '') + '|' + _formatCacheEpoch;
+        if (sig !== _formatCacheSig) {
+            _formatCache.clear();
+            _formatCacheSig = sig;
+        }
+        const cacheKey = content + '|' + (this.pubkey || '');
+        const cachedHit = _formatCache.get(cacheKey);
+        if (cachedHit !== undefined) {
+            _formatCache.delete(cacheKey);
+            _formatCache.set(cacheKey, cachedHit);
+            return cachedHit;
+        }
+
         let formatted = content;
 
         // Deduplicate suffixes in mentions from external apps (e.g., @user#abcd#abcd -> @user#abcd)
-        formatted = formatted.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
+        if (formatted.includes('@') && formatted.includes('#')) {
+            formatted = formatted.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
+        }
 
-        formatted = formatted
-            .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
+        if (formatted.includes('&')) formatted = formatted.replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;');
+        if (formatted.includes('<')) formatted = formatted.replace(/</g, '&lt;');
+        if (formatted.includes('>')) formatted = formatted.replace(/>/g, '&gt;');
+        if (formatted.includes('"')) formatted = formatted.replace(/"/g, '&quot;');
 
         // Code blocks and inline code — extract into placeholders so
         // later markdown/mention/channel processing doesn't touch their contents
@@ -1263,108 +1460,127 @@ Object.assign(NYM.prototype, {
             codePlaceholders.push(`<div class="code-block-wrapper">${langLabel}<pre><code${langClass}>${codeHtml}</code></pre><button class="code-copy-btn" data-code="${encodedRaw}" data-action="codeBlockCopy">Copy</button></div>`);
             return `\uFDD0${idx}\uFDD1`;
         };
-        formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => pushCodeBlock(code));
-        // Unterminated fence (e.g. a truncated bot reply): render the remainder as a block
-        formatted = formatted.replace(/```([\s\S]+)$/, (match, code) => pushCodeBlock(code));
-        formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
-            const idx = codePlaceholders.length;
-            codePlaceholders.push(`<code>${code}</code>`);
-            return `\uFDD0${idx}\uFDD1`;
-        });
+        if (formatted.includes('```')) {
+            formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => pushCodeBlock(code));
+            // Unterminated fence (e.g. a truncated bot reply): render the remainder as a block
+            formatted = formatted.replace(/```([\s\S]+)$/, (match, code) => pushCodeBlock(code));
+        }
+        if (formatted.includes('`')) {
+            formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
+                const idx = codePlaceholders.length;
+                codePlaceholders.push(`<code>${code}</code>`);
+                return `\uFDD0${idx}\uFDD1`;
+            });
+        }
 
         // Bold **text** (asterisks — fine anywhere) or __text__ (underscores — require word boundary)
-        formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        formatted = formatted.replace(/(?<!\w)__(.+?)__(?!\w)/g, '<strong>$1</strong>');
+        if (formatted.includes('**')) formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        if (formatted.includes('__')) formatted = formatted.replace(/(?<!\w)__(.+?)__(?!\w)/g, '<strong>$1</strong>');
 
         // Italic *text* (asterisks — fine anywhere) or _text_ (underscores — require word boundary
         // so that underscores inside names/identifiers like @Cool_User#a1b2 are not treated as italic)
-        formatted = formatted.replace(/(?<![:/])\*([^*\s][^*]*)\*/g, '<em>$1</em>');
-        formatted = formatted.replace(/(?<![:/\w])_([^_\s][^_]*)_(?!\w)/g, '<em>$1</em>');
+        if (formatted.includes('*')) formatted = formatted.replace(/(?<![:/])\*([^*\s][^*]*)\*/g, '<em>$1</em>');
+        if (formatted.includes('_')) formatted = formatted.replace(/(?<![:/\w])_([^_\s][^_]*)_(?!\w)/g, '<em>$1</em>');
 
         // Strikethrough ~~text~~
-        formatted = formatted.replace(/~~(.+?)~~/g, '<del>$1</del>');
+        if (formatted.includes('~~')) formatted = formatted.replace(/~~(.+?)~~/g, '<del>$1</del>');
 
         // Blockquotes > text
-        formatted = formatted.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+        if (formatted.includes('&gt; ')) formatted = formatted.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
 
-        // Headers
-        formatted = formatted.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-        formatted = formatted.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-        formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+        // Headers (#, ##, ### collapsed into one pass)
+        if (formatted.includes('# ')) {
+            formatted = formatted.replace(/^(#{1,3}) (.+)$/gm, (match, hashes, text) => {
+                const level = hashes.length;
+                return `<h${level}>${text}</h${level}>`;
+            });
+        }
 
-        // Convert video URLs to video players
-        // Use __VID_n__ placeholders to prevent the general URL-to-link regex from
-        // matching URLs that are already embedded inside video HTML attributes.
-        const mediaPlaceholders = [];
-        const buildFallbackAttr = (url) => {
-            const mirrors = this.mediaFallbacks ? this.mediaFallbacks.get(url) : null;
-            if (!mirrors || !mirrors.length) return '';
-            const proxied = mirrors.map(m => this.getProxiedMediaUrl(m));
-            return ` data-media-fallbacks="${this.escapeHtml(proxied.join('|'))}"`;
-        };
-        formatted = formatted.replace(
-            /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
-            (match, url, ext) => {
-                const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
-                const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
-                const proxiedUrl = this.getProxiedMediaUrl(url);
-                const fbAttr = buildFallbackAttr(url);
-                const idx = mediaPlaceholders.length;
-                mediaPlaceholders.push({
-                    kind: 'video',
-                    html: `<span class="video-container" data-action="stopPropagation"${fbAttr}><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${proxiedUrl}" type="${type}"></video><button class="video-expand-btn" data-video-src="${proxiedUrl.replace(/"/g, '&quot;')}" data-action="expandVideoFromContainer">⛶</button></span>`
-                });
-                return `﷒${idx}﷓`;
+        // Media + URL handling all require a scheme; skip the whole group otherwise.
+        if (formatted.includes('://')) {
+            // Convert video URLs to video players
+            // Use __VID_n__ placeholders to prevent the general URL-to-link regex from
+            // matching URLs that are already embedded inside video HTML attributes.
+            const mediaPlaceholders = [];
+            const buildFallbackAttr = (url) => {
+                const mirrors = this.mediaFallbacks ? this.mediaFallbacks.get(url) : null;
+                if (!mirrors || !mirrors.length) return '';
+                const proxied = mirrors.map(m => this.getProxiedMediaUrl(m));
+                return ` data-media-fallbacks="${this.escapeHtml(proxied.join('|'))}"`;
+            };
+            if (/\.(?:mp4|webm|ogg|mov)/i.test(formatted)) {
+                formatted = formatted.replace(
+                    /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
+                    (match, url, ext) => {
+                        const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
+                        const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
+                        const proxiedUrl = this.getProxiedMediaUrl(url);
+                        const fbAttr = buildFallbackAttr(url);
+                        const idx = mediaPlaceholders.length;
+                        mediaPlaceholders.push({
+                            kind: 'video',
+                            html: `<span class="video-container" data-action="stopPropagation"${fbAttr}><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${proxiedUrl}" type="${type}"></video><button class="video-expand-btn" data-video-src="${proxiedUrl.replace(/"/g, '&quot;')}" data-action="expandVideoFromContainer">⛶</button></span>`
+                        });
+                        return `﷒${idx}﷓`;
+                    }
+                );
             }
-        );
 
-        // Convert image URLs to images (proxied through Cloudflare worker for IP privacy)
-        formatted = formatted.replace(
-            /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
-            (match, url) => {
-                const proxiedUrl = this.getProxiedMediaUrl(url);
-                const fbAttr = buildFallbackAttr(url);
-                const idx = mediaPlaceholders.length;
-                mediaPlaceholders.push({
-                    kind: 'image',
-                    html: `<img src="${proxiedUrl}" alt="Image" data-action="expandImageFromData"${fbAttr} />`
-                });
-                return `﷒${idx}﷓`;
+            // Convert image URLs to images (proxied through Cloudflare worker for IP privacy)
+            if (/\.(?:jpg|jpeg|png|gif|webp)/i.test(formatted)) {
+                formatted = formatted.replace(
+                    /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
+                    (match, url) => {
+                        const proxiedUrl = this.getProxiedMediaUrl(url);
+                        const fbAttr = buildFallbackAttr(url);
+                        const idx = mediaPlaceholders.length;
+                        mediaPlaceholders.push({
+                            kind: 'image',
+                            html: `<img src="${proxiedUrl}" alt="Image" data-action="expandImageFromData"${fbAttr} />`
+                        });
+                        return `﷒${idx}﷓`;
+                    }
+                );
             }
-        );
 
-        // Convert Nymchat app channel links BEFORE general URLs
-        formatted = formatted.replace(
-            /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
-            (match, prefix, channelId) => {
-                return `<span class="channel-link" data-action="channelLink" data-channel-ref="${prefix}:${this.escapeHtml(channelId)}">${match}</span>`;
+            // Convert Nymchat app channel links BEFORE general URLs
+            if (formatted.includes('app.nym.bar')) {
+                formatted = formatted.replace(
+                    /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
+                    (match, prefix, channelId) => {
+                        return `<span class="channel-link" data-action="channelLink" data-channel-ref="${prefix}:${this.escapeHtml(channelId)}">${match}</span>`;
+                    }
+                );
             }
-        );
 
-        // Convert other URLs to links (but not placeholders)
-        formatted = formatted.replace(
-            /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
-            '<a href="$1" target="_blank" rel="noopener">$1</a>'
-        );
+            // Convert other URLs to links (but not placeholders)
+            formatted = formatted.replace(
+                /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
+                '<a href="$1" target="_blank" rel="noopener">$1</a>'
+            );
 
-        // Restore media placeholders; collapse runs of 2+ media items into a gallery
-        formatted = formatted.replace(
-            /(?:﷒(\d+)﷓)(?:[ \t\r\n]*﷒(\d+)﷓)+/g,
-            (run) => {
-                const indices = [];
-                run.replace(/﷒(\d+)﷓/g, (_m, idx) => { indices.push(parseInt(idx, 10)); return ''; });
-                const inner = indices.map(i => mediaPlaceholders[i].html).join('');
-                const count = indices.length;
-                const sizeClass = count === 2 ? 'gallery-2' : count === 3 ? 'gallery-3' : 'gallery-4plus';
-                return `<div class="message-gallery ${sizeClass}" data-count="${count}">${inner}</div>`;
+            // Restore media placeholders; collapse runs of 2+ media items into a gallery
+            if (mediaPlaceholders.length) {
+                formatted = formatted.replace(
+                    /(?:﷒(\d+)﷓)(?:[ \t\r\n]*﷒(\d+)﷓)+/g,
+                    (run) => {
+                        const indices = [];
+                        run.replace(/﷒(\d+)﷓/g, (_m, idx) => { indices.push(parseInt(idx, 10)); return ''; });
+                        const inner = indices.map(i => mediaPlaceholders[i].html).join('');
+                        const count = indices.length;
+                        const sizeClass = count === 2 ? 'gallery-2' : count === 3 ? 'gallery-3' : 'gallery-4plus';
+                        return `<div class="message-gallery ${sizeClass}" data-count="${count}">${inner}</div>`;
+                    }
+                );
+                formatted = formatted.replace(/﷒(\d+)﷓/g, (_m, idx) => mediaPlaceholders[parseInt(idx, 10)].html);
             }
-        );
-        formatted = formatted.replace(/﷒(\d+)﷓/g, (_m, idx) => mediaPlaceholders[parseInt(idx, 10)].html);
+        }
 
         // Process mentions and channel references (both geohash and non-geohash) in one pass.
         // The trailing (?![^<]*>) prevents matches inside HTML attribute values
         // (e.g. inside an <a href="...@user/...">), which would otherwise consume
         // the closing quote and `>` of the tag and break the rendered HTML.
+        if (formatted.includes('@') || formatted.includes('#')) {
         formatted = formatted.replace(
             /(?:(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?]))(?![^<]*>)/gi,
             (match, mentionWithSuffix, simpleMention, whitespace, channel) => {
@@ -1406,51 +1622,67 @@ Object.assign(NYM.prototype, {
                 }
             }
         );
+        }
 
         // Convert emoji shortcodes :emoji: — built-in unicode first, then NIP-30 custom emoji
-        formatted = formatted.replace(/:([a-zA-Z0-9_]+):/g, (match, code) => {
-            const emoji = this.emojiMap[code.toLowerCase()];
-            if (emoji) return emoji;
-            if (this.customEmojis && this.customEmojis.has(code)) {
-                return this.renderCustomEmojiImg(code) || match;
-            }
-            return match;
-        });
+        if (formatted.includes(':')) {
+            formatted = formatted.replace(/:([a-zA-Z0-9_]+):/g, (match, code) => {
+                const emoji = this.emojiMap[code.toLowerCase()];
+                if (emoji) return emoji;
+                if (this.customEmojis && this.customEmojis.has(code)) {
+                    return this.renderCustomEmojiImg(code) || match;
+                }
+                return match;
+            });
+        }
 
         // Convert simple emoticons to emojis
-        formatted = formatted.replace(/(^|\s):\)($|\s)/g, '$1😊$2');
-        formatted = formatted.replace(/(^|\s):\(($|\s)/g, '$1😢$2');
-        formatted = formatted.replace(/(^|\s):D($|\s)/g, '$1😃$2');
-        formatted = formatted.replace(/(^|\s):P($|\s)/g, '$1😛$2');
-        formatted = formatted.replace(/(^|\s);-?\)($|\s)/g, '$1😉$2');
-        formatted = formatted.replace(/(^|\s):o($|\s)/gi, '$1😮$2');
-        formatted = formatted.replace(/(^|\s):\|($|\s)/g, '$1😐$2');
-        formatted = formatted.replace(/(^|\s)&lt;3($|\s)/g, '$1❤️$2');
-        formatted = formatted.replace(/(^|\s)\/\\($|\s)/g, '$1⚠️$2');
+        if (formatted.includes(':)')) formatted = formatted.replace(/(^|\s):\)($|\s)/g, '$1😊$2');
+        if (formatted.includes(':(')) formatted = formatted.replace(/(^|\s):\(($|\s)/g, '$1😢$2');
+        if (formatted.includes(':D')) formatted = formatted.replace(/(^|\s):D($|\s)/g, '$1😃$2');
+        if (formatted.includes(':P')) formatted = formatted.replace(/(^|\s):P($|\s)/g, '$1😛$2');
+        if (formatted.includes(';')) formatted = formatted.replace(/(^|\s);-?\)($|\s)/g, '$1😉$2');
+        if (formatted.includes(':o') || formatted.includes(':O')) formatted = formatted.replace(/(^|\s):o($|\s)/gi, '$1😮$2');
+        if (formatted.includes(':|')) formatted = formatted.replace(/(^|\s):\|($|\s)/g, '$1😐$2');
+        if (formatted.includes('&lt;3')) formatted = formatted.replace(/(^|\s)&lt;3($|\s)/g, '$1❤️$2');
+        if (formatted.includes('/\\')) formatted = formatted.replace(/(^|\s)\/\\($|\s)/g, '$1⚠️$2');
 
         // Wrap emoji characters in <span class="emoji"> to isolate them from --font-sans
         // This regex matches all Unicode emoji including: emoticons, symbols, dingbats,
         // skin tone modifiers, regional indicator flag sequences, variation selectors,
         // ZWJ sequences, keycap sequences (#️⃣ 0️⃣-9️⃣), and tag flag sequences.
-        formatted = formatted.replace(
-            /(?:<[^>]+>)|((?:[\u{1F1E0}-\u{1F1FF}]{2})|(?:[#*0-9]\u{FE0F}?\u{20E3})|(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?(?:\u{200D}(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?)*)(?:[\u{E0020}-\u{E007E}]+\u{E007F})?)/gu,
-            (match, emoji) => {
-                // If this is an HTML tag, skip it
-                if (!emoji) return match;
-                return `<span class="emoji">${match}</span>`;
-            }
-        );
+        if (_RX_HAS_EMOJI.test(formatted)) {
+            formatted = formatted.replace(
+                /(?:<[^>]+>)|((?:[\u{1F1E0}-\u{1F1FF}]{2})|(?:[#*0-9]\u{FE0F}?\u{20E3})|(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?(?:\u{200D}(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?)*)(?:[\u{E0020}-\u{E007E}]+\u{E007F})?)/gu,
+                (match, emoji) => {
+                    // If this is an HTML tag, skip it
+                    if (!emoji) return match;
+                    return `<span class="emoji">${match}</span>`;
+                }
+            );
+        }
 
         // Restore code placeholders
-        formatted = formatted.replace(/\uFDD0(\d+)\uFDD1/g, (m, idx) => codePlaceholders[idx]);
+        if (codePlaceholders.length) formatted = formatted.replace(/\uFDD0(\d+)\uFDD1/g, (m, idx) => codePlaceholders[idx]);
 
         // Handle game tokens
-        formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
+        if (formatted.includes('[gc:')) formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
 
         // Line breaks
-        formatted = formatted.replace(/\n/g, '<br>');
+        if (formatted.includes('\n')) formatted = formatted.replace(/\n/g, '<br>');
 
+        _formatCache.set(cacheKey, formatted);
+        if (_formatCache.size > _FORMAT_CACHE_MAX) {
+            _formatCache.delete(_formatCache.keys().next().value);
+        }
         return formatted;
+    },
+
+    // Bump the formatMessage cache epoch so previously rendered content is
+    // recomputed. Call when state that formatMessage reads — but isn't part of
+    // the cache key — changes (custom emoji registration, media fallbacks).
+    invalidateFormatCache() {
+        _formatCacheEpoch++;
     },
 
     // Check if a raw message is emoji-only (1-6 emoji, optional whitespace, no other text)
@@ -1577,11 +1809,7 @@ Object.assign(NYM.prototype, {
 
     _updateBubbleGrouping(messageEl) {
         if (!messageEl) return;
-        if (this._suppressBubbleRewrap) {
-            this._applyBubbleGroupingTo(messageEl);
-            this._applyBubbleGroupingTo(messageEl.nextElementSibling);
-            return;
-        }
+        if (this._suppressBubbleRewrap) return;
         const container = document.getElementById('messagesContainer');
         if (container && (container.contains(messageEl) || messageEl.parentNode === null)) {
             this._rewrapBubbleGroups(container);
@@ -1593,6 +1821,52 @@ Object.assign(NYM.prototype, {
         }
         this._applyBubbleGroupingTo(messageEl);
         this._applyBubbleGroupingTo(messageEl.nextElementSibling);
+    },
+
+    _sortContainerMessagesByTimestamp(container) {
+        if (!container) return;
+        const children = Array.from(container.children);
+        if (children.length < 2) return;
+
+        const hasTs = (el) => el && el.dataset && el.dataset.createdAt !== undefined;
+        const key = (el) => {
+            const c = parseInt(el.dataset.createdAt) || 0;
+            const m = el.dataset.ms !== undefined ? (parseInt(el.dataset.ms) || 0) : c * 1000;
+            const s = el.dataset.seq !== undefined ? (parseInt(el.dataset.seq) || 0) : 0;
+            return [m, s];
+        };
+        const cmp = (a, b) => {
+            const [am, as] = key(a);
+            const [bm, bs] = key(b);
+            if (am !== bm) return am - bm;
+            return as - bs;
+        };
+
+        let i = 0;
+        let anyChange = false;
+        while (i < children.length) {
+            if (!hasTs(children[i])) { i++; continue; }
+            let j = i;
+            while (j < children.length && hasTs(children[j])) j++;
+            if (j - i > 1) {
+                const run = children.slice(i, j);
+                let outOfOrder = false;
+                for (let k = 1; k < run.length; k++) {
+                    if (cmp(run[k - 1], run[k]) > 0) { outOfOrder = true; break; }
+                }
+                if (outOfOrder) {
+                    run.sort(cmp);
+                    const anchor = children[j] || null;
+                    for (const el of run) {
+                        if (anchor) container.insertBefore(el, anchor);
+                        else container.appendChild(el);
+                    }
+                    anyChange = true;
+                }
+            }
+            i = j;
+        }
+        return anyChange;
     },
 
     _recomputeAllBubbleGrouping(container) {
@@ -1611,9 +1885,9 @@ Object.assign(NYM.prototype, {
         const wrappers = Array.from(container.children).filter(c => c.classList && c.classList.contains('message-group'));
         const salvagedAvatars = new Map();
         for (const wrapper of wrappers) {
-            if (wrapper._resizeObserver) {
-                wrapper._resizeObserver.disconnect();
-                wrapper._resizeObserver = null;
+            if (this._sharedGroupRO && wrapper._observedStack) {
+                this._sharedGroupRO.unobserve(wrapper._observedStack);
+                wrapper._observedStack = null;
             }
             const pk = wrapper.dataset.pubkey || '';
             const avatarImg = wrapper.querySelector(':scope > .message-group-avatar > img.avatar-bubble');
@@ -1629,6 +1903,8 @@ Object.assign(NYM.prototype, {
             }
             wrapper.remove();
         }
+
+        this._sortContainerMessagesByTimestamp(container);
 
         if (!isBubble) return;
 
@@ -1671,7 +1947,7 @@ Object.assign(NYM.prototype, {
 
         const finalWrappers = container.querySelectorAll(':scope > .message-group');
         for (const wrapper of finalWrappers) {
-            this._syncMessageGroupAvatarOffset(wrapper);
+            this._scheduleGroupAvatarSync(wrapper);
         }
     },
 
@@ -1690,14 +1966,59 @@ Object.assign(NYM.prototype, {
             avatarBox.style.marginBottom = '';
             return;
         }
-        // Align the avatar's bottom flush with the bubble's bottom. Use
-        // bounding rects so the .message's margin-bottom and any siblings
-        // below the bubble (reactions row, edited indicator) are accounted
-        // for, which offsetTop/offsetHeight on its own misses.
         const wrapperRect = wrapper.getBoundingClientRect();
         const contentRect = contentEl.getBoundingClientRect();
         const below = wrapperRect.bottom - contentRect.bottom;
         avatarBox.style.marginBottom = below > 0 ? below + 'px' : '';
+    },
+
+    _scheduleGroupAvatarSync(wrapper) {
+        if (!wrapper) return;
+        if (!this._pendingAvatarSyncs) this._pendingAvatarSyncs = new Set();
+        this._pendingAvatarSyncs.add(wrapper);
+        if (this._avatarSyncRAF) return;
+        this._avatarSyncRAF = requestAnimationFrame(() => {
+            this._avatarSyncRAF = null;
+            const wrappers = this._pendingAvatarSyncs;
+            this._pendingAvatarSyncs = new Set();
+            for (const w of wrappers) {
+                if (w.isConnected) this._syncMessageGroupAvatarOffset(w);
+            }
+        });
+    },
+
+    _ensureSharedGroupResizeObserver() {
+        if (this._sharedGroupRO || typeof ResizeObserver === 'undefined') return this._sharedGroupRO;
+        this._sharedGroupRO = new ResizeObserver(entries => {
+            for (const entry of entries) {
+                const stack = entry.target;
+                const wrapper = stack.closest && stack.closest('.message-group');
+                if (wrapper) this._scheduleGroupAvatarSync(wrapper);
+            }
+        });
+        return this._sharedGroupRO;
+    },
+
+    _ensureLazyVideoObserver() {
+        if (this._lazyVideoIO || typeof IntersectionObserver === 'undefined') return this._lazyVideoIO;
+        this._lazyVideoIO = new IntersectionObserver(entries => {
+            for (const e of entries) {
+                if (!e.isIntersecting) continue;
+                const vid = e.target;
+                this._lazyVideoIO.unobserve(vid);
+                if (!vid.dataset.lazyLoaded) {
+                    vid.dataset.lazyLoaded = '1';
+                    try { vid.load(); } catch (_) {}
+                }
+            }
+        }, { rootMargin: '300px 0px' });
+        return this._lazyVideoIO;
+    },
+
+    _observeLazyVideo(vid) {
+        const io = this._ensureLazyVideoObserver();
+        if (io) io.observe(vid);
+        else { try { vid.load(); } catch (_) {} }
     },
 
     _createMessageGroupWrapper(firstMessageEl, reusableAvatarImg = null) {
@@ -1743,10 +2064,10 @@ Object.assign(NYM.prototype, {
         wrapper.appendChild(avatarBox);
         wrapper.appendChild(stack);
 
-        if (typeof ResizeObserver !== 'undefined') {
-            const ro = new ResizeObserver(() => this._syncMessageGroupAvatarOffset(wrapper));
+        const ro = this._ensureSharedGroupResizeObserver();
+        if (ro) {
             ro.observe(stack);
-            wrapper._resizeObserver = ro;
+            wrapper._observedStack = stack;
         }
 
         return wrapper;
@@ -1869,8 +2190,9 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
-            if (this.enablePow && this.powDifficulty > 0) {
-                event = NostrTools.nip13.minePow(event, this.powDifficulty);
+            const editDifficulty = this._effectivePowDifficulty();
+            if (editDifficulty > 0) {
+                event = await this._minePow(event, editDifficulty);
             }
 
             const signedEvent = await this.signEvent(event);
@@ -1883,11 +2205,13 @@ Object.assign(NYM.prototype, {
             });
 
             // Update the original message in stored messages
-            this.messages.forEach((msgs) => {
+            this.messages.forEach((msgs, channel) => {
                 const msg = msgs.find(m => m.id === originalEventId);
                 if (msg) {
                     msg.content = newContent;
                     msg.isEdited = true;
+                    msg._dirty = true;
+                    this.persistChannelMessages(channel);
                 }
             });
 
@@ -1922,11 +2246,10 @@ Object.assign(NYM.prototype, {
         // Find the message-content element and update its content
         const contentEl = msgEl.querySelector('.message-content');
         if (contentEl) {
-            // Rebuild bubble-time-inner with edited indicator
             const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
+            const hoverButtonsEl = contentEl.querySelector('.msg-hover-buttons');
             const formattedContent = this.formatMessageWithQuotes(newContent);
             if (bubbleTimeEl) {
-                // Add edited indicator inside bubble-time-inner (for bubble layout)
                 if (!bubbleTimeEl.querySelector('.edited-indicator')) {
                     const bubbleEdited = document.createElement('span');
                     bubbleEdited.className = 'edited-indicator';
@@ -1935,9 +2258,9 @@ Object.assign(NYM.prototype, {
                     bubbleTimeEl.insertBefore(bubbleEdited, bubbleTimeEl.firstChild);
                     bubbleTimeEl.insertBefore(document.createTextNode(' '), bubbleEdited.nextSibling);
                 }
-                contentEl.innerHTML = formattedContent + bubbleTimeEl.outerHTML;
+                contentEl.innerHTML = formattedContent + bubbleTimeEl.outerHTML + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
             } else {
-                contentEl.innerHTML = formattedContent;
+                contentEl.innerHTML = formattedContent + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
             }
         }
 
@@ -2513,6 +2836,7 @@ Object.assign(NYM.prototype, {
         while (container.firstChild) {
             fragment.appendChild(container.firstChild);
         }
+        this.renderedMessageIds.clear();
 
         // Get message count and fingerprint for cache invalidation
         const messages = this.messages.get(previousKey) || this.pmMessages.get(previousKey) || [];
@@ -2520,14 +2844,17 @@ Object.assign(NYM.prototype, {
             fragment,
             messageCount: messages.length,
             messageFingerprint: this._computeMessageFingerprint(messages),
+            bubbleMode: document.body.classList.contains('chat-bubbles'),
             virtualScrollState: {
                 currentStartIndex: this.virtualScroll.currentStartIndex,
                 currentEndIndex: this.virtualScroll.currentEndIndex
             }
         });
 
-        // Limit cache to 5 channels to prevent memory bloat
-        if (this.channelDOMCache.size > 5) {
+        // Keep more channels warm so switching back to a recent chat skips the
+        // full DOM rebuild — typing into the input doesn't block on it.
+        const limit = this._channelDOMCacheLimit || 20;
+        while (this.channelDOMCache.size > limit) {
             const oldestKey = this.channelDOMCache.keys().next().value;
             this.channelDOMCache.delete(oldestKey);
         }
@@ -2553,6 +2880,155 @@ Object.assign(NYM.prototype, {
             }
         }
         return null;
+    },
+
+    _queryAllAcrossCache(selector) {
+        const results = [];
+        document.querySelectorAll(selector).forEach(el => results.push(el));
+        if (this.channelDOMCache && this.channelDOMCache.size > 0) {
+            for (const cached of this.channelDOMCache.values()) {
+                if (cached && cached.fragment) {
+                    cached.fragment.querySelectorAll(selector).forEach(el => results.push(el));
+                }
+            }
+        }
+        return results;
+    },
+
+    // Drop everything we know about a set of message IDs
+    _removeMessageNodesEverywhere(messageIds) {
+        if (!messageIds || messageIds.size === 0) return;
+        const fragments = [];
+        if (this.channelDOMCache) {
+            for (const cached of this.channelDOMCache.values()) {
+                if (cached && cached.fragment) fragments.push(cached);
+            }
+        }
+        for (const id of messageIds) {
+            if (!id) continue;
+            const safe = String(id).replace(/"/g, '\\"');
+            const sel = `[data-message-id="${safe}"]`;
+            const live = document.querySelector(sel);
+            if (live) {
+                const group = live.closest('.message-group');
+                live.remove();
+                if (group && group.parentNode && group.children.length === 0) group.remove();
+            }
+            for (const cached of fragments) {
+                const el = cached.fragment.querySelector(sel);
+                if (!el) continue;
+                const group = el.closest('.message-group');
+                el.remove();
+                if (group && group.parentNode && group.children.length === 0) group.remove();
+                cached._pendingRemovals = (cached._pendingRemovals || 0) + 1;
+            }
+        }
+    },
+
+    // Prune a single chat's in-memory messages by hard cap and/or age, then
+    // sweep the DOM and persistence. Returns the number of messages dropped.
+    _pruneStorageKey(storageKey, sourceMap, limit, maxAgeMs) {
+        const arr = sourceMap && sourceMap.get(storageKey);
+        if (!arr || arr.length === 0) return 0;
+
+        // Drop oldest entries above the hard cap.
+        let dropUntil = Math.max(0, arr.length - limit);
+        // Then drop anything still older than the age cutoff. Messages are
+        // chronological, so we can keep scanning forward from dropUntil.
+        if (maxAgeMs > 0) {
+            const cutoff = Date.now() - maxAgeMs;
+            for (let i = dropUntil; i < arr.length; i++) {
+                if (this._messageMs(arr[i]) < cutoff) dropUntil = i + 1;
+                else break;
+            }
+        }
+        if (dropUntil === 0) return 0;
+
+        const dropped = arr.splice(0, dropUntil);
+        const idSet = this.channelMessageIds && this.channelMessageIds.get(storageKey);
+        const idsForDom = new Set();
+        for (const m of dropped) {
+            this._unindexMessage(m);
+            if (m.id) {
+                idsForDom.add(m.id);
+                if (idSet) idSet.delete(m.id);
+            }
+            if (m.nymMessageId && m.nymMessageId !== m.id) idsForDom.add(m.nymMessageId);
+        }
+
+        this._removeMessageNodesEverywhere(idsForDom);
+
+        // Resync fingerprint/count for the cached fragment that holds this
+        // storage key (if any), now that the pre-prune prefix is shorter.
+        if (this.channelDOMCache && this.channelDOMCache.size > 0) {
+            for (const cached of this.channelDOMCache.values()) {
+                if (!cached || !cached._pendingRemovals) continue;
+                const removed = cached._pendingRemovals;
+                delete cached._pendingRemovals;
+                const newCount = Math.max(0, (cached.messageCount || 0) - removed);
+                cached.messageCount = newCount;
+                const liveArr = this.messages.get(storageKey) || this.pmMessages.get(storageKey) || arr;
+                cached.messageFingerprint = this._computeMessageFingerprint(liveArr.slice(0, newCount));
+            }
+        }
+
+        return dropped.length;
+    },
+
+    // Periodic sweep: enforce the per-chat hard caps and drop anything older
+    // than messageMaxAgeMs from every channel, PM, and group. Persisted
+    // copies are rewritten via the normal per-chat scheduler.
+    pruneOldMessages() {
+        const maxAge = this.messageMaxAgeMs || 0;
+        const channelLimit = this.channelMessageLimit || 50;
+        const pmLimit = this.pmStorageLimit || 1000;
+        let total = 0;
+        const touched = new Set();
+        if (this.messages) {
+            for (const key of Array.from(this.messages.keys())) {
+                if (this._pruneStorageKey(key, this.messages, channelLimit, maxAge) > 0) {
+                    touched.add(key);
+                    total += 1;
+                }
+            }
+        }
+        if (this.pmMessages) {
+            for (const key of Array.from(this.pmMessages.keys())) {
+                if (this._pruneStorageKey(key, this.pmMessages, pmLimit, maxAge) > 0) {
+                    touched.add(key);
+                    total += 1;
+                }
+            }
+        }
+        for (const key of touched) {
+            if (typeof this.persistChannelMessages === 'function' && this.messages && this.messages.has(key)) {
+                this.persistChannelMessages(key);
+            }
+            if (typeof this.persistPMMessages === 'function' && this.pmMessages && this.pmMessages.has(key)) {
+                this.persistPMMessages(key);
+            }
+        }
+        return total;
+    },
+
+    // Kept as a thin wrapper so existing single-deletion call sites still work.
+    _removeMessageFromAllCaches(messageId) {
+        if (!this.channelDOMCache || this.channelDOMCache.size === 0) return;
+        const safeId = String(messageId).replace(/"/g, '\\"');
+        const selector = `[data-message-id="${safeId}"]`;
+        for (const [storageKey, cached] of this.channelDOMCache) {
+            if (!cached || !cached.fragment) continue;
+            const el = cached.fragment.querySelector(selector);
+            if (!el) continue;
+            // Drop the message node and any now-empty bubble-mode wrapper it sat in.
+            const group = el.closest('.message-group');
+            el.remove();
+            if (group && group.parentNode && group.children.length === 0) group.remove();
+            const newCount = Math.max(0, (cached.messageCount || 0) - 1);
+            cached.messageCount = newCount;
+            const messages = this.messages.get(storageKey) || this.pmMessages.get(storageKey) || [];
+            cached.messageFingerprint = this._computeMessageFingerprint(messages.slice(0, newCount));
+        }
     },
 
     loadChannelMessages(displayName) {
@@ -2581,9 +3057,9 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Cache miss or stale - render fresh
         this.channelDOMCache.delete(storageKey);
         container.innerHTML = '';
+        this.renderedMessageIds.clear();
 
         if (channelMessages.length === 0) {
             this.displaySystemMessage(`Joined ${displayName}`);
@@ -2612,7 +3088,13 @@ Object.assign(NYM.prototype, {
         if (compareFp !== cached.messageFingerprint) return false;
 
         container.innerHTML = '';
+        this.renderedMessageIds.clear();
         container.appendChild(cached.fragment);
+        const restored = container.querySelectorAll('[data-message-id]');
+        for (let i = 0; i < restored.length; i++) {
+            const rid = restored[i].dataset && restored[i].dataset.messageId;
+            if (rid) this.renderedMessageIds.add(rid);
+        }
         this.channelDOMCache.delete(storageKey);
 
         if (cached.virtualScrollState) {
@@ -2622,7 +3104,10 @@ Object.assign(NYM.prototype, {
         container.dataset.virtualScrollKey = storageKey;
         container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
 
+        this._reobserveVisibleMessages();
+
         // Partial hit: render trailing messages that arrived while we were away.
+        let appendedTrailing = false;
         if (cachedCount < currentLen) {
             const trailing = currentMessages.slice(cachedCount);
             this.virtualScroll.suppressAutoScroll = true;
@@ -2634,12 +3119,14 @@ Object.assign(NYM.prototype, {
             this._suppressSound = false;
             this._suppressBubbleRewrap = false;
             this.virtualScroll.suppressAutoScroll = false;
+            appendedTrailing = trailing.length > 0;
         }
 
-        // The cached fragment was built when bubbles may have been off, or
-        // when grouping ran against a different sibling chain. Recompute now
-        // that the fragment is back in the live container.
-        this._recomputeAllBubbleGrouping(container);
+        const currentBubbleMode = document.body.classList.contains('chat-bubbles');
+        const bubbleModeMatches = cached.bubbleMode === currentBubbleMode;
+        if (!bubbleModeMatches || appendedTrailing) {
+            requestAnimationFrame(() => this._recomputeAllBubbleGrouping(container));
+        }
 
         if (this.settings.autoscroll) {
             this.userScrolledUp = false;
@@ -2656,13 +3143,11 @@ Object.assign(NYM.prototype, {
 
     // Initialize virtual scroll for a container
 
-    // Get filtered messages for a storage key (applies block filters)
     getFilteredMessages(storageKey) {
         const messages = this.messages.get(storageKey) || [];
 
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
-            // Spam gate
             if (!msg.isOwn && !this.isFriend(msg.pubkey) &&
                 !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
                 return false;
@@ -2671,73 +3156,62 @@ Object.assign(NYM.prototype, {
             if (this.hasBlockedKeyword(msg.content, msg.author)) return false;
             if (this.isSpamMessage(msg.content)) return false;
             return true;
-        }).sort((a, b) => this._compareMessages(a, b));
+        });
     },
 
-    // Render all messages for a channel or PM conversation
-    // isPM: if true, uses pmMessages with conversationKey instead of messages with storageKey
     renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false) {
         const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
 
-        // Store context for scroll handlers
         container.dataset.virtualScrollKey = storageKey;
         container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
 
-        // Clear container
         container.innerHTML = '';
+        this.renderedMessageIds.clear();
 
         if (messages.length === 0) {
             return;
         }
 
-        // If this channel has reached the message limit, show a notice at the top
+        const fragment = document.createDocumentFragment();
+
         if (!isPM && messages.length >= this.channelMessageLimit) {
             const notice = document.createElement('div');
             notice.className = 'system-message channel-history-limit';
-            notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void — only the latest 100 messages are shown.';
-            container.appendChild(notice);
+            notice.textContent = `You've reached the edge of this channel's history. Older messages are lost to the void — only the latest ${this.channelMessageLimit} messages are shown.`;
+            fragment.appendChild(notice);
         }
 
-        // For PMs/groups, only render the latest pmPageSize messages initially
-        // and track the start index for pagination
         let renderMessages = messages;
         if (isPM && messages.length > this.pmPageSize) {
             const startIdx = messages.length - this.pmPageSize;
             renderMessages = messages.slice(startIdx);
             this.pmRenderedStart.set(storageKey, startIdx);
-            // Show "load older" notice at top
             const loadNotice = document.createElement('div');
             loadNotice.className = 'system-message pm-load-older';
             loadNotice.textContent = `Scroll up to load older messages (${startIdx} more)`;
-            container.appendChild(loadNotice);
+            fragment.appendChild(loadNotice);
         } else if (isPM) {
             this.pmRenderedStart.set(storageKey, 0);
         }
 
-        // Render all messages sorted by timestamp
         this.virtualScroll.suppressAutoScroll = true;
-
-
-
-        // Suppress notification sounds during bulk rendering of stored messages
-        // (e.g. when opening a conversation) to avoid replaying sounds
         this._suppressSound = true;
         this._suppressBubbleRewrap = true;
+        this._pendingFragment = fragment;
 
         for (let i = 0; i < renderMessages.length; i++) {
             this.displayMessage(renderMessages[i]);
         }
 
+        this._pendingFragment = null;
+        container.appendChild(fragment);
+
         this._suppressSound = false;
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
 
-        // Per-message grouping during a bulk render is evaluated against the
-        // siblings that exist at the moment of insertion, which is fragile if
-        // any message slips in out of order or if `body.chat-bubbles` is set
-        // after this render finishes (settings sync arriving later). Final pass
-        // guarantees grouping is consistent for the whole batch.
-        this._recomputeAllBubbleGrouping(container);
+        this._reobserveVisibleMessages();
+        requestAnimationFrame(() => this._recomputeAllBubbleGrouping(container));
 
         // Scroll to bottom if requested. The reverse-column container keeps
         // the bottom pinned as media loads afterwards, so no follow-up is needed.
