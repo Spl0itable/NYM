@@ -950,13 +950,8 @@ Object.assign(NYM.prototype, {
         list.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (list.length > this.pmStorageLimit) {
-            const dropped = list.slice(0, list.length - this.pmStorageLimit);
-            for (const d of dropped) this._unindexMessage(d);
-            list = list.slice(-this.pmStorageLimit);
-        }
+        if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
         this.pmMessages.set(groupConvKey, list);
-        this._indexMessage(groupConvKey, msg);
         this.persistPMMessages(groupConvKey);
 
         // Update or create group conversation entry
@@ -1305,12 +1300,7 @@ Object.assign(NYM.prototype, {
         groupList.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (groupList.length > this.pmStorageLimit) {
-            const dropped = groupList.slice(0, groupList.length - this.pmStorageLimit);
-            for (const d of dropped) this._unindexMessage(d);
-            this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
-        }
-        this._indexMessage(groupConvKey, msg);
+        if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
         this.channelDOMCache.delete(groupConvKey);
         this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);

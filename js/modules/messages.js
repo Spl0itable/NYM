@@ -149,18 +149,11 @@ Object.assign(NYM.prototype, {
             this._insertMessageSorted(arr, msg);
         }
 
-        const escapedTempId = tempId.replace(/"/g, '\\"');
-        const el = document.querySelector(`[data-message-id="${escapedTempId}"]`);
+        const el = document.querySelector(`[data-message-id="${tempId.replace(/"/g, '\\"')}"]`);
         if (el) {
             el.dataset.messageId = signedEvent.id;
             el.dataset.createdAt = String(signedEvent.created_at || 0);
             el.classList.remove('optimistic-pending');
-
-            el.querySelectorAll(`[data-message-id="${escapedTempId}"]`).forEach(child => {
-                child.dataset.messageId = signedEvent.id;
-            });
-            const readersEl = el.querySelector(`.channel-readers[data-msg-id="${escapedTempId}"]`);
-            if (readersEl) readersEl.dataset.msgId = signedEvent.id;
 
             if (oldCreated !== msg.created_at) {
                 const container = el.parentNode;
@@ -741,8 +734,7 @@ Object.assign(NYM.prototype, {
             // Check if this is a valid event ID (not temporary PM ID)
             // PM messages use nymMessageId (UUID) as the shared reaction key, so accept those too
             const isValidEventId = (message.isPM && message.nymMessageId)
-                || (message.id && /^[0-9a-f]{64}$/i.test(message.id))
-                || (message.isOwn && message.id);
+                || (message.id && /^[0-9a-f]{64}$/i.test(message.id));
             const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             const isMobile = window.innerWidth <= 768;
 
@@ -791,10 +783,10 @@ Object.assign(NYM.prototype, {
 
             // Delivery status for own PM messages
             let deliveryCheckmark = '';
-            if (message.isOwn && !message.isPM && message.geohash && message.id &&
+            if (message.isOwn && !message.isPM && message.geohash &&
+                message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
                 typeof this._buildChannelReadersHtml === 'function') {
-                const isRealEventId = /^[0-9a-f]{64}$/i.test(message.id);
-                const avatarHtml = isRealEventId ? this._buildChannelReadersHtml(message.id) : '';
+                const avatarHtml = this._buildChannelReadersHtml(message.id);
                 deliveryCheckmark = `<span class="channel-readers" data-msg-id="${message.id}">${avatarHtml}</span>`;
             } else if (message.isOwn && message.isPM) {
                 if (message.isGroup && message.nymMessageId) {
