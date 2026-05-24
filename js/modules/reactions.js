@@ -127,7 +127,21 @@ Object.assign(NYM.prototype, {
                 }
             }
             this.persistReactions(messageId);
-            this._updateMessageReactionsEverywhere(messageId);
+            const reactionApplied = this.updateMessageReactions(messageId);
+            if (!reactionApplied) {
+                for (const [key, msgs] of this.messages.entries()) {
+                    if (msgs.some(m => m.id === messageId)) {
+                        this.channelDOMCache.delete(key);
+                        break;
+                    }
+                }
+                for (const [key, msgs] of this.pmMessages.entries()) {
+                    if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
+                        this.channelDOMCache.delete(key);
+                        break;
+                    }
+                }
+            }
             return;
         }
 
@@ -145,10 +159,26 @@ Object.assign(NYM.prototype, {
         messageReactions.get(reactionContent).set(event.pubkey, reactorNym);
         this.persistReactions(messageId);
 
-        // Patch every matching message element — live DOM and any cached
-        // chat fragments — so reaction state stays consistent without
-        // dropping channel caches.
-        this._updateMessageReactionsEverywhere(messageId);
+        // Update UI if message is visible, otherwise invalidate DOM cache
+        // so the reaction appears when the user switches to that channel
+        const reactionApplied = this.updateMessageReactions(messageId);
+        if (!reactionApplied) {
+            // Message not in current DOM — find which channel owns it and
+            // invalidate that channel's cached DOM so it re-renders with the
+            // new reaction when the user navigates there.
+            for (const [key, msgs] of this.messages.entries()) {
+                if (msgs.some(m => m.id === messageId)) {
+                    this.channelDOMCache.delete(key);
+                    break;
+                }
+            }
+            for (const [key, msgs] of this.pmMessages.entries()) {
+                if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
+                    this.channelDOMCache.delete(key);
+                    break;
+                }
+            }
+        }
 
         // Notify if someone reacted to OUR message (not our own reaction)
         if (pTag && pTag[1] === this.pubkey && event.pubkey !== this.pubkey) {
@@ -245,39 +275,14 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Apply reaction updates to every matching message element — both the
-    // live DOM and any cached channel/PM/group fragments
-    _updateMessageReactionsEverywhere(messageId) {
-        if (!messageId) return false;
-        const safeId = String(messageId).replace(/"/g, '\\"');
-        const selector = `[data-message-id="${safeId}"]`;
-        let updated = false;
-        document.querySelectorAll(selector).forEach(el => {
-            this.updateMessageReactions(messageId, el);
-            updated = true;
-        });
-        if (this.channelDOMCache && this.channelDOMCache.size > 0) {
-            for (const cached of this.channelDOMCache.values()) {
-                if (!cached || !cached.fragment) continue;
-                cached.fragment.querySelectorAll(selector).forEach(el => {
-                    this.updateMessageReactions(messageId, el);
-                    updated = true;
-                });
-            }
-        }
-        return updated;
-    },
-
     updateMessageReactions(messageId, messageEl) {
         if (!messageEl) {
             messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
         }
         if (!messageEl) return false;
 
-        // Skip scroll preservation when patching a detached cached fragment —
-        // the live scroller belongs to a different channel right now.
-        const isLive = messageEl.isConnected;
-        const container = isLive ? document.getElementById('messagesScroller') : null;
+        // Capture scroll state before modifying DOM so we can auto-scroll if needed
+        const container = document.getElementById('messagesScroller');
         const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
 
         const reactions = this.reactions.get(messageId);

@@ -70,11 +70,11 @@ Object.assign(NYM.prototype, {
         return (createdAtSec || 0) * 1000;
     },
 
-    // Chronological message comparator. We sort by the millisecond 'ms' tag
-    // first (falling back to created_at*1000) so messages stay in real send
-    // order even when two senders straddle a 1-second created_at boundary or
-    // one sender's clock drifts. Local arrival sequence is the final tiebreak.
+    // Chronological message comparator: created_at seconds, then millisecond
+    // 'ms' stamp, then local arrival sequence as a final tiebreaker.
     _compareMessages(a, b) {
+        const dt = (a.created_at || 0) - (b.created_at || 0);
+        if (dt !== 0) return dt;
         const dm = this._messageMs(a) - this._messageMs(b);
         if (dm !== 0) return dm;
         return (a._seq || 0) - (b._seq || 0);
@@ -288,6 +288,7 @@ Object.assign(NYM.prototype, {
             const ec = parseInt(node.dataset.createdAt) || 0;
             const em = parseInt(node.dataset.ms) || (ec * 1000);
             const es = parseInt(node.dataset.seq) || 0;
+            if (ec !== msgCreatedAt) return ec - msgCreatedAt;
             if (em !== msgMs) return em - msgMs;
             return es - msgSeq;
         };
@@ -1841,11 +1842,12 @@ Object.assign(NYM.prototype, {
             const c = parseInt(el.dataset.createdAt) || 0;
             const m = el.dataset.ms !== undefined ? (parseInt(el.dataset.ms) || 0) : c * 1000;
             const s = el.dataset.seq !== undefined ? (parseInt(el.dataset.seq) || 0) : 0;
-            return [m, s];
+            return [c, m, s];
         };
         const cmp = (a, b) => {
-            const [am, as] = key(a);
-            const [bm, bs] = key(b);
+            const [ac, am, as] = key(a);
+            const [bc, bm, bs] = key(b);
+            if (ac !== bc) return ac - bc;
             if (am !== bm) return am - bm;
             return as - bs;
         };
@@ -2859,10 +2861,8 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Keep more channels warm so switching back to a recent chat skips the
-        // full DOM rebuild — typing into the input doesn't block on it.
-        const limit = this._channelDOMCacheLimit || 20;
-        while (this.channelDOMCache.size > limit) {
+        // Limit cache to 5 channels to prevent memory bloat
+        if (this.channelDOMCache.size > 5) {
             const oldestKey = this.channelDOMCache.keys().next().value;
             this.channelDOMCache.delete(oldestKey);
         }
@@ -2901,29 +2901,6 @@ Object.assign(NYM.prototype, {
             }
         }
         return results;
-    },
-
-    // Surgically drop a single message from any cached chat fragments and
-    // resync the cache's bookkeeping so the next restore still passes the
-    // fingerprint check. Used by message deletion paths instead of wiping
-    // the whole cache entry.
-    _removeMessageFromAllCaches(messageId) {
-        if (!this.channelDOMCache || this.channelDOMCache.size === 0) return;
-        const safeId = String(messageId).replace(/"/g, '\\"');
-        const selector = `[data-message-id="${safeId}"]`;
-        for (const [storageKey, cached] of this.channelDOMCache) {
-            if (!cached || !cached.fragment) continue;
-            const el = cached.fragment.querySelector(selector);
-            if (!el) continue;
-            // Drop the message node and any now-empty bubble-mode wrapper it sat in.
-            const group = el.closest('.message-group');
-            el.remove();
-            if (group && group.parentNode && group.children.length === 0) group.remove();
-            const newCount = Math.max(0, (cached.messageCount || 0) - 1);
-            cached.messageCount = newCount;
-            const messages = this.messages.get(storageKey) || this.pmMessages.get(storageKey) || [];
-            cached.messageFingerprint = this._computeMessageFingerprint(messages.slice(0, newCount));
-        }
     },
 
     loadChannelMessages(displayName) {
