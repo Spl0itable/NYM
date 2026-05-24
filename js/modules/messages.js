@@ -2845,7 +2845,7 @@ Object.assign(NYM.prototype, {
         if (!isPM && messages.length >= this.channelMessageLimit) {
             const notice = document.createElement('div');
             notice.className = 'system-message channel-history-limit';
-            notice.textContent = `You've reached the edge of this channel's history. Older messages are lost to the void — only the latest ${this.channelMessageLimit} messages are shown.`;
+            notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void — only the latest 100 messages are shown.';
             fragment.appendChild(notice);
         }
 
