@@ -1373,7 +1373,7 @@ Object.assign(NYM.prototype, {
         for (const m of prev) this._unindexMessage(m);
         this.pmMessages.set(conversationKey, []);
         this.channelDOMCache.delete(conversationKey);
-        if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', conversationKey);
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
         this.persistPMMessages(conversationKey);
         if (this.inPMMode && this.currentPM === pubkey) {
             const container = document.getElementById('messagesContainer');
@@ -1887,7 +1887,7 @@ Object.assign(NYM.prototype, {
             // Remove messages
             const conversationKey = this.getPMConversationKey(pubkey);
             this.pmMessages.delete(conversationKey);
-            if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', conversationKey);
+            if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
 
             // Persist closed state so PM doesn't reappear on reload
             this.closedPMs.add(pubkey);
@@ -1912,7 +1912,7 @@ Object.assign(NYM.prototype, {
         this.pmConversations.delete(pubkey);
         const conversationKey = this.getPMConversationKey(pubkey);
         this.pmMessages.delete(conversationKey);
-        if (typeof this._cacheDeleteConv === 'function') this._cacheDeleteConv('pms', conversationKey);
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
         this.closedPMs.add(pubkey);
         try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -2236,8 +2236,6 @@ Object.assign(NYM.prototype, {
                 if (msg) {
                     msg.content = newContent;
                     msg.isEdited = true;
-                    msg._dirty = true;
-                    this.persistPMMessages(conversationKey);
                 }
             }
 

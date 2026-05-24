@@ -2076,13 +2076,11 @@ Object.assign(NYM.prototype, {
             });
 
             // Update the original message in stored messages
-            this.messages.forEach((msgs, channel) => {
+            this.messages.forEach((msgs) => {
                 const msg = msgs.find(m => m.id === originalEventId);
                 if (msg) {
                     msg.content = newContent;
                     msg.isEdited = true;
-                    msg._dirty = true;
-                    this.persistChannelMessages(channel);
                 }
             });
 

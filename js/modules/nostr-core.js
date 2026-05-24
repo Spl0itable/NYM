@@ -1929,7 +1929,6 @@ Object.assign(NYM.prototype, {
             if (msg && msg.pubkey === senderPubkey) {
                 msg.content = newContent;
                 msg.isEdited = true;
-                msg._dirty = true;
                 this.persistChannelMessages(channel);
                 found = true;
             }
@@ -1969,7 +1968,6 @@ Object.assign(NYM.prototype, {
 
         msg.content = newContent;
         msg.isEdited = true;
-        msg._dirty = true;
         this.persistPMMessages(conversationKey);
 
         const domId = msg.nymMessageId || msg.id;
