@@ -643,17 +643,9 @@ Object.assign(NYM.prototype, {
                 idSet.add(message.id);
                 this._indexMessage(storageKey, message);
 
-                if (arr.length > this.channelMessageLimit) {
-                    const drop = arr.length - this.channelMessageLimit;
-                    for (let i = 0; i < drop; i++) {
-                        const removed = arr[i];
-                        if (removed && removed.id) {
-                            idSet.delete(removed.id);
-                            this._unindexMessage(removed);
-                        }
-                    }
-                    arr.splice(0, drop);
-                }
+                // Drop anything over the per-channel cap. _pruneStorageKey
+                // also sweeps the cached DOM and the live nodes.
+                this._pruneStorageKey(storageKey, this.messages, this.channelMessageLimit, 0);
 
                 this.persistChannelMessages(storageKey);
                 this._scheduleZapResubscribe();
@@ -2903,10 +2895,123 @@ Object.assign(NYM.prototype, {
         return results;
     },
 
-    // Surgically drop a single message from any cached chat fragments and
-    // resync the cache's bookkeeping so the next restore still passes the
-    // fingerprint check. Used by message deletion paths instead of wiping
-    // the whole cache entry.
+    // Drop everything we know about a set of message IDs
+    _removeMessageNodesEverywhere(messageIds) {
+        if (!messageIds || messageIds.size === 0) return;
+        const fragments = [];
+        if (this.channelDOMCache) {
+            for (const cached of this.channelDOMCache.values()) {
+                if (cached && cached.fragment) fragments.push(cached);
+            }
+        }
+        for (const id of messageIds) {
+            if (!id) continue;
+            const safe = String(id).replace(/"/g, '\\"');
+            const sel = `[data-message-id="${safe}"]`;
+            const live = document.querySelector(sel);
+            if (live) {
+                const group = live.closest('.message-group');
+                live.remove();
+                if (group && group.parentNode && group.children.length === 0) group.remove();
+            }
+            for (const cached of fragments) {
+                const el = cached.fragment.querySelector(sel);
+                if (!el) continue;
+                const group = el.closest('.message-group');
+                el.remove();
+                if (group && group.parentNode && group.children.length === 0) group.remove();
+                cached._pendingRemovals = (cached._pendingRemovals || 0) + 1;
+            }
+        }
+    },
+
+    // Prune a single chat's in-memory messages by hard cap and/or age, then
+    // sweep the DOM and persistence. Returns the number of messages dropped.
+    _pruneStorageKey(storageKey, sourceMap, limit, maxAgeMs) {
+        const arr = sourceMap && sourceMap.get(storageKey);
+        if (!arr || arr.length === 0) return 0;
+
+        // Drop oldest entries above the hard cap.
+        let dropUntil = Math.max(0, arr.length - limit);
+        // Then drop anything still older than the age cutoff. Messages are
+        // chronological, so we can keep scanning forward from dropUntil.
+        if (maxAgeMs > 0) {
+            const cutoff = Date.now() - maxAgeMs;
+            for (let i = dropUntil; i < arr.length; i++) {
+                if (this._messageMs(arr[i]) < cutoff) dropUntil = i + 1;
+                else break;
+            }
+        }
+        if (dropUntil === 0) return 0;
+
+        const dropped = arr.splice(0, dropUntil);
+        const idSet = this.channelMessageIds && this.channelMessageIds.get(storageKey);
+        const idsForDom = new Set();
+        for (const m of dropped) {
+            this._unindexMessage(m);
+            if (m.id) {
+                idsForDom.add(m.id);
+                if (idSet) idSet.delete(m.id);
+            }
+            if (m.nymMessageId && m.nymMessageId !== m.id) idsForDom.add(m.nymMessageId);
+        }
+
+        this._removeMessageNodesEverywhere(idsForDom);
+
+        // Resync fingerprint/count for the cached fragment that holds this
+        // storage key (if any), now that the pre-prune prefix is shorter.
+        if (this.channelDOMCache && this.channelDOMCache.size > 0) {
+            for (const cached of this.channelDOMCache.values()) {
+                if (!cached || !cached._pendingRemovals) continue;
+                const removed = cached._pendingRemovals;
+                delete cached._pendingRemovals;
+                const newCount = Math.max(0, (cached.messageCount || 0) - removed);
+                cached.messageCount = newCount;
+                const liveArr = this.messages.get(storageKey) || this.pmMessages.get(storageKey) || arr;
+                cached.messageFingerprint = this._computeMessageFingerprint(liveArr.slice(0, newCount));
+            }
+        }
+
+        return dropped.length;
+    },
+
+    // Periodic sweep: enforce the per-chat hard caps and drop anything older
+    // than messageMaxAgeMs from every channel, PM, and group. Persisted
+    // copies are rewritten via the normal per-chat scheduler.
+    pruneOldMessages() {
+        const maxAge = this.messageMaxAgeMs || 0;
+        const channelLimit = this.channelMessageLimit || 50;
+        const pmLimit = this.pmStorageLimit || 1000;
+        let total = 0;
+        const touched = new Set();
+        if (this.messages) {
+            for (const key of Array.from(this.messages.keys())) {
+                if (this._pruneStorageKey(key, this.messages, channelLimit, maxAge) > 0) {
+                    touched.add(key);
+                    total += 1;
+                }
+            }
+        }
+        if (this.pmMessages) {
+            for (const key of Array.from(this.pmMessages.keys())) {
+                if (this._pruneStorageKey(key, this.pmMessages, pmLimit, maxAge) > 0) {
+                    touched.add(key);
+                    total += 1;
+                }
+            }
+        }
+        for (const key of touched) {
+            if (typeof this.persistChannelMessages === 'function' && this.messages && this.messages.has(key)) {
+                this.persistChannelMessages(key);
+            }
+            if (typeof this.persistPMMessages === 'function' && this.pmMessages && this.pmMessages.has(key)) {
+                this.persistPMMessages(key);
+            }
+        }
+        return total;
+    },
+
+    // Kept as a thin wrapper so existing single-deletion call sites still work.
     _removeMessageFromAllCaches(messageId) {
         if (!this.channelDOMCache || this.channelDOMCache.size === 0) return;
         const safeId = String(messageId).replace(/"/g, '\\"');

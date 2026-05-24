@@ -2,17 +2,22 @@
 
 (function () {
     const DB_NAME = 'nym-cache';
-    const DB_VERSION = 3;
-    const STORES = ['meta', 'profiles', 'channels', 'pms', 'reactions', 'avatars', 'banners'];
+    const DB_VERSION = 5;
+    const STORES = ['meta', 'profiles', 'channels', 'pms', 'reactions', 'avatars', 'banners', 'unfurls', 'emojis'];
     const MESSAGE_STORES = new Set(['channels', 'pms']);
 
     const PERSIST_DEBOUNCE_MS = 1500;
+
+    // Unfurl entries are also dropped if they sit unused for this long.
+    const UNFURL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
     const STORE_LIMITS = {
         profiles: 2000,
         reactions: 5000,
         avatars: 500,
-        banners: 200
+        banners: 200,
+        unfurls: 500,
+        emojis: 500
     };
 
     // Debounce for the dedup-set persistence
@@ -48,6 +53,8 @@
                     if (!db.objectStoreNames.contains('reactions')) db.createObjectStore('reactions', { keyPath: 'messageId' });
                     if (!db.objectStoreNames.contains('avatars')) db.createObjectStore('avatars', { keyPath: 'pubkey' });
                     if (!db.objectStoreNames.contains('banners')) db.createObjectStore('banners', { keyPath: 'pubkey' });
+                    if (!db.objectStoreNames.contains('unfurls')) db.createObjectStore('unfurls', { keyPath: 'url' });
+                    if (!db.objectStoreNames.contains('emojis')) db.createObjectStore('emojis', { keyPath: 'url' });
 
                     const upgradeMessageStore = (storeName) => {
                         const hadOld = db.objectStoreNames.contains(storeName);
@@ -336,6 +343,8 @@
                 if (storeName === 'avatars') return r.pubkey;
                 if (storeName === 'banners') return r.pubkey;
                 if (storeName === 'reactions') return r.messageId;
+                if (storeName === 'unfurls') return r.url;
+                if (storeName === 'emojis') return r.url;
                 return null;
             };
 
@@ -416,14 +425,57 @@
             if (this._cacheDisabled) return;
             const cachePMsAllowed = this.settings && this.settings.cachePMs !== false;
             try {
-                const [profiles, channelMsgs, pmMsgs, reactions, avatars, banners] = await Promise.all([
+                const [profiles, channelMsgs, pmMsgs, reactions, avatars, banners, unfurls, emojis] = await Promise.all([
                     this._cacheGetAll('profiles'),
                     this._cacheGetMessagesByConv('channels'),
                     cachePMsAllowed ? this._cacheGetMessagesByConv('pms') : Promise.resolve(new Map()),
                     this._cacheGetAll('reactions'),
                     this._cacheGetAll('avatars'),
-                    this._cacheGetAll('banners')
+                    this._cacheGetAll('banners'),
+                    this._cacheGetAll('unfurls'),
+                    this._cacheGetAll('emojis')
                 ]);
+
+                // Custom emoji blobs: same blob:URL hydration as avatars so
+                // every rendered <img.custom-emoji> reads from local bytes.
+                if (Array.isArray(emojis) && emojis.length > 0) {
+                    for (const e of emojis) {
+                        if (!e || !e.url || !e.blob) continue;
+                        try {
+                            const objectUrl = URL.createObjectURL(e.blob);
+                            this.emojiBlobCache.set(e.url, objectUrl);
+                        } catch (_) { }
+                    }
+                }
+
+                // Unfurls: hydrate the in-memory map and drop stale entries
+                // from IndexedDB so the cache doesn't grow forever.
+                if (Array.isArray(unfurls) && unfurls.length > 0) {
+                    if (!this._unfurlCache) this._unfurlCache = new Map();
+                    const now = Date.now();
+                    const expired = [];
+                    let loaded = 0;
+                    // Sort newest first so we keep the freshest entries when
+                    // we hit STORE_LIMITS.unfurls.
+                    unfurls.sort((a, b) => (b.lastTouched || 0) - (a.lastTouched || 0));
+                    for (const entry of unfurls) {
+                        if (!entry || !entry.url || !entry.data) continue;
+                        const age = now - (entry.lastTouched || 0);
+                        if (age > UNFURL_MAX_AGE_MS) {
+                            expired.push(entry.url);
+                            continue;
+                        }
+                        if (loaded < STORE_LIMITS.unfurls && !this._unfurlCache.has(entry.url)) {
+                            this._unfurlCache.set(entry.url, entry.data);
+                            loaded++;
+                        } else if (loaded >= STORE_LIMITS.unfurls) {
+                            expired.push(entry.url);
+                        }
+                    }
+                    for (const url of expired) {
+                        this._cacheDelete('unfurls', url).catch(() => { });
+                    }
+                }
 
                 // Profiles
                 let profileCount = 0;
@@ -837,6 +889,36 @@
         deleteCachedBanner(pubkey) {
             if (!pubkey || this._cacheDisabled) return;
             this._cacheDelete('banners', pubkey);
+        },
+
+        // Persist a successful URL unfurl so that the link preview is
+        // available without a network round-trip after reload.
+        persistUnfurl(url, data) {
+            if (!url || !data || this._cacheDisabled) return;
+            this._schedulePersist('uf', url, () => {
+                this._cachePut('unfurls', { url, data });
+                this._scheduleTrim();
+            });
+        },
+
+        deleteCachedUnfurl(url) {
+            if (!url || this._cacheDisabled) return;
+            this._cacheDelete('unfurls', url);
+        },
+
+        // Custom emoji blobs — keyed by source URL so the same image used by
+        // multiple shortcodes shares one cache row.
+        persistEmojiBlob(url, blob) {
+            if (!url || !blob || this._cacheDisabled) return;
+            this._schedulePersist('em', url, () => {
+                this._cachePut('emojis', { url, blob });
+                this._scheduleTrim();
+            });
+        },
+
+        deleteCachedEmoji(url) {
+            if (!url || this._cacheDisabled) return;
+            this._cacheDelete('emojis', url);
         },
 
         persistReactions(messageId) {
