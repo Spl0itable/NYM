@@ -198,6 +198,7 @@ Object.assign(NYM.prototype, {
             const channelInfo = {
                 type: 'reaction',
                 id: event.id,
+                eventId: event.id,
                 pubkey: event.pubkey,
                 messageId: messageId
             };
@@ -281,7 +282,7 @@ Object.assign(NYM.prototype, {
             if (isHistorical) {
                 this._addNotificationToHistory(reactorNym, body, channelInfo, event.created_at * 1000);
             } else {
-                this.showNotification(reactorNym, body, channelInfo);
+                this.showNotification(reactorNym, body, channelInfo, event.created_at * 1000);
             }
         }
     },

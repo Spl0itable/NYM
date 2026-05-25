@@ -58,6 +58,7 @@ Object.assign(NYM.prototype, {
                     senderNym: n.senderNym,
                     senderPubkey: n.senderPubkey,
                     channelInfo: n.channelInfo || null,
+                    eventId: n.eventId || n.channelInfo?.eventId || undefined,
                     viewed: !!n.viewed
                 }));
         } catch (_) { return []; }
@@ -117,6 +118,9 @@ Object.assign(NYM.prototype, {
             notifyFriendsOnly: this.notifyFriendsOnly || false,
             closedPMs: Array.from(this.closedPMs || []),
             leftGroups: Array.from(this.leftGroups || []),
+            closedPMTimes: this.closedPMTimes ? Object.fromEntries(this.closedPMTimes) : {},
+            leftGroupTimes: this.leftGroupTimes ? Object.fromEntries(this.leftGroupTimes) : {},
+            channelLastRead: this.channelLastRead ? Object.fromEntries(this.channelLastRead) : {},
             acceptPMs: this.settings.acceptPMs || 'enabled',
             syncMLSHistory: this.settings.syncMLSHistory !== false,
             showStatus: this.settings.showStatus !== false,
@@ -233,14 +237,83 @@ Object.assign(NYM.prototype, {
             try { localStorage.setItem('nym_last_settings_sync_ts', String(now)); } catch (_) { }
         }
 
-        // Group ephemeral keys → nymchat-keys
+        // Group ephemeral keys → nymchat-keys. Skip groups we've left, drop
+        // stale member entries, and iteratively trim oldest `prev` keys when
+        // the payload exceeds the NIP-44 plaintext limit.
         if (this.groupEphemeralKeys && this.groupEphemeralKeys.size > 0) {
             try {
                 const ekData = {};
                 for (const [groupId, ek] of this.groupEphemeralKeys) {
-                    ekData[groupId] = this._serializeEphemeralKeys(ek);
+                    if (this.leftGroups && this.leftGroups.has(groupId)) continue;
+                    const entry = this._serializeEphemeralKeys(ek);
+                    // Drop members not in the current member list to keep the
+                    // payload bounded as groups churn.
+                    const group = this.groupConversations?.get(groupId);
+                    if (group && Array.isArray(group.members) && entry.members) {
+                        const memberSet = new Set(group.members);
+                        for (const realPk of Object.keys(entry.members)) {
+                            if (!memberSet.has(realPk)) {
+                                delete entry.members[realPk];
+                                if (entry.memberKeyTs) delete entry.memberKeyTs[realPk];
+                            }
+                        }
+                    }
+                    ekData[groupId] = entry;
                 }
-                await this._publishCategoryWrap({ groupEphemeralKeys: ekData }, 'nymchat-keys', now);
+                if (Object.keys(ekData).length > 0) {
+                    const trimEphemeralPrevKeys = (p) => {
+                        const map = p.groupEphemeralKeys || {};
+                        let biggestKey = null;
+                        let biggestLen = 0;
+                        for (const [gid, entry] of Object.entries(map)) {
+                            const prev = entry?.self?.prev;
+                            if (Array.isArray(prev) && prev.length > biggestLen) {
+                                biggestLen = prev.length;
+                                biggestKey = gid;
+                            }
+                        }
+                        if (!biggestKey || biggestLen === 0) return false;
+                        const entry = map[biggestKey];
+                        // Drop the oldest quarter of prev keys from the biggest group
+                        const dropCount = Math.max(1, Math.ceil(biggestLen * 0.25));
+                        entry.self.prev = entry.self.prev.slice(0, biggestLen - dropCount);
+                        if (entry.self.prev.length === 0) delete entry.self.prev;
+                        return true;
+                    };
+                    const trimMemberKeyTs = (p) => {
+                        const map = p.groupEphemeralKeys || {};
+                        let dropped = false;
+                        for (const entry of Object.values(map)) {
+                            if (entry && entry.memberKeyTs) {
+                                delete entry.memberKeyTs;
+                                dropped = true;
+                            }
+                        }
+                        return dropped;
+                    };
+                    // Last-resort: drop the biggest group's entry entirely so the
+                    // remaining groups still sync.
+                    const dropBiggestGroup = (p) => {
+                        const map = p.groupEphemeralKeys || {};
+                        const keys = Object.keys(map);
+                        if (keys.length === 0) return false;
+                        let biggestKey = null;
+                        let biggestSize = -1;
+                        for (const gid of keys) {
+                            const size = JSON.stringify(map[gid] || {}).length;
+                            if (size > biggestSize) { biggestSize = size; biggestKey = gid; }
+                        }
+                        if (!biggestKey) return false;
+                        delete map[biggestKey];
+                        return true;
+                    };
+                    await this._publishCategoryWrap(
+                        { groupEphemeralKeys: ekData },
+                        'nymchat-keys',
+                        now,
+                        [trimEphemeralPrevKeys, trimMemberKeyTs, dropBiggestGroup]
+                    );
+                }
             } catch (_) { }
         }
 

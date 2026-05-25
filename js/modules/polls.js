@@ -296,33 +296,24 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Insert in correct chronological order, consistent with regular message
-        // DOM insertion in displayMessage(): created_at seconds, then 'ms', then seq.
+        // Mirror displayMessage(): 'ms' (with created_at*1000 fallback) first, then _seq.
         {
             const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
-            const msgCreatedAt = pollCreatedAt;
             const msgMs = pollCreatedAt * 1000;
 
             let insertBefore = null;
             for (const existing of existingMessages) {
                 const existingCreatedAt = parseInt(existing.dataset.createdAt) || 0;
-                if (msgCreatedAt < existingCreatedAt) {
+                const existingMs = parseInt(existing.dataset.ms) || (existingCreatedAt * 1000);
+                if (msgMs < existingMs) {
                     insertBefore = existing;
                     break;
                 }
-                if (msgCreatedAt === existingCreatedAt) {
-                    const existingMs = parseInt(existing.dataset.ms) || (existingCreatedAt * 1000);
-                    if (msgMs < existingMs) {
+                if (msgMs === existingMs) {
+                    const existingSeq = parseInt(existing.dataset.seq) || 0;
+                    if (0 < existingSeq) {
                         insertBefore = existing;
                         break;
-                    }
-                    if (msgMs === existingMs) {
-                        const existingSeq = parseInt(existing.dataset.seq) || 0;
-                        // Polls use seq=0, so they sort before same-second messages
-                        if (0 < existingSeq) {
-                            insertBefore = existing;
-                            break;
-                        }
                     }
                 }
             }

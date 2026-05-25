@@ -36,7 +36,6 @@ Object.assign(NYM.prototype, {
         return ek.self.current;
     },
 
-    // Rotate own ephemeral key for a group
     _rotateSelfEphemeralKey(groupId) {
         const NT = window.NostrTools;
         const ek = this._getGroupEphemeralKeys(groupId);
@@ -45,6 +44,9 @@ Object.assign(NYM.prototype, {
         }
         if (ek.self.current) {
             ek.self.prev.unshift(ek.self.current);
+        }
+        if (ek.self.prev.length > this.EPHEMERAL_PREV_KEYS_MAX) {
+            ek.self.prev = ek.self.prev.slice(0, this.EPHEMERAL_PREV_KEYS_MAX);
         }
         const nextSk = NT.generateSecretKey();
         const nextPk = NT.getPublicKey(nextSk);
@@ -243,12 +245,14 @@ Object.assign(NYM.prototype, {
                     knownPks.add(synced.self.current.pk);
                 }
 
-                // Add any synced prev keys we don't have
                 for (const k of synced.self.prev) {
                     if (!knownPks.has(k.pk)) {
                         local.self.prev.push(k);
                         knownPks.add(k.pk);
                     }
+                }
+                if (local.self.prev.length > this.EPHEMERAL_PREV_KEYS_MAX) {
+                    local.self.prev = local.self.prev.slice(0, this.EPHEMERAL_PREV_KEYS_MAX);
                 }
             }
         }
@@ -275,10 +279,18 @@ Object.assign(NYM.prototype, {
             const raw = localStorage.getItem(`nym_ephemeral_keys_${this.pubkey}`);
             if (!raw) return;
             const data = JSON.parse(raw);
+            const cap = this.EPHEMERAL_PREV_KEYS_MAX || 30;
+            let trimmed = false;
             for (const [groupId, entry] of Object.entries(data)) {
-                this.groupEphemeralKeys.set(groupId, this._deserializeEphemeralEntry(entry));
+                const ek = this._deserializeEphemeralEntry(entry);
+                if (ek.self && Array.isArray(ek.self.prev) && ek.self.prev.length > cap) {
+                    ek.self.prev = ek.self.prev.slice(0, cap);
+                    trimmed = true;
+                }
+                this.groupEphemeralKeys.set(groupId, ek);
             }
             this._invalidateEphPkCache();
+            if (trimmed) this._saveEphemeralKeys();
         } catch (_) { }
     },
 
@@ -350,7 +362,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Reload leftGroups for the current pubkey (called after pubkey is known)
     _loadLeftGroups() {
         if (!this.pubkey) return;
         try {
@@ -358,6 +369,14 @@ Object.assign(NYM.prototype, {
             if (perUser) {
                 const arr = JSON.parse(perUser);
                 for (const gid of arr) this.leftGroups.add(gid);
+            }
+            if (!this.leftGroupTimes) this.leftGroupTimes = new Map();
+            const times = localStorage.getItem('nym_left_group_times');
+            if (times) {
+                const obj = JSON.parse(times);
+                for (const [k, v] of Object.entries(obj || {})) {
+                    if (typeof v === 'number' && v > 0) this.leftGroupTimes.set(k, v);
+                }
             }
         } catch (_) { }
     },
@@ -479,8 +498,14 @@ Object.assign(NYM.prototype, {
         const msgType = typeTag ? typeTag[1] : null;
 
         // Drop messages for groups the user has left, unless it's a reinvite or unban
-        if (this.leftGroups.has(groupId) && msgType !== 'group-invite' && msgType !== 'group-add-member' && msgType !== 'group-unban') {
-            return;
+        // newer than when we left. Stale backlog never resurrects a deleted group.
+        if (this.leftGroups.has(groupId)) {
+            const leftAt = this.leftGroupTimes?.get(groupId) || 0;
+            const msgTs = Math.floor(rumor.created_at || 0);
+            const isReinviteType = (msgType === 'group-invite' || msgType === 'group-add-member' || msgType === 'group-unban');
+            if (!isReinviteType || msgTs <= leftAt) {
+                return;
+            }
         }
 
         // group-unban: owner notified us that we were unbanned. Show a notification.
@@ -493,9 +518,9 @@ Object.assign(NYM.prototype, {
             const unbanIsHistorical = (Math.floor(Date.now() / 1000) - unbanTsSec) > 10;
             const unbanTitle = `Unbanned from ${groupName}`;
             const unbanBody = `${actorName} unbanned you from "${groupName}". You may be re-invited.`;
-            const unbanChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
+            const unbanChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
             if (!unbanIsHistorical) {
-                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo);
+                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
             } else {
                 this._addNotificationToHistory(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
             }
@@ -540,10 +565,11 @@ Object.assign(NYM.prototype, {
         // group-invite: the rumor author is always the group creator — persist this so
         // non-creating members know who owns the group without relying on local state.
         if (typeTag && typeTag[1] === 'group-invite') {
-            // Re-invited to a group we previously left — clear the left state
             if (this.leftGroups.has(groupId)) {
                 this.leftGroups.delete(groupId);
+                if (this.leftGroupTimes) this.leftGroupTimes.delete(groupId);
                 this._saveLeftGroups();
+                try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(this.leftGroupTimes || new Map()))); } catch { }
                 this._debouncedNostrSettingsSave();
             }
             // Pre-create the group entry with createdBy set BEFORE _addGroupMessage
@@ -583,22 +609,20 @@ Object.assign(NYM.prototype, {
                 const inviterName = this.getNymFromPubkey(senderPubkey);
                 const inviteBody = rumor.content || `You've been added to group "${groupName}"`;
                 const inviteTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-                const isHistorical = this._isGiftWrapBacklog();
+                const inviteAgeMs = Date.now() - (inviteTsSec * 1000);
+                const isHistorical = this._isGiftWrapBacklog() || inviteAgeMs > 30000;
                 const groupConvKeyForNotif = this.getGroupConversationKey(groupId);
+                const inviteChannelInfo = {
+                    type: 'group',
+                    groupId,
+                    id: groupConvKeyForNotif,
+                    pubkey: senderPubkey,
+                    eventId: event.id
+                };
                 if (!isHistorical) {
-                    this.showNotification(`Group invite: ${groupName}`, inviteBody, {
-                        type: 'group',
-                        groupId,
-                        id: groupConvKeyForNotif,
-                        pubkey: senderPubkey
-                    });
+                    this.showNotification(`Group invite: ${groupName}`, inviteBody, inviteChannelInfo, inviteTsSec * 1000);
                 } else {
-                    this._addNotificationToHistory(`Group invite: ${groupName}`, inviteBody, {
-                        type: 'group',
-                        groupId,
-                        id: groupConvKeyForNotif,
-                        pubkey: senderPubkey
-                    }, inviteTsSec * 1000);
+                    this._addNotificationToHistory(`Group invite: ${groupName}`, inviteBody, inviteChannelInfo, inviteTsSec * 1000);
                 }
             }
 
@@ -607,10 +631,11 @@ Object.assign(NYM.prototype, {
 
         // group-add-member: show as system message, not a chat bubble.
         if (typeTag && typeTag[1] === 'group-add-member') {
-            // Re-added to a group we previously left — clear the left state
             if (this.leftGroups.has(groupId)) {
                 this.leftGroups.delete(groupId);
+                if (this.leftGroupTimes) this.leftGroupTimes.delete(groupId);
                 this._saveLeftGroups();
+                try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(this.leftGroupTimes || new Map()))); } catch { }
             }
             const memberPubkeys = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
@@ -706,11 +731,11 @@ Object.assign(NYM.prototype, {
                 const bodySelf = banTag
                     ? `${removerName} banned you. You can be re-invited only by the group owner.`
                     : `${removerName} removed you from the group.`;
-                const removeSelfChannelInfo = { type: 'group', groupId, id: gck, pubkey: senderPubkey };
+                const removeSelfChannelInfo = { type: 'group', groupId, id: gck, pubkey: senderPubkey, eventId: event.id };
                 const removeSelfTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
                 const removeSelfIsHistorical = (Math.floor(Date.now() / 1000) - removeSelfTsSec) > 10;
                 if (!removeSelfIsHistorical) {
-                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo);
+                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
                 } else {
                     this._addNotificationToHistory(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
                 }
@@ -764,12 +789,12 @@ Object.assign(NYM.prototype, {
                 if (targetPubkey === this.pubkey) {
                     const promoteTitle = `Promoted in ${grp.name || groupName}`;
                     const promoteBody = `${actorName} made you a moderator.`;
-                    const promoteChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
+                    const promoteChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
                     const promoteTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
                     if ((Math.floor(Date.now() / 1000) - promoteTsSec) > 10) {
                         this._addNotificationToHistory(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
                     } else {
-                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo);
+                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
                     }
                 }
             }
@@ -801,12 +826,12 @@ Object.assign(NYM.prototype, {
                 if (targetPubkey === this.pubkey) {
                     const revokeTitle = `Moderator removed in ${grp.name || groupName}`;
                     const revokeBody = `${actorName} revoked your moderator role.`;
-                    const revokeChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
+                    const revokeChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
                     const revokeTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
                     if ((Math.floor(Date.now() / 1000) - revokeTsSec) > 10) {
                         this._addNotificationToHistory(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
                     } else {
-                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo);
+                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
                     }
                 }
             }
@@ -839,12 +864,12 @@ Object.assign(NYM.prototype, {
                 if (newOwner === this.pubkey) {
                     const transferTitle = `Owner of ${grp.name || groupName}`;
                     const transferBody = `${actorName} transferred group ownership to you.`;
-                    const transferChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey };
+                    const transferChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
                     const transferTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
                     if ((Math.floor(Date.now() / 1000) - transferTsSec) > 10) {
                         this._addNotificationToHistory(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
                     } else {
-                        this.showNotification(transferTitle, transferBody, transferChannelInfo);
+                        this.showNotification(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
                     }
                 }
             }
@@ -966,40 +991,32 @@ Object.assign(NYM.prototype, {
 
         const senderBlocked = this.blockedUsers.has(senderPubkey) || this.hasBlockedKeyword(msg.content, msg.author);
         if (this.inPMMode && this.currentGroup === groupId) {
-            // displayMessage already filters blocked senders; no extra check needed here
             this.displayMessage(msg);
-            // Force auto-scroll to bottom for group messages
             this._scheduleScrollToBottom();
             if (typeof this._markChannelRead === 'function') {
                 this._markChannelRead(groupConvKey, msg.created_at);
             }
         } else {
-            // Not viewing this group — leave the cached DOM in place
             if (!isOwn && !senderBlocked) {
-                if (!msg.isHistorical) {
-                    // Always update sidebar unread count for all group messages
+                const ageMs = Date.now() - (tsSec * 1000);
+                const treatAsHistorical = msg.isHistorical || ageMs > 30000;
+                if (!treatAsHistorical) {
                     this.updateUnreadCount(groupConvKey);
                 }
-                // Notify for all group messages unless mentions-only is enabled.
-                // Suppress the chat-message notification for group-invite rumors —
-                // the invite handler above already fired a "Group invite" notification.
                 const isInviteRumor = msgType === 'group-invite';
                 const shouldNotifyGroup = !isInviteRumor && (!this.groupNotifyMentionsOnly || this.isMentioned(messageContent));
                 if (shouldNotifyGroup) {
-                    if (!msg.isHistorical) {
-                        this.showNotification(`${groupName}: ${msg.author}`, messageContent, {
-                            type: 'group',
-                            groupId,
-                            id: groupConvKey,
-                            pubkey: senderPubkey
-                        });
+                    const groupMsgChannelInfo = {
+                        type: 'group',
+                        groupId,
+                        id: groupConvKey,
+                        pubkey: senderPubkey,
+                        eventId: event.id
+                    };
+                    if (!treatAsHistorical) {
+                        this.showNotification(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
                     } else {
-                        this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, {
-                            type: 'group',
-                            groupId,
-                            id: groupConvKey,
-                            pubkey: senderPubkey
-                        }, msg.timestamp.getTime());
+                        this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
                     }
                 }
             }
@@ -1364,7 +1381,14 @@ Object.assign(NYM.prototype, {
         }
         // Track the left group so it doesn't reappear from stale relay data
         this.leftGroups.add(groupId);
+        if (!this.leftGroupTimes) this.leftGroupTimes = new Map();
+        this.leftGroupTimes.set(groupId, Math.floor(Date.now() / 1000));
         this._saveLeftGroups();
+        try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(this.leftGroupTimes))); } catch { }
+        const groupConvKeyForRead = this.getGroupConversationKey(groupId);
+        if (this.channelLastRead) this.channelLastRead.set(groupConvKeyForRead, Math.floor(Date.now() / 1000));
+        if (this.unreadCounts) this.unreadCounts.delete(groupConvKeyForRead);
+        if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
 
         // Clean up ephemeral keys for this group
         this.groupEphemeralKeys.delete(groupId);

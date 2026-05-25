@@ -435,12 +435,12 @@ Object.assign(NYM.prototype, {
                         channel: geohash,
                         geohash: geohash,
                         id: event.id,
+                        eventId: event.id,
                         pubkey: event.pubkey
                     };
-                    this.showNotification(nym, message.content, channelInfo);
+                    this.showNotification(nym, message.content, channelInfo, event.created_at * 1000);
                 }
 
-                // Silently track historical mentions in notification history
                 if (isHistorical && !message.isOwn && !message._spamGated &&
                     this.isMentioned(message.content) && !this.blockedUsers.has(event.pubkey)) {
                     this._addNotificationToHistory(nym, message.content, {
@@ -448,6 +448,7 @@ Object.assign(NYM.prototype, {
                         channel: geohash,
                         geohash: geohash,
                         id: event.id,
+                        eventId: event.id,
                         pubkey: event.pubkey
                     }, message.timestamp.getTime());
                 }

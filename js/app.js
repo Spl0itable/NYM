@@ -377,6 +377,7 @@
 
         state.overlay.classList.add('active');
         state.overlay.style.display = 'flex';
+        state.overlay.removeAttribute('aria-hidden');
         state.started = true;
         state.idx = 0;
 
@@ -410,8 +411,14 @@
 
     function endTutorial(markSeen) {
         // Hide
+        if (state.overlay && state.overlay.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
         state.overlay?.classList.remove('active');
-        if (state.overlay) state.overlay.style.display = 'none';
+        if (state.overlay) {
+            state.overlay.style.display = 'none';
+            state.overlay.setAttribute('aria-hidden', 'true');
+        }
         if (state.highlight) state.highlight.style.display = 'none';
 
         // Save flag
@@ -595,6 +602,7 @@ class NYM {
         this.pmConversations = new Map();
         this.groupConversations = new Map();
         this.groupEphemeralKeys = new Map();
+        this.EPHEMERAL_PREV_KEYS_MAX = 30;
         this._ephemeralSubIds = [];
         this._dmCatchupReady = Promise.resolve();
         this.currentGroup = null;
@@ -716,6 +724,8 @@ class NYM {
         this.notifyFriendsOnly = localStorage.getItem('nym_notify_friends_only') === 'true';
         this.closedPMs = new Set(JSON.parse(localStorage.getItem('nym_closed_pms') || '[]'));
         this.leftGroups = new Set(JSON.parse(localStorage.getItem('nym_left_groups') || '[]'));
+        this.closedPMTimes = new Map(Object.entries(JSON.parse(localStorage.getItem('nym_closed_pm_times') || '{}')));
+        this.leftGroupTimes = new Map(Object.entries(JSON.parse(localStorage.getItem('nym_left_group_times') || '{}')));
         this.recentEmojis = [];
         this.customEmojis = new Map();
         this.customEmojiPacks = new Map();
@@ -3511,7 +3521,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.392';
+const NYMCHAT_VERSION = 'v3.66.393';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -4861,35 +4871,47 @@ async function applyNostrSettingsAdditive(s) {
         if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
     }
 
-    // Cross-device notification sync
+    // Cross-device notification sync. Match on eventId when available,
+    // otherwise on (senderPubkey, body, ~minute timestamp) so duplicates
+    // across devices and live/replay paths collapse into one entry.
     if (Array.isArray(s.notificationHistory) && s.notificationHistory.length > 0) {
         try {
             const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-            const notifId = (n) => n.channelInfo?.id
-                || `${n.senderPubkey || ''}|${n.timestamp}|${(n.body || '').slice(0, 60)}`;
-            const localById = new Map();
-            for (const n of nym.notificationHistory) {
-                if (!n) continue;
-                localById.set(notifId(n), n);
-            }
+            const findLocalMatch = (n) => {
+                const evId = n.eventId || n.channelInfo?.eventId || '';
+                if (evId) {
+                    for (const m of nym.notificationHistory) {
+                        const mid = m.eventId || m.channelInfo?.eventId || '';
+                        if (mid && mid === evId) return m;
+                    }
+                }
+                for (const m of nym.notificationHistory) {
+                    if (m.body !== n.body) continue;
+                    if ((m.senderPubkey || '') !== (n.senderPubkey || '')) continue;
+                    if (Math.abs((m.timestamp || 0) - (n.timestamp || 0)) > 60000) continue;
+                    return m;
+                }
+                return null;
+            };
             let changed = false;
             for (const n of s.notificationHistory) {
                 if (!n || typeof n.timestamp !== 'number') continue;
                 if (n.timestamp <= cutoff) continue;
-                const id = notifId(n);
-                const existing = localById.get(id);
+                const existing = findLocalMatch(n);
                 if (existing) {
-                    // Merge viewed flag — once any device viewed the
-                    // notification, all devices should reflect that.
                     if (n.viewed && !existing.viewed) {
                         existing.viewed = true;
                         changed = true;
                     }
+                    if (!existing.eventId && (n.eventId || n.channelInfo?.eventId)) {
+                        existing.eventId = n.eventId || n.channelInfo?.eventId;
+                        changed = true;
+                    }
                     continue;
                 }
-                // Skip notifications from blocked users / nyms on this device.
                 const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
                 if (pk && nym.blockedUsers && nym.blockedUsers.has(pk)) continue;
+                const viewedFromLastRead = n.timestamp <= (nym.notificationLastReadTime || 0);
                 nym.notificationHistory.push({
                     title: n.title || '',
                     body: n.body || '',
@@ -4897,9 +4919,9 @@ async function applyNostrSettingsAdditive(s) {
                     timestamp: n.timestamp,
                     senderNym: n.senderNym || '',
                     senderPubkey: pk,
-                    viewed: !!n.viewed
+                    eventId: n.eventId || n.channelInfo?.eventId || undefined,
+                    viewed: !!n.viewed || viewedFromLastRead
                 });
-                localById.set(id, nym.notificationHistory[nym.notificationHistory.length - 1]);
                 changed = true;
             }
             if (changed) {
@@ -4910,6 +4932,48 @@ async function applyNostrSettingsAdditive(s) {
                 if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
             }
         } catch (_) { }
+    }
+
+    if (Array.isArray(s.closedPMs)) {
+        for (const pk of s.closedPMs) nym.closedPMs.add(pk);
+        try { localStorage.setItem('nym_closed_pms', JSON.stringify([...nym.closedPMs])); } catch (_) { }
+    }
+    if (s.closedPMTimes && typeof s.closedPMTimes === 'object') {
+        if (!nym.closedPMTimes) nym.closedPMTimes = new Map();
+        for (const [pk, v] of Object.entries(s.closedPMTimes)) {
+            if (typeof v !== 'number' || v <= 0) continue;
+            const cur = nym.closedPMTimes.get(pk) || 0;
+            if (v > cur) nym.closedPMTimes.set(pk, v);
+        }
+        try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(nym.closedPMTimes))); } catch (_) { }
+    }
+
+    if (Array.isArray(s.leftGroups)) {
+        for (const gid of s.leftGroups) nym.leftGroups.add(gid);
+        if (typeof nym._saveLeftGroups === 'function') nym._saveLeftGroups();
+    }
+    if (s.leftGroupTimes && typeof s.leftGroupTimes === 'object') {
+        if (!nym.leftGroupTimes) nym.leftGroupTimes = new Map();
+        for (const [gid, v] of Object.entries(s.leftGroupTimes)) {
+            if (typeof v !== 'number' || v <= 0) continue;
+            const cur = nym.leftGroupTimes.get(gid) || 0;
+            if (v > cur) nym.leftGroupTimes.set(gid, v);
+        }
+        try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(nym.leftGroupTimes))); } catch (_) { }
+    }
+
+    if (s.channelLastRead && typeof s.channelLastRead === 'object') {
+        if (!nym.channelLastRead) nym.channelLastRead = new Map();
+        let lrChanged = false;
+        for (const [ch, v] of Object.entries(s.channelLastRead)) {
+            if (typeof v !== 'number' || v <= 0) continue;
+            const cur = nym.channelLastRead.get(ch) || 0;
+            if (v > cur) { nym.channelLastRead.set(ch, v); lrChanged = true; }
+        }
+        if (lrChanged && typeof nym._persistUnreadCounts === 'function') {
+            nym._persistUnreadCounts(true);
+            if (typeof nym.recomputeAllUnreadCounts === 'function') nym.recomputeAllUnreadCounts();
+        }
     }
 
     // Group conversations
@@ -5412,16 +5476,48 @@ async function applyNostrSettings(s) {
         nym._updateNotificationBadge();
     }
 
-    // Closed PMs — merge with local set so deletions aren't lost by stale relay data
     if (Array.isArray(s.closedPMs)) {
         for (const pk of s.closedPMs) nym.closedPMs.add(pk);
         localStorage.setItem('nym_closed_pms', JSON.stringify([...nym.closedPMs]));
     }
+    if (s.closedPMTimes && typeof s.closedPMTimes === 'object') {
+        if (!nym.closedPMTimes) nym.closedPMTimes = new Map();
+        for (const [pk, v] of Object.entries(s.closedPMTimes)) {
+            if (typeof v !== 'number' || v <= 0) continue;
+            const cur = nym.closedPMTimes.get(pk) || 0;
+            if (v > cur) nym.closedPMTimes.set(pk, v);
+        }
+        try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(nym.closedPMTimes))); } catch { }
+    }
 
-    // Left groups — merge with local set so leaves aren't lost by stale relay data
     if (Array.isArray(s.leftGroups)) {
         for (const gid of s.leftGroups) nym.leftGroups.add(gid);
         nym._saveLeftGroups();
+    }
+    if (s.leftGroupTimes && typeof s.leftGroupTimes === 'object') {
+        if (!nym.leftGroupTimes) nym.leftGroupTimes = new Map();
+        for (const [gid, v] of Object.entries(s.leftGroupTimes)) {
+            if (typeof v !== 'number' || v <= 0) continue;
+            const cur = nym.leftGroupTimes.get(gid) || 0;
+            if (v > cur) nym.leftGroupTimes.set(gid, v);
+        }
+        try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(nym.leftGroupTimes))); } catch { }
+    }
+
+    // Channel read state — keep the later timestamp per channel so badges
+    // on a new device don't surface messages already read elsewhere.
+    if (s.channelLastRead && typeof s.channelLastRead === 'object') {
+        if (!nym.channelLastRead) nym.channelLastRead = new Map();
+        let lrChanged = false;
+        for (const [ch, v] of Object.entries(s.channelLastRead)) {
+            if (typeof v !== 'number' || v <= 0) continue;
+            const cur = nym.channelLastRead.get(ch) || 0;
+            if (v > cur) { nym.channelLastRead.set(ch, v); lrChanged = true; }
+        }
+        if (lrChanged && typeof nym._persistUnreadCounts === 'function') {
+            nym._persistUnreadCounts(true);
+            if (typeof nym.recomputeAllUnreadCounts === 'function') nym.recomputeAllUnreadCounts();
+        }
     }
 
     // Group conversations encrypted inside a gift wrap

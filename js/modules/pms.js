@@ -995,11 +995,21 @@ Object.assign(NYM.prototype, {
                 if (clearedAt && (rumor.created_at || 0) <= clearedAt) return;
             }
 
-            // Re-open closed PMs when a new message arrives from the peer
+            // Re-open closed PMs only when the incoming message is newer than
+            // the close timestamp. Stale relay backlog must not resurrect a
+            // conversation the user just deleted.
             if (this.closedPMs.has(peerPubkey)) {
-                this.closedPMs.delete(peerPubkey);
-                try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
-                this._debouncedNostrSettingsSave();
+                const closedAt = this.closedPMTimes?.get(peerPubkey) || 0;
+                const msgTs = Math.floor(rumor.created_at || 0);
+                if (msgTs > closedAt) {
+                    this.closedPMs.delete(peerPubkey);
+                    if (this.closedPMTimes) this.closedPMTimes.delete(peerPubkey);
+                    try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
+                    try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes || new Map()))); } catch { }
+                    this._debouncedNostrSettingsSave();
+                } else {
+                    return;
+                }
             }
 
             const conversationKey = this.getPMConversationKey(peerPubkey);
@@ -1192,26 +1202,23 @@ Object.assign(NYM.prototype, {
                 // avoiding a full re-render of long PM threads.
                 if (!isOwn) {
                     const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author);
-                    if (!msg.isHistorical) {
-                        // Live message: full notification with sound/popup
+                    const ageMs = Date.now() - (tsSec * 1000);
+                    const treatAsHistorical = msg.isHistorical || ageMs > 30000;
+                    const pmChannelInfo = {
+                        type: 'pm',
+                        nym: msg.author,
+                        pubkey: peerPubkey,
+                        id: conversationKey,
+                        eventId: event.id
+                    };
+                    if (!treatAsHistorical) {
                         this.updateUnreadCount(conversationKey);
                         if (!pmSenderBlocked) {
-                            this.showNotification(`PM from ${msg.author}`, messageContent, {
-                                type: 'pm',
-                                nym: msg.author,
-                                pubkey: peerPubkey,
-                                id: conversationKey
-                            });
+                            this.showNotification(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);
                         }
                     } else {
-                        // Historical message: silently add to notification history
                         if (!pmSenderBlocked) {
-                            this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, {
-                                type: 'pm',
-                                nym: msg.author,
-                                pubkey: peerPubkey,
-                                id: conversationKey
-                            }, msg.timestamp.getTime());
+                            this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);
                         }
                     }
                 }
@@ -1772,10 +1779,11 @@ Object.assign(NYM.prototype, {
             : this.parseNymFromDisplay(nym);
 
         if (!this.pmConversations.has(pubkey)) {
-            // Re-open closed PMs when a new conversation is initiated
             if (this.closedPMs.has(pubkey)) {
                 this.closedPMs.delete(pubkey);
+                if (this.closedPMTimes) this.closedPMTimes.delete(pubkey);
                 try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
+                try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes || new Map()))); } catch { }
                 this._debouncedNostrSettingsSave();
             }
 
@@ -1895,17 +1903,22 @@ Object.assign(NYM.prototype, {
 
     deletePM(pubkey) {
         if (confirm('Delete this PM conversation?')) {
-            // Remove from conversations
             this.pmConversations.delete(pubkey);
 
-            // Remove messages
             const conversationKey = this.getPMConversationKey(pubkey);
             this.pmMessages.delete(conversationKey);
             if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
+            if (this.channelLastRead) {
+                this.channelLastRead.set(conversationKey, Math.floor(Date.now() / 1000));
+            }
+            if (this.unreadCounts) this.unreadCounts.delete(conversationKey);
+            if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
 
-            // Persist closed state so PM doesn't reappear on reload
             this.closedPMs.add(pubkey);
+            if (!this.closedPMTimes) this.closedPMTimes = new Map();
+            this.closedPMTimes.set(pubkey, Math.floor(Date.now() / 1000));
             try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
+            try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes))); } catch { }
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
             // Remove from UI
@@ -1921,14 +1934,21 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Delete a PM without confirmation (used by /leave command)
     deletePMDirect(pubkey) {
         this.pmConversations.delete(pubkey);
         const conversationKey = this.getPMConversationKey(pubkey);
         this.pmMessages.delete(conversationKey);
         if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
+        if (this.channelLastRead) {
+            this.channelLastRead.set(conversationKey, Math.floor(Date.now() / 1000));
+        }
+        if (this.unreadCounts) this.unreadCounts.delete(conversationKey);
+        if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
         this.closedPMs.add(pubkey);
+        if (!this.closedPMTimes) this.closedPMTimes = new Map();
+        this.closedPMTimes.set(pubkey, Math.floor(Date.now() / 1000));
         try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
+        try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes))); } catch { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
         if (item) item.remove();
@@ -2101,10 +2121,11 @@ Object.assign(NYM.prototype, {
         // Extract base nym if it has a suffix
         const baseNym = this.stripPubkeySuffix(nym);
 
-        // Clear closed state so user can re-open a previously closed PM
         if (this.closedPMs.has(pubkey)) {
             this.closedPMs.delete(pubkey);
+            if (this.closedPMTimes) this.closedPMTimes.delete(pubkey);
             try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
+            try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes || new Map()))); } catch { }
             this._debouncedNostrSettingsSave();
         }
 

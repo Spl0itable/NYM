@@ -59,11 +59,11 @@ Object.assign(NYM.prototype, {
         return (createdAtSec || 0) * 1000;
     },
 
-    // Chronological message comparator: created_at seconds, then millisecond
-    // 'ms' stamp, then local arrival sequence as a final tiebreaker.
+    // Chronological message comparator. The 'ms' tag is primary so NYM-stamped
+    // events sort with sub-second precision; _messageMs falls back to
+    // created_at*1000 for events without the tag (bitchat, other clients).
+    // _seq breaks ties when the resolved millisecond value is identical.
     _compareMessages(a, b) {
-        const dt = (a.created_at || 0) - (b.created_at || 0);
-        if (dt !== 0) return dt;
         const dm = this._messageMs(a) - this._messageMs(b);
         if (dm !== 0) return dm;
         return (a._seq || 0) - (b._seq || 0);
@@ -969,34 +969,27 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Always insert messages in correct chronological order to prevent
-        // out-of-order display: created_at seconds, then the millisecond 'ms'
-        // stamp, then arrival sequence (_seq) — consistent with the in-memory sort.
+        // Insert in chronological order using the same key the in-memory
+        // comparator uses: 'ms' tag (falling back to created_at*1000 when the
+        // tag is missing), then _seq as a final tiebreaker.
         {
             const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
-            const msgCreatedAt = message.created_at || 0;
             const msgMs = this._messageMs(message);
             const msgSeq = message._seq || 0;
 
             let insertBefore = null;
             for (const existing of existingMessages) {
                 const existingCreatedAt = parseInt(existing.dataset.createdAt) || 0;
-                if (msgCreatedAt < existingCreatedAt) {
+                const existingMs = parseInt(existing.dataset.ms) || (existingCreatedAt * 1000);
+                if (msgMs < existingMs) {
                     insertBefore = existing;
                     break;
                 }
-                if (msgCreatedAt === existingCreatedAt) {
-                    const existingMs = parseInt(existing.dataset.ms) || (existingCreatedAt * 1000);
-                    if (msgMs < existingMs) {
+                if (msgMs === existingMs) {
+                    const existingSeq = parseInt(existing.dataset.seq) || 0;
+                    if (msgSeq < existingSeq) {
                         insertBefore = existing;
                         break;
-                    }
-                    if (msgMs === existingMs) {
-                        const existingSeq = parseInt(existing.dataset.seq) || 0;
-                        if (msgSeq < existingSeq) {
-                            insertBefore = existing;
-                            break;
-                        }
                     }
                 }
             }
@@ -1983,11 +1976,10 @@ Object.assign(NYM.prototype, {
         // Find the message-content element and update its content
         const contentEl = msgEl.querySelector('.message-content');
         if (contentEl) {
-            // Rebuild bubble-time-inner with edited indicator
             const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
+            const hoverButtonsEl = contentEl.querySelector('.msg-hover-buttons');
             const formattedContent = this.formatMessageWithQuotes(newContent);
             if (bubbleTimeEl) {
-                // Add edited indicator inside bubble-time-inner (for bubble layout)
                 if (!bubbleTimeEl.querySelector('.edited-indicator')) {
                     const bubbleEdited = document.createElement('span');
                     bubbleEdited.className = 'edited-indicator';
@@ -1996,9 +1988,9 @@ Object.assign(NYM.prototype, {
                     bubbleTimeEl.insertBefore(bubbleEdited, bubbleTimeEl.firstChild);
                     bubbleTimeEl.insertBefore(document.createTextNode(' '), bubbleEdited.nextSibling);
                 }
-                contentEl.innerHTML = formattedContent + bubbleTimeEl.outerHTML;
+                contentEl.innerHTML = formattedContent + bubbleTimeEl.outerHTML + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
             } else {
-                contentEl.innerHTML = formattedContent;
+                contentEl.innerHTML = formattedContent + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
             }
         }
 

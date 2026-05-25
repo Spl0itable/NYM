@@ -2,53 +2,59 @@
 
 Object.assign(NYM.prototype, {
 
-    showNotification(title, body, channelInfo = null) {
+    showNotification(title, body, channelInfo = null, timestamp = null) {
         if (!this.notificationsEnabled) return;
 
         const baseTitle = this.parseNymFromDisplay(title);
 
-        // Skip notifications from blocked users
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
-        // Skip notifications from non-friends if friends-only is enabled
         if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
-
-        // Skip bot digest messages that mass-mention users
         if (body && body.includes('10 recent messages:')) return;
-
-        // Skip Nymbot quote-reply notifications (bot quotes user's message with @mention)
         if (senderPubkey && this.isVerifiedBot(senderPubkey)) return;
 
-        // If this is a PM notification (we have a pubkey), append plain suffix for readability
         let titleToShow = baseTitle;
         if (channelInfo && channelInfo.pubkey) {
             const suffix = this.getPubkeySuffix(channelInfo.pubkey);
             titleToShow = `${baseTitle}#${suffix}`;
         }
 
-        // Track notification in history for the notifications modal
+        const ts = (typeof timestamp === 'number' && timestamp > 0) ? timestamp : Date.now();
+        const eventId = channelInfo?.eventId || '';
+
+        // Dedup against existing history before adding (live + replay paths
+        // can both call this for the same underlying event).
+        const isDupe = this.notificationHistory.some(n => {
+            if (eventId && n.eventId && n.eventId === eventId) return true;
+            if (n.title === titleToShow && n.body === body
+                && n.senderPubkey === (channelInfo?.pubkey || '')
+                && Math.abs((n.timestamp || 0) - ts) < 60000) return true;
+            return false;
+        });
+        if (isDupe) {
+            this._updateNotificationBadge();
+            return;
+        }
+
         this.notificationHistory.push({
             title: titleToShow,
             body: body,
             channelInfo: channelInfo,
-            timestamp: Date.now(),
+            timestamp: ts,
             senderNym: baseTitle,
             senderPubkey: channelInfo?.pubkey || '',
-            viewed: false
+            eventId: eventId || undefined,
+            viewed: ts <= (this.notificationLastReadTime || 0)
         });
-        // Prune notifications older than 24 hours and persist
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
         this._updateNotificationBadge();
         this._refreshNotificationsModalIfOpen();
-        // Push the updated history to the self-addressed settings giftwrap so
-        // other signed-in devices can render this notification too.
         if (typeof this._debouncedNostrSettingsSave === 'function') {
             this._debouncedNostrSettingsSave(8000);
         }
 
-        // Sound
         if (this.settings.sound !== 'none') {
             this.playSound(this.settings.sound);
         }
@@ -95,22 +101,15 @@ Object.assign(NYM.prototype, {
     },
 
     // Silently add a notification to history without triggering sound/popup/browser notification.
-    // Used for historical messages from relays that match notification criteria.
     _addNotificationToHistory(title, body, channelInfo, timestamp) {
         if (!this.notificationsEnabled) return;
 
         const baseTitle = this.parseNymFromDisplay(title);
 
-        // Skip notifications from blocked users
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
-        // Skip notifications from non-friends if friends-only is enabled
         if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
-
-        // Skip bot digest messages that mass-mention users
         if (body && body.includes('10 recent messages:')) return;
-
-        // Skip Nymbot quote-reply notifications (bot quotes user's message with @mention)
         if (senderPubkey && this.isVerifiedBot(senderPubkey)) return;
 
         let titleToShow = baseTitle;
@@ -118,14 +117,16 @@ Object.assign(NYM.prototype, {
             const suffix = this.getPubkeySuffix(channelInfo.pubkey);
             titleToShow = `${baseTitle}#${suffix}`;
         }
-        const ts = timestamp || Date.now();
+        const ts = (typeof timestamp === 'number' && timestamp > 0) ? timestamp : Date.now();
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-        // Only track if within the last 24 hours
         if (ts < cutoff24h) return;
-        const eventId = channelInfo?.id || '';
+        const eventId = channelInfo?.eventId || '';
         const isDupe = this.notificationHistory.some(n => {
-            if (eventId && n.channelInfo?.id === eventId && n.timestamp === ts) return true;
-            return n.title === titleToShow && n.body === body && Math.abs(n.timestamp - ts) < 2000;
+            if (eventId && n.eventId && n.eventId === eventId) return true;
+            if (n.title === titleToShow && n.body === body
+                && n.senderPubkey === (channelInfo?.pubkey || '')
+                && Math.abs((n.timestamp || 0) - ts) < 60000) return true;
+            return false;
         });
         if (isDupe) return;
         this.notificationHistory.push({
@@ -135,12 +136,11 @@ Object.assign(NYM.prototype, {
             timestamp: ts,
             senderNym: baseTitle,
             senderPubkey: channelInfo?.pubkey || '',
+            eventId: eventId || undefined,
             viewed: ts <= (this.notificationLastReadTime || 0)
         });
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
-        // Refresh badge so unviewed historical events (newer than the synced
-        // notificationLastReadTime) surface as unread on reconnected devices.
         this._updateNotificationBadge();
         this._refreshNotificationsModalIfOpen();
     },
