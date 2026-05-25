@@ -1867,6 +1867,24 @@ Object.assign(NYM.prototype, {
 <div class="gif-attribution">Powered by <a href="https://giphy.com" target="_blank">GIPHY</a></div>
 `;
 
+        // Reparent to <body> so position:fixed anchors to the viewport
+        const button = document.querySelector('.icon-btn.input-btn[title="GIF"]');
+        document.body.appendChild(gifPicker);
+        gifPicker.style.position = 'fixed';
+        if (window.innerWidth <= 768) {
+            gifPicker.style.bottom = '60px';
+            gifPicker.style.left = '50%';
+            gifPicker.style.transform = 'translateX(-50%)';
+            gifPicker.style.right = 'auto';
+            gifPicker.style.maxWidth = '90%';
+        } else if (button) {
+            const rect = button.getBoundingClientRect();
+            gifPicker.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
+            gifPicker.style.right = Math.min(window.innerWidth - rect.right + 50, 10) + 'px';
+            gifPicker.style.left = '';
+            gifPicker.style.transform = '';
+        }
+
         gifPicker.classList.add('active');
 
         // Load trending GIFs by default
@@ -2027,6 +2045,7 @@ Object.assign(NYM.prototype, {
         const wasOpen = gifPicker.classList.contains('active');
         gifPicker.classList.remove('active');
         gifPicker.innerHTML = '';
+        gifPicker.style.cssText = '';
         if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
