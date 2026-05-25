@@ -2,53 +2,72 @@
 
 Object.assign(NYM.prototype, {
 
-    showNotification(title, body, channelInfo = null) {
+    showNotification(title, body, channelInfo = null, eventTs = null) {
         if (!this.notificationsEnabled) return;
 
         const baseTitle = this.parseNymFromDisplay(title);
 
-        // Skip notifications from blocked users
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
-        // Skip notifications from non-friends if friends-only is enabled
         if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
+        if (this._isClosedContext(channelInfo)) return;
 
-        // Skip bot digest messages that mass-mention users
         if (body && body.includes('10 recent messages:')) return;
-
-        // Skip Nymbot quote-reply notifications (bot quotes user's message with @mention)
         if (senderPubkey && this.isVerifiedBot(senderPubkey)) return;
 
-        // If this is a PM notification (we have a pubkey), append plain suffix for readability
         let titleToShow = baseTitle;
         if (channelInfo && channelInfo.pubkey) {
             const suffix = this.getPubkeySuffix(channelInfo.pubkey);
             titleToShow = `${baseTitle}#${suffix}`;
         }
 
-        // Track notification in history for the notifications modal
+        const now = Date.now();
+        const ts = (typeof eventTs === 'number' && eventTs > 0) ? eventTs : now;
+        const cutoff24h = now - 24 * 60 * 60 * 1000;
+        if (ts < cutoff24h) return;
+
+        // Anything older than the soft-live window is recorded silently —
+        // no popup, no sound, no browser notification. Prevents stale relay
+        // backlog from re-triggering notifications the user already saw.
+        const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+        if (now - ts > STALE_THRESHOLD_MS) {
+            this._addNotificationToHistory(title, body, channelInfo, ts);
+            return;
+        }
+
+        const eventId = channelInfo?.id || '';
+        const isDupe = this.notificationHistory.some(n => {
+            if (eventId && n.channelInfo?.id === eventId) return true;
+            return n.title === titleToShow && n.body === body && Math.abs(n.timestamp - ts) < 2000;
+        });
+        if (isDupe) {
+            this._updateNotificationBadge();
+            return;
+        }
+
+        // A live notification is unread by default. The badge updater will
+        // still mark it viewed if the user is actively looking at the
+        // matching channel/PM/group.
+        const viewed = this._isViewingNotificationContext({ channelInfo });
         this.notificationHistory.push({
             title: titleToShow,
             body: body,
             channelInfo: channelInfo,
-            timestamp: Date.now(),
+            timestamp: ts,
             senderNym: baseTitle,
-            senderPubkey: channelInfo?.pubkey || '',
-            viewed: false
+            senderPubkey: senderPubkey,
+            viewed
         });
-        // Prune notifications older than 24 hours and persist
-        const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
         this._updateNotificationBadge();
         this._refreshNotificationsModalIfOpen();
-        // Push the updated history to the self-addressed settings giftwrap so
-        // other signed-in devices can render this notification too.
         if (typeof this._debouncedNostrSettingsSave === 'function') {
             this._debouncedNostrSettingsSave(8000);
         }
 
-        // Sound
+        if (viewed) return;
+
         if (this.settings.sound !== 'none') {
             this.playSound(this.settings.sound);
         }
@@ -59,7 +78,7 @@ Object.assign(NYM.prototype, {
                 const notification = new Notification(titleToShow, {
                     body: body,
                     icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="24" fill="%230ff" text-anchor="middle" font-family="monospace">Nymchat</text></svg>',
-                    tag: channelInfo ? (channelInfo.id || 'nym-notification') : 'nym-notification',
+                    tag: this._notificationGroupingTag(channelInfo),
                     requireInteraction: false,
                     data: { channelInfo: channelInfo }
                 });
@@ -101,16 +120,12 @@ Object.assign(NYM.prototype, {
 
         const baseTitle = this.parseNymFromDisplay(title);
 
-        // Skip notifications from blocked users
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
-        // Skip notifications from non-friends if friends-only is enabled
         if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
+        if (this._isClosedContext(channelInfo)) return;
 
-        // Skip bot digest messages that mass-mention users
         if (body && body.includes('10 recent messages:')) return;
-
-        // Skip Nymbot quote-reply notifications (bot quotes user's message with @mention)
         if (senderPubkey && this.isVerifiedBot(senderPubkey)) return;
 
         let titleToShow = baseTitle;
@@ -165,7 +180,9 @@ Object.assign(NYM.prototype, {
             if (!raw) return [];
             const parsed = JSON.parse(raw);
             const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-            return parsed.filter(n => n.timestamp > cutoff24h);
+            // Drop entries for PMs/groups the user has since deleted so
+            // they don't resurface on reload as ghost notifications.
+            return parsed.filter(n => n.timestamp > cutoff24h && !this._isClosedContext(n.channelInfo));
         } catch { return []; }
     },
 
@@ -175,6 +192,29 @@ Object.assign(NYM.prototype, {
             const recent = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
             localStorage.setItem('nym_notification_history', JSON.stringify(recent));
         } catch { }
+    },
+
+    pruneNotificationsForContext(channelInfo) {
+        if (!Array.isArray(this.notificationHistory) || this.notificationHistory.length === 0) return;
+        const before = this.notificationHistory.length;
+        this.notificationHistory = this.notificationHistory.filter(n => {
+            const ci = n && n.channelInfo;
+            if (!ci) return true;
+            if (channelInfo.type === 'pm' && channelInfo.pubkey) {
+                if (ci.type === 'pm' && ci.pubkey === channelInfo.pubkey) return false;
+                if (ci.type === 'reaction' && ci.sourceType === 'pm' && ci.sourcePubkey === channelInfo.pubkey) return false;
+            }
+            if (channelInfo.type === 'group' && channelInfo.groupId) {
+                if (ci.type === 'group' && ci.groupId === channelInfo.groupId) return false;
+                if (ci.type === 'reaction' && ci.sourceType === 'group' && ci.sourceGroupId === channelInfo.groupId) return false;
+            }
+            return true;
+        });
+        if (this.notificationHistory.length !== before) {
+            this._saveNotificationHistory();
+            this._updateNotificationBadge();
+            this._refreshNotificationsModalIfOpen();
+        }
     },
 
     _updateNotificationBadge() {
@@ -195,20 +235,28 @@ Object.assign(NYM.prototype, {
 
         if (!this.notificationsEnabled) {
             [desktopBadge, mobileBadge].forEach(badge => {
-                if (badge) badge.style.display = 'none';
+                if (badge) badge.classList.add('nm-hidden');
             });
             return;
         }
 
+        let viewedChanged = false;
+        for (const n of this.notificationHistory) {
+            if (n && !n.viewed && this._isViewingNotificationContext(n)) {
+                n.viewed = true;
+                viewedChanged = true;
+            }
+        }
+        if (viewedChanged) this._saveNotificationHistory();
+
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         const unreadCount = this.notificationHistory.filter(n => {
             if (n.timestamp <= cutoff24h) return false;
-            // Treat as read if either the per-item viewed flag is set or the
-            // legacy bulk read marker covers it (kept for backwards compat).
             if (n.viewed) return false;
             if (n.timestamp <= (this.notificationLastReadTime || 0)) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
+            if (this._isClosedContext(n.channelInfo)) return false;
             return true;
         }).length;
 
@@ -216,11 +264,53 @@ Object.assign(NYM.prototype, {
             if (!badge) return;
             if (unreadCount > 0) {
                 badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
-                badge.style.display = '';
+                badge.classList.remove('nm-hidden');
             } else {
-                badge.style.display = 'none';
+                badge.classList.add('nm-hidden');
             }
         });
+    },
+
+    _notificationGroupingTag(channelInfo) {
+        if (!channelInfo) return 'nym-notification';
+        if (channelInfo.type === 'pm' && channelInfo.pubkey) return `nym-pm-${channelInfo.pubkey}`;
+        if (channelInfo.type === 'group' && channelInfo.groupId) return `nym-group-${channelInfo.groupId}`;
+        if (channelInfo.type === 'geohash' && channelInfo.geohash) return `nym-geo-${channelInfo.geohash}`;
+        if (channelInfo.type === 'reaction') {
+            if (channelInfo.sourceType === 'pm' && channelInfo.sourcePubkey) return `nym-pm-${channelInfo.sourcePubkey}`;
+            if (channelInfo.sourceType === 'group' && channelInfo.sourceGroupId) return `nym-group-${channelInfo.sourceGroupId}`;
+            if (channelInfo.sourceType === 'geohash' && channelInfo.sourceGeohash) return `nym-geo-${channelInfo.sourceGeohash}`;
+        }
+        return channelInfo.id || 'nym-notification';
+    },
+
+    _isClosedContext(channelInfo) {
+        if (!channelInfo) return false;
+        const t = channelInfo.type;
+        if (t === 'pm') return !!(channelInfo.pubkey && this.closedPMs?.has(channelInfo.pubkey));
+        if (t === 'group') return !!(channelInfo.groupId && this.leftGroups?.has(channelInfo.groupId));
+        if (t === 'reaction') {
+            if (channelInfo.sourceType === 'pm') return !!(channelInfo.sourcePubkey && this.closedPMs?.has(channelInfo.sourcePubkey));
+            if (channelInfo.sourceType === 'group') return !!(channelInfo.sourceGroupId && this.leftGroups?.has(channelInfo.sourceGroupId));
+        }
+        return false;
+    },
+
+    _isViewingNotificationContext(n) {
+        const ci = n && n.channelInfo;
+        if (!ci) return false;
+        const matchGeohash = (gh) => !this.inPMMode && gh && this.currentGeohash === gh;
+        const matchPM = (pk) => this.inPMMode && pk && this.currentPM === pk;
+        const matchGroup = (gid) => this.inPMMode && gid && this.currentGroup === gid;
+        if (ci.type === 'geohash') return matchGeohash(ci.geohash);
+        if (ci.type === 'pm') return matchPM(ci.pubkey);
+        if (ci.type === 'group') return matchGroup(ci.groupId);
+        if (ci.type === 'reaction') {
+            if (ci.sourceType === 'geohash') return matchGeohash(ci.sourceGeohash);
+            if (ci.sourceType === 'pm') return matchPM(ci.sourcePubkey);
+            if (ci.sourceType === 'group') return matchGroup(ci.sourceGroupId);
+        }
+        return false;
     },
 
     openNotificationsModal() {
@@ -263,6 +353,7 @@ Object.assign(NYM.prototype, {
             if (n.timestamp <= cutoff24h) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
+            if (this._isClosedContext(n.channelInfo)) return false;
             return true;
         }).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 

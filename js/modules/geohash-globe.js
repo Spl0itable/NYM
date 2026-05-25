@@ -367,6 +367,346 @@ Object.assign(NYM.prototype, {
         this.updateGeohashChannels();
 
         const canvas = container.querySelector('#geohashMapCanvas');
+
+        const isFileOrigin = location.protocol === 'file:';
+        const supportsOffscreen = !isFileOrigin
+            && !window.NYM_IS_IOS
+            && typeof Worker !== 'undefined'
+            && typeof HTMLCanvasElement !== 'undefined'
+            && 'transferControlToOffscreen' in HTMLCanvasElement.prototype;
+
+        if (supportsOffscreen) {
+            let worker = null;
+            try {
+                worker = new Worker('js/workers/geohash-worker.js');
+            } catch (e) {
+                console.warn('geohash worker construct failed, falling back', e);
+            }
+            if (worker) {
+                try {
+                    this._initializeGeohashMapWorker(canvas, container, worker);
+                    return;
+                } catch (e) {
+                    console.warn('geohash worker init failed, falling back', e);
+                    try { worker.terminate(); } catch (_) {}
+                }
+            }
+        }
+        this._initializeGeohashMapMainThread(canvas, container);
+    },
+
+    _initializeGeohashMapWorker(canvas, container, worker) {
+        const isPerf = !!this.performanceMode;
+        const dpr = isPerf ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+        let cssWidth = Math.max(1, container.clientWidth || 1);
+        let cssHeight = Math.max(1, container.clientHeight || 1);
+        canvas.style.width = cssWidth + 'px';
+        canvas.style.height = cssHeight + 'px';
+
+        const isLight = document.body.classList.contains('light-mode');
+        const off = canvas.transferControlToOffscreen();
+
+        const view = { cx: 0, cy: 0, zoom: 1, minZoom: 1, maxZoom: 16 };
+        const pending = new Map();
+        let nextReplyId = 1;
+        let heatmapMode = !!this._heatmapPreference;
+        let daynightMode = !!this._daynightPreference;
+        let geohashGridMode = !!this._geohashGridPreference;
+        let admin1Loaded = false;
+        let citiesLoaded = false;
+
+        worker.onmessage = (e) => {
+            const d = e.data || {};
+            if (d.type === 'viewChanged') {
+                view.cx = d.cx; view.cy = d.cy; view.zoom = d.zoom;
+                ensureSubregions();
+            } else if (d.type === 'hitResult') {
+                const entry = pending.get(d.replyId);
+                if (entry) { pending.delete(d.replyId); entry.resolve(d); }
+            } else if (d.type === 'hoverResult') {
+                const entry = pending.get(d.replyId);
+                if (entry) { pending.delete(d.replyId); entry.resolve(d); }
+            }
+        };
+
+        const post = (op, args, transfer) => {
+            const msg = Object.assign({ op }, args || {});
+            if (transfer) worker.postMessage(msg, transfer);
+            else worker.postMessage(msg);
+        };
+
+        post('init', { canvas: off, cssWidth, cssHeight, dpr, isLight, isPerf }, [off]);
+
+        const sendChannels = () => {
+            const chs = (this.geohashChannels || []).map(c => ({
+                geohash: c.geohash, lat: c.lat, lng: c.lng, messages: c.messages, isJoined: c.isJoined
+            }));
+            post('setChannels', { channels: chs });
+        };
+        sendChannels();
+
+        if (this.userLocation) {
+            post('setUserLocation', { userLocation: { lat: this.userLocation.lat, lng: this.userLocation.lng } });
+        }
+        if (heatmapMode || daynightMode || geohashGridMode) {
+            post('setMode', { heatmap: heatmapMode, daynight: daynightMode, grid: geohashGridMode });
+        }
+
+        const updateHeatmapButton = () => {
+            const btn = document.getElementById('geohashHeatmapBtn');
+            if (btn) btn.classList.toggle('active', heatmapMode);
+        };
+        const updateDaynightButton = () => {
+            const btn = document.getElementById('geohashDaynightBtn');
+            if (btn) btn.classList.toggle('active', daynightMode);
+        };
+        const updateGeohashGridButton = () => {
+            const btn = document.getElementById('geohashGridBtn');
+            if (btn) btn.classList.toggle('active', geohashGridMode);
+        };
+        updateHeatmapButton();
+        updateDaynightButton();
+        updateGeohashGridButton();
+
+        const ensureSubregions = () => {
+            if (view.zoom >= ADMIN1_ZOOM_THRESHOLD && !admin1Loaded) {
+                admin1Loaded = true;
+                loadAdmin1Features().then(feats => post('setFeatures', { admin1: feats }));
+            }
+            if (view.zoom >= CITY_ZOOM_THRESHOLD && !citiesLoaded) {
+                citiesLoaded = true;
+                loadCityFeatures().then(feats => post('setFeatures', { cities: feats }));
+            }
+        };
+
+        loadWorldFeatures().then(feats => post('setFeatures', { admin0: feats }));
+
+        let dragging = false;
+        let dragStart = null;
+        let movedDistance = 0;
+        let cursorChannel = false;
+        const CLICK_THRESHOLD = 5;
+
+        const hitTest = (x, y) => {
+            const replyId = 'r' + (nextReplyId++);
+            return new Promise(resolve => {
+                pending.set(replyId, { resolve });
+                post('hitTest', { x, y, replyId });
+            });
+        };
+        const hoverTest = (x, y) => {
+            const replyId = 'r' + (nextReplyId++);
+            return new Promise(resolve => {
+                pending.set(replyId, { resolve });
+                post('hoverTest', { x, y, replyId });
+            });
+        };
+
+        const onPointerDown = (e) => {
+            if (e.pointerType === 'touch' && e.isPrimary === false) return;
+            try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+            dragging = true;
+            movedDistance = 0;
+            dragStart = { x: e.clientX, y: e.clientY };
+            canvas.style.cursor = 'grabbing';
+        };
+
+        const onPointerMove = (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const localX = e.clientX - rect.left;
+            const localY = e.clientY - rect.top;
+
+            if (!dragging) {
+                hoverTest(localX, localY).then(r => {
+                    if (r.hasChannel !== cursorChannel) {
+                        cursorChannel = r.hasChannel;
+                        canvas.style.cursor = cursorChannel ? 'pointer' : 'grab';
+                    }
+                });
+                return;
+            }
+
+            const dx = e.clientX - dragStart.x;
+            const dy = e.clientY - dragStart.y;
+            dragStart = { x: e.clientX, y: e.clientY };
+            movedDistance += Math.abs(dx) + Math.abs(dy);
+            post('panBy', { dx, dy });
+        };
+
+        const onPointerUp = (e) => {
+            const wasDrag = movedDistance > CLICK_THRESHOLD;
+            const wasDown = dragging;
+            dragging = false;
+            try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+            canvas.style.cursor = cursorChannel ? 'pointer' : 'grab';
+
+            if (!wasDown || wasDrag) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const localX = e.clientX - rect.left;
+            const localY = e.clientY - rect.top;
+            hitTest(localX, localY).then(r => {
+                if (r.channel && typeof this.selectGeohashChannel === 'function') {
+                    const ch = r.channel;
+                    if (!ch.isJoined && this.userJoinedChannels) {
+                        ch.isJoined = !!(this.userJoinedChannels.has(ch.geohash));
+                    }
+                    this.selectGeohashChannel(ch);
+                    return;
+                }
+                if (r.geohash) this._selectGeohashCell(r.geohash);
+            });
+        };
+
+        const onWheel = (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const px = e.clientX - rect.left;
+            const py = e.clientY - rect.top;
+            const factor = Math.exp(-e.deltaY * 0.0015);
+            post('zoomAt', { factor, focusX: px, focusY: py });
+        };
+
+        let pinch = null;
+        const onTouchStart = (e) => {
+            if (e.touches.length === 2) {
+                const t0 = e.touches[0], t1 = e.touches[1];
+                const dx = t0.clientX - t1.clientX;
+                const dy = t0.clientY - t1.clientY;
+                pinch = {
+                    dist: Math.hypot(dx, dy) || 1,
+                    zoom: view.zoom,
+                    midX: (t0.clientX + t1.clientX) / 2,
+                    midY: (t0.clientY + t1.clientY) / 2
+                };
+                dragging = false;
+            }
+        };
+        const onTouchMove = (e) => {
+            if (e.touches.length === 2 && pinch) {
+                e.preventDefault();
+                const t0 = e.touches[0], t1 = e.touches[1];
+                const dx = t0.clientX - t1.clientX;
+                const dy = t0.clientY - t1.clientY;
+                const newDist = Math.hypot(dx, dy) || 1;
+                const rect = canvas.getBoundingClientRect();
+                const px = pinch.midX - rect.left, py = pinch.midY - rect.top;
+                const ratio = newDist / pinch.dist;
+                const targetZoom = Math.max(view.minZoom, Math.min(view.maxZoom, pinch.zoom * ratio));
+                const factor = targetZoom / view.zoom;
+                if (factor !== 1) post('zoomAt', { factor, focusX: px, focusY: py });
+            }
+        };
+        const onTouchEnd = (e) => {
+            if (e.touches.length < 2) pinch = null;
+        };
+
+        canvas.addEventListener('pointerdown', onPointerDown);
+        canvas.addEventListener('pointermove', onPointerMove);
+        canvas.addEventListener('pointerup', onPointerUp);
+        canvas.addEventListener('pointercancel', onPointerUp);
+        canvas.addEventListener('wheel', onWheel, { passive: false });
+        canvas.addEventListener('touchstart', onTouchStart, { passive: true });
+        canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+        canvas.addEventListener('touchend', onTouchEnd, { passive: true });
+        canvas.addEventListener('touchcancel', onTouchEnd, { passive: true });
+        canvas.style.cursor = 'grab';
+        canvas.style.touchAction = 'none';
+
+        let resizeTimer = null;
+        const onResize = () => {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                cssWidth = Math.max(1, container.clientWidth);
+                cssHeight = Math.max(1, container.clientHeight);
+                canvas.style.width = cssWidth + 'px';
+                canvas.style.height = cssHeight + 'px';
+                post('resize', { cssWidth, cssHeight, dpr });
+            }, 100);
+        };
+        window.addEventListener('resize', onResize, { passive: true });
+
+        const activeWindowTimer = setInterval(() => {
+            if (!this.geohashMap) return;
+            this.updateGeohashChannels();
+            sendChannels();
+        }, ACTIVE_WINDOW_REFRESH_MS);
+
+        const daynightTimer = setInterval(() => {
+            if (!this.geohashMap || !daynightMode) return;
+            post('requestDraw');
+        }, DAYNIGHT_REFRESH_MS);
+
+        this._geomapCleanup = () => {
+            canvas.removeEventListener('pointerdown', onPointerDown);
+            canvas.removeEventListener('pointermove', onPointerMove);
+            canvas.removeEventListener('pointerup', onPointerUp);
+            canvas.removeEventListener('pointercancel', onPointerUp);
+            canvas.removeEventListener('wheel', onWheel);
+            canvas.removeEventListener('touchstart', onTouchStart);
+            canvas.removeEventListener('touchmove', onTouchMove);
+            canvas.removeEventListener('touchend', onTouchEnd);
+            canvas.removeEventListener('touchcancel', onTouchEnd);
+            window.removeEventListener('resize', onResize);
+            if (resizeTimer) clearTimeout(resizeTimer);
+            clearInterval(activeWindowTimer);
+            clearInterval(daynightTimer);
+            pending.clear();
+            try { worker.terminate(); } catch (_) {}
+        };
+
+        this.geohashMap = {
+            updatePoints: () => {
+                this.updateGeohashChannels();
+                sendChannels();
+            },
+            resetView: () => {
+                heatmapMode = false;
+                daynightMode = false;
+                geohashGridMode = false;
+                this._heatmapPreference = false;
+                this._daynightPreference = false;
+                this._geohashGridPreference = false;
+                updateHeatmapButton();
+                updateDaynightButton();
+                updateGeohashGridButton();
+                view.cx = 0; view.cy = 0; view.zoom = 1;
+                post('resetView');
+            },
+            zoomBy: (factor) => {
+                post('zoomAt', { factor, focusX: cssWidth / 2, focusY: cssHeight / 2 });
+            },
+            toggleHeatmap: () => {
+                heatmapMode = !heatmapMode;
+                this._heatmapPreference = heatmapMode;
+                updateHeatmapButton();
+                post('setMode', { heatmap: heatmapMode });
+            },
+            isHeatmap: () => heatmapMode,
+            toggleDaynight: () => {
+                daynightMode = !daynightMode;
+                this._daynightPreference = daynightMode;
+                updateDaynightButton();
+                post('setMode', { daynight: daynightMode });
+            },
+            isDaynight: () => daynightMode,
+            toggleGeohashGrid: () => {
+                geohashGridMode = !geohashGridMode;
+                this._geohashGridPreference = geohashGridMode;
+                updateGeohashGridButton();
+                post('setMode', { grid: geohashGridMode });
+            },
+            isGeohashGrid: () => geohashGridMode,
+            zoomToBounds: (bounds, padding = 0.7) => {
+                post('zoomToBounds', { bounds, padding });
+            },
+            setStyle: (light) => {
+                post('setStyle', { isLight: !!light });
+            }
+        };
+    },
+
+    _initializeGeohashMapMainThread(canvas, container) {
         const ctx = canvas.getContext('2d');
 
         const isPerf = !!this.performanceMode;

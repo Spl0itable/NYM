@@ -9,4 +9,8 @@
     }
     // Hide ASCII art logos in NymchatApp shell to prevent flash
     if (/NymchatApp\//i.test(navigator.userAgent)) document.body.classList.add('nymchat-app');
+
+    var ua = navigator.userAgent || '';
+    window.NYM_IS_IOS = /iPad|iPhone|iPod/.test(ua)
+        || (ua.indexOf('Macintosh') !== -1 && navigator.maxTouchPoints > 1);
 })();
