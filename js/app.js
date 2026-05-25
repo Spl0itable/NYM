@@ -551,6 +551,9 @@ class NYM {
         this.dismissedTransferEvents = new Set(JSON.parse(localStorage.getItem('nym_dismissed_transfers') || '[]'));
         this.powDifficulty = 12;
         this.enablePow = false;
+        this.nymchatPowFloor = 16;
+        this.nymchatVouches = new Set();
+        this._lastVouchPublishAt = 0;
         this.spamFilterEnabled = true;
         this.spamFilterAggressive = true;
         this.connectionMode = 'ephemeral';
@@ -1039,6 +1042,8 @@ class NYM {
             title: 'Nymchat Bot'
         };
         this.verifiedBotPubkeys = new Set([this.verifiedBot.pubkey]);
+        this.nymchatPubkeys.add(this.verifiedDeveloper.pubkey);
+        this.nymchatPubkeys.add(this.verifiedBot.pubkey);
         // Seed nymbot into users map so it always appears in sidebar and mention autocomplete
         this.users.set(this.verifiedBot.pubkey, {
             nym: 'Nymbot',
@@ -3506,7 +3511,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.391';
+const NYMCHAT_VERSION = 'v3.66.392';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');

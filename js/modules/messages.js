@@ -121,6 +121,66 @@ Object.assign(NYM.prototype, {
         return conversation;
     },
 
+    // Swap an optimistic message's temp id for the real signed event id, and
+    // re-sort if PoW mining shifted created_at out of chronological order
+    // relative to messages that arrived during mining.
+    _replaceOptimisticMessage(tempId, signedEvent, storageKey, isPM) {
+        const arr = isPM ? this.pmMessages.get(storageKey) : this.messages.get(storageKey);
+        if (!arr) return;
+        const idx = arr.findIndex(m => m && m.id === tempId);
+        if (idx < 0) return;
+        const msg = arr[idx];
+        const oldCreated = msg.created_at || 0;
+        msg.id = signedEvent.id;
+        msg.created_at = signedEvent.created_at;
+        msg.timestamp = new Date(signedEvent.created_at * 1000);
+        delete msg._optimistic;
+
+        const idSet = isPM ? null : this.channelMessageIds && this.channelMessageIds.get(storageKey);
+        if (idSet) idSet.add(signedEvent.id);
+        if (typeof this._indexMessage === 'function') this._indexMessage(storageKey, msg);
+        if (this.processedMessageEventIds) this.processedMessageEventIds.add(signedEvent.id);
+        if (this.renderedMessageIds) {
+            this.renderedMessageIds.delete(tempId);
+            this.renderedMessageIds.add(signedEvent.id);
+        }
+
+        if (oldCreated !== msg.created_at) {
+            arr.splice(idx, 1);
+            if (typeof this._insertMessageSorted === 'function') {
+                this._insertMessageSorted(arr, msg);
+            } else {
+                arr.push(msg);
+            }
+        }
+
+        const el = document.querySelector(`[data-message-id="${tempId.replace(/"/g, '\\"')}"]`);
+        if (el) {
+            el.dataset.messageId = signedEvent.id;
+            el.dataset.createdAt = String(signedEvent.created_at || 0);
+            el.classList.remove('optimistic-pending');
+
+            if (oldCreated !== msg.created_at && typeof this._findDomInsertionPoint === 'function') {
+                const container = el.parentNode;
+                if (container) {
+                    const insertBefore = this._findDomInsertionPoint(container, msg.created_at, msg._ms || msg.created_at * 1000, msg._seq || 0);
+                    if (insertBefore !== el && insertBefore !== el.nextSibling) {
+                        if (insertBefore) container.insertBefore(el, insertBefore);
+                        else container.appendChild(el);
+                    }
+                }
+            }
+        }
+    },
+
+    _markOptimisticFailed(tempId, storageKey, err) {
+        const el = document.querySelector(`[data-message-id="${tempId.replace(/"/g, '\\"')}"]`);
+        if (el) el.classList.add('optimistic-failed');
+        if (typeof this.displaySystemMessage === 'function') {
+            this.displaySystemMessage('Failed to send message: ' + (err && err.message || err));
+        }
+    },
+
     trackMessage(pubkey, channel, isHistorical = false, content = '') {
         if (isHistorical) return;
 
@@ -1869,8 +1929,9 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
-            if (this.enablePow && this.powDifficulty > 0) {
-                event = NostrTools.nip13.minePow(event, this.powDifficulty);
+            const editDifficulty = this._effectivePowDifficulty();
+            if (editDifficulty > 0) {
+                event = await this._minePow(event, editDifficulty);
             }
 
             const signedEvent = await this.signEvent(event);

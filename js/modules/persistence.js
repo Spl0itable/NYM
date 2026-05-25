@@ -23,6 +23,7 @@
     const META_PROCESSED_PM_EVENT_IDS = 'processedPMEventIds';
     const META_DELETED_EVENT_IDS = 'deletedEventIds';
     const META_NYMCHAT_PUBKEYS = 'nymchatPubkeys';
+    const META_NYMCHAT_VOUCHES = 'nymchatVouches';
 
     Object.assign(NYM.prototype, {
 
@@ -261,6 +262,12 @@
                         ids: Array.from(this.nymchatPubkeys)
                     });
                 }
+                if (this.nymchatVouches && this.nymchatVouches.size > 0) {
+                    this._cachePut('meta', {
+                        key: META_NYMCHAT_VOUCHES,
+                        ids: Array.from(this.nymchatVouches)
+                    });
+                }
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
@@ -275,6 +282,8 @@
                         for (const id of m.ids) this.deletedEventIds.add(id);
                     } else if (m.key === META_NYMCHAT_PUBKEYS && this.nymchatPubkeys) {
                         for (const id of m.ids) this.nymchatPubkeys.add(id);
+                    } else if (m.key === META_NYMCHAT_VOUCHES && this.nymchatVouches) {
+                        for (const id of m.ids) this.nymchatVouches.add(id);
                     }
                 }
             } catch (_) { }

@@ -29,6 +29,36 @@ Object.assign(NYM.prototype, {
         return pow >= minimumDifficulty;
     },
 
+    // Cooperative NIP-13 miner: hashes for ~4ms, yields to the event loop,
+    // then resumes. Keeps the UI at 60fps while mining without a Worker.
+    async _minePow(event, difficulty) {
+        if (!difficulty || difficulty <= 0) return event;
+        let nonceIdx = event.tags.findIndex(t => Array.isArray(t) && t[0] === 'nonce');
+        if (nonceIdx < 0) {
+            event.tags.push(['nonce', '0', String(difficulty)]);
+            nonceIdx = event.tags.length - 1;
+        } else {
+            event.tags[nonceIdx] = ['nonce', '0', String(difficulty)];
+        }
+        let nonce = 0;
+        while (true) {
+            const start = performance.now();
+            while (performance.now() - start < 4) {
+                event.tags[nonceIdx][1] = String(nonce);
+                event.id = NostrTools.getEventHash(event);
+                if (NostrTools.nip13.getPow(event.id) >= difficulty) return event;
+                nonce++;
+            }
+            await new Promise(r => setTimeout(r, 0));
+        }
+    },
+
+    _effectivePowDifficulty() {
+        const userPow = (this.enablePow && this.powDifficulty > 0) ? this.powDifficulty : 0;
+        const floor = this.nymchatPowFloor || 0;
+        return Math.max(userPow, floor);
+    },
+
     async saveToNostrProfile() {
         if (!this.pubkey) return;
 
@@ -241,6 +271,14 @@ Object.assign(NYM.prototype, {
 
             if (event.pubkey !== this.pubkey) {
                 this._trackPubkeyMessage(event.pubkey, event.id);
+                // NIP-13 PoW that meets the nymchat floor is treated as
+                // self-attestation that the sender is using a nymchat client.
+                if (this.nymchatPowFloor > 0 && this.validatePow(event, this.nymchatPowFloor)) {
+                    this._markNymchatPubkey(event.pubkey);
+                    if (typeof this._observeNymchatPubkey === 'function') {
+                        this._observeNymchatPubkey(event.pubkey);
+                    }
+                }
             }
 
             // Check flooding FOR THIS CHANNEL (only for non-historical messages)
@@ -431,6 +469,8 @@ Object.assign(NYM.prototype, {
                 this.handlePollEvent(event);
             } else if (tTag && tTag[1] === 'nym-poll-vote') {
                 this.handlePollVoteEvent(event);
+            } else if (tTag && tTag[1] === 'nym-vouches') {
+                this.handleVouchEvent(event);
             }
         } else if (event.kind === 24420) {
             this.handleChannelTypingEvent(event);
@@ -1415,6 +1455,9 @@ Object.assign(NYM.prototype, {
         if (this.blockedUsers.has(event.pubkey)) return;
 
         this._markNymchatPubkey(event.pubkey);
+        if (typeof this._observeNymchatPubkey === 'function') {
+            this._observeNymchatPubkey(event.pubkey);
+        }
 
         if (!this.channelMessageReaders.has(messageId)) {
             this.channelMessageReaders.set(messageId, new Map());
@@ -2107,50 +2150,46 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
-            // Mine PoW if enabled (NIP-13)
-            if (this.enablePow && this.powDifficulty > 0) {
-                event = NostrTools.nip13.minePow(event, this.powDifficulty);
-            }
-
-            // Sign event (after mining PoW)
-            const signedEvent = await this.signEvent(event);
-
+            const tempId = '_optim_' + Math.random().toString(36).slice(2) + nowMs.toString(36);
+            const storageKey = geohash ? `#${geohash}` : channel;
             const optimisticMessage = {
-                id: signedEvent.id, // Use the signed event ID
+                id: tempId,
                 content: content,
                 author: this.nym,
                 pubkey: this.pubkey,
-                created_at: signedEvent.created_at,
+                created_at: now,
                 _ms: nowMs,
                 _seq: ++this._msgSeq,
-                timestamp: new Date(signedEvent.created_at * 1000),
+                timestamp: new Date(now * 1000),
                 channel: channel,
                 geohash: geohash,
                 isOwn: true,
                 isHistorical: false,
                 isPM: false,
+                _optimistic: true,
+                _storageKey: storageKey
             };
 
-            // Display immediately (optimistic)
             this.displayMessage(optimisticMessage);
-
-            // Send to relay (async - UI already updated)
-            this.sendToRelay(["EVENT", signedEvent]);
-
-            // Ensure geo relays for this channel also receive the event
-            if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
-
-            // Bump our own presence so status stays "online" and other clients
-            // see us as recently active.
             this.recordOwnActivity();
 
-            // Schedule deletion if redacted cosmetic is active
-            if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                const eventIdToDelete = signedEvent.id;
-                setTimeout(() => {
-                    this.publishDeletionEvent(eventIdToDelete);
-                }, 600000); // 10 minutes
-            }
+            (async () => {
+                try {
+                    const difficulty = this._effectivePowDifficulty();
+                    if (difficulty > 0) event = await this._minePow(event, difficulty);
+                    const signedEvent = await this.signEvent(event);
+                    this._replaceOptimisticMessage(tempId, signedEvent, storageKey, false);
+                    this.sendToRelay(["EVENT", signedEvent]);
+                    if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
+
+                    if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                        const eventIdToDelete = signedEvent.id;
+                        setTimeout(() => this.publishDeletionEvent(eventIdToDelete), 600000);
+                    }
+                } catch (err) {
+                    this._markOptimisticFailed(tempId, storageKey, err);
+                }
+            })();
 
             return true;
         } catch (error) {
@@ -2242,9 +2281,9 @@ Object.assign(NYM.prototype, {
                 pubkey: ephPk
             };
 
-            // Mine PoW if enabled (NIP-13)
-            if (this.enablePow && this.powDifficulty > 0) {
-                event = NostrTools.nip13.minePow(event, this.powDifficulty);
+            const psDifficulty = this._effectivePowDifficulty();
+            if (psDifficulty > 0) {
+                event = await this._minePow(event, psDifficulty);
             }
 
             // Sign with the ephemeral key (bypasses Nostr login signing)
@@ -2279,6 +2318,64 @@ Object.assign(NYM.prototype, {
         } catch (error) {
             this.displaySystemMessage('Failed to send pseudonymous message: ' + error.message);
             return false;
+        }
+    },
+
+    // Record an observation that a peer is running nymchat (valid PoW or read
+    // receipt). Drives transitive trust via the kind-30078 vouch list.
+    _observeNymchatPubkey(pubkey) {
+        if (!pubkey || pubkey === this.pubkey) return;
+        if (!this.nymchatVouches) this.nymchatVouches = new Set();
+        if (this.nymchatVouches.has(pubkey)) return;
+        this.nymchatVouches.add(pubkey);
+        if (this.nymchatVouches.size > 5000) {
+            this.nymchatVouches = new Set(Array.from(this.nymchatVouches).slice(-4000));
+        }
+        if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
+        this._scheduleVouchPublish();
+    },
+
+    _scheduleVouchPublish() {
+        if (this._vouchPublishTimer) return;
+        const sinceLast = Date.now() - (this._lastVouchPublishAt || 0);
+        const delay = sinceLast < 60000 ? 60000 - sinceLast : 5000;
+        this._vouchPublishTimer = setTimeout(() => {
+            this._vouchPublishTimer = null;
+            this.publishNymchatVouches();
+        }, delay);
+    },
+
+    async publishNymchatVouches() {
+        try {
+            if (!this.connected || !this.pubkey) return;
+            const list = Array.from(this.nymchatVouches || []);
+            if (list.length === 0) return;
+            const event = {
+                kind: 30078,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [['d', 'nym-vouches'], ['t', 'nym-vouches']],
+                content: JSON.stringify(list),
+                pubkey: this.pubkey
+            };
+            const signed = await this.signEvent(event);
+            this.sendToRelay(['EVENT', signed]);
+            this._lastVouchPublishAt = Date.now();
+        } catch (_) { /* best-effort */ }
+    },
+
+    handleVouchEvent(event) {
+        if (!event || event.pubkey === this.pubkey) return;
+        // Only accept vouches from peers we already trust as nymchat so the
+        // trust graph stays rooted in the seeded developer/bot pubkeys.
+        if (!this.nymchatPubkeys || !this.nymchatPubkeys.has(event.pubkey)) return;
+        let list;
+        try { list = JSON.parse(event.content || '[]'); }
+        catch (_) { return; }
+        if (!Array.isArray(list)) return;
+        for (const pk of list) {
+            if (typeof pk !== 'string' || !/^[0-9a-f]{64}$/i.test(pk)) continue;
+            if (pk === this.pubkey) continue;
+            this._markNymchatPubkey(pk);
         }
     },
 
