@@ -593,20 +593,13 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
+            // Add event tag only if this is a message zap (not profile zap)
             if (this.currentZapTarget.messageId) {
-                let eventTagId = this.currentZapTarget.messageId;
-                const hit = this.messageIndex && this.messageIndex.get(eventTagId);
-                if (hit && hit.msg && hit.msg.id && /^[0-9a-f]{64}$/i.test(hit.msg.id)) {
-                    eventTagId = hit.msg.id;
-                }
-                if (!/^[0-9a-f]{64}$/i.test(eventTagId)) {
-                    return null;
-                }
-                zapRequest.tags.unshift(['e', eventTagId]);
+                zapRequest.tags.unshift(['e', this.currentZapTarget.messageId]); // Event being zapped
 
-                let originalKind = '20000';
+                let originalKind = '20000'; // Default geohash
                 if (this.inPMMode) {
-                    originalKind = '1059';
+                    originalKind = '1059'; // PMs via NIP-17
                 } else if (this.currentGeohash) {
                     originalKind = String(this.channelWire(this.currentGeohash).kind);
                 }
@@ -970,14 +963,12 @@ Object.assign(NYM.prototype, {
     },
 
     // Update message with zap display
-    updateMessageZaps(messageId, messageEl) {
-        if (!messageEl) {
-            messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
-        }
+    updateMessageZaps(messageId) {
+        const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
         if (!messageEl) return;
 
-        const isLive = messageEl.isConnected;
-        const container = isLive ? document.getElementById('messagesScroller') : null;
+        // Capture scroll state before modifying DOM so we can auto-scroll if needed
+        const container = document.getElementById('messagesScroller');
         const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
 
         const messageZaps = this.zaps.get(messageId);

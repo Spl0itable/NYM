@@ -41,9 +41,9 @@ window.nymHapticTap = function (ms) {
     }
 
     document.addEventListener('click',    function (e) { dispatch('click',    'data-action',     e); }, false);
-    document.addEventListener('change',   function (e) { dispatch('change',   'data-on-change',  e); }, { passive: true });
-    document.addEventListener('input',    function (e) { dispatch('input',    'data-on-input',   e); }, { passive: true });
-    document.addEventListener('keyup',    function (e) { dispatch('keyup',    'data-on-keyup',   e); }, { passive: true });
+    document.addEventListener('change',   function (e) { dispatch('change',   'data-on-change',  e); }, false);
+    document.addEventListener('input',    function (e) { dispatch('input',    'data-on-input',   e); }, false);
+    document.addEventListener('keyup',    function (e) { dispatch('keyup',    'data-on-keyup',   e); }, false);
     document.addEventListener('keydown',  function (e) { dispatch('keydown',  'data-on-keydown', e); }, false);
 
     // Avatar / image fallback. `error` events do not bubble
