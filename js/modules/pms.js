@@ -2660,7 +2660,8 @@ Object.assign(NYM.prototype, {
     // Load older PM/group messages when user scrolls to top
     loadOlderPMMessages(conversationKey) {
         const container = document.getElementById('messagesContainer');
-        if (!container) return false;
+        const scroller = this._getMessagesScroller();
+        if (!container || !scroller) return false;
 
         const currentStart = this.pmRenderedStart.get(conversationKey);
         if (currentStart === undefined || currentStart <= 0) return false;
@@ -2675,6 +2676,10 @@ Object.assign(NYM.prototype, {
         this.channelDOMCache.delete(conversationKey);
 
         const olderMessages = messages.slice(newStart, currentStart);
+
+        const anchor = container.querySelector('[data-message-id]');
+        const anchorTopBefore = anchor ? anchor.getBoundingClientRect().top : 0;
+        const scrollTopBefore = scroller.scrollTop;
 
         this.virtualScroll.suppressAutoScroll = true;
         this._suppressSound = true;
@@ -2696,6 +2701,13 @@ Object.assign(NYM.prototype, {
         }
 
         this._recomputeAllBubbleGrouping(container);
+
+        if (anchor) {
+            const anchorTopAfter = anchor.getBoundingClientRect().top;
+            const delta = anchorTopAfter - anchorTopBefore;
+            if (delta !== 0) scroller.scrollTop = scrollTopBefore + delta;
+        }
+
         return true;
     },
 
