@@ -217,13 +217,53 @@ export async function onRequest(context) {
       || /out\s+of\s+time\b/i.test(reason)
       || /\btop[\s\-]?up\b/i.test(reason)
       || /\baccepted\s+(repository|event)\b/i.test(reason)
-      || /\bmust\s+reference\b/i.test(reason);
+      || /\bmust\s+reference\b/i.test(reason)
+      || /\bweb\s+of\s+trust\b/i.test(reason)
+      || /\bpolicy\s+violated\b/i.test(reason)
+      || /\blow\s+trust\b/i.test(reason);
   }
 
   function isUnsupportedKind(reason) {
     if (typeof reason !== 'string') return false;
     return /kinds?\s*not\s*supported/i.test(reason)
       || /\bNIP[\s\-_:]*\d+\b/i.test(reason);
+  }
+
+  function extractRejectedKind(reason) {
+    if (typeof reason !== 'string') return null;
+    let m = reason.match(/\bNIP[\s\-_:]*(\d+)\b/i);
+    if (m) return parseInt(m[1], 10);
+    m = reason.match(/\bkind[\s\-_:]*(\d+)\b/i);
+    if (m) return parseInt(m[1], 10);
+    return null;
+  }
+
+  function stripKindsFromReq(rawReq, blockedKinds) {
+    try {
+      const reqMsg = JSON.parse(rawReq);
+      if (!Array.isArray(reqMsg) || reqMsg[0] !== 'REQ') return null;
+      const newFilters = [];
+      let modified = false;
+      for (let i = 2; i < reqMsg.length; i++) {
+        const f = reqMsg[i];
+        if (f && Array.isArray(f.kinds)) {
+          const kept = f.kinds.filter(k => !blockedKinds.has(k));
+          if (kept.length === f.kinds.length) {
+            newFilters.push(f);
+          } else if (kept.length > 0) {
+            newFilters.push({ ...f, kinds: kept });
+            modified = true;
+          } else {
+            modified = true;
+          }
+        } else {
+          newFilters.push(f);
+        }
+      }
+      if (!modified) return null;
+      if (newFilters.length === 0) return '';
+      return JSON.stringify(['REQ', reqMsg[1], ...newFilters]);
+    } catch { return null; }
   }
 
   function isRelayWideRejection(reason) {
@@ -247,7 +287,10 @@ export async function onRequest(context) {
       || /out\s+of\s+time\b/i.test(reason)
       || /\btop[\s\-]?up\b/i.test(reason)
       || /\baccepted\s+(repository|event)\b/i.test(reason)
-      || /\bmust\s+reference\b/i.test(reason);
+      || /\bmust\s+reference\b/i.test(reason)
+      || /\bweb\s+of\s+trust\b/i.test(reason)
+      || /\bpolicy\s+violated\b/i.test(reason)
+      || /\blow\s+trust\b/i.test(reason);
   }
 
   function trackRelayFailure(relayUrl) {
@@ -660,9 +703,16 @@ export async function onRequest(context) {
   }
 
   function replaySubscriptions(relayUrl, ws) {
+    const blocked = kindBlacklist.get(relayUrl);
     for (const [subId, reqMsg] of activeSubscriptions) {
+      let payload = reqMsg;
+      if (blocked && blocked.size > 0) {
+        const stripped = stripKindsFromReq(reqMsg, blocked);
+        if (stripped === '') continue;
+        if (stripped !== null) payload = stripped;
+      }
       try {
-        ws.send(reqMsg);
+        ws.send(payload);
         let targets = subRelays.get(subId);
         if (!targets) { targets = new Set(); subRelays.set(subId, targets); }
         targets.add(relayUrl);
@@ -750,21 +800,25 @@ export async function onRequest(context) {
             if (seenOKs.has(eventId)) return;
             seenOKs.add(eventId);
           }
-          const okMatch = raw.match(/^\["OK","[^"]+",\s*(true|false)\s*,\s*"((?:[^"\\]|\\.)*)"/);
-          if (okMatch && okMatch[1] === 'false') {
-            const reason = okMatch[2];
-            if (isUnsupportedKind(reason)) {
-              sendToClient(JSON.stringify(['OK', eventId, false, reason, relayUrl]));
-              return;
-            }
+          const okMatch = raw.match(/^\["OK",(?:"([^"]*)"|null),\s*(true|false)\s*,\s*"((?:[^"\\]|\\.)*)"/);
+          if (okMatch) {
+            const okId = okMatch[1] || null;
+            const acceptedFlag = okMatch[2] === 'true';
+            const reason = okMatch[3];
             if (isRelayWideRejection(reason)) {
               markPermanentlySkipped(relayUrl, `event-rejected: ${reason}`);
-              sendToClient(JSON.stringify(['OK', eventId, false, reason, relayUrl]));
+              sendToClient(JSON.stringify(['OK', okId, acceptedFlag, reason, relayUrl]));
               return;
             }
-            if (isPermanentRejection(reason)) {
-              sendToClient(JSON.stringify(['OK', eventId, false, reason, relayUrl]));
-              return;
+            if (!acceptedFlag) {
+              if (isUnsupportedKind(reason)) {
+                sendToClient(JSON.stringify(['OK', okId, false, reason, relayUrl]));
+                return;
+              }
+              if (isPermanentRejection(reason)) {
+                sendToClient(JSON.stringify(['OK', okId, false, reason, relayUrl]));
+                return;
+              }
             }
           }
           sendToClient(raw);
@@ -805,6 +859,17 @@ export async function onRequest(context) {
             const subId = m ? m[1] : '';
             const reason = m ? m[2] : '';
             if (m && isUnsupportedKind(reason)) {
+              const rejectedKind = extractRejectedKind(reason);
+              if (rejectedKind !== null && activeSubscriptions.has(subId)) {
+                const rawReq = activeSubscriptions.get(subId);
+                const stripped = stripKindsFromReq(rawReq, new Set([rejectedKind]));
+                if (stripped) {
+                  const info = upstreams.get(relayUrl);
+                  if (info && info.ws && info.ws.readyState === 1) {
+                    try { info.ws.send(stripped); } catch { /* noop */ }
+                  }
+                }
+              }
               sendToClient(JSON.stringify(['CLOSED', subId, reason, relayUrl]));
               return;
             }
@@ -984,19 +1049,21 @@ export async function onRequest(context) {
                 for (const k of f.kinds) reqKinds.add(k);
               }
             }
-            sendToUpstreams(event.data, (url) => {
-              if (reqKinds.size > 0) {
-                const blocked = kindBlacklist.get(url);
-                if (blocked && blocked.size > 0) {
-                  let allBlocked = true;
-                  for (const k of reqKinds) {
-                    if (!blocked.has(k)) { allBlocked = false; break; }
-                  }
-                  if (allBlocked) return false;
+            const originalReq = event.data;
+            upstreams.forEach((info, url) => {
+              if (info.status !== 'connected' || !info.ws || info.ws.readyState !== 1) return;
+              const blocked = kindBlacklist.get(url);
+              let payload = originalReq;
+              if (blocked && blocked.size > 0 && reqKinds.size > 0) {
+                let anyBlocked = false;
+                for (const k of reqKinds) { if (blocked.has(k)) { anyBlocked = true; break; } }
+                if (anyBlocked) {
+                  const stripped = stripKindsFromReq(originalReq, blocked);
+                  if (stripped === '') return;
+                  if (stripped !== null) payload = stripped;
                 }
               }
-              reqTargets.add(url);
-              return true;
+              try { info.ws.send(payload); reqTargets.add(url); } catch { /* noop */ }
             });
           } else if (msgType === 'KIND_BLACKLIST') {
             const config = msg[1];

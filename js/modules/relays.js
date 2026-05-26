@@ -2255,9 +2255,24 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _recordUnsupportedKindRejection(relayUrl, subId) {
+    _extractUnsupportedKind(reason) {
+        if (typeof reason !== 'string') return null;
+        let m = reason.match(/\bNIP[\s\-_:]*(\d+)\b/i);
+        if (m) return parseInt(m[1], 10);
+        m = reason.match(/\bkind[\s\-_:]*(\d+)\b/i);
+        if (m) return parseInt(m[1], 10);
+        return null;
+    },
+
+    _recordUnsupportedKindRejection(relayUrl, subId, reason) {
         if (!relayUrl || relayUrl === 'relay-pool' || !subId) return;
-        const kinds = this._subKinds && this._subKinds.get(subId);
+        const specific = this._extractUnsupportedKind(reason);
+        let kinds;
+        if (specific !== null) {
+            kinds = new Set([specific]);
+        } else {
+            kinds = this._subKinds && this._subKinds.get(subId);
+        }
         if (!kinds || kinds.size === 0) return;
         if (!this._relayUnsupportedKinds) this._relayUnsupportedKinds = new Map();
         let set = this._relayUnsupportedKinds.get(relayUrl);
@@ -3517,14 +3532,17 @@ Object.assign(NYM.prototype, {
                 const reason = data[2] || '';
                 const attributedRelay = (typeof data[3] === 'string' && data[3].startsWith('wss://'))
                     ? data[3] : relayUrl;
-                if (accepted === false) {
-                    const r = typeof reason === 'string' ? reason : '';
+                const r = typeof reason === 'string' ? reason : '';
+                const hasEventId = typeof okEventId === 'string' && okEventId.length > 0;
+                if (this._isRelayWideRejection(reason)) {
+                    this._permanentlyBlacklistRelay(attributedRelay, reason);
+                } else if (accepted === false) {
                     if (this._isUnsupportedKind(reason)) {
-                        this._recordEventKindRejection(attributedRelay, okEventId);
-                    } else if (this._isRelayWideRejection(reason)) {
-                        this._permanentlyBlacklistRelay(attributedRelay, reason);
+                        if (hasEventId) this._recordEventKindRejection(attributedRelay, okEventId);
+                        else this._permanentlyBlacklistRelay(attributedRelay, reason);
                     } else if (this._isPermanentRejection(reason)) {
-                        this._recordEventKindRejection(attributedRelay, okEventId);
+                        if (hasEventId) this._recordEventKindRejection(attributedRelay, okEventId);
+                        else this._permanentlyBlacklistRelay(attributedRelay, reason);
                     } else if (/^mute[\s:]/i.test(r)) {
                         // NIP-01 mute: relay accepted but no subscribers
                     } else if (/event[\s_-]?too[\s_-]?large|\btoo[\s_-]large\b|\bsize[\s_]*\d+.*max[\s_]*\d+|created_at\b.*\b(too|in)\b.*(early|late|future|past)|timestamp.*too/i.test(r)) {
@@ -3578,7 +3596,7 @@ Object.assign(NYM.prototype, {
                     }
                 }
                 if (this._isUnsupportedKind(reason)) {
-                    this._recordUnsupportedKindRejection(attributedRelay, closedSubId);
+                    this._recordUnsupportedKindRejection(attributedRelay, closedSubId, reason);
                 } else if (this._isPermanentRejection(reason)) {
                     this._permanentlyBlacklistRelay(attributedRelay, reason);
                 } else if (typeof reason === 'string' && /rate-?limit|too many|concurrent/i.test(reason)) {
@@ -3747,7 +3765,10 @@ Object.assign(NYM.prototype, {
             || /out\s+of\s+time\b/i.test(reason)
             || /\btop[\s\-]?up\b/i.test(reason)
             || /\baccepted\s+(repository|event)\b/i.test(reason)
-            || /\bmust\s+reference\b/i.test(reason);
+            || /\bmust\s+reference\b/i.test(reason)
+            || /\bweb\s+of\s+trust\b/i.test(reason)
+            || /\bpolicy\s+violated\b/i.test(reason)
+            || /\blow\s+trust\b/i.test(reason);
     },
 
     _isUnsupportedKind(reason) {
@@ -3778,7 +3799,10 @@ Object.assign(NYM.prototype, {
             || /out\s+of\s+time\b/i.test(reason)
             || /\btop[\s\-]?up\b/i.test(reason)
             || /\baccepted\s+(repository|event)\b/i.test(reason)
-            || /\bmust\s+reference\b/i.test(reason);
+            || /\bmust\s+reference\b/i.test(reason)
+            || /\bweb\s+of\s+trust\b/i.test(reason)
+            || /\bpolicy\s+violated\b/i.test(reason)
+            || /\blow\s+trust\b/i.test(reason);
     },
 
     // Count error responses per relay. If a relay sends 5+ errors within
