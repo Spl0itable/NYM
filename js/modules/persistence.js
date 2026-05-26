@@ -24,6 +24,7 @@
     const META_DELETED_EVENT_IDS = 'deletedEventIds';
     const META_NYMCHAT_PUBKEYS = 'nymchatPubkeys';
     const META_NYMCHAT_VOUCHES = 'nymchatVouches';
+    const META_POOL_SHARD_LAST_SEEN = 'poolShardLastSeen';
 
     Object.assign(NYM.prototype, {
 
@@ -271,6 +272,19 @@
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
+        _schedulePoolStatePersist() {
+            if (this._cacheDisabled) return;
+            if (this._poolStatePersistTimer) clearTimeout(this._poolStatePersistTimer);
+            this._poolStatePersistTimer = setTimeout(() => {
+                this._poolStatePersistTimer = null;
+                if (this._shardLastSeenAt && this._shardLastSeenAt.size > 0) {
+                    const map = {};
+                    for (const [shardId, ts] of this._shardLastSeenAt) map[shardId] = ts;
+                    this._cachePut('meta', { key: META_POOL_SHARD_LAST_SEEN, map });
+                }
+            }, DEDUP_PERSIST_DEBOUNCE_MS);
+        },
+
         async _hydrateDedupSets() {
             try {
                 const meta = await this._cacheGetAll('meta');
@@ -284,6 +298,11 @@
                         for (const id of m.ids) this.nymchatPubkeys.add(id);
                     } else if (m.key === META_NYMCHAT_VOUCHES && this.nymchatVouches) {
                         for (const id of m.ids) this.nymchatVouches.add(id);
+                    } else if (m.key === META_POOL_SHARD_LAST_SEEN && m.map && typeof m.map === 'object') {
+                        if (!this._shardLastSeenAt) this._shardLastSeenAt = new Map();
+                        for (const [shardId, ts] of Object.entries(m.map)) {
+                            if (typeof ts === 'number' && ts > 0) this._shardLastSeenAt.set(shardId, ts);
+                        }
                     }
                 }
             } catch (_) { }

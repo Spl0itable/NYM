@@ -2027,7 +2027,6 @@ Object.assign(NYM.prototype, {
                 clearTimeout(timeout);
                 wasOpen = true;
 
-                // Send RELAYS config for this shard
                 ws.send(JSON.stringify(['RELAYS', {
                     relays: shard.relays,
                     dmRelays: shard.dmRelays || []
@@ -2093,6 +2092,10 @@ Object.assign(NYM.prototype, {
                         // Merge connected relays from ALL workers
                         this._mergePoolStatus();
                     } else if (msgType === 'EVENT') {
+                        const evt = msg[2];
+                        if (evt && typeof evt.created_at === 'number' && evt.created_at > 0) {
+                            this._updateShardLastSeen(poolEntry.id, evt.created_at);
+                        }
                         this.handleRelayMessage(msg, 'relay-pool');
                     } else {
                         this.handleRelayMessage(msg, 'relay-pool');
@@ -2359,25 +2362,21 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Subscribe on a specific worker (by shard id) after reconnection
     _poolSubscribeOnWorker(shardId) {
         const p = this.poolSockets.find(w => w.id === shardId);
         if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) return;
 
-        // Close prior broad sub on this worker so the proxy/relays don't
-        // accumulate duplicate broad subs across reconnects.
         if (p._lastSubId) {
             this._safeWsSend(p.ws, JSON.stringify(["CLOSE", p._lastSubId]), { critical: true });
             p._lastSubId = null;
         }
 
-        const since24h = Math.floor(Date.now() / 1000) - 86400;
+        const sinceFloor = this._getShardSinceFloor(p.id);
 
-        // Geo/discovered shards only get channel-message kinds (20000, 23333)
         const isGeoOrDiscovered = p.role === 'geo' || p.role === 'discovered';
         const filters = isGeoOrDiscovered
-            ? this._buildGeoFilters(since24h)
-            : this._buildCriticalFilters(since24h);
+            ? this._buildGeoFilters(sinceFloor)
+            : this._buildCriticalFilters(sinceFloor);
 
         const subId = Math.random().toString(36).substring(2);
         p._lastSubId = subId;
@@ -2385,9 +2384,28 @@ Object.assign(NYM.prototype, {
         const msg = JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters]));
         this._safeWsSend(p.ws, msg, { critical: true });
 
-        // Also subscribe to ephemeral pubkeys on critical shards
         if (!isGeoOrDiscovered) {
             this._refreshEphemeralSubscriptions();
+        }
+    },
+
+    _getShardSinceFloor(shardId) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const since24h = nowSec - 86400;
+        const lastSeen = this._shardLastSeenAt && this._shardLastSeenAt.get(shardId);
+        if (typeof lastSeen !== 'number' || lastSeen < since24h) return since24h;
+        const buffered = lastSeen - 30;
+        return buffered > since24h ? buffered : since24h;
+    },
+
+    _updateShardLastSeen(shardId, createdAt) {
+        if (!shardId || typeof createdAt !== 'number' || createdAt <= 0) return;
+        if (!this._shardLastSeenAt) this._shardLastSeenAt = new Map();
+        const cur = this._shardLastSeenAt.get(shardId) || 0;
+        if (createdAt <= cur) return;
+        this._shardLastSeenAt.set(shardId, createdAt);
+        if (typeof this._schedulePoolStatePersist === 'function') {
+            this._schedulePoolStatePersist();
         }
     },
 

@@ -547,6 +547,7 @@ class NYM {
         this._nip66Done = false;
         this._nip66LastRun = 0;
         this.eventDeduplication = new Map();
+        this._shardLastSeenAt = new Map();
         this.reconnectingRelays = new Set();
         this.blacklistedRelays = new Set();
         this.blacklistTimestamps = new Map();

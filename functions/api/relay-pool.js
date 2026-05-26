@@ -51,6 +51,8 @@ export async function onRequest(context) {
   const upstreams = new Map();       // relayUrl -> { ws, type, status, eventCount, handled }
   const activeSubscriptions = new Map(); // subId -> raw JSON string of the REQ message
   const subRelays = new Map();       // subId -> Set<relayUrl> the REQ was sent to
+  const splitChildren = new Map();   // parentSubId -> [{ childSubId, rawChild, filter }, ...]
+  const childToParent = new Map();   // childSubId -> parentSubId
   const seenEvents = new Map();      // eventId -> 1 (string-based dedup, no JSON.parse)
   const seenOKs = new Set();         // eventId (only forward first OK per event)
   const seenEOSE = new Set();        // subId (only forward first EOSE per subscription)
@@ -265,6 +267,29 @@ export async function onRequest(context) {
       if (newFilters.length === 0) return '';
       return JSON.stringify(['REQ', reqMsg[1], ...newFilters]);
     } catch { return null; }
+  }
+
+  function buildChildrenForParent(parentSubId, msg) {
+    if (!Array.isArray(msg) || msg.length <= 3) return null;
+    const children = [];
+    for (let i = 2; i < msg.length; i++) {
+      const f = msg[i];
+      const childSubId = `${parentSubId}~f${i - 2}`;
+      const rawChild = JSON.stringify(['REQ', childSubId, f]);
+      children.push({ childSubId, rawChild, filter: f });
+    }
+    return children;
+  }
+
+  function buildChildPayload(child, blockedKinds) {
+    if (blockedKinds && blockedKinds.size > 0 && child.filter && Array.isArray(child.filter.kinds)) {
+      const kept = child.filter.kinds.filter(k => !blockedKinds.has(k));
+      if (kept.length === 0) return null;
+      if (kept.length < child.filter.kinds.length) {
+        return JSON.stringify(['REQ', child.childSubId, { ...child.filter, kinds: kept }]);
+      }
+    }
+    return child.rawChild;
   }
 
   function isRelayWideRejection(reason) {
@@ -703,21 +728,37 @@ export async function onRequest(context) {
     reconnectTimers.set(relayUrl, timerId);
   }
 
-  function replaySubscriptions(relayUrl, ws) {
+  function sendSubscriptionToRelay(relayUrl, ws, parentSubId) {
     const blocked = kindBlacklist.get(relayUrl);
-    for (const [subId, reqMsg] of activeSubscriptions) {
-      let payload = reqMsg;
+    const children = splitChildren.get(parentSubId);
+    let anySent = false;
+    if (children) {
+      for (const child of children) {
+        const payload = buildChildPayload(child, blocked);
+        if (payload === null) continue;
+        try { ws.send(payload); anySent = true; } catch { /* noop */ }
+      }
+    } else {
+      const rawReq = activeSubscriptions.get(parentSubId);
+      if (!rawReq) return;
+      let payload = rawReq;
       if (blocked && blocked.size > 0) {
-        const stripped = stripKindsFromReq(reqMsg, blocked);
-        if (stripped === '') continue;
+        const stripped = stripKindsFromReq(rawReq, blocked);
+        if (stripped === '') return;
         if (stripped !== null) payload = stripped;
       }
-      try {
-        ws.send(payload);
-        let targets = subRelays.get(subId);
-        if (!targets) { targets = new Set(); subRelays.set(subId, targets); }
-        targets.add(relayUrl);
-      } catch { /* noop */ }
+      try { ws.send(payload); anySent = true; } catch { /* noop */ }
+    }
+    if (anySent) {
+      let targets = subRelays.get(parentSubId);
+      if (!targets) { targets = new Set(); subRelays.set(parentSubId, targets); }
+      targets.add(relayUrl);
+    }
+  }
+
+  function replaySubscriptions(relayUrl, ws) {
+    for (const subId of activeSubscriptions.keys()) {
+      sendSubscriptionToRelay(relayUrl, ws, subId);
     }
   }
 
@@ -781,17 +822,26 @@ export async function onRequest(context) {
         if (raw.charCodeAt(2) === 69 && raw.startsWith('["EVENT"')) {
           const eventId = extractEventId(raw);
           if (eventId) {
-            if (seenEvents.has(eventId)) return; // Dedup
+            if (seenEvents.has(eventId)) return;
             seenEvents.set(eventId, 1);
             trimDedup();
           }
-          // Drop channel spam server-side so the client never has to render
-          // a flood of gibberish kind-20000 events.
           if (isSpamEventFrame(raw)) {
             droppedSpamCount++;
             return;
           }
           info.eventCount++;
+          if (childToParent.size > 0) {
+            const subEnd = raw.indexOf('"', 10);
+            if (subEnd !== -1) {
+              const childSubId = raw.substring(10, subEnd);
+              const parent = childToParent.get(childSubId);
+              if (parent && parent !== childSubId) {
+                sendToClient('["EVENT","' + parent + raw.substring(subEnd));
+                return;
+              }
+            }
+          }
           sendToClient(raw);
 
         // OK: ["OK","eventId",bool,"msg"]
@@ -824,13 +874,17 @@ export async function onRequest(context) {
 
         // EOSE, AUTH, NOTICE, CLOSED, or anything else
         } else {
-          // EOSE dedup: only forward the first per subId
           if (raw.charCodeAt(2) === 69 && raw.startsWith('["EOSE"')) {
             const eoseMatch = raw.match(/^\["EOSE","([^"]+)"/);
             if (eoseMatch) {
               const eoseSubId = eoseMatch[1];
-              if (seenEOSE.has(eoseSubId)) return;
-              seenEOSE.add(eoseSubId);
+              const parent = childToParent.get(eoseSubId) || eoseSubId;
+              if (seenEOSE.has(parent)) return;
+              seenEOSE.add(parent);
+              if (parent !== eoseSubId) {
+                sendToClient('["EOSE","' + parent + '"]');
+                return;
+              }
             }
             sendToClient(raw);
             return;
@@ -859,29 +913,43 @@ export async function onRequest(context) {
 
           if (raw.startsWith('["CLOSED"')) {
             const m = raw.match(/^\["CLOSED","([^"]+)",\s*"((?:[^"\\]|\\.)*)"/);
-            const subId = m ? m[1] : '';
+            const closedSubId = m ? m[1] : '';
             const reason = m ? m[2] : '';
+            const parentSubId = childToParent.get(closedSubId) || closedSubId;
             if (m && isUnsupportedKind(reason)) {
               const rejectedKind = extractRejectedKind(reason);
-              if (rejectedKind !== null && activeSubscriptions.has(subId)) {
-                const rawReq = activeSubscriptions.get(subId);
-                const stripped = stripKindsFromReq(rawReq, new Set([rejectedKind]));
-                if (stripped) {
-                  const info = upstreams.get(relayUrl);
-                  if (info && info.ws && info.ws.readyState === 1) {
-                    try { info.ws.send(stripped); } catch { /* noop */ }
+              if (rejectedKind !== null) {
+                let bl = kindBlacklist.get(relayUrl);
+                if (!bl) { bl = new Set(); kindBlacklist.set(relayUrl, bl); }
+                bl.add(rejectedKind);
+              }
+              const blockedSet = kindBlacklist.get(relayUrl);
+              const children = splitChildren.get(parentSubId);
+              const upstreamInfo = upstreams.get(relayUrl);
+              if (children && upstreamInfo && upstreamInfo.ws && upstreamInfo.ws.readyState === 1) {
+                const child = children.find(c => c.childSubId === closedSubId);
+                if (child) {
+                  const newPayload = buildChildPayload(child, blockedSet);
+                  if (newPayload) {
+                    try { upstreamInfo.ws.send(newPayload); } catch { /* noop */ }
                   }
                 }
+              } else if (activeSubscriptions.has(parentSubId) && blockedSet && blockedSet.size > 0) {
+                const rawReq = activeSubscriptions.get(parentSubId);
+                const stripped = stripKindsFromReq(rawReq, blockedSet);
+                if (stripped && upstreamInfo && upstreamInfo.ws && upstreamInfo.ws.readyState === 1) {
+                  try { upstreamInfo.ws.send(stripped); } catch { /* noop */ }
+                }
               }
-              sendToClient(JSON.stringify(['CLOSED', subId, reason, relayUrl]));
+              sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
               return;
             }
             if (m && isRelayWideRejection(reason)) {
               markPermanentlySkipped(relayUrl, reason);
-              sendToClient(JSON.stringify(['CLOSED', subId, reason, relayUrl]));
+              sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
               return;
             }
-            sendToClient(JSON.stringify(['CLOSED', subId, reason, relayUrl]));
+            sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
             return;
           }
 
@@ -1043,30 +1111,17 @@ export async function onRequest(context) {
           } else if (msgType === 'REQ') {
             const subId = msg[1];
             activeSubscriptions.set(subId, event.data);
-            const reqTargets = new Set();
-            subRelays.set(subId, reqTargets);
-            const reqKinds = new Set();
-            for (let i = 2; i < msg.length; i++) {
-              const f = msg[i];
-              if (f && Array.isArray(f.kinds)) {
-                for (const k of f.kinds) reqKinds.add(k);
-              }
+            subRelays.set(subId, new Set());
+
+            const children = buildChildrenForParent(subId, msg);
+            if (children) {
+              splitChildren.set(subId, children);
+              for (const child of children) childToParent.set(child.childSubId, subId);
             }
-            const originalReq = event.data;
+
             upstreams.forEach((info, url) => {
               if (info.status !== 'connected' || !info.ws || info.ws.readyState !== 1) return;
-              const blocked = kindBlacklist.get(url);
-              let payload = originalReq;
-              if (blocked && blocked.size > 0 && reqKinds.size > 0) {
-                let anyBlocked = false;
-                for (const k of reqKinds) { if (blocked.has(k)) { anyBlocked = true; break; } }
-                if (anyBlocked) {
-                  const stripped = stripKindsFromReq(originalReq, blocked);
-                  if (stripped === '') return;
-                  if (stripped !== null) payload = stripped;
-                }
-              }
-              try { info.ws.send(payload); reqTargets.add(url); } catch { /* noop */ }
+              sendSubscriptionToRelay(url, info.ws, subId);
             });
           } else if (msgType === 'KIND_BLACKLIST') {
             const config = msg[1];
@@ -1081,12 +1136,21 @@ export async function onRequest(context) {
           } else if (msgType === 'CLOSE') {
             const subId = msg[1];
             const targets = subRelays.get(subId);
+            const children = splitChildren.get(subId);
+            if (children) {
+              if (targets && targets.size > 0) {
+                for (const child of children) {
+                  sendToUpstreams(JSON.stringify(['CLOSE', child.childSubId]), (url) => targets.has(url));
+                }
+              }
+              for (const child of children) childToParent.delete(child.childSubId);
+              splitChildren.delete(subId);
+            } else if (targets && targets.size > 0) {
+              sendToUpstreams(event.data, (url) => targets.has(url));
+            }
             activeSubscriptions.delete(subId);
             subRelays.delete(subId);
             seenEOSE.delete(subId);
-            if (targets && targets.size > 0) {
-              sendToUpstreams(event.data, (url) => targets.has(url));
-            }
           }
     } catch {
       // Parse error
@@ -1108,6 +1172,8 @@ export async function onRequest(context) {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });
     upstreams.clear();
+    splitChildren.clear();
+    childToParent.clear();
   }
 
   server.addEventListener('close', cleanupAll);
