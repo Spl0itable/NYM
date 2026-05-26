@@ -941,7 +941,78 @@ Object.assign(NYM.prototype, {
                 zapperPubkey === this.pubkey) {
                 this.handleZapPaymentSuccess(amount);
             }
+
+            if (pTag && pTag[1] === this.pubkey && zapperPubkey !== this.pubkey) {
+                this._notifyZapToOurMessage(messageId, amount, zapperPubkey, event);
+            }
         }
+    },
+
+    _notifyZapToOurMessage(messageId, amount, zapperPubkey, event) {
+        const zapperNym = this.getNymFromPubkey(zapperPubkey);
+        const ts = (event && event.created_at ? event.created_at * 1000 : Date.now());
+        const eventId = (event && event.id) || '';
+
+        let msgPreview = '';
+        let channelInfo = {
+            type: 'reaction',
+            id: eventId,
+            eventId,
+            pubkey: zapperPubkey,
+            messageId
+        };
+
+        const msgEl = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+        if (msgEl) {
+            const raw = msgEl.dataset.rawContent || '';
+            msgPreview = raw.split('\n').filter(l => !l.startsWith('>')).join(' ').trim();
+        }
+        if (!msgPreview) {
+            for (const msgs of this.messages.values()) {
+                const found = msgs.find(m => m.id === messageId);
+                if (found) { msgPreview = (found.content || '').split('\n').filter(l => !l.startsWith('>')).join(' ').trim(); break; }
+            }
+        }
+        if (!msgPreview) {
+            for (const msgs of this.pmMessages.values()) {
+                const found = msgs.find(m => m.id === messageId || m.nymMessageId === messageId);
+                if (found) { msgPreview = (found.content || '').split('\n').filter(l => !l.startsWith('>')).join(' ').trim(); break; }
+            }
+        }
+
+        for (const [key, msgs] of this.messages.entries()) {
+            if (msgs.some(m => m.id === messageId)) {
+                channelInfo.sourceType = 'geohash';
+                const gh = key.startsWith('#') ? key.slice(1) : key;
+                channelInfo.sourceChannel = gh;
+                channelInfo.sourceGeohash = gh;
+                break;
+            }
+        }
+        if (!channelInfo.sourceType) {
+            for (const [key, msgs] of this.pmMessages.entries()) {
+                if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
+                    if (key.startsWith('group:')) {
+                        channelInfo.sourceType = 'group';
+                        channelInfo.sourceGroupId = key.replace('group:', '');
+                    } else {
+                        channelInfo.sourceType = 'pm';
+                        const parts = key.split(':');
+                        channelInfo.sourcePubkey = parts.find(p => p !== this.pubkey) || parts[0];
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (msgPreview && msgPreview.length > 80) msgPreview = msgPreview.slice(0, 80) + '…';
+        const sats = this.abbreviateNumber ? this.abbreviateNumber(amount) : String(amount);
+        const body = msgPreview
+            ? `⚡ zapped ${sats} sats to: "${msgPreview}"`
+            : `⚡ zapped ${sats} sats to your message`;
+        const isHistorical = (Date.now() - ts) > 10000;
+        if (isHistorical) this._addNotificationToHistory(zapperNym, body, channelInfo, ts);
+        else this.showNotification(zapperNym, body, channelInfo, ts);
     },
 
     // Parse amount from bolt11 invoice

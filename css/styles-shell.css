@@ -762,9 +762,21 @@ body.sidebar-reorder-mode .nav-title {
     gap: 15px;
 }
 
+.channel-header-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
 .channel-nav-buttons {
     display: flex;
     gap: 2px;
+}
+
+.channel-action-buttons {
+    display: flex;
+    gap: 2px;
+    align-items: center;
 }
 
 .channel-nav-btn {

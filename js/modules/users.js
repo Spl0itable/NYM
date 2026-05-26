@@ -1781,11 +1781,15 @@ Object.assign(NYM.prototype, {
                 const baseNym = known ? this.parseNymFromDisplay(known.nym) : this.getNymFromPubkey(pubkey);
                 const suffix = this.getPubkeySuffix(pubkey);
                 const safePk = this._safePubkey(pubkey);
-                const pmAvatarSrc = this.getAvatarUrl(pubkey);
                 const flairHtml = this.getFlairForUser(pubkey);
                 const friendBadge = this.getFriendBadgeHtml(pubkey);
-                const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${friendBadge}`;
-                channelEl.innerHTML = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span class="nm-usr-2">(PM)</span>`;
+                const sig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${friendBadge}`;
+                if (channelEl.dataset.pmHeaderSig !== sig) {
+                    const pmAvatarSrc = this.getAvatarUrl(pubkey);
+                    const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${friendBadge}`;
+                    channelEl.innerHTML = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span class="nm-usr-2">(PM)</span>`;
+                    channelEl.dataset.pmHeaderSig = sig;
+                }
             }
         }
     },

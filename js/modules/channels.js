@@ -486,6 +486,39 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.updateChannelPins();
         this.sortChannelsByActivity();
+        this._refreshFavoriteChannelBtn();
+    },
+
+    _refreshFavoriteChannelBtn() {
+        const btn = document.getElementById('favoriteChannelBtn');
+        if (!btn) return;
+        const key = this.currentGeohash || this.currentChannel;
+        const inChannel = !this.inPMMode && !!key;
+        if (!inChannel) {
+            btn.style.display = 'none';
+            return;
+        }
+        btn.style.display = 'block';
+        if (key === 'nymchat') {
+            btn.disabled = true;
+            btn.classList.remove('active');
+            btn.title = '#nymchat is always favorited';
+            return;
+        }
+        btn.disabled = false;
+        const isFav = this.pinnedChannels && this.pinnedChannels.has(key);
+        btn.classList.toggle('active', !!isFav);
+        btn.title = isFav ? 'Unfavorite channel' : 'Favorite channel';
+        btn.setAttribute('aria-label', btn.title);
+    },
+
+    toggleFavoriteCurrentChannel() {
+        if (this.inPMMode) return;
+        const channel = this.currentChannel;
+        const geohash = this.currentGeohash;
+        if (!channel && !geohash) return;
+        this.togglePin(channel, geohash);
+        this._refreshFavoriteChannelBtn();
     },
 
     updateChannelPins() {
@@ -722,6 +755,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _renderChannelTitle(channel, geohash) {
         const titleEl = document.getElementById('currentChannel');
         if (!titleEl) return;
+        delete titleEl.dataset.pmHeaderSig;
+        delete titleEl.dataset.groupHeaderSig;
 
         const safeChannel = this.sanitizeChannelName(channel);
         const safeGeohash = this.sanitizeChannelName(geohash);
@@ -920,6 +955,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (shareBtn) {
             shareBtn.style.display = 'block';
         }
+        this._refreshFavoriteChannelBtn();
 
         const displayName = geohash ? `#${geohash}` : `#${channel}`;
 

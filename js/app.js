@@ -3362,7 +3362,7 @@ async function clearLocalStorageCache() {
 // app cache. Useful when the user wants to start over visually without
 // nuking conversations.
 async function resetSettings() {
-    if (!confirm('Reset all settings and preferences to defaults? This will reset theme, layout, wallpaper, sound, pinned/hidden/blocked channels, blocked users, and blocked keywords. Your login, group memberships, and PMs will be preserved.')) {
+    if (!confirm('Reset all settings and preferences to defaults? This will reset theme, layout, wallpaper, sound, favorited/hidden/blocked channels, blocked users, and blocked keywords. Your login, group memberships, and PMs will be preserved.')) {
         return;
     }
 
@@ -3524,7 +3524,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.394';
+const NYMCHAT_VERSION = 'v3.66.395';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');

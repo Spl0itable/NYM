@@ -1094,6 +1094,41 @@
     fill: var(--primary);
 }
 
+.favorite-channel-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    opacity: 0.4;
+    transition: opacity 0.2s, transform 0.2s, color 0.2s;
+    padding: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+}
+
+.favorite-channel-btn:hover {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+.favorite-channel-btn svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linejoin: round;
+}
+
+.favorite-channel-btn.active {
+    opacity: 1;
+    color: #f5c518;
+}
+
+.favorite-channel-btn.active svg {
+    fill: currentColor;
+    stroke: currentColor;
+}
+
 .share-modal {
     max-width: 500px;
 }

@@ -458,6 +458,14 @@ Object.assign(NYM.prototype, {
         if (!messageReactions.has(emoji)) messageReactions.set(emoji, new Map());
         messageReactions.get(emoji).set(senderPubkey, reactorNym);
         this.updateMessageReactions(messageId);
+
+        if (senderPubkey !== this.pubkey) {
+            const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && t[1]);
+            const groupId = groupTag ? groupTag[1] : null;
+            if (groupId && typeof this._notifyGroupReactionToOurMessage === 'function') {
+                this._notifyGroupReactionToOurMessage(messageId, emoji, senderPubkey, groupId, rumor);
+            }
+        }
     },
 
     // Handle incoming group message (rumor with 'g' tag)
@@ -2159,6 +2167,13 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _groupItemSignature(group) {
+        if (!group) return '';
+        const otherMembers = (group.members || []).filter(pk => pk !== this.pubkey);
+        const displayPks = otherMembers.slice(0, 3).map(pk => this._safePubkey(pk)).join(',');
+        return `${displayPks}|${group.members ? group.members.length : 0}|${group.name || ''}`;
+    },
+
     // Re-render a group item's inner HTML (e.g., after member list changes)
     updateGroupConversationUI(groupId) {
         const group = this.groupConversations.get(groupId);
@@ -2166,7 +2181,11 @@ Object.assign(NYM.prototype, {
         const pmList = document.getElementById('pmList');
         const item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
         if (item) {
-            item.innerHTML = this._buildGroupItemHTML(groupId, group.name, group.members);
+            const sig = this._groupItemSignature(group);
+            if (item.dataset.groupSig !== sig) {
+                item.innerHTML = this._buildGroupItemHTML(groupId, group.name, group.members);
+                item.dataset.groupSig = sig;
+            }
             item.dataset.action = 'openGroupItem';
         }
     },
@@ -2186,17 +2205,24 @@ Object.assign(NYM.prototype, {
             // If we're currently viewing this group, refresh its header so the
             // (re)rendered nickname appears in the title bar.
             if (this.inPMMode && this.currentGroup === groupId) {
-                const otherMembers = group.members.filter(pk => pk !== this.pubkey);
-                const headerAvatars = otherMembers.slice(0, 4).map(pk => {
-                    const sk = this._safePubkey(pk);
-                    const src = this.getAvatarUrl(pk);
-                    return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
-                }).join('');
-                const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-                const memberLabel = `<span class="nm-grp-1">(${this.abbreviateNumber(group.members.length)} members)</span>`;
-                const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span>${memberLabel}`;
                 const channelEl = document.getElementById('currentChannel');
-                if (channelEl) channelEl.innerHTML = headerHtml;
+                if (channelEl) {
+                    const otherMembers = group.members.filter(pk => pk !== this.pubkey);
+                    const displayPks = otherMembers.slice(0, 4).map(pk => this._safePubkey(pk));
+                    const sig = `${displayPks.join(',')}|${group.members.length}|${group.name || ''}`;
+                    if (channelEl.dataset.groupHeaderSig !== sig) {
+                        const headerAvatars = displayPks.map((sk, i) => {
+                            const pk = otherMembers[i];
+                            const src = this.getAvatarUrl(pk);
+                            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
+                        }).join('');
+                        const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+                        const memberLabel = `<span class="nm-grp-1">(${this.abbreviateNumber(group.members.length)} members)</span>`;
+                        const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span>${memberLabel}`;
+                        channelEl.innerHTML = headerHtml;
+                        channelEl.dataset.groupHeaderSig = sig;
+                    }
+                }
             }
         }
     },
@@ -2227,8 +2253,9 @@ Object.assign(NYM.prototype, {
 
         // Build stacked avatar header
         const otherMembers = group.members.filter(pk => pk !== this.pubkey);
-        const headerAvatars = otherMembers.slice(0, 4).map(pk => {
-            const sk = this._safePubkey(pk);
+        const displayPks = otherMembers.slice(0, 4).map(pk => this._safePubkey(pk));
+        const headerAvatars = displayPks.map((sk, i) => {
+            const pk = otherMembers[i];
             const src = this.getAvatarUrl(pk);
             return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
         }).join('');
@@ -2237,13 +2264,18 @@ Object.assign(NYM.prototype, {
         const memberLabel = `<span class="nm-grp-1">(${this.abbreviateNumber(group.members.length)} members)</span>`;
         const headerHtml = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span>${memberLabel}`;
 
-        document.getElementById('currentChannel').innerHTML = headerHtml;
+        const channelEl = document.getElementById('currentChannel');
+        channelEl.innerHTML = headerHtml;
+        channelEl.dataset.groupHeaderSig = `${displayPks.join(',')}|${group.members.length}|${group.name || ''}`;
+        delete channelEl.dataset.pmHeaderSig;
         const lockSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-grp-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
         const metaText = `${lockSvg}End-to-end encrypted group chat`;
         document.getElementById('channelMeta').innerHTML = metaText;
 
         const shareBtn = document.getElementById('shareChannelBtn');
         if (shareBtn) shareBtn.style.display = 'none';
+        const favBtn = document.getElementById('favoriteChannelBtn');
+        if (favBtn) favBtn.style.display = 'none';
 
         // Mark only the matching group item as active
         document.querySelectorAll('.channel-item').forEach(i => i.classList.remove('active'));

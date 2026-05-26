@@ -153,6 +153,7 @@ window.nymHapticTap = function (ms) {
         'navigateBack':               function () { nym().navigateBack(); },
         'navigateForward':            function () { nym().navigateForward(); },
         'shareChannel':               function () { nym().shareChannel(); },
+        'toggleFavoriteCurrentChannel': function () { nym().toggleFavoriteCurrentChannel(); },
         'toggleSearch':               function (_e, t) { window.toggleSearch(t.dataset.searchTarget); },
         'clearSearch':                function (_e, t) { window.clearSearch(t.dataset.searchTarget); },
         'toggleSectionCollapse':      function (e, t) { e.stopPropagation(); window.toggleSectionCollapse(t.dataset.sectionTarget); },

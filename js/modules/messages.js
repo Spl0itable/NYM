@@ -1826,9 +1826,10 @@ Object.assign(NYM.prototype, {
         const authorEl = document.getElementById('quotePreviewAuthor');
         const textEl = document.getElementById('quotePreviewText');
         authorEl.textContent = `@${author}`;
-        // Strip markdown/HTML and truncate for preview
+        // Strip markdown/HTML, keep shortcodes so they can render as images
         const cleanText = text.replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
-        textEl.textContent = cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText;
+        const truncated = cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText;
+        textEl.innerHTML = this.renderCustomEmojiInEscapedText(this.escapeHtml(truncated));
         preview.style.display = 'flex';
         const input = document.getElementById('messageInput');
         input.focus();
@@ -2590,6 +2591,105 @@ Object.assign(NYM.prototype, {
     _computeMessageFingerprint(messages) {
         if (!messages || messages.length === 0) return '';
         return messages.map(m => `${m.id}:${m._originalCreatedAt || m.created_at || 0}:${m.isEdited ? 'e' : ''}`).join('|');
+    },
+
+    _resolveMentionPubkey(mentionEl) {
+        if (!mentionEl) return null;
+        const direct = mentionEl.getAttribute('data-mention-pubkey');
+        if (direct) return direct;
+        const avatarImg = mentionEl.querySelector('img[data-avatar-pubkey]');
+        if (avatarImg) {
+            const safe = avatarImg.getAttribute('data-avatar-pubkey');
+            if (safe) {
+                for (const [pk] of this.users.entries()) {
+                    if (this._safePubkey(pk) === safe) return pk;
+                }
+            }
+        }
+        const suffixEl = mentionEl.querySelector('.nym-suffix');
+        if (suffixEl) {
+            const sfx = (suffixEl.textContent || '').replace(/^#/, '').toLowerCase();
+            if (sfx.length === 4) {
+                if (!this._suffixIndex) this._suffixIndex = new Map();
+                if (this._suffixIndex.size === 0) {
+                    this.users.forEach((_, pubkey) => {
+                        if (typeof pubkey === 'string' && pubkey.length >= 4) {
+                            const s = pubkey.slice(-4).toLowerCase();
+                            if (!this._suffixIndex.has(s)) this._suffixIndex.set(s, pubkey);
+                        }
+                    });
+                }
+                const pk = this._suffixIndex.get(sfx);
+                if (pk) return pk;
+            }
+        }
+        const text = (mentionEl.textContent || '').trim();
+        const m = text.match(/^@([^#]+)(?:#([0-9a-f]{4}))?$/i);
+        if (m) {
+            const name = m[1].trim();
+            const sfx = (m[2] || '').toLowerCase();
+            for (const [pk, user] of this.users.entries()) {
+                if (sfx && pk.slice(-4).toLowerCase() !== sfx) continue;
+                const userNym = this.parseNymFromDisplay(user.nym);
+                if (userNym === name) return pk;
+            }
+        }
+        return null;
+    },
+
+    _scrollToQuotedMessage(blockquoteEl) {
+        if (!blockquoteEl) return;
+        const authorEl = blockquoteEl.querySelector('.quote-author');
+        const authorText = (authorEl?.textContent || '').replace(/^@/, '').replace(/:\s*$/, '').trim();
+        const sfxMatch = authorText.match(/#([0-9a-f]{4})$/i);
+        const quotedSuffix = sfxMatch ? sfxMatch[1].toLowerCase() : null;
+        const quotedName = authorText.replace(/#[0-9a-f]{4}$/i, '').trim();
+
+        const clone = blockquoteEl.cloneNode(true);
+        clone.querySelectorAll('.quote-author').forEach(n => n.remove());
+        const quotedText = (clone.textContent || '').trim().replace(/\s+/g, ' ');
+        if (!quotedText) return;
+
+        const hostMsg = blockquoteEl.closest('.message');
+        const hostKey = hostMsg ? hostMsg.dataset.messageId : null;
+
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+        const candidates = container.querySelectorAll('.message[data-message-id]');
+        let best = null;
+        let bestScore = -1;
+        for (const el of candidates) {
+            if (hostKey && el.dataset.messageId === hostKey) continue;
+            const elAuthor = (el.dataset.author || '').trim();
+            const elPk = el.dataset.pubkey || '';
+            const elSuffix = elPk.slice(-4).toLowerCase();
+            if (quotedSuffix && elSuffix !== quotedSuffix) continue;
+            const baseAuthor = this.stripPubkeySuffix(elAuthor);
+            if (quotedName && baseAuthor !== quotedName && elAuthor !== quotedName) continue;
+            const raw = (el.dataset.rawContent || '').replace(/\s+/g, ' ').trim();
+            if (!raw) continue;
+            const replyOnly = raw.split(/\r?\n/).filter(l => !l.startsWith('>')).join(' ').replace(/\s+/g, ' ').trim();
+            const haystack = replyOnly || raw;
+            let score = 0;
+            const needle = quotedText.slice(0, 200);
+            if (haystack === needle) score = 1000;
+            else if (haystack.includes(needle)) score = 500;
+            else if (needle.length > 20 && haystack.includes(needle.slice(0, 80))) score = 250;
+            if (score > bestScore) { bestScore = score; best = el; }
+        }
+        if (!best) {
+            this.displaySystemMessage('Original message is not in view');
+            return;
+        }
+        const scroller = this._getMessagesScroller ? this._getMessagesScroller() : document.getElementById('messagesScroller');
+        const target = best;
+        if (typeof target.scrollIntoView === 'function') {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else if (scroller) {
+            scroller.scrollTop = Math.max(0, target.offsetTop - 100);
+        }
+        target.classList.add('message-scroll-flash');
+        setTimeout(() => target.classList.remove('message-scroll-flash'), 1600);
     },
 
     findMessageElementAnywhere(messageId) {

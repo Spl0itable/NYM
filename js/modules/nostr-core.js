@@ -1263,13 +1263,33 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Build avatars
-        const avatarHtml = typers.slice(0, 3).map(([pk]) => {
-            const sk = this._safePubkey(pk);
-            const src = this.getAvatarUrl(pk);
-            return `<img src="${this.escapeHtml(src)}" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
-        }).join('');
-        avatarsEl.innerHTML = avatarHtml;
+        // Diff against the existing avatars so re-renders don't refetch the
+        // images and visibly flicker on every typing tick.
+        const visibleTypers = typers.slice(0, 3);
+        const desiredKeys = visibleTypers.map(([pk]) => pk);
+        const existing = Array.from(avatarsEl.querySelectorAll('img[data-avatar-pubkey]'));
+        const existingKeys = existing.map(img => img.dataset.avatarPubkey || '');
+        const sameLength = existingKeys.length === desiredKeys.length;
+        const sameOrder = sameLength && desiredKeys.every((pk, i) => this._safePubkey(pk) === existingKeys[i]);
+        if (!sameOrder) {
+            const byKey = new Map();
+            for (const img of existing) byKey.set(img.dataset.avatarPubkey, img);
+            avatarsEl.innerHTML = '';
+            for (const pk of desiredKeys) {
+                const sk = this._safePubkey(pk);
+                const reuse = byKey.get(sk);
+                if (reuse) {
+                    avatarsEl.appendChild(reuse);
+                } else {
+                    const img = document.createElement('img');
+                    img.src = this.getAvatarUrl(pk);
+                    img.dataset.avatarPubkey = sk;
+                    img.alt = '';
+                    img.loading = 'lazy';
+                    avatarsEl.appendChild(img);
+                }
+            }
+        }
 
         // Build text
         if (typers.length === 1) {

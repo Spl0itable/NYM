@@ -835,6 +835,27 @@ Object.assign(NYM.prototype, {
                     e.preventDefault();
                     e.stopPropagation();
                     this.manualRetryDM(retryEl.dataset.retryEventId);
+                    return;
+                }
+
+                const mentionEl = e.target.closest('.nm-mention');
+                if (mentionEl && !e.target.closest('a, button, .reaction-badge, .add-reaction-btn')) {
+                    const pubkey = this._resolveMentionPubkey(mentionEl);
+                    if (pubkey) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const nym = this.getNymFromPubkey(pubkey);
+                        const suffix = this.getPubkeySuffix(pubkey);
+                        this.showContextMenu(e, `${nym}#${suffix}`, pubkey, null, null, true);
+                        return;
+                    }
+                }
+
+                const bq = e.target.closest('.message-content > blockquote');
+                if (bq && !e.target.closest('a, button, img, .reaction-badge, .add-reaction-btn, .nm-mention, code, pre')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this._scrollToQuotedMessage(bq);
                 }
             });
         }

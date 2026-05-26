@@ -962,6 +962,10 @@ Object.assign(NYM.prototype, {
                         msgReactions.get(emoji).set(senderPubkey, reactorNym);
                         this.persistReactions(reactionMessageId);
                         this.updateMessageReactions(reactionMessageId);
+
+                        if (senderPubkey !== this.pubkey) {
+                            this._notifyPmReactionToOurMessage(reactionMessageId, emoji, senderPubkey, event, rumor);
+                        }
                     }
                     // If the target bubble isn't in the current DOM, drop its
                     // cached render so the reaction shows after channel switch.
@@ -1481,6 +1485,69 @@ Object.assign(NYM.prototype, {
         this.renderTypingIndicator();
     },
 
+    _findMessageById(messageId) {
+        for (const [key, msgs] of this.pmMessages.entries()) {
+            const m = msgs.find(x => x.id === messageId || x.nymMessageId === messageId);
+            if (m) return { msg: m, convKey: key, store: 'pm' };
+        }
+        for (const [key, msgs] of this.messages.entries()) {
+            const m = msgs.find(x => x.id === messageId);
+            if (m) return { msg: m, convKey: key, store: 'channel' };
+        }
+        return null;
+    },
+
+    _notifyPmReactionToOurMessage(messageId, emoji, reactorPubkey, event, rumor) {
+        const found = this._findMessageById(messageId);
+        if (!found || found.store !== 'pm') return;
+        if (found.msg.pubkey !== this.pubkey) return;
+
+        const peer = (found.convKey.split(':').find(p => p !== this.pubkey)) || found.convKey;
+        const reactorNym = this.getNymFromPubkey(reactorPubkey);
+        const eventId = (event && event.id) || (rumor && rumor.id) || '';
+        const ts = (rumor && rumor.created_at ? rumor.created_at * 1000 : Date.now());
+        const msgPreview = (found.msg.content || '').split('\n').filter(l => !l.startsWith('>')).join(' ').trim();
+        const preview = msgPreview.length > 80 ? msgPreview.slice(0, 80) + '…' : msgPreview;
+        const body = preview ? `reacted ${emoji} to: "${preview}"` : `reacted ${emoji} to your message`;
+        const channelInfo = {
+            type: 'reaction',
+            id: eventId,
+            eventId,
+            pubkey: reactorPubkey,
+            messageId,
+            sourceType: 'pm',
+            sourcePubkey: peer
+        };
+        const isHistorical = (Date.now() - ts) > 10000;
+        if (isHistorical) this._addNotificationToHistory(reactorNym, body, channelInfo, ts);
+        else this.showNotification(reactorNym, body, channelInfo, ts);
+    },
+
+    _notifyGroupReactionToOurMessage(messageId, emoji, reactorPubkey, groupId, rumor) {
+        const found = this._findMessageById(messageId);
+        if (!found || found.store !== 'pm') return;
+        if (found.msg.pubkey !== this.pubkey) return;
+
+        const reactorNym = this.getNymFromPubkey(reactorPubkey);
+        const ts = (rumor && rumor.created_at ? rumor.created_at * 1000 : Date.now());
+        const eventId = (rumor && rumor.id) || '';
+        const msgPreview = (found.msg.content || '').split('\n').filter(l => !l.startsWith('>')).join(' ').trim();
+        const preview = msgPreview.length > 80 ? msgPreview.slice(0, 80) + '…' : msgPreview;
+        const body = preview ? `reacted ${emoji} to: "${preview}"` : `reacted ${emoji} to your message`;
+        const channelInfo = {
+            type: 'reaction',
+            id: eventId,
+            eventId,
+            pubkey: reactorPubkey,
+            messageId,
+            sourceType: 'group',
+            sourceGroupId: groupId
+        };
+        const isHistorical = (Date.now() - ts) > 10000;
+        if (isHistorical) this._addNotificationToHistory(reactorNym, body, channelInfo, ts);
+        else this.showNotification(reactorNym, body, channelInfo, ts);
+    },
+
     // Advance sent/read receipts for our messages in the Nymbot chat
     _markBotPMReceipts(status) {
         const convKey = this.getPMConversationKey(this.verifiedBot.pubkey);
@@ -1718,10 +1785,13 @@ Object.assign(NYM.prototype, {
         const supporterBadge = userShopItems?.supporter ?
             '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span></span>' : '';
         const safePk = this._safePubkey(pubkey);
+        const authorSig = `${clean}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterBadge}`;
         document.querySelectorAll(`.message[data-pubkey="${safePk}"] .message-author`).forEach(el => {
             // Update only the author-clickable inner span to preserve bubble-time and click handler
             const clickable = el.querySelector('.author-clickable');
             if (clickable) {
+                if (clickable.dataset.authorSig === authorSig) return;
+                clickable.dataset.authorSig = authorSig;
                 clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">&lt;${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}`;
             } else {
                 // Fallback: full rewrite with author-clickable wrapper for older messages missing it
@@ -1756,10 +1826,14 @@ Object.assign(NYM.prototype, {
                 : this.isVerifiedBot(pubkey)
                     ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                     : '';
-            const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-            const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span class="nm-pms-1">(PM)</span>`;
+            const pmHeaderSig = `${safePk}|${clean}|${suffix}|${flairHtml}|${verifiedBadge}|${friendBadge}`;
             const channelEl = document.getElementById('currentChannel');
-            if (channelEl) channelEl.innerHTML = pmHeaderHtml;
+            if (channelEl && channelEl.dataset.pmHeaderSig !== pmHeaderSig) {
+                const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
+                const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span class="nm-pms-1">(PM)</span>`;
+                channelEl.innerHTML = pmHeaderHtml;
+                channelEl.dataset.pmHeaderSig = pmHeaderSig;
+            }
         }
 
         // Update any visible notification banner from this user
@@ -1998,7 +2072,10 @@ Object.assign(NYM.prototype, {
         const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span class="nm-pms-1">(PM)</span>`;
 
         // Update UI with formatted nym
-        document.getElementById('currentChannel').innerHTML = pmHeaderHtml;
+        const _pmHeaderEl = document.getElementById('currentChannel');
+        _pmHeaderEl.innerHTML = pmHeaderHtml;
+        _pmHeaderEl.dataset.pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${friendBadge}`;
+        delete _pmHeaderEl.dataset.groupHeaderSig;
         const lockSvgPM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-pms-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
         if (this.isVerifiedBot(pubkey)) {
             document.getElementById('channelMeta').innerHTML =
@@ -2013,6 +2090,8 @@ Object.assign(NYM.prototype, {
         if (shareBtn) {
             shareBtn.style.display = 'none';
         }
+        const favBtn = document.getElementById('favoriteChannelBtn');
+        if (favBtn) favBtn.style.display = 'none';
 
         // Update active states
         document.querySelectorAll('.channel-item').forEach(item => {
@@ -2729,6 +2808,8 @@ Object.assign(NYM.prototype, {
 
         const shareBtn = document.getElementById('shareChannelBtn');
         if (shareBtn) shareBtn.style.display = 'none';
+        const favBtn = document.getElementById('favoriteChannelBtn');
+        if (favBtn) favBtn.style.display = 'none';
 
         document.querySelectorAll('.channel-item').forEach(i => i.classList.remove('active'));
         document.querySelectorAll('.pm-item').forEach(i => i.classList.remove('active'));

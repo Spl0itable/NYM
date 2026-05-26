@@ -1125,6 +1125,25 @@ body.chat-bubbles .read-more-btn {
     color: var(--text-dim);
     border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
     background: rgb(from var(--secondary) r g b / 0.1);
+    cursor: pointer;
+    transition: background var(--transition);
+}
+
+.message-content > blockquote:hover {
+    background: rgb(from var(--secondary) r g b / 0.18);
+}
+
+.message-scroll-flash {
+    animation: messageScrollFlash 1.6s ease-out;
+}
+
+@keyframes messageScrollFlash {
+    0% { background-color: rgb(from var(--primary) r g b / 0.25); }
+    100% { background-color: transparent; }
+}
+
+.nm-mention {
+    cursor: pointer;
 }
 
 .message-content h1,
@@ -1410,9 +1429,21 @@ body.chat-bubbles .edited-indicator-irc {
 .swipe-reply-indicator svg {
     width: 16px;
     height: 16px;
+    color: var(--primary);
+}
+
+.swipe-reply-indicator svg:not([fill]):not([stroke]) {
     stroke: var(--primary);
     fill: none;
     stroke-width: 2;
+}
+
+.swipe-reply-indicator svg[fill="currentColor"] {
+    fill: currentColor;
+}
+
+.swipe-reply-indicator svg[stroke="currentColor"] {
+    stroke: currentColor;
 }
 
 .swipe-reply-indicator .swipe-react-emoji {
