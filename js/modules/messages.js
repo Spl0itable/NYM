@@ -2608,7 +2608,9 @@ Object.assign(NYM.prototype, {
         const renderedIds = [];
         const domMsgs = container.querySelectorAll('[data-message-id]');
         for (let i = 0; i < domMsgs.length; i++) {
-            const id = domMsgs[i].dataset.messageId;
+            const el = domMsgs[i];
+            if (el.classList && el.classList.contains('poll-message')) continue;
+            const id = el.dataset.messageId;
             if (id) renderedIds.push(id);
         }
         if (renderedIds.length === 0) return;
@@ -2786,6 +2788,7 @@ Object.assign(NYM.prototype, {
         const cached = this.channelDOMCache.get(storageKey);
 
         if (cached && this._tryRestoreCachedDOM(container, cached, storageKey, filteredMessages, false)) {
+            this.renderChannelPolls();
             return;
         }
 

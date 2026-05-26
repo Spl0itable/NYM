@@ -237,7 +237,7 @@ Object.assign(NYM.prototype, {
                 const vAvatar = this.getAvatarUrl(vpk);
                 const vNym = this.getNymFromPubkey(vpk);
                 const vSuffix = this.getPubkeySuffix(vpk);
-                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" title="${this.escapeHtml(vNym)}" alt="">`;
+                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" title="${this.escapeHtml(vNym)}" alt="" loading="lazy">`;
             }).join('');
             const extraCount = count > 8 ? `<span class="poll-voter-extra">+${count - 8}</span>` : '';
 
@@ -296,13 +296,16 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Mirror displayMessage(): 'ms' (with created_at*1000 fallback) first, then _seq.
+        // Walk all timestamped descendants; in bubble mode messages live inside
+        // .message-group > .message-group-stack, so the target may not be a
+        // direct child of container — insert against the target's parent.
         {
             const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
             const msgMs = pollCreatedAt * 1000;
 
             let insertBefore = null;
             for (const existing of existingMessages) {
+                if (existing === messageEl) continue;
                 const existingCreatedAt = parseInt(existing.dataset.createdAt) || 0;
                 const existingMs = parseInt(existing.dataset.ms) || (existingCreatedAt * 1000);
                 if (msgMs < existingMs) {
@@ -318,12 +321,21 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            if (insertBefore) {
-                container.insertBefore(messageEl, insertBefore);
+            if (insertBefore && insertBefore.parentNode) {
+                insertBefore.parentNode.insertBefore(messageEl, insertBefore);
             } else {
                 container.appendChild(messageEl);
             }
         }
+
+        // Polls split bubble groups since they lack data-pubkey — rewrap so
+        // adjacent same-author messages regroup around the inserted poll.
+        if (!this._suppressBubbleRewrap
+            && typeof this._rewrapBubbleGroups === 'function'
+            && container.querySelector(':scope > .message-group')) {
+            this._rewrapBubbleGroups(container);
+        }
+
         this._scheduleScrollToBottom();
     },
 
@@ -337,35 +349,70 @@ Object.assign(NYM.prototype, {
         const totalVotes = poll.votes.size;
         const hasVoted = poll.votes.has(this.pubkey);
 
-        const optionsEl = container.querySelector('.poll-options');
-        optionsEl.innerHTML = poll.options.map(opt => {
+        // Update each option in place so existing voter <img> nodes aren't
+        // destroyed (an innerHTML rebuild made every avatar flicker on each vote).
+        for (const opt of poll.options) {
+            const optionEl = container.querySelector(`.poll-option[data-option-index="${opt.index}"]`);
+            if (!optionEl) continue;
+
             const optVotes = Array.from(poll.votes.entries()).filter(([, idx]) => idx === opt.index);
             const count = optVotes.length;
             const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
 
-            const voterAvatars = optVotes.slice(0, 8).map(([vpk]) => {
-                const sk = this._safePubkey(vpk);
-                const vAvatar = this.getAvatarUrl(vpk);
-                const vNym = this.getNymFromPubkey(vpk);
-                const vSuffix = this.getPubkeySuffix(vpk);
-                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" title="${this.escapeHtml(vNym)}" alt="">`;
-            }).join('');
-            const extraCount = count > 8 ? `<span class="poll-voter-extra">+${count - 8}</span>` : '';
+            const bar = optionEl.querySelector('.poll-option-bar');
+            if (bar) {
+                bar.dataset.pct = pct;
+                bar.style.width = pct + '%';
+            }
+            const pctEl = optionEl.querySelector('.poll-option-pct');
+            if (pctEl) pctEl.textContent = totalVotes > 0 ? pct + '%' : '';
 
-            const selectedClass = hasVoted && poll.votes.get(this.pubkey) === opt.index ? ' poll-option-selected' : '';
+            optionEl.classList.toggle('poll-option-selected', hasVoted && poll.votes.get(this.pubkey) === opt.index);
 
-            return `
-                <div class="poll-option${selectedClass}" data-poll-id="${pollId}" data-option-index="${opt.index}" data-action="votePoll">
-                    <div class="poll-option-bar" data-pct="${pct}"></div>
-                    <div class="poll-option-content">
-                        <span class="poll-option-text">${this.escapeHtml(opt.text)}</span>
-                        <span class="poll-option-pct">${totalVotes > 0 ? pct + '%' : ''}</span>
-                    </div>
-                    <div class="poll-voters">${voterAvatars}${extraCount}</div>
-                </div>
-            `;
-        }).join('');
-        optionsEl.querySelectorAll('.poll-option-bar[data-pct]').forEach(b => { b.style.width = b.dataset.pct + '%'; });
+            const votersEl = optionEl.querySelector('.poll-voters');
+            if (votersEl) {
+                const visibleVoters = optVotes.slice(0, 8).map(([vpk]) => vpk);
+                const wantedKeys = visibleVoters.map(vpk => this._safePubkey(vpk));
+
+                const currentImgs = Array.from(votersEl.querySelectorAll('img.poll-voter-avatar'));
+                const orderMatches = currentImgs.length === wantedKeys.length
+                    && currentImgs.every((img, i) => img.dataset.avatarPubkey === wantedKeys[i]);
+
+                let extraEl = votersEl.querySelector('.poll-voter-extra');
+
+                if (!orderMatches) {
+                    const byKey = new Map();
+                    for (const img of currentImgs) byKey.set(img.dataset.avatarPubkey, img);
+                    for (const img of currentImgs) img.remove();
+                    if (extraEl) extraEl.remove();
+                    for (let i = 0; i < wantedKeys.length; i++) {
+                        const sk = wantedKeys[i];
+                        let img = byKey.get(sk);
+                        if (!img) {
+                            img = document.createElement('img');
+                            img.src = this.getAvatarUrl(visibleVoters[i]);
+                            img.className = 'poll-voter-avatar';
+                            img.dataset.avatarPubkey = sk;
+                            img.title = this.getNymFromPubkey(visibleVoters[i]);
+                            img.alt = '';
+                            img.loading = 'lazy';
+                        }
+                        votersEl.appendChild(img);
+                    }
+                }
+
+                if (count > 8) {
+                    if (!extraEl || !extraEl.isConnected) {
+                        extraEl = document.createElement('span');
+                        extraEl.className = 'poll-voter-extra';
+                        votersEl.appendChild(extraEl);
+                    }
+                    extraEl.textContent = `+${count - 8}`;
+                } else if (extraEl) {
+                    extraEl.remove();
+                }
+            }
+        }
 
         const pollFooter = container.querySelector('.poll-footer');
         if (pollFooter) pollFooter.textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
@@ -378,10 +425,12 @@ Object.assign(NYM.prototype, {
         const container = document.getElementById('messagesContainer');
         if (!container) return;
 
-        // Collect polls for this channel, sorted by created_at
         const channelPolls = [];
         for (const [pollId, poll] of this.polls) {
-            if (poll.geohash === geohash && !container.querySelector(`[data-poll-id="${pollId}"]`)) {
+            if (poll.geohash !== geohash) continue;
+            if (container.querySelector(`[data-poll-id="${pollId}"]`)) {
+                this.updatePollDisplay(pollId);
+            } else {
                 channelPolls.push([pollId, poll]);
             }
         }
@@ -390,10 +439,21 @@ Object.assign(NYM.prototype, {
 
         channelPolls.sort((a, b) => a[1].created_at - b[1].created_at);
 
-        for (const [pollId, poll] of channelPolls) {
-            const nym = poll.nym || 'nym';
-            const isOwn = poll.pubkey === this.pubkey;
-            this.displayPollMessage(pollId, nym, poll.pubkey, poll.question, poll.options, poll.votes, poll.created_at, isOwn);
+        const prevSuppress = this._suppressBubbleRewrap;
+        this._suppressBubbleRewrap = true;
+        try {
+            for (const [pollId, poll] of channelPolls) {
+                const nym = poll.nym || 'nym';
+                const isOwn = poll.pubkey === this.pubkey;
+                this.displayPollMessage(pollId, nym, poll.pubkey, poll.question, poll.options, poll.votes, poll.created_at, isOwn);
+            }
+        } finally {
+            this._suppressBubbleRewrap = prevSuppress;
+        }
+
+        if (typeof this._rewrapBubbleGroups === 'function'
+            && container.querySelector(':scope > .message-group')) {
+            this._rewrapBubbleGroups(container);
         }
     },
 
