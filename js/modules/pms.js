@@ -227,7 +227,7 @@ Object.assign(NYM.prototype, {
         const now = Math.floor(nowMs / 1000);
 
         // Generate message ID for delivery receipts (Nymchat format)
-        const nymMessageId = this.generateUUID();
+        const nymMessageId = this._generateSharedEventId();
 
         const rumor = {
             kind: 14,
@@ -275,32 +275,29 @@ Object.assign(NYM.prototype, {
                 this.sendDMToRelays(['EVENT', bitchatWrapped]);
                 sentWrappedEvents.push(['EVENT', bitchatWrapped]);
                 wrapped = bitchatWrapped;
+                this._recordGiftWrapId(nymMessageId, bitchatWrapped.id);
 
-                // Schedule deletion if redacted cosmetic is active
                 if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                     setTimeout(() => { this.publishDeletionEvent(bitchatWrapped.id, 1059); }, 600000);
                 }
             }
 
-            // For known nymchat users OR unknown peers, send nymchat-format wrap
-            // Unknown peers get BOTH formats so either app can decrypt
             if (isKnownNym || isUnknownPeer) {
                 const nymWrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', nymWrapped]);
                 sentWrappedEvents.push(['EVENT', nymWrapped]);
                 wrapped = nymWrapped;
+                this._recordGiftWrapId(nymMessageId, nymWrapped.id);
 
-                // Schedule deletion if redacted cosmetic is active
                 if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                     setTimeout(() => { this.publishDeletionEvent(nymWrapped.id, 1059); }, 600000);
                 }
             }
 
-            // Send a self-wrap so our own message is retrievable from relays after reload.
-            // The outer gift wrap has #p = our pubkey, so our subscription picks it up.
             if (recipientPubkey !== this.pubkey) {
                 const selfWrapped = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', selfWrapped]);
+                this._recordGiftWrapId(nymMessageId, selfWrapped.id);
             }
 
             const conversationKey = this.getPMConversationKey(recipientPubkey);
@@ -2176,7 +2173,7 @@ Object.assign(NYM.prototype, {
             if (!this.connected) throw new Error('Not connected to relay');
 
             const now = Math.floor(Date.now() / 1000);
-            const nymMessageId = this.generateUUID();
+            const nymMessageId = this._generateSharedEventId();
 
             const rumor = {
                 kind: 14,
@@ -2202,12 +2199,13 @@ Object.assign(NYM.prototype, {
                 if (isKnownNym || isUnknownPeer) {
                     const nymWrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', nymWrapped]);
+                    this._recordGiftWrapId(nymMessageId, nymWrapped.id);
                 }
 
-                // Self-wrap so edit is retrievable on reload
                 if (recipientPubkey !== this.pubkey) {
                     const selfWrapped = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', selfWrapped]);
+                    this._recordGiftWrapId(nymMessageId, selfWrapped.id);
                 }
             } else if (window.nostr?.nip44?.encrypt && window.nostr?.signEvent) {
                 // Extension path: create seal + wrap via extension

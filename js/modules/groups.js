@@ -1041,7 +1041,7 @@ Object.assign(NYM.prototype, {
 
         const groupId = this.generateUUID();
         const now = Math.floor(Date.now() / 1000);
-        const nymMessageId = this.generateUUID();
+        const nymMessageId = this._generateSharedEventId();
         const inviteContent = `You've been added to group "${name}" (${allMembers.length} members).`;
 
         const tags = allMembers.map(pk => ['p', pk]);
@@ -1109,7 +1109,7 @@ Object.assign(NYM.prototype, {
         }
 
         const now = Math.floor(Date.now() / 1000);
-        const nymMessageId = this.generateUUID();
+        const nymMessageId = this._generateSharedEventId();
         const newMemberName = this.getNymFromPubkey(newMemberPubkey);
         const inviterName = this.getNymFromPubkey(this.pubkey);
         const addContent = `${newMemberName} was added by ${inviterName}.`;
@@ -1160,15 +1160,31 @@ Object.assign(NYM.prototype, {
     },
 
     _sendGiftWraps(members, rumor, expirationTs, groupId = null) {
+        const sharedId = this.getNymMessageId(rumor);
         for (const pubkey of members) {
-            // Use ephemeral recipient key when available (timing-attack mitigation)
             const encryptTo = groupId ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
             const wrapped = this.nip59WrapEvent(rumor, this.privkey, encryptTo, expirationTs);
             this.sendDMToRelays(['EVENT', wrapped]);
+            this._recordGiftWrapId(sharedId, wrapped.id);
 
             if (this.activeCosmetics?.has('cosmetic-redacted')) {
                 setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
             }
+        }
+    },
+
+    _recordGiftWrapId(sharedId, wrappedId) {
+        if (!sharedId || !wrappedId) return;
+        if (!this._giftWrapsForSharedId) this._giftWrapsForSharedId = new Map();
+        let set = this._giftWrapsForSharedId.get(sharedId);
+        if (!set) {
+            set = new Set();
+            this._giftWrapsForSharedId.set(sharedId, set);
+        }
+        set.add(wrappedId);
+        if (this._giftWrapsForSharedId.size > 5000) {
+            const firstKey = this._giftWrapsForSharedId.keys().next().value;
+            this._giftWrapsForSharedId.delete(firstKey);
         }
     },
 
@@ -1192,6 +1208,7 @@ Object.assign(NYM.prototype, {
         const rumorWithId = { ...rumor };
         rumorWithId.id = NT.getEventHash(rumorWithId);
         const rumorJson = JSON.stringify(rumorWithId);
+        const sharedId = this.getNymMessageId(rumor);
 
         const wrapOne = async (pubkey) => {
             try {
@@ -1220,6 +1237,7 @@ Object.assign(NYM.prototype, {
 
                 const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
                 this.sendDMToRelays(['EVENT', wrapped]);
+                this._recordGiftWrapId(sharedId, wrapped.id);
 
                 if (this.activeCosmetics?.has('cosmetic-redacted')) {
                     setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
@@ -1258,7 +1276,7 @@ Object.assign(NYM.prototype, {
         const nowMs = Date.now();
         const now = Math.floor(nowMs / 1000);
 
-        const nymMessageId = this.generateUUID();
+        const nymMessageId = this._generateSharedEventId();
 
         const tags = group.members.map(pk => ['p', pk]);
         tags.push(['g', groupId]);
@@ -1373,7 +1391,7 @@ Object.assign(NYM.prototype, {
                 tags.push(['g', groupId]);
                 tags.push(['subject', group.name]);
                 tags.push(['type', 'group-leave']);
-                tags.push(['x', this.generateUUID()]);
+                tags.push(['x', this._generateSharedEventId()]);
                 const rumor = { kind: 14, created_at: now, tags, content: leaveContent, pubkey: this.pubkey };
                 // Send to remaining members only (not self), using ephemeral keys
                 await this._sendGiftWrapsAsync(otherMembers, rumor, null, groupId);
@@ -1461,7 +1479,7 @@ Object.assign(NYM.prototype, {
             ? `${kickedName} was banned by ${kickerName}.`
             : `${kickedName} was removed by ${kickerName}.`;
         const now = Math.floor(Date.now() / 1000);
-        const nymMessageId = this.generateUUID();
+        const nymMessageId = this._generateSharedEventId();
 
         const tags = group.members.map(pk => ['p', pk]);
         tags.push(['g', groupId]);
@@ -1522,7 +1540,7 @@ Object.assign(NYM.prototype, {
                 ['subject', group.name],
                 ['type', 'group-unban'],
                 ['unban', pubkey],
-                ['x', this.generateUUID()]
+                ['x', this._generateSharedEventId()]
             ];
             const rumor = {
                 kind: 14,
@@ -1571,7 +1589,7 @@ Object.assign(NYM.prototype, {
         tags.push(['subject', group.name]);
         tags.push(['type', 'group-promote-mod']);
         tags.push(['mod', pubkey]);
-        tags.push(['x', this.generateUUID()]);
+        tags.push(['x', this._generateSharedEventId()]);
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
 
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
@@ -1612,7 +1630,7 @@ Object.assign(NYM.prototype, {
         tags.push(['subject', group.name]);
         tags.push(['type', 'group-revoke-mod']);
         tags.push(['mod', pubkey]);
-        tags.push(['x', this.generateUUID()]);
+        tags.push(['x', this._generateSharedEventId()]);
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
 
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
@@ -1653,7 +1671,7 @@ Object.assign(NYM.prototype, {
         tags.push(['subject', group.name]);
         tags.push(['type', 'group-transfer-owner']);
         tags.push(['owner', pubkey]);
-        tags.push(['x', this.generateUUID()]);
+        tags.push(['x', this._generateSharedEventId()]);
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
 
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
@@ -1703,7 +1721,7 @@ Object.assign(NYM.prototype, {
         tags.push(['type', 'group-delete-message']);
         tags.push(['e', sharedId]);
         if (authorPubkey) tags.push(['target_pubkey', authorPubkey]);
-        tags.push(['x', this.generateUUID()]);
+        tags.push(['x', this._generateSharedEventId()]);
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
 
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
@@ -2286,7 +2304,7 @@ Object.assign(NYM.prototype, {
             if (!group) return false;
 
             const now = Math.floor(Date.now() / 1000);
-            const nymMessageId = this.generateUUID();
+            const nymMessageId = this._generateSharedEventId();
 
             const tags = group.members.map(pk => ['p', pk]);
             tags.push(['g', groupId]);

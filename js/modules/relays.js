@@ -2200,19 +2200,27 @@ Object.assign(NYM.prototype, {
     // Strict relays (Pocket) reject filters with duplicate tag values.
     _normalizeFilters(filters) {
         if (!Array.isArray(filters)) return filters;
+        const hexOnlyKeys = new Set(['ids', 'authors', '#e', '#p']);
         const seen = new Set();
         const out = [];
         for (const f of filters) {
             if (!f || typeof f !== 'object') continue;
             const cleaned = {};
+            let invalid = false;
             for (const key of Object.keys(f)) {
                 const v = f[key];
                 if (Array.isArray(v)) {
-                    cleaned[key] = [...new Set(v)];
+                    let arr = [...new Set(v)];
+                    if (hexOnlyKeys.has(key)) {
+                        arr = arr.filter(s => this._isNostrHex64(s));
+                        if (arr.length === 0) { invalid = true; break; }
+                    }
+                    cleaned[key] = arr;
                 } else {
                     cleaned[key] = v;
                 }
             }
+            if (invalid) continue;
             const sig = JSON.stringify(
                 Object.keys(cleaned).sort().reduce((acc, k) => {
                     const v = cleaned[k];
@@ -2436,19 +2444,21 @@ Object.assign(NYM.prototype, {
         return filters;
     },
 
-    // Collect event IDs from all currently stored channel messages (max 100 per channel)
+    _isNostrHex64(s) {
+        return typeof s === 'string' && s.length === 64 && /^[0-9a-f]{64}$/i.test(s);
+    },
+
     _collectVisibleEventIds() {
         this._zapReceiptEventIds.clear();
         this.messages.forEach((msgs) => {
             for (const msg of msgs) {
-                if (msg.id) this._zapReceiptEventIds.add(msg.id);
+                if (this._isNostrHex64(msg.id)) this._zapReceiptEventIds.add(msg.id);
             }
         });
-        // Also include PM message IDs if any
         if (this.pmMessages) {
             this.pmMessages.forEach((msgs) => {
                 for (const msg of msgs) {
-                    if (msg.id) this._zapReceiptEventIds.add(msg.id);
+                    if (this._isNostrHex64(msg.id)) this._zapReceiptEventIds.add(msg.id);
                 }
             });
         }

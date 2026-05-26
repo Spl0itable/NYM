@@ -879,12 +879,22 @@ Object.assign(NYM.prototype, {
         return Math.round(Date.now() / 1000 - Math.random() * TWO_HOURS);
     },
 
-    // Generate UUID v4
+    // Generate UUID v4 (used only by Bitchat's TLV encoder, which parses UUID format)
     generateUUID() {
         return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
             const r = Math.random() * 16 | 0;
             return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         }).toUpperCase();
+    },
+
+    _generateSharedEventId() {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        let s = '';
+        for (let i = 0; i < bytes.length; i++) {
+            s += bytes[i].toString(16).padStart(2, '0');
+        }
+        return s;
     },
 
     // Encode message in Bitchat's bitchat1: format
@@ -1758,7 +1768,6 @@ Object.assign(NYM.prototype, {
     async publishDeletionEvent(messageId, originalKind) {
         try {
             const tags = [['e', messageId]];
-            // Add k tag per NIP-09 so relays can filter deletes by kind
             if (originalKind) {
                 tags.push(['k', String(originalKind)]);
             }
@@ -1773,9 +1782,34 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(event);
             this.sendToRelay(['EVENT', signedEvent]);
 
-            // Track deleted event ID
             this.deletedEventIds.add(messageId);
             if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+
+            // For NIP-17 messages: also publish kind-5 against every actual gift-wrap
+            // event id we sent for this shared id, so relays drop them from storage.
+            // The signal kind-5 above only lets other clients soft-hide locally.
+            if (originalKind === 1059 && this._giftWrapsForSharedId) {
+                const wrapIds = this._giftWrapsForSharedId.get(messageId);
+                if (wrapIds && wrapIds.size > 0) {
+                    for (const wrapId of wrapIds) {
+                        if (wrapId === messageId) continue;
+                        if (this.deletedEventIds.has(wrapId)) continue;
+                        const wrapEvent = {
+                            kind: 5,
+                            created_at: Math.floor(Date.now() / 1000),
+                            tags: [['e', wrapId], ['k', '1059']],
+                            content: '',
+                            pubkey: this.pubkey
+                        };
+                        try {
+                            const signedWrapDelete = await this.signEvent(wrapEvent);
+                            this.sendToRelay(['EVENT', signedWrapDelete]);
+                            this.deletedEventIds.add(wrapId);
+                        } catch (_) { }
+                    }
+                    this._giftWrapsForSharedId.delete(messageId);
+                }
+            }
 
             // Remove message from DOM
             const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
