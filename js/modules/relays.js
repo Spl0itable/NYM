@@ -2419,39 +2419,41 @@ Object.assign(NYM.prototype, {
 
     _buildCriticalFilters(since24h) {
         const filters = [];
+        const nowSec = Math.floor(Date.now() / 1000);
+        const channelMode = !this.settings.groupChatPMOnlyMode;
 
-        if (!this.settings.groupChatPMOnlyMode) {
+        // Critical real-time filters — proxy splits these into individual subs (one per filter)
+        if (this.pubkey) {
+            filters.push({ kinds: [1059], "#p": [this.pubkey], limit: 500 });
+        }
+        if (channelMode) {
             filters.push({ kinds: [20000, 23333], since: since24h });
-            filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since24h, limit: 100 });
+        }
+        if (this.pubkey) {
+            filters.push({ kinds: [7], "#p": [this.pubkey], "#k": ["20000", "23333"], limit: 100 });
+            filters.push({ kinds: [25051], "#p": [this.pubkey], since: nowSec - 120, limit: 50 });
+        }
+        if (channelMode) {
             filters.push({ kinds: [7], "#k": ["20000", "23333"], since: since24h, limit: 100 });
+        }
+        filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
+        if (channelMode) {
             filters.push({ kinds: [5], "#k": ["20000", "23333", "1059"], since: since24h, limit: 100 });
         }
-
         filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
-        filters.push({ kinds: [30078], "#t": ["nym-vouches"], limit: 1000 });
-        filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
-
-        // NIP-30 custom emoji packs from across Nostr
-        filters.push({ kinds: [30030], limit: 300 });
-
-        // Zap receipts: scope to visible message event IDs if available
         const zapFilter = this._buildZapReceiptFilter();
         if (zapFilter) filters.push(zapFilter);
 
-        if (this.pubkey) {
-            // Gift wraps to our real pubkey (1:1 DMs, bootstrapping, resyncs)
-            filters.push(
-                { kinds: [1059], "#p": [this.pubkey], limit: 500 },
-                { kinds: [7], "#p": [this.pubkey], "#k": ["20000", "23333"], limit: 100 },
-                { kinds: [25051], "#p": [this.pubkey], since: Math.floor(Date.now() / 1000) - 120, limit: 50 },
-                { kinds: [25052], since: Math.floor(Date.now() / 1000) - 86400, limit: 100 },
-                { kinds: [10030], authors: [this.pubkey], limit: 1 }
-            );
-            // Ephemeral pubkey subscriptions are sent as independent REQs
+        // Less critical — anything past position 9 is bundled into a single sub upstream
+        if (channelMode) {
+            filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since24h, limit: 100 });
         }
-
-        // Subscribe to kind 0 (profile metadata) for current PM contacts so
-        // nickname/avatar updates push in real-time. 
+        filters.push({ kinds: [30078], "#t": ["nym-vouches"], limit: 1000 });
+        filters.push({ kinds: [30030], limit: 300 });
+        if (this.pubkey) {
+            filters.push({ kinds: [25052], since: nowSec - 86400, limit: 100 });
+            filters.push({ kinds: [10030], authors: [this.pubkey], limit: 1 });
+        }
         const pmAuthors = this.pmConversations
             ? Array.from(this.pmConversations.keys()).filter(pk => typeof pk === 'string' && pk.length === 64)
             : [];

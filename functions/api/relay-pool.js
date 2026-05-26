@@ -269,27 +269,59 @@ export async function onRequest(context) {
     } catch { return null; }
   }
 
+  const MAX_CHILDREN_PER_PARENT = 10;
+
   function buildChildrenForParent(parentSubId, msg) {
-    if (!Array.isArray(msg) || msg.length <= 3) return null;
+    if (!Array.isArray(msg)) return null;
+    const filterCount = msg.length - 2;
+    if (filterCount <= 1) return null;
     const children = [];
-    for (let i = 2; i < msg.length; i++) {
-      const f = msg[i];
-      const childSubId = `${parentSubId}~f${i - 2}`;
-      const rawChild = JSON.stringify(['REQ', childSubId, f]);
-      children.push({ childSubId, rawChild, filter: f });
+    if (filterCount <= MAX_CHILDREN_PER_PARENT) {
+      for (let i = 2; i < msg.length; i++) {
+        const childSubId = `${parentSubId}~c${i - 2}`;
+        const rawChild = JSON.stringify(['REQ', childSubId, msg[i]]);
+        children.push({ childSubId, rawChild, filters: [msg[i]] });
+      }
+    } else {
+      const singleCount = MAX_CHILDREN_PER_PARENT - 1;
+      for (let i = 0; i < singleCount; i++) {
+        const f = msg[2 + i];
+        const childSubId = `${parentSubId}~c${i}`;
+        const rawChild = JSON.stringify(['REQ', childSubId, f]);
+        children.push({ childSubId, rawChild, filters: [f] });
+      }
+      const bundle = [];
+      for (let i = 2 + singleCount; i < msg.length; i++) bundle.push(msg[i]);
+      const lastSubId = `${parentSubId}~c${singleCount}`;
+      const rawLast = JSON.stringify(['REQ', lastSubId, ...bundle]);
+      children.push({ childSubId: lastSubId, rawChild: rawLast, filters: bundle });
     }
     return children;
   }
 
   function buildChildPayload(child, blockedKinds) {
-    if (blockedKinds && blockedKinds.size > 0 && child.filter && Array.isArray(child.filter.kinds)) {
-      const kept = child.filter.kinds.filter(k => !blockedKinds.has(k));
-      if (kept.length === 0) return null;
-      if (kept.length < child.filter.kinds.length) {
-        return JSON.stringify(['REQ', child.childSubId, { ...child.filter, kinds: kept }]);
+    const filters = child.filters;
+    if (!filters || filters.length === 0) return null;
+    if (!blockedKinds || blockedKinds.size === 0) return child.rawChild;
+    const newFilters = [];
+    let modified = false;
+    for (const f of filters) {
+      if (f && Array.isArray(f.kinds)) {
+        const kept = f.kinds.filter(k => !blockedKinds.has(k));
+        if (kept.length === 0) { modified = true; continue; }
+        if (kept.length < f.kinds.length) {
+          newFilters.push({ ...f, kinds: kept });
+          modified = true;
+        } else {
+          newFilters.push(f);
+        }
+      } else {
+        newFilters.push(f);
       }
     }
-    return child.rawChild;
+    if (newFilters.length === 0) return null;
+    if (!modified) return child.rawChild;
+    return JSON.stringify(['REQ', child.childSubId, ...newFilters]);
   }
 
   function isRelayWideRejection(reason) {
