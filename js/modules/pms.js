@@ -2070,7 +2070,7 @@ Object.assign(NYM.prototype, {
                 ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                 : '';
         const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span class="nm-pms-1">(PM)</span>`;
+        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">${displayNym} <span class="nm-pms-1">(PM)</span>`;
 
         // Update UI with formatted nym
         const _pmHeaderEl = document.getElementById('currentChannel');
