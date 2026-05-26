@@ -226,14 +226,15 @@ export async function onRequest(context) {
   function isUnsupportedKind(reason) {
     if (typeof reason !== 'string') return false;
     return /kinds?\s*not\s*supported/i.test(reason)
-      || /\bNIP[\s\-_:]*\d+\b/i.test(reason);
+      || /\bNIP[\s\-_:]*\d+\b/i.test(reason)
+      || /\bkinds?[\s\-_:]*\d+\b/i.test(reason);
   }
 
   function extractRejectedKind(reason) {
     if (typeof reason !== 'string') return null;
     let m = reason.match(/\bNIP[\s\-_:]*(\d+)\b/i);
     if (m) return parseInt(m[1], 10);
-    m = reason.match(/\bkind[\s\-_:]*(\d+)\b/i);
+    m = reason.match(/\bkinds?[\s\-_:]*(\d+)\b/i);
     if (m) return parseInt(m[1], 10);
     return null;
   }
@@ -805,20 +806,18 @@ export async function onRequest(context) {
             const okId = okMatch[1] || null;
             const acceptedFlag = okMatch[2] === 'true';
             const reason = okMatch[3];
+            if (isUnsupportedKind(reason)) {
+              sendToClient(JSON.stringify(['OK', okId, acceptedFlag, reason, relayUrl]));
+              return;
+            }
             if (isRelayWideRejection(reason)) {
               markPermanentlySkipped(relayUrl, `event-rejected: ${reason}`);
               sendToClient(JSON.stringify(['OK', okId, acceptedFlag, reason, relayUrl]));
               return;
             }
-            if (!acceptedFlag) {
-              if (isUnsupportedKind(reason)) {
-                sendToClient(JSON.stringify(['OK', okId, false, reason, relayUrl]));
-                return;
-              }
-              if (isPermanentRejection(reason)) {
-                sendToClient(JSON.stringify(['OK', okId, false, reason, relayUrl]));
-                return;
-              }
+            if (!acceptedFlag && isPermanentRejection(reason)) {
+              sendToClient(JSON.stringify(['OK', okId, false, reason, relayUrl]));
+              return;
             }
           }
           sendToClient(raw);
@@ -846,6 +845,10 @@ export async function onRequest(context) {
             const m = raw.match(/^\["NOTICE",\s*"((?:[^"\\]|\\.)*)"/);
             const reason = m ? m[1] : '';
             if (/no such sub|unknown subscription/i.test(reason)) return;
+            if (m && isUnsupportedKind(reason)) {
+              sendToClient(JSON.stringify(['NOTICE', reason, relayUrl]));
+              return;
+            }
             if (m && isRelayWideRejection(reason)) {
               markPermanentlySkipped(relayUrl, reason);
               return;

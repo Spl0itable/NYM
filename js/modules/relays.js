@@ -2259,7 +2259,7 @@ Object.assign(NYM.prototype, {
         if (typeof reason !== 'string') return null;
         let m = reason.match(/\bNIP[\s\-_:]*(\d+)\b/i);
         if (m) return parseInt(m[1], 10);
-        m = reason.match(/\bkind[\s\-_:]*(\d+)\b/i);
+        m = reason.match(/\bkinds?[\s\-_:]*(\d+)\b/i);
         if (m) return parseInt(m[1], 10);
         return null;
     },
@@ -3534,13 +3534,13 @@ Object.assign(NYM.prototype, {
                     ? data[3] : relayUrl;
                 const r = typeof reason === 'string' ? reason : '';
                 const hasEventId = typeof okEventId === 'string' && okEventId.length > 0;
-                if (this._isRelayWideRejection(reason)) {
+                if (this._isUnsupportedKind(reason)) {
+                    if (hasEventId) this._recordEventKindRejection(attributedRelay, okEventId);
+                    else this._permanentlyBlacklistRelay(attributedRelay, reason);
+                } else if (this._isRelayWideRejection(reason)) {
                     this._permanentlyBlacklistRelay(attributedRelay, reason);
                 } else if (accepted === false) {
-                    if (this._isUnsupportedKind(reason)) {
-                        if (hasEventId) this._recordEventKindRejection(attributedRelay, okEventId);
-                        else this._permanentlyBlacklistRelay(attributedRelay, reason);
-                    } else if (this._isPermanentRejection(reason)) {
+                    if (this._isPermanentRejection(reason)) {
                         if (hasEventId) this._recordEventKindRejection(attributedRelay, okEventId);
                         else this._permanentlyBlacklistRelay(attributedRelay, reason);
                     } else if (/^mute[\s:]/i.test(r)) {
@@ -3774,7 +3774,8 @@ Object.assign(NYM.prototype, {
     _isUnsupportedKind(reason) {
         if (typeof reason !== 'string') return false;
         return /kinds?\s*not\s*supported/i.test(reason)
-            || /\bNIP[\s\-_:]*\d+\b/i.test(reason);
+            || /\bNIP[\s\-_:]*\d+\b/i.test(reason)
+            || /\bkinds?[\s\-_:]*\d+\b/i.test(reason);
     },
 
     _isRelayWideRejection(reason) {
