@@ -2082,10 +2082,18 @@ Object.assign(NYM.prototype, {
                             }
                         }
 
-                        // Update per-relay event counts from this worker
                         if (status.events) {
+                            if (!this._poolEventBaselines) this._poolEventBaselines = new Map();
+                            let baseline = this._poolEventBaselines.get(poolEntry.id);
+                            if (!baseline) { baseline = new Map(); this._poolEventBaselines.set(poolEntry.id, baseline); }
                             for (const [url, count] of Object.entries(status.events)) {
-                                this.relayStats.eventsPerRelay.set(url, count);
+                                const prev = baseline.get(url) || 0;
+                                const delta = count >= prev ? count - prev : count;
+                                if (delta > 0) {
+                                    const cur = this.relayStats.eventsPerRelay.get(url) || 0;
+                                    this.relayStats.eventsPerRelay.set(url, cur + delta);
+                                }
+                                baseline.set(url, count);
                             }
                         }
 
@@ -2121,7 +2129,10 @@ Object.assign(NYM.prototype, {
                     return;
                 }
 
-                // Clear this worker's connected relays and re-merge
+                if (!this._reconnectingShards) this._reconnectingShards = new Set();
+                this._reconnectingShards.add(shard.id);
+                if (this._poolEventBaselines) this._poolEventBaselines.delete(shard.id);
+
                 poolEntry.connectedRelays = [];
                 poolEntry.ws = null;
                 this._mergePoolStatus();
@@ -2392,6 +2403,7 @@ Object.assign(NYM.prototype, {
     _getShardSinceFloor(shardId) {
         const nowSec = Math.floor(Date.now() / 1000);
         const since24h = nowSec - 86400;
+        if (!this._reconnectingShards || !this._reconnectingShards.has(shardId)) return since24h;
         const lastSeen = this._shardLastSeenAt && this._shardLastSeenAt.get(shardId);
         if (typeof lastSeen !== 'number' || lastSeen < since24h) return since24h;
         const buffered = lastSeen - 30;

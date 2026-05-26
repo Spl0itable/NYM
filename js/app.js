@@ -548,6 +548,8 @@ class NYM {
         this._nip66LastRun = 0;
         this.eventDeduplication = new Map();
         this._shardLastSeenAt = new Map();
+        this._reconnectingShards = new Set();
+        this._poolEventBaselines = new Map();
         this.reconnectingRelays = new Set();
         this.blacklistedRelays = new Set();
         this.blacklistTimestamps = new Map();
@@ -5690,6 +5692,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     parseUrlChannel();
 
     await nym.initialize();
+    startRelayStatsSampling();
 
     // Apply group chat & PM only mode on startup (hide channels section)
     if (nym.settings.groupChatPMOnlyMode) {
@@ -6114,34 +6117,29 @@ function closeRelayStatsModal() {
     }
 })();
 
-let _rsInterval = null;
+let _rsSampleInterval = null;
+let _rsRenderInterval = null;
 
-function startRelayStatsLoop() {
-    stopRelayStatsLoop();
-
-    // Reset accumulated events counter so first sample isn't a huge spike
-    if (typeof nym !== 'undefined') {
-        nym.relayStats.eventsThisSecond = 0;
-    }
-
-    // Throughput sampling: once per second, push eventsThisSecond into history
-    _rsInterval = setInterval(() => {
+function startRelayStatsSampling() {
+    if (_rsSampleInterval) return;
+    _rsSampleInterval = setInterval(() => {
         if (typeof nym === 'undefined') return;
         const s = nym.relayStats;
         s.throughputHistory.push(s.eventsThisSecond);
         if (s.throughputHistory.length > 60) s.throughputHistory.shift();
         s.eventsThisSecond = 0;
-
-        // Render on each data update instead of every animation frame
-        renderRelayStats();
     }, 1000);
+}
 
-    // Initial render
+function startRelayStatsLoop() {
+    startRelayStatsSampling();
+    if (_rsRenderInterval) clearInterval(_rsRenderInterval);
+    _rsRenderInterval = setInterval(renderRelayStats, 1000);
     renderRelayStats();
 }
 
 function stopRelayStatsLoop() {
-    if (_rsInterval) { clearInterval(_rsInterval); _rsInterval = null; }
+    if (_rsRenderInterval) { clearInterval(_rsRenderInterval); _rsRenderInterval = null; }
 }
 
 function formatBytes(b) {
