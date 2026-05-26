@@ -1567,6 +1567,7 @@ Object.assign(NYM.prototype, {
         this.poolConnectedRelays = [];
         this.poolReady = false;
         this.relayPool.clear();
+        if (this._poolRelayLastSeen) this._poolRelayLastSeen.clear();
         this._poolReconnecting = false;
         this._poolReconnectRetries = 0;
 
@@ -2148,26 +2149,63 @@ Object.assign(NYM.prototype, {
 
     // Merge POOL:STATUS from all workers into unified state
     _mergePoolStatus() {
-        const allConnected = [];
+        const allConnected = new Set();
         for (const p of this.poolSockets) {
             if (p.connectedRelays) {
-                allConnected.push(...p.connectedRelays);
+                for (const url of p.connectedRelays) allConnected.add(url);
             }
         }
-        this.poolConnectedRelays = [...new Set(allConnected)];
+        this.poolConnectedRelays = [...allConnected];
 
-        // Sync relayPool map for UI status tracking
-        this.relayPool.clear();
-        for (const url of this.poolConnectedRelays) {
-            this.relayPool.set(url, {
-                ws: this.poolSocket,
-                type: 'relay',
-                status: 'connected',
-                connectedAt: Date.now()
-            });
+        if (!this._poolRelayLastSeen) this._poolRelayLastSeen = new Map();
+        const now = Date.now();
+        const graceMs = 15000;
+
+        for (const url of allConnected) {
+            this._poolRelayLastSeen.set(url, now);
         }
-        this.updateConnectionStatus();
 
+        // Anything seen within the grace window stays in the pool map as
+        // either connected (in allConnected) or recently-disconnected.
+        for (const url of [...this._poolRelayLastSeen.keys()]) {
+            const lastSeen = this._poolRelayLastSeen.get(url);
+            const stillConnected = allConnected.has(url);
+            if (!stillConnected && (now - lastSeen) > graceMs) {
+                this._poolRelayLastSeen.delete(url);
+                this.relayPool.delete(url);
+                continue;
+            }
+            const existing = this.relayPool.get(url);
+            if (stillConnected) {
+                if (existing) {
+                    existing.status = 'connected';
+                } else {
+                    this.relayPool.set(url, {
+                        ws: this.poolSocket,
+                        type: 'relay',
+                        status: 'connected',
+                        connectedAt: now
+                    });
+                }
+            } else if (existing) {
+                existing.status = 'reconnecting';
+            }
+        }
+
+        // Anything in relayPool that isn't tracked any more (e.g. switched
+        // out of pool mode) gets cleaned up.
+        for (const url of [...this.relayPool.keys()]) {
+            if (!this._poolRelayLastSeen.has(url)) {
+                const entry = this.relayPool.get(url);
+                // Direct-mode entries have a ws other than the pool socket;
+                // leave those alone.
+                if (entry && entry.type === 'relay' && entry.ws === this.poolSocket) {
+                    this.relayPool.delete(url);
+                }
+            }
+        }
+
+        this.updateConnectionStatus();
     },
 
     // Keep legacy this.poolSocket pointing to first open socket for external compat
@@ -2444,7 +2482,13 @@ Object.assign(NYM.prototype, {
         const zapFilter = this._buildZapReceiptFilter();
         if (zapFilter) filters.push(zapFilter);
         if (this.pubkey) {
-            filters.push({ kinds: [9735], "#p": [this.pubkey], since: since24h, limit: 200 });
+            filters.push({
+                kinds: [9735],
+                "#p": [this.pubkey],
+                "#k": ["20000", "23333", "1059", "0"],
+                since: since24h,
+                limit: 200
+            });
         }
 
         // Less critical — anything past position 9 is bundled into a single sub upstream

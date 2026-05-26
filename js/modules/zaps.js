@@ -604,6 +604,10 @@ Object.assign(NYM.prototype, {
                     originalKind = String(this.channelWire(this.currentGeohash).kind);
                 }
                 zapRequest.tags.push(['k', originalKind]);
+            } else {
+                // Profile zap: tag k=0 so the receipt can be filtered by the
+                // recipient's broad #k subscription alongside message zaps.
+                zapRequest.tags.push(['k', '0']);
             }
 
             // Sign the request
@@ -881,7 +885,15 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        if (!eTag || !boltTag) return;
+        if (!boltTag) return;
+
+        // Profile zap (no e tag): if it's tagged to us, notify and exit.
+        if (!eTag) {
+            if (pTag && pTag[1] === this.pubkey) {
+                this._handleIncomingProfileZap(event, descriptionTag, boltTag);
+            }
+            return;
+        }
 
         const messageId = eTag[1];
         const bolt11 = boltTag[1];
@@ -900,9 +912,14 @@ Object.assign(NYM.prototype, {
                         zapperPubkey = zapRequest.pubkey;
                     }
 
-                    // Optional: Verify the k tag to ensure it's for supported kinds
+                    // Verify the k tag is for one of our supported kinds. If
+                    // missing, fall through (legacy compat) but only display
+                    // if we actually have the message in storage.
                     const kTag = zapRequest.tags?.find(t => t[0] === 'k');
                     if (kTag && !['20000', '23333', '1059'].includes(kTag[1])) {
+                        return;
+                    }
+                    if (!kTag && !this._messageIdKnown(messageId)) {
                         return;
                     }
                 } catch (e) {
@@ -946,6 +963,57 @@ Object.assign(NYM.prototype, {
                 this._notifyZapToOurMessage(messageId, amount, zapperPubkey, event);
             }
         }
+    },
+
+    _messageIdKnown(messageId) {
+        if (!messageId) return false;
+        for (const msgs of this.messages.values()) {
+            if (msgs.some(m => m.id === messageId)) return true;
+        }
+        if (this.pmMessages) {
+            for (const msgs of this.pmMessages.values()) {
+                if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) return true;
+            }
+        }
+        return false;
+    },
+
+    _handleIncomingProfileZap(event, descriptionTag, boltTag) {
+        if (!this._profileZapReceipts) this._profileZapReceipts = new Set();
+        if (this._profileZapReceipts.has(event.id)) return;
+        this._profileZapReceipts.add(event.id);
+
+        const amount = this.parseAmountFromBolt11(boltTag[1]);
+        if (!amount) return;
+
+        let zapperPubkey = event.pubkey;
+        if (descriptionTag) {
+            try {
+                const zapRequest = JSON.parse(descriptionTag[1]);
+                if (zapRequest.pubkey) zapperPubkey = zapRequest.pubkey;
+                // If the zap request explicitly tagged a non-profile kind,
+                // ignore — this isn't actually a profile zap.
+                const kTag = zapRequest.tags?.find(t => t[0] === 'k');
+                if (kTag && kTag[1] !== '0') return;
+            } catch (_) { }
+        }
+        if (zapperPubkey === this.pubkey) return;
+
+        const zapperNym = this.getNymFromPubkey(zapperPubkey);
+        const ts = (event && event.created_at ? event.created_at * 1000 : Date.now());
+        const sats = this.abbreviateNumber ? this.abbreviateNumber(amount) : String(amount);
+        const body = `⚡ zapped ${sats} sats to your profile`;
+        const channelInfo = {
+            type: 'reaction',
+            id: event.id,
+            eventId: event.id,
+            pubkey: zapperPubkey,
+            sourceType: 'pm',
+            sourcePubkey: zapperPubkey
+        };
+        const isHistorical = (Date.now() - ts) > 10000;
+        if (isHistorical) this._addNotificationToHistory(zapperNym, body, channelInfo, ts);
+        else this.showNotification(zapperNym, body, channelInfo, ts);
     },
 
     _notifyZapToOurMessage(messageId, amount, zapperPubkey, event) {
@@ -1010,9 +1078,38 @@ Object.assign(NYM.prototype, {
         const body = msgPreview
             ? `⚡ zapped ${sats} sats to: "${msgPreview}"`
             : `⚡ zapped ${sats} sats to your message`;
+
+        // Tag the notification so the modal can re-render the body with the
+        // actual message text once it arrives (e.g. if the zapped message
+        // isn't in local storage yet).
+        channelInfo.zapMessageId = messageId;
+        channelInfo.zapSats = sats;
+
+        if (!msgPreview) this._fetchZappedMessage(messageId);
+
         const isHistorical = (Date.now() - ts) > 10000;
         if (isHistorical) this._addNotificationToHistory(zapperNym, body, channelInfo, ts);
         else this.showNotification(zapperNym, body, channelInfo, ts);
+    },
+
+    // Best-effort fetch of a zapped message we don't have yet. Stored events
+    // flow back through handleRelayMessage → displayMessage → this.messages,
+    // and the notifications modal re-reads message text at render time.
+    _fetchZappedMessage(messageId) {
+        if (!messageId || !/^[0-9a-f]{64}$/i.test(messageId)) return;
+        if (!this._zapFetchInflight) this._zapFetchInflight = new Set();
+        if (this._zapFetchInflight.has(messageId)) return;
+        this._zapFetchInflight.add(messageId);
+        try {
+            const subId = 'zap-msg-' + Math.random().toString(36).slice(2, 9);
+            this.sendToRelay(["REQ", subId, { ids: [messageId], limit: 1 }]);
+            setTimeout(() => {
+                try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+                this._zapFetchInflight.delete(messageId);
+            }, 10000);
+        } catch (_) {
+            this._zapFetchInflight.delete(messageId);
+        }
     },
 
     // Parse amount from bolt11 invoice

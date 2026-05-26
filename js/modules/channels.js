@@ -911,6 +911,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.clearQuoteReply();
         if (this.pendingEdit) this.cancelEditMessage();
 
+        // Close the mobile sidebar as soon as the switch is committed so the
+        // UI feels responsive even while the channel loads. Anything that
+        // throws later won't leave the sidebar stuck open.
+        if (window.innerWidth <= 768) {
+            this.closeSidebar();
+        }
+
         // Track navigation history
         this._pushNavigation({ type: 'channel', channel, geohash });
 
@@ -1010,11 +1017,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.hideChannelAutocomplete();
         this.hideEmojiAutocomplete();
         this._focusMessageInput();
-
-        // Close mobile sidebar on mobile
-        if (window.innerWidth <= 768) {
-            this.closeSidebar();
-        }
     },
 
     _focusMessageInput() {

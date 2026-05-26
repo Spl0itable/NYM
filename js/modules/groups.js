@@ -2245,6 +2245,11 @@ Object.assign(NYM.prototype, {
         this.userScrolledUp = false;
         if (this.pendingEdit) this.cancelEditMessage();
 
+        // Close the mobile sidebar as soon as the switch is committed.
+        if (window.innerWidth <= 768) {
+            this.closeSidebar();
+        }
+
         // Track navigation history
         this._pushNavigation({ type: 'group', groupId });
 
@@ -2294,8 +2299,6 @@ Object.assign(NYM.prototype, {
         this.hideChannelAutocomplete();
         this.hideEmojiAutocomplete();
         this._focusMessageInput();
-
-        if (window.innerWidth <= 768) this.closeSidebar();
     },
 
     // Bubble a group item to the top of the PM list

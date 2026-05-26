@@ -59,13 +59,25 @@ Object.assign(NYM.prototype, {
         return (createdAtSec || 0) * 1000;
     },
 
-    // Chronological message comparator. The 'ms' tag is primary so NYM-stamped
-    // events sort with sub-second precision; _messageMs falls back to
-    // created_at*1000 for events without the tag (bitchat, other clients).
-    // _seq breaks ties when the resolved millisecond value is identical.
+    // True only when the message has an authentic sub-second 'ms' tag
+    // (not the floor-to-second fallback _extractEventMs synthesises).
+    _hasRealMsTag(m) {
+        if (!m || !Number.isFinite(m._ms) || m._ms <= 0) return false;
+        const base = (m.created_at || 0) * 1000;
+        return m._ms > base;
+    },
+
+    // Compare by created_at seconds first so cross-client ordering can't be
+    // flipped by one peer's missing 'ms' tag. Only use sub-second 'ms' when
+    // both messages carry a real tag; otherwise tie-break by arrival seq.
     _compareMessages(a, b) {
-        const dm = this._messageMs(a) - this._messageMs(b);
-        if (dm !== 0) return dm;
+        const sa = a.created_at || 0;
+        const sb = b.created_at || 0;
+        if (sa !== sb) return sa - sb;
+        if (this._hasRealMsTag(a) && this._hasRealMsTag(b)) {
+            const dm = a._ms - b._ms;
+            if (dm !== 0) return dm;
+        }
         return (a._seq || 0) - (b._seq || 0);
     },
 
@@ -467,6 +479,12 @@ Object.assign(NYM.prototype, {
                 const messages = this.messages.get(storageKey);
                 if (messages && messages.length > this.channelMessageLimit) {
                     this.messages.set(storageKey, messages.slice(-this.channelMessageLimit));
+                }
+
+                // If a zap notification is waiting for this message's text,
+                // refresh the modal so the body shows the actual content.
+                if (typeof this._maybeRefreshZapNotif === 'function') {
+                    this._maybeRefreshZapNotif(message.id);
                 }
 
                 // Persist to IndexedDB (debounced) so this channel's
@@ -971,29 +989,48 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Insert in chronological order using the same key the in-memory
-        // comparator uses: 'ms' tag (falling back to created_at*1000 when the
-        // tag is missing), then _seq as a final tiebreaker.
-        {
-            const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
-            const msgMs = this._messageMs(message);
+        // Insert in chronological order. During bulk render the caller has
+        // already sorted the list and renders in order, so just append —
+        // a per-message querySelectorAll would make bulk render O(N²).
+        if (this._bulkAppending) {
+            (this._bulkContainer || container).appendChild(messageEl);
+        } else {
+            const msgCreatedAt = message.created_at || 0;
+            const msgHasMs = this._hasRealMsTag(message);
+            const msgMs = msgHasMs ? message._ms : 0;
             const msgSeq = message._seq || 0;
 
+            // Walk from the end (newest) backwards — most inserts are newer
+            // than what's currently rendered, so we exit after one comparison.
             let insertBefore = null;
-            for (const existing of existingMessages) {
-                const existingCreatedAt = parseInt(existing.dataset.createdAt) || 0;
-                const existingMs = parseInt(existing.dataset.ms) || (existingCreatedAt * 1000);
-                if (msgMs < existingMs) {
-                    insertBefore = existing;
-                    break;
+            let cursor = container.lastElementChild;
+            while (cursor) {
+                if (!cursor.dataset || cursor.dataset.createdAt === undefined) {
+                    cursor = cursor.previousElementSibling;
+                    continue;
                 }
-                if (msgMs === existingMs) {
-                    const existingSeq = parseInt(existing.dataset.seq) || 0;
-                    if (msgSeq < existingSeq) {
-                        insertBefore = existing;
-                        break;
+                const existingCreatedAt = parseInt(cursor.dataset.createdAt) || 0;
+                if (msgCreatedAt > existingCreatedAt) break;
+                if (msgCreatedAt < existingCreatedAt) {
+                    insertBefore = cursor;
+                    cursor = cursor.previousElementSibling;
+                    continue;
+                }
+                // Same second
+                const existingMsRaw = parseInt(cursor.dataset.ms) || 0;
+                const existingHasMs = existingMsRaw > existingCreatedAt * 1000;
+                if (msgHasMs && existingHasMs) {
+                    if (msgMs > existingMsRaw) break;
+                    if (msgMs < existingMsRaw) {
+                        insertBefore = cursor;
+                        cursor = cursor.previousElementSibling;
+                        continue;
                     }
                 }
+                const existingSeq = parseInt(cursor.dataset.seq) || 0;
+                if (msgSeq >= existingSeq) break;
+                insertBefore = cursor;
+                cursor = cursor.previousElementSibling;
             }
 
             if (insertBefore && insertBefore.parentNode) {
@@ -1036,7 +1073,10 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        {
+        // Skip per-insert DOM prune during bulk render — the caller already
+        // limits to channelPageSize, and scanning the whole DOM after every
+        // insert makes channel switching quadratic.
+        if (!this._bulkAppending) {
             const domMessages = container.querySelectorAll('[data-message-id]');
             const domLimit = message.isPM ? this.pmStorageLimit : this.channelMessageLimit;
             if (domMessages.length > domLimit) {
@@ -2558,20 +2598,36 @@ Object.assign(NYM.prototype, {
 
     cacheCurrentContainerDOM() {
         const container = document.getElementById('messagesContainer');
+        if (!container) return;
         const previousKey = container.dataset.lastChannel;
         if (!previousKey || container.children.length === 0) return;
+
+        // Track the IDs in DOM order so we can locate the cached slice in the
+        // current message array on restore — robust against storage truncation,
+        // filter changes, and dedup events.
+        const renderedIds = [];
+        const domMsgs = container.querySelectorAll('[data-message-id]');
+        for (let i = 0; i < domMsgs.length; i++) {
+            const id = domMsgs[i].dataset.messageId;
+            if (id) renderedIds.push(id);
+        }
+        if (renderedIds.length === 0) return;
 
         const fragment = document.createDocumentFragment();
         while (container.firstChild) {
             fragment.appendChild(container.firstChild);
         }
 
-        // Get message count and fingerprint for cache invalidation
-        const messages = this.messages.get(previousKey) || this.pmMessages.get(previousKey) || [];
+        const isPM = container.dataset.virtualScrollIsPM === 'true';
+        const renderedStart = isPM
+            ? this.pmRenderedStart.get(previousKey)
+            : this.channelRenderedStart.get(previousKey);
+
         this.channelDOMCache.set(previousKey, {
             fragment,
-            messageCount: messages.length,
-            messageFingerprint: this._computeMessageFingerprint(messages),
+            renderedIds,
+            isPM,
+            renderedStart: (typeof renderedStart === 'number') ? renderedStart : null,
             virtualScrollState: {
                 currentStartIndex: this.virtualScroll.currentStartIndex,
                 currentEndIndex: this.virtualScroll.currentEndIndex
@@ -2724,11 +2780,12 @@ Object.assign(NYM.prototype, {
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = storageKey;
 
-        // Try to restore from cache
-        const channelMessages = this.messages.get(storageKey) || [];
+        // Try to restore from cache (compare against filtered set so cached
+        // fragment and current visible set stay aligned)
+        const filteredMessages = this.getFilteredMessages(storageKey);
         const cached = this.channelDOMCache.get(storageKey);
 
-        if (cached && this._tryRestoreCachedDOM(container, cached, storageKey, channelMessages, false)) {
+        if (cached && this._tryRestoreCachedDOM(container, cached, storageKey, filteredMessages, false)) {
             return;
         }
 
@@ -2736,7 +2793,7 @@ Object.assign(NYM.prototype, {
         this.channelDOMCache.delete(storageKey);
         container.innerHTML = '';
 
-        if (channelMessages.length === 0) {
+        if (filteredMessages.length === 0) {
             this.displaySystemMessage(`Joined ${displayName}`);
             this.renderChannelPolls();
             return;
@@ -2751,16 +2808,29 @@ Object.assign(NYM.prototype, {
 
     // Restore a cached DOM fragment into the container
     _tryRestoreCachedDOM(container, cached, storageKey, currentMessages, isPM) {
-        const cachedCount = cached.messageCount || 0;
-        const currentLen = currentMessages.length;
+        const renderedIds = cached.renderedIds;
+        if (!Array.isArray(renderedIds) || renderedIds.length === 0) return false;
 
-        if (cachedCount > currentLen) return false;
+        // Find where the cached fragment's last message lives in the current
+        // (filtered) array. If it's missing, the cache is stale.
+        const lastId = renderedIds[renderedIds.length - 1];
+        let lastIdx = -1;
+        for (let i = currentMessages.length - 1; i >= 0; i--) {
+            const m = currentMessages[i];
+            const id = (m.isPM && m.nymMessageId) ? m.nymMessageId : m.id;
+            if (id === lastId) { lastIdx = i; break; }
+        }
+        if (lastIdx === -1) return false;
 
-        const compareList = cachedCount === currentLen
-            ? currentMessages
-            : currentMessages.slice(0, cachedCount);
-        const compareFp = this._computeMessageFingerprint(compareList);
-        if (compareFp !== cached.messageFingerprint) return false;
+        // The cached fragment must still represent a contiguous tail of the
+        // current array — check that the first cached id is also still
+        // present at the expected offset.
+        const firstId = renderedIds[0];
+        const firstExpectedIdx = lastIdx - renderedIds.length + 1;
+        if (firstExpectedIdx < 0) return false;
+        const firstMsg = currentMessages[firstExpectedIdx];
+        const firstMsgId = firstMsg && ((firstMsg.isPM && firstMsg.nymMessageId) ? firstMsg.nymMessageId : firstMsg.id);
+        if (firstMsgId !== firstId) return false;
 
         container.innerHTML = '';
         container.appendChild(cached.fragment);
@@ -2773,15 +2843,25 @@ Object.assign(NYM.prototype, {
         container.dataset.virtualScrollKey = storageKey;
         container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
 
+        // Keep the renderedStart map in sync so loadOlderXxxMessages doesn't
+        // run off a stale offset.
+        if (isPM) {
+            this.pmRenderedStart.set(storageKey, firstExpectedIdx);
+        } else {
+            this.channelRenderedStart.set(storageKey, firstExpectedIdx);
+        }
+
         // Partial hit: render trailing messages that arrived while we were away.
-        if (cachedCount < currentLen) {
-            const trailing = currentMessages.slice(cachedCount);
+        const trailing = currentMessages.slice(lastIdx + 1);
+        if (trailing.length > 0) {
             this.virtualScroll.suppressAutoScroll = true;
             this._suppressSound = true;
             this._suppressBubbleRewrap = true;
+            this._bulkAppending = true;
             for (let i = 0; i < trailing.length; i++) {
                 this.displayMessage(trailing[i]);
             }
+            this._bulkAppending = false;
             this._suppressSound = false;
             this._suppressBubbleRewrap = false;
             this.virtualScroll.suppressAutoScroll = false;
@@ -2864,11 +2944,13 @@ Object.assign(NYM.prototype, {
         // (e.g. when opening a conversation) to avoid replaying sounds
         this._suppressSound = true;
         this._suppressBubbleRewrap = true;
+        this._bulkAppending = true;
 
         for (let i = 0; i < renderMessages.length; i++) {
             this.displayMessage(renderMessages[i]);
         }
 
+        this._bulkAppending = false;
         this._suppressSound = false;
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
@@ -2917,14 +2999,21 @@ Object.assign(NYM.prototype, {
         this.virtualScroll.suppressAutoScroll = true;
         this._suppressSound = true;
         this._suppressBubbleRewrap = true;
+        const frag = document.createDocumentFragment();
+        this._bulkContainer = frag;
+        this._bulkAppending = true;
 
         for (let i = 0; i < olderMessages.length; i++) {
             this.displayMessage(olderMessages[i]);
         }
 
+        this._bulkAppending = false;
+        this._bulkContainer = null;
         this._suppressSound = false;
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
+
+        container.insertBefore(frag, container.firstChild);
 
         if (newStart === 0 && !container.querySelector('.channel-history-limit')) {
             const notice = document.createElement('div');

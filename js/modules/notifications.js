@@ -36,15 +36,20 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        // viewed compares against when WE received the notification, not the
+        // event's created_at — otherwise a delayed event with an older
+        // created_at would be auto-marked viewed after the modal was opened.
+        const receivedAt = Date.now();
         this.notificationHistory.push({
             title: titleToShow,
             body: body,
             channelInfo: channelInfo,
             timestamp: ts,
+            receivedAt,
             senderNym: baseTitle,
             senderPubkey: channelInfo?.pubkey || '',
             eventId: eventId || undefined,
-            viewed: ts <= (this.notificationLastReadTime || 0)
+            viewed: receivedAt <= (this.notificationLastReadTime || 0)
         });
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
@@ -129,15 +134,17 @@ Object.assign(NYM.prototype, {
             return false;
         });
         if (isDupe) return;
+        const receivedAt = Date.now();
         this.notificationHistory.push({
             title: titleToShow,
             body: body,
             channelInfo: channelInfo,
             timestamp: ts,
+            receivedAt,
             senderNym: baseTitle,
             senderPubkey: channelInfo?.pubkey || '',
             eventId: eventId || undefined,
-            viewed: ts <= (this.notificationLastReadTime || 0)
+            viewed: receivedAt <= (this.notificationLastReadTime || 0)
         });
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
@@ -157,6 +164,44 @@ Object.assign(NYM.prototype, {
             this.openNotificationsModal();
             this.notificationLastReadTime = wasReadTs;
         }, 150);
+    },
+
+    // Called when a message lands in storage. If an open zap notification was
+    // waiting for that messageId's text, re-render the modal so it shows.
+    _maybeRefreshZapNotif(messageId) {
+        if (!messageId || !this.notificationHistory) return;
+        const matches = this.notificationHistory.some(n =>
+            n && n.channelInfo && n.channelInfo.zapMessageId === messageId);
+        if (!matches) return;
+        if (typeof this._refreshNotificationsModalIfOpen === 'function') {
+            this._refreshNotificationsModalIfOpen();
+        }
+    },
+
+    // Look up the zapped message text fresh from storage and build the
+    // enriched body. Returns null if the message still isn't available.
+    _enrichZapBody(messageId, sats) {
+        if (!messageId || !sats) return null;
+        let content = '';
+        const msgEl = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+        if (msgEl) content = msgEl.dataset.rawContent || '';
+        if (!content) {
+            for (const msgs of this.messages.values()) {
+                const found = msgs.find(m => m.id === messageId);
+                if (found) { content = found.content || ''; break; }
+            }
+        }
+        if (!content && this.pmMessages) {
+            for (const msgs of this.pmMessages.values()) {
+                const found = msgs.find(m => m.id === messageId || m.nymMessageId === messageId);
+                if (found) { content = found.content || ''; break; }
+            }
+        }
+        if (!content) return null;
+        let preview = content.split('\n').filter(l => !l.startsWith('>')).join(' ').trim();
+        if (!preview) return null;
+        if (preview.length > 80) preview = preview.slice(0, 80) + '…';
+        return `⚡ zapped ${sats} sats to: "${preview}"`;
     },
 
     _loadNotificationHistory() {
@@ -203,10 +248,13 @@ Object.assign(NYM.prototype, {
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         const unreadCount = this.notificationHistory.filter(n => {
             if (n.timestamp <= cutoff24h) return false;
-            // Treat as read if either the per-item viewed flag is set or the
-            // legacy bulk read marker covers it (kept for backwards compat).
+            // Treat as read if the per-item viewed flag is set. Use
+            // receivedAt (when we observed it) — not the event's created_at —
+            // for the legacy bulk-read fallback so delayed events with old
+            // timestamps don't auto-clear the badge.
             if (n.viewed) return false;
-            if (n.timestamp <= (this.notificationLastReadTime || 0)) return false;
+            const observedAt = n.receivedAt || n.timestamp || 0;
+            if (observedAt <= (this.notificationLastReadTime || 0)) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
             return true;
@@ -318,7 +366,15 @@ Object.assign(NYM.prototype, {
                 }
 
                 // Strip quoted lines (> prefixed) to show only the new message
-                const rawBody = n.body || '';
+                let rawBody = n.body || '';
+
+                // If this is a zap notification and the original message is
+                // now in storage, re-render the body with the actual text.
+                if (n.channelInfo && n.channelInfo.zapMessageId) {
+                    const enriched = this._enrichZapBody(n.channelInfo.zapMessageId, n.channelInfo.zapSats);
+                    if (enriched) rawBody = enriched;
+                }
+
                 const newMessageLines = rawBody.split('\n').filter(line => !line.startsWith('>'));
                 const displayBody = newMessageLines.join(' ').replace(/\s+/g, ' ').trim().slice(0, 200);
 

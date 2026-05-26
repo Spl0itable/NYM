@@ -3539,7 +3539,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.400';
+const NYMCHAT_VERSION = 'v3.66.401';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4951,12 +4951,17 @@ async function applyNostrSettingsAdditive(s) {
                 }
                 const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
                 if (pk && nym.blockedUsers && nym.blockedUsers.has(pk)) continue;
-                const viewedFromLastRead = n.timestamp <= (nym.notificationLastReadTime || 0);
+                // Use receivedAt when present (set on the device that observed
+                // the notification) so synced notifications keep their original
+                // unread status. Fall back to timestamp for legacy entries.
+                const observedAt = (typeof n.receivedAt === 'number' && n.receivedAt > 0) ? n.receivedAt : n.timestamp;
+                const viewedFromLastRead = observedAt <= (nym.notificationLastReadTime || 0);
                 nym.notificationHistory.push({
                     title: n.title || '',
                     body: n.body || '',
                     channelInfo: n.channelInfo || null,
                     timestamp: n.timestamp,
+                    receivedAt: observedAt,
                     senderNym: n.senderNym || '',
                     senderPubkey: pk,
                     eventId: n.eventId || n.channelInfo?.eventId || undefined,
@@ -6314,17 +6319,21 @@ function renderRelayList(pool, stats) {
     const listEl = document.getElementById('rsRelayList');
     if (!listEl) return;
 
-    // Build sorted relay entries (no type labels - all relays are read/write)
     const entries = [];
 
     if (typeof nym !== 'undefined' && nym.useRelayProxy && nym._isAnyPoolOpen()) {
-        // Pool mode: only show actually connected relays
+        // Pool mode: render every known relay (connected + recently-seen) so
+        // a single shard hiccup doesn't make rows disappear and reappear.
         const connectedSet = new Set(nym.poolConnectedRelays);
-        connectedSet.forEach(url => {
+        const known = new Set([...connectedSet]);
+        if (nym._poolRelayLastSeen) {
+            nym._poolRelayLastSeen.forEach((_, url) => known.add(url));
+        }
+        known.forEach(url => {
             if (url === 'relay-pool') return;
             entries.push({
                 url,
-                open: true,
+                open: connectedSet.has(url),
                 events: stats.eventsPerRelay.get(url) || 0,
                 latency: stats.latencyPerRelay.get(url) || null
             });
@@ -6341,7 +6350,6 @@ function renderRelayList(pool, stats) {
         });
     }
 
-    // Sort: connected first, then by events descending
     entries.sort((a, b) => {
         if (a.open !== b.open) return a.open ? -1 : 1;
         return b.events - a.events;
@@ -6352,31 +6360,45 @@ function renderRelayList(pool, stats) {
         return;
     }
 
-    // Only rebuild DOM if count changed; otherwise update in-place for performance
-    const existing = listEl.querySelectorAll('.relay-stats-row');
-    if (existing.length !== entries.length) {
-        let html = '';
-        entries.forEach((e, i) => {
-            const shortUrl = e.url.replace('wss://', '').replace('ws://', '');
-            html += `<div class="relay-stats-row" data-rs-idx="${i}">` +
+    const existing = new Map();
+    listEl.querySelectorAll('.relay-stats-row').forEach(row => {
+        const url = row.dataset.rsUrl;
+        if (url) existing.set(url, row);
+    });
+
+    const seen = new Set();
+    let prevRow = null;
+    entries.forEach(e => {
+        seen.add(e.url);
+        let row = existing.get(e.url);
+        const shortUrl = e.url.replace('wss://', '').replace('ws://', '');
+        if (!row) {
+            row = document.createElement('div');
+            row.className = 'relay-stats-row';
+            row.dataset.rsUrl = e.url;
+            row.innerHTML =
                 `<span class="relay-stats-dot ${e.open ? 'open' : 'closed'}"></span>` +
                 `<span class="relay-stats-url" title="${nym.escapeHtml(e.url)}">${nym.escapeHtml(shortUrl)}</span>` +
                 `<span class="relay-stats-latency">${e.latency !== null ? e.latency + 'ms' : '--'}</span>` +
-                `<span class="relay-stats-events">${e.events} evt</span>` +
-                `</div>`;
-        });
-        listEl.innerHTML = html;
-    } else {
-        // Update in-place
-        entries.forEach((e, i) => {
-            const row = existing[i];
-            if (!row) return;
+                `<span class="relay-stats-events">${e.events} evt</span>`;
+        } else {
             const dot = row.querySelector('.relay-stats-dot');
-            if (dot) { dot.className = `relay-stats-dot ${e.open ? 'open' : 'closed'}`; }
+            if (dot) dot.className = `relay-stats-dot ${e.open ? 'open' : 'closed'}`;
             const evtEl = row.querySelector('.relay-stats-events');
             if (evtEl) evtEl.textContent = e.events + ' evt';
             const latEl = row.querySelector('.relay-stats-latency');
             if (latEl) latEl.textContent = e.latency !== null ? e.latency + 'ms' : '--';
-        });
-    }
+        }
+        // Move into the correct sort position
+        if (prevRow) {
+            if (prevRow.nextElementSibling !== row) {
+                prevRow.parentNode.insertBefore(row, prevRow.nextElementSibling);
+            }
+        } else if (listEl.firstElementChild !== row) {
+            listEl.insertBefore(row, listEl.firstElementChild);
+        }
+        prevRow = row;
+    });
+
+    existing.forEach((row, url) => { if (!seen.has(url)) row.remove(); });
 }

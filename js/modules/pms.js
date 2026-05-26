@@ -2044,6 +2044,12 @@ Object.assign(NYM.prototype, {
         this.userScrolledUp = false;
         if (this.pendingEdit) this.cancelEditMessage();
 
+        // Close the mobile sidebar as soon as the switch is committed so the
+        // UI feels responsive even while messages load.
+        if (window.innerWidth <= 768) {
+            this.closeSidebar();
+        }
+
         // Pull a fresh kind 0 so the header/sidebar reflect any profile
         // updates the contact has published since we last fetched.
         if (typeof this.refreshUserProfileThrottled === 'function') {
@@ -2133,11 +2139,6 @@ Object.assign(NYM.prototype, {
         this.hideChannelAutocomplete();
         this.hideEmojiAutocomplete();
         this._focusMessageInput();
-
-        // Close mobile sidebar on mobile
-        if (window.innerWidth <= 768) {
-            this.closeSidebar();
-        }
     },
 
     loadPMMessages(conversationKey, skipBotWelcome = false) {
@@ -2158,19 +2159,17 @@ Object.assign(NYM.prototype, {
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = conversationKey;
 
-        // Try to restore from DOM cache
-        const pmMessages = this.pmMessages.get(conversationKey) || [];
+        // Try to restore from DOM cache (compare against filtered set so the
+        // cached fragment and the current visible set stay aligned)
+        const filteredMessages = this.getFilteredPMMessages(conversationKey);
         const cached = this.channelDOMCache.get(conversationKey);
 
-        if (cached && this._tryRestoreCachedDOM(container, cached, conversationKey, pmMessages, true)) {
+        if (cached && this._tryRestoreCachedDOM(container, cached, conversationKey, filteredMessages, true)) {
             return;
         }
 
         // Cache miss or stale - render fresh
         this.channelDOMCache.delete(conversationKey);
-
-        // Get filtered messages
-        const filteredMessages = this.getFilteredPMMessages(conversationKey);
 
         if (filteredMessages.length === 0) {
             container.innerHTML = '';
@@ -2679,14 +2678,21 @@ Object.assign(NYM.prototype, {
         this.virtualScroll.suppressAutoScroll = true;
         this._suppressSound = true;
         this._suppressBubbleRewrap = true;
+        const frag = document.createDocumentFragment();
+        this._bulkContainer = frag;
+        this._bulkAppending = true;
 
         for (let i = 0; i < olderMessages.length; i++) {
             this.displayMessage(olderMessages[i]);
         }
 
+        this._bulkAppending = false;
+        this._bulkContainer = null;
         this._suppressSound = false;
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
+
+        container.insertBefore(frag, container.firstChild);
 
         if (newStart === 0 && !container.querySelector('.pm-history-start')) {
             const topNotice = document.createElement('div');
