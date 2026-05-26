@@ -651,7 +651,7 @@ Object.assign(NYM.prototype, {
                 if (c >= 65 && c <= 90) interiorUpper++;
             }
             const interiorUpperRatio = interiorUpper / (token.length - 1);
-            if (interiorUpperRatio >= 0.2) return true;
+            if (interiorUpper >= 3 && interiorUpperRatio >= 0.3) return true;
         }
 
         return false;
@@ -698,10 +698,11 @@ Object.assign(NYM.prototype, {
         const lower = token.toLowerCase();
         const hasDigit = /[0-9]/.test(token);
         if (hasDigit && /[A-Za-z]/.test(token)) score += 1;
-        if (/[A-Z]/.test(token.substring(1))) score += 1;
-        if (/[a-z][A-Z]/.test(token)) score += 1;
+        const interiorUpper = (token.substring(1).match(/[A-Z]/g) || []).length;
+        if (interiorUpper >= 3) score += 1;
         const vowelCount = (lower.match(/[aeiou]/g) || []).length;
-        if (vowelCount / token.length <= 0.2) score += 1;
+        const vowelRatio = vowelCount / token.length;
+        if (vowelRatio <= 0.2) score += 1;
         // 'q' in English is almost always followed by 'u'; violating that is a strong tell
         if (/q(?!u)/i.test(token)) score += 2;
         let rare = 0;

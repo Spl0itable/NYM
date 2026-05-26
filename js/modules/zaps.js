@@ -992,13 +992,13 @@ Object.assign(NYM.prototype, {
         if (!channelInfo.sourceType) {
             for (const [key, msgs] of this.pmMessages.entries()) {
                 if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
-                    if (key.startsWith('group:')) {
+                    if (key.startsWith('group-')) {
                         channelInfo.sourceType = 'group';
-                        channelInfo.sourceGroupId = key.replace('group:', '');
-                    } else {
+                        channelInfo.sourceGroupId = key.slice(6);
+                    } else if (key.startsWith('pm-')) {
                         channelInfo.sourceType = 'pm';
-                        const parts = key.split(':');
-                        channelInfo.sourcePubkey = parts.find(p => p !== this.pubkey) || parts[0];
+                        const parts = key.slice(3).split('-');
+                        channelInfo.sourcePubkey = parts.find(p => p && p !== this.pubkey) || parts[0];
                     }
                     break;
                 }

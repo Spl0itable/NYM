@@ -3526,9 +3526,9 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.397';
+const NYMCHAT_VERSION = 'v3.66.398';
 
-function showAbout() {
+function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
     if (!modal) return;
 
@@ -3547,7 +3547,29 @@ function showAbout() {
         status.style.color = '';
     }
 
+    const typeEl = document.getElementById('aboutContactType');
+    const msgEl = document.getElementById('aboutContactMessage');
+    if (prefill && typeof prefill === 'object') {
+        if (typeEl && prefill.topic) {
+            const opt = Array.from(typeEl.options).find(o => o.value === prefill.topic);
+            if (opt) typeEl.value = prefill.topic;
+        }
+        if (msgEl && typeof prefill.message === 'string') {
+            msgEl.value = prefill.message;
+        }
+    }
+
     modal.classList.add('active');
+    if (prefill && msgEl) {
+        try { msgEl.focus(); } catch (_) { }
+    }
+}
+
+function reportSpamFalsePositive(content) {
+    const body = content
+        ? `The following message was incorrectly flagged by the spam filter:\n\n\`\`\`\n${content}\n\`\`\``
+        : 'A message was incorrectly flagged by the spam filter.';
+    showAbout({ topic: 'Spam false positive', message: body });
 }
 
 async function sendAboutContact() {

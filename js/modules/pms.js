@@ -1502,7 +1502,8 @@ Object.assign(NYM.prototype, {
         if (!found || found.store !== 'pm') return;
         if (found.msg.pubkey !== this.pubkey) return;
 
-        const peer = (found.convKey.split(':').find(p => p !== this.pubkey)) || found.convKey;
+        const convKeyBody = found.convKey.startsWith('pm-') ? found.convKey.slice(3) : found.convKey;
+        const peer = convKeyBody.split('-').find(p => p && p !== this.pubkey) || convKeyBody;
         const reactorNym = this.getNymFromPubkey(reactorPubkey);
         const eventId = (event && event.id) || (rumor && rumor.id) || '';
         const ts = (rumor && rumor.created_at ? rumor.created_at * 1000 : Date.now());
@@ -2641,14 +2642,11 @@ Object.assign(NYM.prototype, {
         const pmMessages = this.pmMessages.get(conversationKey) || [];
 
         return pmMessages.filter(msg => {
-            // Check if message has been deleted
             if (this.deletedEventIds.has(msg.id)) return false;
-            // Check if message is from blocked user
-            if (this.blockedUsers.has(msg.pubkey) || msg.blocked) return false;
-            // Check if message content or nickname matches blocked keywords
-            if (this.hasBlockedKeyword(msg.content, msg.author)) return false;
-            // Check if message content is spam
-            if (this.isSpamMessage(msg.content)) return false;
+            const isOwn = msg.pubkey === this.pubkey;
+            if (!isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
+            if (!isOwn && this.hasBlockedKeyword(msg.content, msg.author)) return false;
+            if (!isOwn && this.isSpamMessage(msg.content)) return false;
             if (msg.conversationKey !== conversationKey) return false;
             // For 1:1 PMs, restrict to the two participants. Group messages have
             // multiple senders so skip this check for them.

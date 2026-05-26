@@ -111,6 +111,7 @@ window.nymHapticTap = function (ms) {
         'showSettings':               function () { window.showSettings(); },
         'showAbout':                  function () { window.showAbout(); },
         'sendAboutContact':           function () { window.sendAboutContact(); },
+        'reportSpamFalsePositive':    function (_e, t) { window.reportSpamFalsePositive(t.dataset.spamContent || ''); },
         'signOut':                    function () { window.signOut(); },
         'openNostrLogin':             function () { window.openNostrLogin(); },
         'editNick':                   function () { window.editNick(); },

@@ -299,7 +299,7 @@ Object.assign(NYM.prototype, {
                         : this.isVerifiedBot(pubkey)
                             ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
                             : '';
-                    authorHtml = `<span class="notification-item-author" data-notif-pubkey="${this.escapeHtml(pubkey)}">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>&gt;${flairHtml} ${verifiedBadge}</span>`;
+                    authorHtml = `<span class="notification-item-author" data-notif-pubkey="${this.escapeHtml(pubkey)}"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span><span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}</span>`;
                 }
 
                 // Channel/context label
@@ -375,7 +375,7 @@ Object.assign(NYM.prototype, {
                 ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
                 : '';
         modal.querySelectorAll(`.notification-item-author[data-notif-pubkey="${this.escapeHtml(pubkey)}"]`).forEach(el => {
-            el.innerHTML = `&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>&gt;${flairHtml} ${verifiedBadge}`;
+            el.innerHTML = `<span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span><span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}`;
         });
     },
 

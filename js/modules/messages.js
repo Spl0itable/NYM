@@ -561,15 +561,18 @@ Object.assign(NYM.prototype, {
         // knows why their message disappeared (it was still sent to relays).
         const keywordHit = this.hasBlockedKeyword(message.content, message.author);
         const spamHit = this.isSpamMessage(message.content);
-        if (this.blockedUsers.has(message.pubkey) || keywordHit || spamHit) {
-            if (message.isOwn) {
-                const reason = keywordHit
-                    ? 'matched one of your blocked keywords'
-                    : spamHit
-                        ? 'was flagged by the spam filter'
-                        : 'matched a block rule';
+        if (message.isOwn) {
+            if (keywordHit || this.blockedUsers.has(message.pubkey)) {
+                const reason = keywordHit ? 'matched one of your blocked keywords' : 'matched a block rule';
                 this.displaySystemMessage(`Your message ${reason} and was hidden locally. It was still sent.`);
+                return;
             }
+            if (spamHit) {
+                const escContent = this.escapeHtml(message.content);
+                const html = `Your message was flagged by the spam filter. <button class="spam-false-positive-btn" data-action="reportSpamFalsePositive" data-spam-content="${escContent}">Report false positive</button>`;
+                this.displaySystemMessage(html, 'system', { html: true });
+            }
+        } else if (this.blockedUsers.has(message.pubkey) || keywordHit || spamHit) {
             return;
         }
 
@@ -682,7 +685,7 @@ Object.assign(NYM.prototype, {
             const baseNym = this.parseNymFromDisplay(message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk2 = this._safePubkey(message.pubkey);
-            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" loading="lazy">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -814,7 +817,7 @@ Object.assign(NYM.prototype, {
 
             messageEl.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span>&gt;</span>
+    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span></span>
     <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${editedBubble}${bubbleTime}</span>${hoverButtons}</span>
     ${editedIRC}
     ${deliveryCheckmark}
@@ -2673,7 +2676,7 @@ Object.assign(NYM.prototype, {
             if (score > bestScore) { bestScore = score; best = el; }
         }
         if (!best) {
-            this.displaySystemMessage('Original message is not in view');
+            this.displaySystemMessage('Original message is not available');
             return;
         }
         const scroller = this._getMessagesScroller ? this._getMessagesScroller() : document.getElementById('messagesScroller');
@@ -2810,14 +2813,13 @@ Object.assign(NYM.prototype, {
 
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
-            // Spam gate
             if (!msg.isOwn && !this.isFriend(msg.pubkey) &&
                 !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
                 return false;
             }
-            if (this.blockedUsers.has(msg.pubkey) || msg.blocked) return false;
-            if (this.hasBlockedKeyword(msg.content, msg.author)) return false;
-            if (this.isSpamMessage(msg.content)) return false;
+            if (!msg.isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
+            if (!msg.isOwn && this.hasBlockedKeyword(msg.content, msg.author)) return false;
+            if (!msg.isOwn && this.isSpamMessage(msg.content)) return false;
             return true;
         }).sort((a, b) => this._compareMessages(a, b));
     },

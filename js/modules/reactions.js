@@ -10,20 +10,22 @@ Object.assign(NYM.prototype, {
     },
 
     saveRecentEmojis() {
-        localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, 20)));
+        localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, 24)));
         if (typeof this._debouncedNostrSettingsSave === 'function') {
             this._debouncedNostrSettingsSave();
         }
     },
 
     addToRecentEmojis(emoji) {
-        // Remove if already exists
         this.recentEmojis = this.recentEmojis.filter(e => e !== emoji);
-        // Add to beginning
         this.recentEmojis.unshift(emoji);
-        // Keep only 20 recent
-        this.recentEmojis = this.recentEmojis.slice(0, 20);
+        this.recentEmojis = this.recentEmojis.slice(0, 24);
         this.saveRecentEmojis();
+    },
+
+    _recentEmojisForPicker() {
+        const isMobile = window.innerWidth <= 768;
+        return this.recentEmojis.slice(0, isMobile ? 20 : 24);
     },
 
     // Move reaction state from oldId to newId so reaction keys always match the
@@ -235,14 +237,13 @@ Object.assign(NYM.prototype, {
                 for (const [key, msgs] of this.pmMessages.entries()) {
                     if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
                         // Determine if this is a group PM or 1:1 PM
-                        if (key.startsWith('group:')) {
+                        if (key.startsWith('group-')) {
                             channelInfo.sourceType = 'group';
-                            channelInfo.sourceGroupId = key.replace('group:', '');
-                        } else {
+                            channelInfo.sourceGroupId = key.slice(6);
+                        } else if (key.startsWith('pm-')) {
                             channelInfo.sourceType = 'pm';
-                            // Extract the peer pubkey from the conversation key
-                            const parts = key.split(':');
-                            channelInfo.sourcePubkey = parts.find(p => p !== this.pubkey) || parts[0];
+                            const parts = key.slice(3).split('-');
+                            channelInfo.sourcePubkey = parts.find(p => p && p !== this.pubkey) || parts[0];
                         }
                         break;
                     }
@@ -579,7 +580,7 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
+            ${this._recentEmojisForPicker().map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
@@ -702,7 +703,7 @@ ${this.recentEmojis.length > 0 ? `
     <div class="emoji-section">
         <div class="emoji-section-title">Recently Used</div>
         <div class="emoji-grid">
-            ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
+            ${this._recentEmojisForPicker().map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
         </div>
     </div>
 ` : ''}
@@ -1092,7 +1093,7 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             html += `<div class="emoji-picker-section" data-category="recent">
                 <div class="emoji-picker-section-title">Recent</div>
                 <div class="emoji-picker-grid">
-                    ${this.recentEmojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
+                    ${this._recentEmojisForPicker().map(emoji => this.emojiOptionHtml(emoji, emojiToNames, "emoji-btn")).join('')}
                 </div>
             </div>`;
         }

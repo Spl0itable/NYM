@@ -863,18 +863,20 @@ export async function onRequest(context) {
             return;
           }
           info.eventCount++;
+          const relayTail = ',"' + relayUrl + '"]';
           if (childToParent.size > 0) {
             const subEnd = raw.indexOf('"', 10);
             if (subEnd !== -1) {
               const childSubId = raw.substring(10, subEnd);
               const parent = childToParent.get(childSubId);
               if (parent && parent !== childSubId) {
-                sendToClient('["EVENT","' + parent + raw.substring(subEnd));
+                const body = raw.substring(subEnd, raw.length - 1);
+                sendToClient('["EVENT","' + parent + body + relayTail);
                 return;
               }
             }
           }
-          sendToClient(raw);
+          sendToClient(raw.slice(0, -1) + relayTail);
 
         // OK: ["OK","eventId",bool,"msg"]
         } else if (raw.charCodeAt(2) === 79 && raw.startsWith('["OK"')) {

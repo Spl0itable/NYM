@@ -2082,20 +2082,8 @@ Object.assign(NYM.prototype, {
                             }
                         }
 
-                        if (status.events) {
-                            if (!this._poolEventBaselines) this._poolEventBaselines = new Map();
-                            let baseline = this._poolEventBaselines.get(poolEntry.id);
-                            if (!baseline) { baseline = new Map(); this._poolEventBaselines.set(poolEntry.id, baseline); }
-                            for (const [url, count] of Object.entries(status.events)) {
-                                const prev = baseline.get(url) || 0;
-                                const delta = count >= prev ? count - prev : count;
-                                if (delta > 0) {
-                                    const cur = this.relayStats.eventsPerRelay.get(url) || 0;
-                                    this.relayStats.eventsPerRelay.set(url, cur + delta);
-                                }
-                                baseline.set(url, count);
-                            }
-                        }
+                        // Per-relay event counts are tracked in handleRelayMessage
+                        // post-dedup so counts match the headline unique-event total.
 
                         // Merge connected relays from ALL workers
                         this._mergePoolStatus();
@@ -2784,10 +2772,6 @@ Object.assign(NYM.prototype, {
                         const dataLen = typeof event.data === 'string' ? event.data.length : (event.data.byteLength || 0);
                         this.relayStats.bytesReceived += dataLen;
                         const msg = JSON.parse(event.data);
-                        if (Array.isArray(msg) && msg[0] === 'EVENT') {
-                            const prev = this.relayStats.eventsPerRelay.get(relayUrl) || 0;
-                            this.relayStats.eventsPerRelay.set(relayUrl, prev + 1);
-                        }
                         this.handleRelayMessage(msg, relayUrl);
                     } catch (e) {
                     }
@@ -3542,23 +3526,25 @@ Object.assign(NYM.prototype, {
 
         switch (type) {
             case 'EVENT':
-                const [subscriptionId, event] = data;
+                const [subscriptionId, event, sourceRelay] = data;
 
-                // Deduplicate events by ID
                 if (event && event.id) {
                     if (this.eventDeduplication.has(event.id)) {
-                        // We've already processed this event
                         return;
                     }
 
-                    // Mark event as seen
                     this.eventDeduplication.set(event.id, true);
-
-                    // Count unique events only
                     this.relayStats.totalEvents++;
                     this.relayStats.eventsThisSecond++;
 
-                    // Clean up old events periodically (keep last 10000)
+                    const attributedRelay = (typeof sourceRelay === 'string' && sourceRelay.startsWith('wss://'))
+                        ? sourceRelay
+                        : (relayUrl && relayUrl !== 'relay-pool' ? relayUrl : null);
+                    if (attributedRelay) {
+                        const cur = this.relayStats.eventsPerRelay.get(attributedRelay) || 0;
+                        this.relayStats.eventsPerRelay.set(attributedRelay, cur + 1);
+                    }
+
                     if (this.eventDeduplication.size > 10000) {
                         const entriesToDelete = this.eventDeduplication.size - 10000;
                         let deleted = 0;

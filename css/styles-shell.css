@@ -763,20 +763,18 @@ body.sidebar-reorder-mode .nav-title {
 }
 
 .channel-header-controls {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.channel-nav-buttons {
-    display: flex;
-    gap: 2px;
-}
-
-.channel-action-buttons {
-    display: flex;
-    gap: 2px;
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-auto-rows: auto;
+    row-gap: 4px;
+    column-gap: 2px;
+    justify-content: start;
     align-items: center;
+}
+
+.channel-nav-buttons,
+.channel-action-buttons {
+    display: contents;
 }
 
 .channel-nav-btn {
