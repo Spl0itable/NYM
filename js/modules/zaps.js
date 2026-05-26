@@ -1093,9 +1093,7 @@ Object.assign(NYM.prototype, {
                 addZapBtn.innerHTML = `
         <svg viewBox="0 0 24 24">
             <path d="M11 2L1 14h8l-1 8 10-12h-8l1-8z" stroke="var(--text)" fill="var(--text)"/>
-            <circle cx="19" cy="6" r="5" fill="var(--text)" stroke="none"></circle>
-            <line x1="19" y1="4" x2="19" y2="8" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
-            <line x1="17" y1="6" x2="21" y2="6" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"></line>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M19 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 19 1" fill="var(--text)"/>
         </svg>
     `;
                 addZapBtn.title = 'Quick zap';

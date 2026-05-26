@@ -2443,6 +2443,9 @@ Object.assign(NYM.prototype, {
         }
         const zapFilter = this._buildZapReceiptFilter();
         if (zapFilter) filters.push(zapFilter);
+        if (this.pubkey) {
+            filters.push({ kinds: [9735], "#p": [this.pubkey], since: since24h, limit: 200 });
+        }
 
         // Less critical — anything past position 9 is bundled into a single sub upstream
         if (this.pubkey) {

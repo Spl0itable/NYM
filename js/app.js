@@ -1536,13 +1536,26 @@ function scrollToBottom() {
     const scroller = document.getElementById('messagesScroller');
     if (!scroller) return;
 
-    // User explicitly wants to go to the bottom — clear the scrolled-up flag
     nym.userScrolledUp = false;
 
-    // Cancel any pending coalesced scroll so we can do it immediately
     if (nym._scrollRAF) {
         cancelAnimationFrame(nym._scrollRAF);
         nym._scrollRAF = null;
+    }
+
+    // Trim any lazy-loaded older history so the DOM bottom is the real latest.
+    if (nym.inPMMode) {
+        const convKey = nym.currentGroup
+            ? nym.getGroupConversationKey(nym.currentGroup)
+            : (nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null);
+        if (convKey && typeof nym.collapsePMToLatest === 'function') {
+            nym.collapsePMToLatest(convKey);
+        }
+    } else {
+        const storageKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
+        if (storageKey && typeof nym.collapseChannelToLatest === 'function') {
+            nym.collapseChannelToLatest(storageKey);
+        }
     }
 
     scroller.scrollTop = 0;
@@ -3526,7 +3539,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.399';
+const NYMCHAT_VERSION = 'v3.66.400';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
