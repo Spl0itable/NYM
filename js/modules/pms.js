@@ -2660,8 +2660,7 @@ Object.assign(NYM.prototype, {
     // Load older PM/group messages when user scrolls to top
     loadOlderPMMessages(conversationKey) {
         const container = document.getElementById('messagesContainer');
-        const scroller = this._getMessagesScroller();
-        if (!container || !scroller) return false;
+        if (!container) return false;
 
         const currentStart = this.pmRenderedStart.get(conversationKey);
         if (currentStart === undefined || currentStart <= 0) return false;
@@ -2672,40 +2671,31 @@ Object.assign(NYM.prototype, {
         const newStart = Math.max(0, currentStart - this.pmLoadMoreSize);
         if (newStart === currentStart) return false;
 
-        const prevScrollTop = scroller.scrollTop;
-
-        // Update start index and invalidate DOM cache
         this.pmRenderedStart.set(conversationKey, newStart);
         this.channelDOMCache.delete(conversationKey);
 
-        container.innerHTML = '';
-        const renderMessages = messages.slice(newStart);
-
-        if (newStart === 0) {
-            const topNotice = document.createElement('div');
-            topNotice.className = 'system-message pm-history-start';
-            topNotice.textContent = 'You\'ve reached the edge of this conversation\'s history.';
-            container.appendChild(topNotice);
-        }
+        const olderMessages = messages.slice(newStart, currentStart);
 
         this.virtualScroll.suppressAutoScroll = true;
         this._suppressSound = true;
         this._suppressBubbleRewrap = true;
 
-        for (let i = 0; i < renderMessages.length; i++) {
-            this.displayMessage(renderMessages[i]);
+        for (let i = 0; i < olderMessages.length; i++) {
+            this.displayMessage(olderMessages[i]);
         }
 
         this._suppressSound = false;
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
+
+        if (newStart === 0 && !container.querySelector('.pm-history-start')) {
+            const topNotice = document.createElement('div');
+            topNotice.className = 'system-message pm-history-start';
+            topNotice.textContent = 'You\'ve reached the edge of this conversation\'s history.';
+            container.insertBefore(topNotice, container.firstChild);
+        }
+
         this._recomputeAllBubbleGrouping(container);
-
-        // Restore scroll position so user stays at the same place
-        requestAnimationFrame(() => {
-            scroller.scrollTop = prevScrollTop;
-        });
-
         return true;
     },
 
