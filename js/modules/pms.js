@@ -1769,7 +1769,7 @@ Object.assign(NYM.prototype, {
             const sidebarFriendBadge = this.getFriendBadgeHtml(pubkey);
             const pmNameEl = item.querySelector('.pm-name');
             if (pmNameEl) {
-                pmNameEl.innerHTML = `@${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${sidebarFlair} ${verifiedBadge}${sidebarFriendBadge}`;
+                pmNameEl.innerHTML = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${sidebarFlair} ${verifiedBadge}${sidebarFriendBadge}`;
             }
         }
 
@@ -1831,7 +1831,7 @@ Object.assign(NYM.prototype, {
             const channelEl = document.getElementById('currentChannel');
             if (channelEl && channelEl.dataset.pmHeaderSig !== pmHeaderSig) {
                 const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-                const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">@${displayNym} <span class="nm-pms-1">(PM)</span>`;
+                const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">${displayNym} <span class="nm-pms-1">(PM)</span>`;
                 channelEl.innerHTML = pmHeaderHtml;
                 channelEl.dataset.pmHeaderSig = pmHeaderSig;
             }
@@ -1889,7 +1889,7 @@ Object.assign(NYM.prototype, {
             const safePk = this._safePubkey(pubkey);
             item.innerHTML = `
 <img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy">
-<span class="pm-name">@${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
+<span class="pm-name">${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
 <span class="unread-badge nm-hidden">0</span>
 </div>

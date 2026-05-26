@@ -667,7 +667,7 @@
     color: var(--text-dim) !important;
 }
 
-.message.supporter-style {
+body:not(.chat-bubbles) .message.supporter-style {
     background: linear-gradient(135deg, rgba(255, 215, 0, 0.08), rgba(255, 215, 0, 0.03));
     border-left: 3px solid #ffd700;
 }
@@ -734,7 +734,7 @@ body:not(.chat-bubbles) .message.cosmetic-aura-gold {
     letter-spacing: 1px;
 }
 
-.message.supporter-style {
+body:not(.chat-bubbles) .message.supporter-style {
     background: linear-gradient(135deg, rgba(255, 215, 0, 0.05), rgba(255, 215, 0, 0.02));
     border-left: 3px solid #ffd700;
 }

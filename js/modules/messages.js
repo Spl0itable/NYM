@@ -569,7 +569,7 @@ Object.assign(NYM.prototype, {
             }
             if (spamHit) {
                 const escContent = this.escapeHtml(message.content);
-                const html = `Your message was flagged by the spam filter. <button class="spam-false-positive-btn" data-action="reportSpamFalsePositive" data-spam-content="${escContent}">Report false positive</button>`;
+                const html = `Your message was flagged by the spam filter and not shown to anyone but yourself. <button class="spam-false-positive-btn" data-action="reportSpamFalsePositive" data-spam-content="${escContent}">Report false positive</button>`;
                 this.displaySystemMessage(html, 'system', { html: true });
             }
         } else if (this.blockedUsers.has(message.pubkey) || keywordHit || spamHit) {
