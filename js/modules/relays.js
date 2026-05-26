@@ -3518,14 +3518,21 @@ Object.assign(NYM.prototype, {
                 const attributedRelay = (typeof data[3] === 'string' && data[3].startsWith('wss://'))
                     ? data[3] : relayUrl;
                 if (accepted === false) {
-                    if (this._isRelayWideRejection(reason)) {
+                    const r = typeof reason === 'string' ? reason : '';
+                    if (this._isUnsupportedKind(reason)) {
+                        this._recordEventKindRejection(attributedRelay, okEventId);
+                    } else if (this._isRelayWideRejection(reason)) {
                         this._permanentlyBlacklistRelay(attributedRelay, reason);
                     } else if (this._isPermanentRejection(reason)) {
                         this._recordEventKindRejection(attributedRelay, okEventId);
-                    } else if (typeof reason === 'string' && /rate-?limit|too many|concurrent/i.test(reason)) {
+                    } else if (/^mute[\s:]/i.test(r)) {
+                        // NIP-01 mute: relay accepted but no subscribers
+                    } else if (/event[\s_-]?too[\s_-]?large|\btoo[\s_-]large\b|\bsize[\s_]*\d+.*max[\s_]*\d+|created_at\b.*\b(too|in)\b.*(early|late|future|past)|timestamp.*too/i.test(r)) {
+                        // Per-event problem, not the relay's fault
+                    } else if (/rate-?limit|too many|concurrent/i.test(r)) {
                         this._noteRateLimit(attributedRelay);
                         this._recordRelayError(attributedRelay, reason);
-                    } else if (typeof reason === 'string' && /error|invalid/i.test(reason)) {
+                    } else if (/error|invalid/i.test(r)) {
                         this._recordRelayError(attributedRelay, reason);
                     }
                 }
@@ -3730,11 +3737,23 @@ Object.assign(NYM.prototype, {
             || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
             || /\binvalid query\b/i.test(reason)
             || /\bconnection-failed\b/i.test(reason)
-            || /kinds?\s*not\s*supported/i.test(reason);
+            || /kinds?\s*not\s*supported/i.test(reason)
+            || /\bNIP[\s\-_:]*\d+\b/i.test(reason)
+            || /\bnot\s+whitelisted\b/i.test(reason)
+            || /\bauthor[\s\-_]+banned\b/i.test(reason)
+            || /\bnot\s+allowed\b/i.test(reason)
+            || /(does\s+not\s+have\s+permission|no\s+permission|permission\s+to\s+write)/i.test(reason)
+            || /\bonly\s+members\b/i.test(reason)
+            || /out\s+of\s+time\b/i.test(reason)
+            || /\btop[\s\-]?up\b/i.test(reason)
+            || /\baccepted\s+(repository|event)\b/i.test(reason)
+            || /\bmust\s+reference\b/i.test(reason);
     },
 
     _isUnsupportedKind(reason) {
-        return typeof reason === 'string' && /kinds?\s*not\s*supported/i.test(reason);
+        if (typeof reason !== 'string') return false;
+        return /kinds?\s*not\s*supported/i.test(reason)
+            || /\bNIP[\s\-_:]*\d+\b/i.test(reason);
     },
 
     _isRelayWideRejection(reason) {
@@ -3750,7 +3769,16 @@ Object.assign(NYM.prototype, {
             || /\bpaid\b/i.test(reason)
             || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
             || /\binvalid query\b/i.test(reason)
-            || /\bconnection-failed\b/i.test(reason);
+            || /\bconnection-failed\b/i.test(reason)
+            || /\bnot\s+whitelisted\b/i.test(reason)
+            || /\bauthor[\s\-_]+banned\b/i.test(reason)
+            || /\bnot\s+allowed\b/i.test(reason)
+            || /(does\s+not\s+have\s+permission|no\s+permission|permission\s+to\s+write)/i.test(reason)
+            || /\bonly\s+members\b/i.test(reason)
+            || /out\s+of\s+time\b/i.test(reason)
+            || /\btop[\s\-]?up\b/i.test(reason)
+            || /\baccepted\s+(repository|event)\b/i.test(reason)
+            || /\bmust\s+reference\b/i.test(reason);
     },
 
     // Count error responses per relay. If a relay sends 5+ errors within

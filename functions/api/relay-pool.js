@@ -207,7 +207,23 @@ export async function onRequest(context) {
       || /\bpow\b/i.test(reason)
       || /\bprotected\b/i.test(reason)
       || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
-      || /\binvalid query\b/i.test(reason);
+      || /\binvalid query\b/i.test(reason)
+      || /\bNIP[\s\-_:]*\d+\b/i.test(reason)
+      || /\bnot\s+whitelisted\b/i.test(reason)
+      || /\bauthor[\s\-_]+banned\b/i.test(reason)
+      || /\bnot\s+allowed\b/i.test(reason)
+      || /(does\s+not\s+have\s+permission|no\s+permission|permission\s+to\s+write)/i.test(reason)
+      || /\bonly\s+members\b/i.test(reason)
+      || /out\s+of\s+time\b/i.test(reason)
+      || /\btop[\s\-]?up\b/i.test(reason)
+      || /\baccepted\s+(repository|event)\b/i.test(reason)
+      || /\bmust\s+reference\b/i.test(reason);
+  }
+
+  function isUnsupportedKind(reason) {
+    if (typeof reason !== 'string') return false;
+    return /kinds?\s*not\s*supported/i.test(reason)
+      || /\bNIP[\s\-_:]*\d+\b/i.test(reason);
   }
 
   function isRelayWideRejection(reason) {
@@ -222,7 +238,16 @@ export async function onRequest(context) {
       || /payment[\s\-_:]*required/i.test(reason)
       || /\bpaid\b/i.test(reason)
       || /must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag/i.test(reason)
-      || /\binvalid query\b/i.test(reason);
+      || /\binvalid query\b/i.test(reason)
+      || /\bnot\s+whitelisted\b/i.test(reason)
+      || /\bauthor[\s\-_]+banned\b/i.test(reason)
+      || /\bnot\s+allowed\b/i.test(reason)
+      || /(does\s+not\s+have\s+permission|no\s+permission|permission\s+to\s+write)/i.test(reason)
+      || /\bonly\s+members\b/i.test(reason)
+      || /out\s+of\s+time\b/i.test(reason)
+      || /\btop[\s\-]?up\b/i.test(reason)
+      || /\baccepted\s+(repository|event)\b/i.test(reason)
+      || /\bmust\s+reference\b/i.test(reason);
   }
 
   function trackRelayFailure(relayUrl) {
@@ -728,6 +753,10 @@ export async function onRequest(context) {
           const okMatch = raw.match(/^\["OK","[^"]+",\s*(true|false)\s*,\s*"((?:[^"\\]|\\.)*)"/);
           if (okMatch && okMatch[1] === 'false') {
             const reason = okMatch[2];
+            if (isUnsupportedKind(reason)) {
+              sendToClient(JSON.stringify(['OK', eventId, false, reason, relayUrl]));
+              return;
+            }
             if (isRelayWideRejection(reason)) {
               markPermanentlySkipped(relayUrl, `event-rejected: ${reason}`);
               sendToClient(JSON.stringify(['OK', eventId, false, reason, relayUrl]));
@@ -763,7 +792,7 @@ export async function onRequest(context) {
             const m = raw.match(/^\["NOTICE",\s*"((?:[^"\\]|\\.)*)"/);
             const reason = m ? m[1] : '';
             if (/no such sub|unknown subscription/i.test(reason)) return;
-            if (m && isPermanentRejection(reason)) {
+            if (m && isRelayWideRejection(reason)) {
               markPermanentlySkipped(relayUrl, reason);
               return;
             }
@@ -775,7 +804,11 @@ export async function onRequest(context) {
             const m = raw.match(/^\["CLOSED","([^"]+)",\s*"((?:[^"\\]|\\.)*)"/);
             const subId = m ? m[1] : '';
             const reason = m ? m[2] : '';
-            if (m && isPermanentRejection(reason)) {
+            if (m && isUnsupportedKind(reason)) {
+              sendToClient(JSON.stringify(['CLOSED', subId, reason, relayUrl]));
+              return;
+            }
+            if (m && isRelayWideRejection(reason)) {
               markPermanentlySkipped(relayUrl, reason);
               sendToClient(JSON.stringify(['CLOSED', subId, reason, relayUrl]));
               return;
