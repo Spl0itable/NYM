@@ -2424,7 +2424,8 @@ Object.assign(NYM.prototype, {
     _buildGeoFilters(since24h) {
         const filters = [];
         if (!this.settings.groupChatPMOnlyMode) {
-            filters.push({ kinds: [20000, 23333], since: since24h });
+            filters.push({ kinds: [20000], since: since24h });
+            filters.push({ kinds: [23333], since: since24h });
         }
         return filters;
     },
@@ -2439,11 +2440,11 @@ Object.assign(NYM.prototype, {
             filters.push({ kinds: [1059], "#p": [this.pubkey], limit: 500 });
         }
         if (channelMode) {
-            filters.push({ kinds: [20000, 23333], since: since24h });
+            filters.push({ kinds: [20000], since: since24h });
+            filters.push({ kinds: [23333], since: since24h });
         }
         if (this.pubkey) {
             filters.push({ kinds: [7], "#p": [this.pubkey], "#k": ["20000", "23333"], limit: 100 });
-            filters.push({ kinds: [25051], "#p": [this.pubkey], since: nowSec - 120, limit: 50 });
         }
         if (channelMode) {
             filters.push({ kinds: [7], "#k": ["20000", "23333"], since: since24h, limit: 100 });
@@ -2452,11 +2453,14 @@ Object.assign(NYM.prototype, {
         if (channelMode) {
             filters.push({ kinds: [5], "#k": ["20000", "23333", "1059"], since: since24h, limit: 100 });
         }
-        filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
         const zapFilter = this._buildZapReceiptFilter();
         if (zapFilter) filters.push(zapFilter);
 
         // Less critical — anything past position 9 is bundled into a single sub upstream
+        if (this.pubkey) {
+            filters.push({ kinds: [25051], "#p": [this.pubkey], since: nowSec - 120, limit: 50 });
+        }
+        filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
         if (channelMode) {
             filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since24h, limit: 100 });
         }
