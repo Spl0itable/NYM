@@ -2678,19 +2678,13 @@ Object.assign(NYM.prototype, {
         this.pmRenderedStart.set(conversationKey, newStart);
         this.channelDOMCache.delete(conversationKey);
 
-        // Re-render with the expanded message window
         container.innerHTML = '';
         const renderMessages = messages.slice(newStart);
 
-        if (newStart > 0) {
-            const loadNotice = document.createElement('div');
-            loadNotice.className = 'system-message pm-load-older';
-            loadNotice.textContent = `Scroll up to load older messages (${newStart} more)`;
-            container.appendChild(loadNotice);
-        } else {
+        if (newStart === 0) {
             const topNotice = document.createElement('div');
             topNotice.className = 'system-message pm-history-start';
-            topNotice.textContent = 'Beginning of conversation history';
+            topNotice.textContent = 'You\'ve reached the edge of this conversation\'s history.';
             container.appendChild(topNotice);
         }
 
@@ -2730,14 +2724,16 @@ Object.assign(NYM.prototype, {
         this.pmRenderedStart.set(conversationKey, newStart);
         this.channelDOMCache.delete(conversationKey);
 
-        let notice = container.querySelector('.pm-load-older, .pm-history-start');
-        if (newStart > 0) {
-            if (!notice) {
-                notice = document.createElement('div');
+        const existingNotice = container.querySelector('.pm-history-start, .pm-load-older');
+        if (newStart === 0) {
+            if (!existingNotice) {
+                const notice = document.createElement('div');
+                notice.className = 'system-message pm-history-start';
+                notice.textContent = 'You\'ve reached the edge of this conversation\'s history.';
                 container.insertBefore(notice, container.firstChild);
             }
-            notice.className = 'system-message pm-load-older';
-            notice.textContent = `Scroll up to load older messages (${newStart} more)`;
+        } else if (existingNotice) {
+            existingNotice.remove();
         }
         this._recomputeAllBubbleGrouping(container);
         return true;

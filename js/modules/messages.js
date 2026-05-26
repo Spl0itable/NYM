@@ -464,7 +464,6 @@ Object.assign(NYM.prototype, {
                 this.messages.get(storageKey).push(message);
                 this.messages.get(storageKey).sort((a, b) => this._compareMessages(a, b));
 
-                // Prune in-memory messages if exceeding the tier-aware limit
                 const messages = this.messages.get(storageKey);
                 if (messages && messages.length > this.channelMessageLimit) {
                     this.messages.set(storageKey, messages.slice(-this.channelMessageLimit));
@@ -1034,9 +1033,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Prune oldest messages from DOM to stay within limits. With the
-        // reverse-column scroll container, removing elements above the
-        // viewport keeps the reading position stable on its own.
         {
             const domMessages = container.querySelectorAll('[data-message-id]');
             const domLimit = message.isPM ? this.pmStorageLimit : this.channelMessageLimit;
@@ -1045,7 +1041,6 @@ Object.assign(NYM.prototype, {
                 for (let i = 0; i < toRemove; i++) {
                     domMessages[i].remove();
                 }
-                // The new first message lost its previous sibling — recompute its grouping.
                 const firstAfterPrune = container.querySelector('[data-message-id]');
                 if (firstAfterPrune) this._updateBubbleGrouping(firstAfterPrune);
             }
@@ -2843,28 +2838,27 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // If this channel has reached the message limit, show a notice at the top
-        if (!isPM && messages.length >= this.channelMessageLimit) {
-            const notice = document.createElement('div');
-            notice.className = 'system-message channel-history-limit';
-            notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void — only the latest 100 messages are shown.';
-            container.appendChild(notice);
-        }
-
-        // For PMs/groups, only render the latest pmPageSize messages initially
-        // and track the start index for pagination
         let renderMessages = messages;
         if (isPM && messages.length > this.pmPageSize) {
             const startIdx = messages.length - this.pmPageSize;
             renderMessages = messages.slice(startIdx);
             this.pmRenderedStart.set(storageKey, startIdx);
-            // Show "load older" notice at top
-            const loadNotice = document.createElement('div');
-            loadNotice.className = 'system-message pm-load-older';
-            loadNotice.textContent = `Scroll up to load older messages (${startIdx} more)`;
-            container.appendChild(loadNotice);
         } else if (isPM) {
             this.pmRenderedStart.set(storageKey, 0);
+            const topNotice = document.createElement('div');
+            topNotice.className = 'system-message pm-history-start';
+            topNotice.textContent = 'You\'ve reached the edge of this conversation\'s history.';
+            container.appendChild(topNotice);
+        } else if (!isPM && messages.length > this.channelPageSize) {
+            const startIdx = messages.length - this.channelPageSize;
+            renderMessages = messages.slice(startIdx);
+            this.channelRenderedStart.set(storageKey, startIdx);
+        } else if (!isPM) {
+            this.channelRenderedStart.set(storageKey, 0);
+            const notice = document.createElement('div');
+            notice.className = 'system-message channel-history-limit';
+            notice.textContent = 'You\'ve reached the edge of this channel\'s history.';
+            container.appendChild(notice);
         }
 
         // Render all messages sorted by timestamp
@@ -2904,6 +2898,85 @@ Object.assign(NYM.prototype, {
                 });
             }
         }
+    },
+
+    loadOlderChannelMessages(storageKey) {
+        const container = document.getElementById('messagesContainer');
+        const scroller = this._getMessagesScroller();
+        if (!container || !scroller) return false;
+
+        const currentStart = this.channelRenderedStart.get(storageKey);
+        if (currentStart === undefined || currentStart <= 0) return false;
+
+        const messages = this.getFilteredMessages(storageKey);
+        if (messages.length === 0) return false;
+
+        const newStart = Math.max(0, currentStart - this.channelLoadMoreSize);
+        if (newStart === currentStart) return false;
+
+        const prevScrollTop = scroller.scrollTop;
+
+        this.channelRenderedStart.set(storageKey, newStart);
+        this.channelDOMCache.delete(storageKey);
+
+        container.innerHTML = '';
+        const renderMessages = messages.slice(newStart);
+
+        if (newStart === 0) {
+            const notice = document.createElement('div');
+            notice.className = 'system-message channel-history-limit';
+            notice.textContent = 'You\'ve reached the edge of this channel\'s history.';
+            container.appendChild(notice);
+        }
+
+        this.virtualScroll.suppressAutoScroll = true;
+        this._suppressSound = true;
+        this._suppressBubbleRewrap = true;
+
+        for (let i = 0; i < renderMessages.length; i++) {
+            this.displayMessage(renderMessages[i]);
+        }
+
+        this._suppressSound = false;
+        this._suppressBubbleRewrap = false;
+        this.virtualScroll.suppressAutoScroll = false;
+        this._recomputeAllBubbleGrouping(container);
+
+        requestAnimationFrame(() => {
+            scroller.scrollTop = prevScrollTop;
+        });
+
+        return true;
+    },
+
+    collapseChannelToLatest(storageKey) {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return false;
+        const msgEls = container.querySelectorAll('.message');
+        const excess = msgEls.length - this.channelPageSize;
+        if (excess <= 0) return false;
+        for (let i = 0; i < excess; i++) {
+            msgEls[i].remove();
+        }
+
+        const messages = this.getFilteredMessages(storageKey);
+        const newStart = Math.max(0, messages.length - this.channelPageSize);
+        this.channelRenderedStart.set(storageKey, newStart);
+        this.channelDOMCache.delete(storageKey);
+
+        const existingNotice = container.querySelector('.channel-history-limit');
+        if (newStart === 0) {
+            if (!existingNotice) {
+                const notice = document.createElement('div');
+                notice.className = 'system-message channel-history-limit';
+                notice.textContent = 'You\'ve reached the edge of this channel\'s history.';
+                container.insertBefore(notice, container.firstChild);
+            }
+        } else if (existingNotice) {
+            existingNotice.remove();
+        }
+        this._recomputeAllBubbleGrouping(container);
+        return true;
     },
 
     refreshMessages() {

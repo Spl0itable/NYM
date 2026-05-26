@@ -632,11 +632,13 @@ class NYM {
         this.performanceMode = false;
         this._deviceCapabilities = this._detectDeviceCapabilities();
         this._applyPerformanceMode();
-        const _tier = this._deviceCapabilities.tier;
-        this.channelSubscriptionBatchSize = _tier === 'low' ? 5 : (_tier === 'high' ? 15 : 10);
-        this.channelMessageLimit = _tier === 'low' ? 50 : (_tier === 'high' ? 150 : 100);
-        this.pmStorageLimit = _tier === 'low' ? 200 : (_tier === 'high' ? 1000 : 500);
-        this.pmPageSize = 100;
+        this.channelSubscriptionBatchSize = 15;
+        this.channelMessageLimit = 1000;
+        this.channelPageSize = 50;
+        this.channelLoadMoreSize = 50;
+        this.channelRenderedStart = new Map();
+        this.pmStorageLimit = 1000;
+        this.pmPageSize = 50;
         this.pmLoadMoreSize = 50;
         this.pmRenderedStart = new Map();
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
@@ -3524,7 +3526,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.395';
+const NYMCHAT_VERSION = 'v3.66.396';
 
 function showAbout() {
     const modal = document.getElementById('aboutModal');
@@ -5857,11 +5859,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const currentKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
 
         nym.messages.forEach((messages, channel) => {
-            // Skip current channel
             if (channel === currentKey) return;
-
-            // Prune inactive channels to the tier-aware channel limit so
-            // low-tier devices recover memory faster.
             if (messages.length > nym.channelMessageLimit) {
                 nym.messages.set(channel, messages.slice(-nym.channelMessageLimit));
             }
@@ -5929,10 +5927,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             const distanceFromBottom = Math.abs(messagesScroller.scrollTop);
             const distanceFromTop = (messagesScroller.scrollHeight - messagesScroller.clientHeight) - distanceFromBottom;
 
-            // When scrolled to the very top, load older messages or show history limit
             if (distanceFromTop <= 5) {
                 if (nym.inPMMode) {
-                    // PM/group pagination: load older messages on scroll-to-top
                     const convKey = nym.currentGroup
                         ? nym.getGroupConversationKey(nym.currentGroup)
                         : (nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null);
@@ -5946,33 +5942,40 @@ document.addEventListener('DOMContentLoaded', async () => {
                             });
                         }
                     }
-                } else if (messagesContainer) {
-                    // Channel mode: show history limit notice
+                } else if (messagesContainer && !nym._channelLoadingOlder) {
                     const storageKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
-                    const channelMessages = nym.messages.get(storageKey) || [];
-                    if (channelMessages.length >= nym.channelMessageLimit && !messagesContainer.querySelector('.channel-history-limit')) {
-                        const notice = document.createElement('div');
-                        notice.className = 'system-message channel-history-limit';
-                        notice.textContent = 'You\'ve reached the edge of this channel\'s history. Older messages are lost to the void \u2014 only the latest 100 messages are shown.';
-                        messagesContainer.insertBefore(notice, messagesContainer.firstChild);
+                    const startIdx = nym.channelRenderedStart.get(storageKey);
+                    if (startIdx !== undefined && startIdx > 0) {
+                        nym._channelLoadingOlder = true;
+                        requestAnimationFrame(() => {
+                            nym.loadOlderChannelMessages(storageKey);
+                            nym._channelLoadingOlder = false;
+                        });
                     }
                 }
             }
 
-            // Track whether user has intentionally scrolled away from the bottom
             nym.userScrolledUp = distanceFromBottom > 150;
 
-            // Once the user rests back at the latest messages, prune the older
-            // messages that lazy-loading appended so PMs/groups don't bloat the DOM.
-            if (distanceFromBottom < 50 && nym.inPMMode) {
-                const collapseKey = nym.currentGroup
-                    ? nym.getGroupConversationKey(nym.currentGroup)
-                    : (nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null);
-                if (collapseKey) {
-                    clearTimeout(nym._pmCollapseTimer);
-                    nym._pmCollapseTimer = setTimeout(() => {
-                        if (Math.abs(messagesScroller.scrollTop) < 50) nym.collapsePMToLatest(collapseKey);
-                    }, 600);
+            if (distanceFromBottom < 50) {
+                if (nym.inPMMode) {
+                    const collapseKey = nym.currentGroup
+                        ? nym.getGroupConversationKey(nym.currentGroup)
+                        : (nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null);
+                    if (collapseKey) {
+                        clearTimeout(nym._pmCollapseTimer);
+                        nym._pmCollapseTimer = setTimeout(() => {
+                            if (Math.abs(messagesScroller.scrollTop) < 50) nym.collapsePMToLatest(collapseKey);
+                        }, 600);
+                    }
+                } else {
+                    const storageKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
+                    if (storageKey) {
+                        clearTimeout(nym._channelCollapseTimer);
+                        nym._channelCollapseTimer = setTimeout(() => {
+                            if (Math.abs(messagesScroller.scrollTop) < 50) nym.collapseChannelToLatest(storageKey);
+                        }, 600);
+                    }
                 }
             }
 
