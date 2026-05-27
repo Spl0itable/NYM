@@ -334,7 +334,10 @@ Object.assign(NYM.prototype, {
             if (strong.dataset.label !== label) {
                 strong.dataset.label = label;
                 strong.textContent = '';
-                strong.appendChild(document.createTextNode(`@${user.baseNym}`));
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'ac-name-text';
+                nameSpan.textContent = `@${user.baseNym}`;
+                strong.appendChild(nameSpan);
                 const sfx = document.createElement('span');
                 sfx.className = 'nym-suffix';
                 sfx.textContent = `#${user.suffix}`;

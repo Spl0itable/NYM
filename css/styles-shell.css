@@ -760,6 +760,21 @@ body.sidebar-reorder-mode .nav-title {
     display: flex;
     align-items: center;
     gap: 15px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+}
+
+.channel-info > .nm-h-15 {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+}
+
+.channel-info > .nm-h-15 > div:not([class]) {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
 }
 
 .channel-header-controls {
@@ -815,6 +830,41 @@ body.sidebar-reorder-mode .nav-title {
     font-weight: 700;
     letter-spacing: 0.3px;
     min-height: calc((var(--user-text-size) + 3px) * 1.4 + 19px);
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.channel-title-line {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.pm-header-row,
+.group-header-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    gap: 0;
+    overflow: hidden;
+}
+
+.pm-header-row > *,
+.group-header-row > * {
+    flex: 0 0 auto;
+}
+
+.pm-name-text,
+.group-name-text {
+    flex: 0 1 auto !important;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .channel-type-label {
@@ -828,11 +878,38 @@ body.sidebar-reorder-mode .nav-title {
     color: var(--text-dim);
     text-shadow: none;
     margin-top: 2px;
+    max-width: 100%;
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
 }
 
 .channel-location a {
     color: var(--text-dim);
     text-shadow: none;
+    display: inline-flex;
+    align-items: baseline;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.channel-location .loc-city {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.channel-location .loc-country {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.channel-location-dist {
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 .channel-meta {

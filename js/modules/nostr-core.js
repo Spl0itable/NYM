@@ -2395,13 +2395,13 @@ Object.assign(NYM.prototype, {
                 isPM: false,
             };
 
-            // Display immediately (optimistic)
+            this.userScrolledUp = false;
             this.displayMessage(optimisticMessage);
+            this._scheduleScrollToBottom(true);
+            this.recordOwnActivity();
 
-            // Send to relay
             this.sendToRelay(["EVENT", signedEvent]);
 
-            // Ensure geo relays for this channel also receive the event
             if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
 
             return true;

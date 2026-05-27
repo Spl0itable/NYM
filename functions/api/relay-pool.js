@@ -112,6 +112,7 @@ export async function onRequest(context) {
 
   // Relays that must never be banned, skipped, or backed off
   const APP_RELAY = 'wss://relay.nymchat.app';
+  const WRITE_ONLY_RELAYS = new Set(['wss://sendit.nosflare.com']);
 
   // Track failed relays to avoid wasting cycles
   const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
@@ -761,6 +762,7 @@ export async function onRequest(context) {
   }
 
   function sendSubscriptionToRelay(relayUrl, ws, parentSubId) {
+    if (WRITE_ONLY_RELAYS.has(relayUrl)) return;
     const blocked = kindBlacklist.get(relayUrl);
     const children = splitChildren.get(parentSubId);
     let anySent = false;
@@ -797,7 +799,7 @@ export async function onRequest(context) {
   function connectUpstream(relayUrl, type) {
     if (upstreams.has(relayUrl)) return;
     if (!validateRelayUrl(relayUrl)) return;
-    if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://sendit.nosflare.com') return;
+    if (relayUrl === 'wss://relay.nosflare.com') return;
     if (shouldSkipRelay(relayUrl)) return;
 
     const info = { ws: null, type, status: 'connecting', eventCount: 0, handled: false };
@@ -1035,7 +1037,14 @@ export async function onRequest(context) {
 
   function sendToUpstreams(data, filter) {
     const msg = typeof data === 'string' ? data : JSON.stringify(data);
+    WRITE_ONLY_RELAYS.forEach((url) => {
+      const info = upstreams.get(url);
+      if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
+      if (filter && !filter(url, info)) return;
+      try { info.ws.send(msg); } catch { /* noop */ }
+    });
     upstreams.forEach((info, url) => {
+      if (WRITE_ONLY_RELAYS.has(url)) return;
       if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
         if (!filter || filter(url, info)) {
           try { info.ws.send(msg); } catch { /* noop */ }
@@ -1099,7 +1108,14 @@ export async function onRequest(context) {
             const geoUrls = msg[2] || [];
             const geoSet = new Set(geoUrls);
             const sentGeo = new Set();
+            WRITE_ONLY_RELAYS.forEach((url) => {
+              const info = upstreams.get(url);
+              if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
+              if (isBlockedFor(url)) return;
+              try { info.ws.send(geoMsg); sentGeo.add(url); } catch { /* noop */ }
+            });
             upstreams.forEach((info, url) => {
+              if (WRITE_ONLY_RELAYS.has(url)) return;
               if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(geoMsg); sentGeo.add(url); } catch { /* noop */ }
               }
@@ -1118,6 +1134,8 @@ export async function onRequest(context) {
               }
             }
             upstreams.forEach((info, url) => {
+              if (WRITE_ONLY_RELAYS.has(url)) return;
+              if (sentGeo.has(url)) return;
               if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(geoMsg); } catch { /* noop */ }
               }
@@ -1132,12 +1150,20 @@ export async function onRequest(context) {
             };
             const dmMsg = JSON.stringify(['EVENT', dmEvt]);
             const dmSet = new Set(dmRelays);
+            WRITE_ONLY_RELAYS.forEach((url) => {
+              const info = upstreams.get(url);
+              if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
+              if (isBlockedFor(url)) return;
+              try { info.ws.send(dmMsg); } catch { /* noop */ }
+            });
             upstreams.forEach((info, url) => {
+              if (WRITE_ONLY_RELAYS.has(url)) return;
               if (dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
               }
             });
             upstreams.forEach((info, url) => {
+              if (WRITE_ONLY_RELAYS.has(url)) return;
               if (!dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
               }

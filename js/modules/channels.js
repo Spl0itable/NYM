@@ -767,13 +767,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
-        const nameNode = document.createTextNode(displayName + ' ');
+        const titleLine = document.createElement('span');
+        titleLine.className = 'channel-title-line';
+        titleLine.appendChild(document.createTextNode(displayName + ' '));
 
         const typeLabel = document.createElement('span');
         typeLabel.className = 'channel-type-label';
         typeLabel.textContent = isGeo ? '(Geohash)' : '(Non-Geohash)';
+        titleLine.appendChild(typeLabel);
 
-        const nodes = [nameNode, typeLabel];
+        const nodes = [titleLine];
 
         if (isGeo) {
             const locWrap = document.createElement('div');
@@ -785,7 +788,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             link.setAttribute('rel', 'noopener');
 
             const cached = this._geohashPlaceCache && this._geohashPlaceCache.get(safeGeohash.toLowerCase());
-            link.textContent = cached || 'Loading location...';
+            this._fillLocationLink(link, cached || 'Loading location...');
             locWrap.appendChild(link);
 
             if (this.userLocation && this.settings.sortByProximity) {
@@ -795,7 +798,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                         this.userLocation.lat, this.userLocation.lng,
                         coords.lat, coords.lng
                     );
-                    locWrap.appendChild(document.createTextNode(` (${distance.toFixed(1)}km)`));
+                    const distSpan = document.createElement('span');
+                    distSpan.className = 'channel-location-dist';
+                    distSpan.textContent = ` (${distance.toFixed(1)}km)`;
+                    locWrap.appendChild(distSpan);
                 } catch (e) { }
             }
 
@@ -803,14 +809,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             if (!cached) {
                 this._resolveGeohashPlaceName(safeGeohash).then(place => {
-                    if (link.isConnected) link.textContent = place;
+                    if (link.isConnected) this._fillLocationLink(link, place);
                 }).catch(() => {
-                    if (link.isConnected) link.textContent = this.getGeohashLocation(safeGeohash);
+                    if (link.isConnected) this._fillLocationLink(link, this.getGeohashLocation(safeGeohash));
                 });
             }
         }
 
         titleEl.replaceChildren(...nodes);
+    },
+
+    _fillLocationLink(link, place) {
+        link.replaceChildren();
+        const idx = place.lastIndexOf(', ');
+        if (idx > 0 && idx < place.length - 2) {
+            const city = document.createElement('span');
+            city.className = 'loc-city';
+            city.textContent = place.slice(0, idx);
+            const country = document.createElement('span');
+            country.className = 'loc-country';
+            country.textContent = place.slice(idx);
+            link.appendChild(city);
+            link.appendChild(country);
+        } else {
+            const country = document.createElement('span');
+            country.className = 'loc-country';
+            country.textContent = place;
+            link.appendChild(country);
+        }
     },
 
     // Resolve a geohash to a human-readable place name, cached per geohash.

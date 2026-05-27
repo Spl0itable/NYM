@@ -505,8 +505,10 @@ class NYM {
         };
         this._relayStatsInterval = null;
         this._relayStatsAnimFrame = null;
+        this.writeOnlyRelays = new Set(['wss://sendit.nosflare.com']);
         // Core default relays - always connected first for fast startup
         this.defaultRelays = [
+            'wss://sendit.nosflare.com',
             'wss://relay.nymchat.app',
             'wss://relay.damus.io',
             'wss://offchain.pub',
@@ -3539,7 +3541,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.406';
+const NYMCHAT_VERSION = 'v3.66.407';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -6196,13 +6198,15 @@ function renderRelayStats() {
     syncLowDataToggleFromState();
     const s = nym.relayStats;
     const pool = nym.relayPool;
+    const writeOnly = nym.writeOnlyRelays || new Set();
 
     // Count connected — pool mode uses poolConnectedRelays count
     let connected = 0;
     if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
-        connected = nym.poolConnectedRelays.length;
+        connected = nym.poolConnectedRelays.filter(u => !writeOnly.has(u)).length;
     } else {
-        pool.forEach((relay) => {
+        pool.forEach((relay, url) => {
+            if (writeOnly.has(url)) return;
             if (relay.ws && relay.ws.readyState === WebSocket.OPEN) connected++;
         });
     }
@@ -6210,6 +6214,7 @@ function renderRelayStats() {
     // Average latency
     let latSum = 0, latCount = 0;
     s.latencyPerRelay.forEach((ms, url) => {
+        if (writeOnly.has(url)) return;
         if (nym.useRelayProxy || pool.has(url)) { latSum += ms; latCount++; }
     });
     const avgLat = latCount > 0 ? Math.round(latSum / latCount) : null;
@@ -6318,6 +6323,7 @@ function renderRelayList(pool, stats) {
     const listEl = document.getElementById('rsRelayList');
     if (!listEl) return;
 
+    const writeOnly = (typeof nym !== 'undefined' && nym.writeOnlyRelays) ? nym.writeOnlyRelays : new Set();
     const entries = [];
 
     if (typeof nym !== 'undefined' && nym.useRelayProxy && nym._isAnyPoolOpen()) {
@@ -6330,6 +6336,7 @@ function renderRelayList(pool, stats) {
         }
         known.forEach(url => {
             if (url === 'relay-pool') return;
+            if (writeOnly.has(url)) return;
             entries.push({
                 url,
                 open: connectedSet.has(url),
@@ -6339,6 +6346,7 @@ function renderRelayList(pool, stats) {
         });
     } else {
         pool.forEach((relay, url) => {
+            if (writeOnly.has(url)) return;
             const isOpen = relay.ws && relay.ws.readyState === WebSocket.OPEN;
             entries.push({
                 url,

@@ -556,6 +556,33 @@
     transition: all 0.2s;
 }
 
+.autocomplete-item:has(.ac-name-text) {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.autocomplete-item:has(.ac-name-text) > strong {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+}
+
+.autocomplete-item:has(.ac-name-text) > strong > * {
+    flex: 0 0 auto;
+}
+
+.autocomplete-item .ac-name-text {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .autocomplete-item:hover,
 .autocomplete-item.selected,
 .emoji-item:hover,
