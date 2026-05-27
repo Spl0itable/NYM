@@ -2371,28 +2371,24 @@ Object.assign(NYM.prototype, {
                 pubkey: ephPk
             };
 
-            const psDifficulty = this._effectivePowDifficulty();
-            if (psDifficulty > 0) {
-                event = await this._minePow(event, psDifficulty);
-            }
-
-            // Sign with the ephemeral key (bypasses Nostr login signing)
-            const signedEvent = window.NostrTools.finalizeEvent(event, ephSk);
-
+            const tempId = '_optim_' + Math.random().toString(36).slice(2) + nowMs.toString(36);
+            const storageKey = geohash ? `#${geohash}` : channel;
             const optimisticMessage = {
-                id: signedEvent.id,
+                id: tempId,
                 content: content,
                 author: anonNym,
                 pubkey: ephPk,
-                created_at: signedEvent.created_at,
+                created_at: now,
                 _ms: nowMs,
                 _seq: ++this._msgSeq,
-                timestamp: new Date(signedEvent.created_at * 1000),
+                timestamp: new Date(now * 1000),
                 channel: channel,
                 geohash: geohash,
                 isOwn: true,
                 isHistorical: false,
                 isPM: false,
+                _optimistic: true,
+                _storageKey: storageKey
             };
 
             this.userScrolledUp = false;
@@ -2400,9 +2396,18 @@ Object.assign(NYM.prototype, {
             this._scheduleScrollToBottom(true);
             this.recordOwnActivity();
 
-            this.sendToRelay(["EVENT", signedEvent]);
-
-            if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
+            (async () => {
+                try {
+                    const psDifficulty = this._effectivePowDifficulty();
+                    if (psDifficulty > 0) event = await this._minePow(event, psDifficulty);
+                    const signedEvent = window.NostrTools.finalizeEvent(event, ephSk);
+                    this._replaceOptimisticMessage(tempId, signedEvent, storageKey, false);
+                    this.sendToRelay(["EVENT", signedEvent]);
+                    if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
+                } catch (err) {
+                    this._markOptimisticFailed(tempId, storageKey, err);
+                }
+            })();
 
             return true;
         } catch (error) {
