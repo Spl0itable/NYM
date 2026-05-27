@@ -1880,64 +1880,125 @@ Object.assign(NYM.prototype, {
     },
 
     handleDeletionEvent(event) {
-        // NIP-09: Deletion events reference messages to delete via 'e' tags
+        // NIP-09: only the original author may delete an event
         const eTags = (event.tags || []).filter(t => Array.isArray(t) && t[0] === 'e' && t[1]);
         if (eTags.length === 0) return;
+        const requesterPubkey = event.pubkey;
+        if (!requesterPubkey) return;
 
         for (const eTag of eTags) {
             const deletedId = eTag[1];
+            const originalAuthor = this._findMessageAuthor(deletedId);
 
-            this.deletedEventIds.add(deletedId);
-
-            this.pmMessages.forEach(msgs => {
-                for (const m of msgs) {
-                    if (m.id === deletedId || m.nymMessageId === deletedId) {
-                        if (m.id) this.deletedEventIds.add(m.id);
-                        if (m.nymMessageId) this.deletedEventIds.add(m.nymMessageId);
-                    }
-                }
-            });
-
-            if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
-
-            // Prune if too large
-            if (this.deletedEventIds.size > 5000) {
-                const arr = Array.from(this.deletedEventIds);
-                this.deletedEventIds = new Set(arr.slice(-4000));
+            if (originalAuthor && originalAuthor !== requesterPubkey) {
+                continue;
             }
 
-            // Remove from DOM
-            const messageEl = document.querySelector(`[data-message-id="${deletedId}"]`);
-            if (messageEl) {
-                if (typeof this._playMessageDisintegration !== 'function' || !this._playMessageDisintegration(messageEl)) {
-                    messageEl.remove();
+            if (!originalAuthor) {
+                if (!this._pendingDeletions) this._pendingDeletions = new Map();
+                let claimants = this._pendingDeletions.get(deletedId);
+                if (!claimants) {
+                    claimants = new Set();
+                    this._pendingDeletions.set(deletedId, claimants);
                 }
+                claimants.add(requesterPubkey);
+                if (this._pendingDeletions.size > 5000) {
+                    const entries = Array.from(this._pendingDeletions.entries());
+                    this._pendingDeletions = new Map(entries.slice(-4000));
+                }
+                continue;
             }
 
-            // Remove from channel messages
-            this.messages.forEach((msgs, channel) => {
-                const idx = msgs.findIndex(m => m.id === deletedId);
-                if (idx !== -1) {
-                    msgs.splice(idx, 1);
-                    this.persistChannelMessages(channel);
-                }
-            });
-
-            // Remove from PM messages
-            this.pmMessages.forEach((msgs, convKey) => {
-                let removed = false;
-                for (let i = msgs.length - 1; i >= 0; i--) {
-                    if (msgs[i].id === deletedId || msgs[i].nymMessageId === deletedId) {
-                        msgs.splice(i, 1);
-                        removed = true;
-                    }
-                }
-                if (removed) {
-                    this.channelDOMCache.delete(convKey);
-                    this.persistPMMessages(convKey);
-                }
-            });
+            this._applyVerifiedDeletion(deletedId);
         }
+    },
+
+    _findMessageAuthor(id) {
+        if (!id) return null;
+        if (this.messages) {
+            for (const msgs of this.messages.values()) {
+                for (const m of msgs) {
+                    if (m && m.id === id) return m.pubkey || null;
+                }
+            }
+        }
+        if (this.pmMessages) {
+            for (const msgs of this.pmMessages.values()) {
+                for (const m of msgs) {
+                    if (m && (m.id === id || m.nymMessageId === id)) return m.pubkey || null;
+                }
+            }
+        }
+        return null;
+    },
+
+    _applyVerifiedDeletion(deletedId) {
+        this.deletedEventIds.add(deletedId);
+
+        this.pmMessages.forEach(msgs => {
+            for (const m of msgs) {
+                if (m.id === deletedId || m.nymMessageId === deletedId) {
+                    if (m.id) this.deletedEventIds.add(m.id);
+                    if (m.nymMessageId) this.deletedEventIds.add(m.nymMessageId);
+                }
+            }
+        });
+
+        if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+
+        if (this.deletedEventIds.size > 5000) {
+            const arr = Array.from(this.deletedEventIds);
+            this.deletedEventIds = new Set(arr.slice(-4000));
+        }
+
+        const messageEl = document.querySelector(`[data-message-id="${deletedId}"]`);
+        if (messageEl) {
+            if (typeof this._playMessageDisintegration !== 'function' || !this._playMessageDisintegration(messageEl)) {
+                messageEl.remove();
+            }
+        }
+
+        this.messages.forEach((msgs, channel) => {
+            const idx = msgs.findIndex(m => m.id === deletedId);
+            if (idx !== -1) {
+                msgs.splice(idx, 1);
+                this.persistChannelMessages(channel);
+            }
+        });
+
+        this.pmMessages.forEach((msgs, convKey) => {
+            let removed = false;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].id === deletedId || msgs[i].nymMessageId === deletedId) {
+                    msgs.splice(i, 1);
+                    removed = true;
+                }
+            }
+            if (removed) {
+                this.channelDOMCache.delete(convKey);
+                this.persistPMMessages(convKey);
+            }
+        });
+    },
+
+    _consumePendingDeletion(message) {
+        if (!this._pendingDeletions || !message || !message.pubkey) return false;
+        const ids = [message.id];
+        if (message.nymMessageId) ids.push(message.nymMessageId);
+        for (const id of ids) {
+            if (!id) continue;
+            const claimants = this._pendingDeletions.get(id);
+            if (claimants && claimants.has(message.pubkey)) {
+                this._pendingDeletions.delete(id);
+                this.deletedEventIds.add(id);
+                for (const otherId of ids) {
+                    if (otherId) this.deletedEventIds.add(otherId);
+                }
+                if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+                return true;
+            }
+        }
+        return false;
     },
 
     handleIncomingEdit(originalEventId, newContent, senderPubkey, editEventId) {

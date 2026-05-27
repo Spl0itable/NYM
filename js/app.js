@@ -591,6 +591,7 @@ class NYM {
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
         this.deletedEventIds = new Set();
+        this._pendingDeletions = new Map();
         this.editedMessages = new Map();
         this.pendingEdit = null;
         this.pendingDMs = new Map();
@@ -3541,7 +3542,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.410';
+const NYMCHAT_VERSION = 'v3.66.411';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');

@@ -1235,13 +1235,11 @@ Object.assign(NYM.prototype, {
                         id: conversationKey,
                         eventId: event.id
                     };
-                    if (!treatAsHistorical) {
-                        this.updateUnreadCount(conversationKey);
-                        if (!pmSenderBlocked) {
+                    this.updateUnreadCount(conversationKey);
+                    if (!pmSenderBlocked) {
+                        if (!treatAsHistorical) {
                             this.showNotification(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);
-                        }
-                    } else {
-                        if (!pmSenderBlocked) {
+                        } else {
                             this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);
                         }
                     }
@@ -2665,6 +2663,7 @@ Object.assign(NYM.prototype, {
         return pmMessages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
             if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
+            if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
             const isOwn = msg.pubkey === this.pubkey;
             if (!isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
             if (!isOwn && this.hasBlockedKeyword(msg.content, msg.author)) return false;

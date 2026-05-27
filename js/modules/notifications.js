@@ -248,13 +248,11 @@ Object.assign(NYM.prototype, {
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         const unreadCount = this.notificationHistory.filter(n => {
             if (n.timestamp <= cutoff24h) return false;
-            // Treat as read if the per-item viewed flag is set. Use
-            // receivedAt (when we observed it) — not the event's created_at —
-            // for the legacy bulk-read fallback so delayed events with old
-            // timestamps don't auto-clear the badge.
-            if (n.viewed) return false;
-            const observedAt = n.receivedAt || n.timestamp || 0;
-            if (observedAt <= (this.notificationLastReadTime || 0)) return false;
+            if (n.viewed === true) return false;
+            if (typeof n.viewed !== 'boolean') {
+                const observedAt = n.receivedAt || n.timestamp || 0;
+                if (observedAt <= (this.notificationLastReadTime || 0)) return false;
+            }
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
             return true;

@@ -652,8 +652,12 @@ Object.assign(NYM.prototype, {
             const addMods = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'mod' && t[1])
                 .map(t => t[1]);
-            // Determine who was added by comparing new member list with existing group
+            const claimedOwner = ownerTag ? ownerTag[1] : null;
             const existingGroup = this.groupConversations.get(groupId);
+            const senderIsClaimedOwner = !!claimedOwner && claimedOwner === senderPubkey;
+            // Refuse to bootstrap a brand-new group entry from a non-owner;
+            // legitimate first contact arrives via group-invite from the owner.
+            if (!existingGroup && !senderIsClaimedOwner) return;
             const existingMembers = existingGroup ? new Set(existingGroup.members) : new Set();
             const newMembers = memberPubkeys.filter(pk => !existingMembers.has(pk));
             this.addGroupConversation(
@@ -661,10 +665,13 @@ Object.assign(NYM.prototype, {
                 groupName,
                 memberPubkeys,
                 (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
-                { createdBy: ownerTag ? ownerTag[1] : undefined, mods: addMods }
+                {
+                    createdBy: senderIsClaimedOwner ? claimedOwner : undefined,
+                    mods: senderIsClaimedOwner ? addMods : []
+                }
             );
             const grpAdd = this.groupConversations.get(groupId);
-            if (grpAdd && addMods.length > 0 && (!Array.isArray(grpAdd.mods) || grpAdd.mods.length === 0)) {
+            if (senderIsClaimedOwner && grpAdd && addMods.length > 0 && (!Array.isArray(grpAdd.mods) || grpAdd.mods.length === 0)) {
                 grpAdd.mods = [...addMods];
             }
             this._saveGroupConversations();
@@ -1008,9 +1015,7 @@ Object.assign(NYM.prototype, {
             if (!isOwn && !senderBlocked) {
                 const ageMs = Date.now() - (tsSec * 1000);
                 const treatAsHistorical = msg.isHistorical || ageMs > 30000;
-                if (!treatAsHistorical) {
-                    this.updateUnreadCount(groupConvKey);
-                }
+                this.updateUnreadCount(groupConvKey);
                 const isInviteRumor = msgType === 'group-invite';
                 const shouldNotifyGroup = !isInviteRumor && (!this.groupNotifyMentionsOnly || this.isMentioned(messageContent));
                 if (shouldNotifyGroup) {

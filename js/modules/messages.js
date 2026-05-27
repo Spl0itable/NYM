@@ -427,6 +427,9 @@ Object.assign(NYM.prototype, {
             (message.nymMessageId && this.deletedEventIds.has(message.nymMessageId))) {
             return;
         }
+        if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(message)) {
+            return;
+        }
 
         // Apply pending edits that arrived before the original message
         const editLookupId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
@@ -1884,9 +1887,9 @@ Object.assign(NYM.prototype, {
         if (hashIdx >= 0) {
             const base = author.substring(0, hashIdx);
             const suffix = author.substring(hashIdx);
-            authorEl.innerHTML = `@${this.escapeHtml(base)}<span class="nym-suffix">${this.escapeHtml(suffix)}</span>`;
+            authorEl.innerHTML = `${this.escapeHtml(base)}<span class="nym-suffix">${this.escapeHtml(suffix)}</span>`;
         } else {
-            authorEl.textContent = `@${author}`;
+            authorEl.textContent = author;
         }
         // Strip markdown/HTML, keep shortcodes so they can render as images
         const cleanText = text.replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
@@ -2921,6 +2924,7 @@ Object.assign(NYM.prototype, {
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
             if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
+            if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
             if (!msg.isOwn && !this.isFriend(msg.pubkey) &&
                 !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
                 return false;
