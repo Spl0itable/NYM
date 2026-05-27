@@ -187,9 +187,11 @@ Object.assign(NYM.prototype, {
     displayPollMessage(pollId, nym, pubkey, question, options, votes, created_at, isOwn) {
         const container = document.getElementById('messagesContainer');
         const messageEl = document.createElement('div');
-        messageEl.className = 'message poll-message';
+        messageEl.className = 'message poll-message' + (isOwn ? ' self' : '');
         messageEl.dataset.messageId = pollId;
         messageEl.dataset.pollId = pollId;
+        messageEl.dataset.pubkey = pubkey;
+        messageEl.dataset.author = nym;
 
         const avatarSrc = this.getAvatarUrl(pubkey);
         const suffix = this.getPubkeySuffix(pubkey);
@@ -267,11 +269,11 @@ Object.assign(NYM.prototype, {
         });
 
         const safePk = this._safePubkey(pubkey);
-        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">&lt;${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
 
         messageEl.innerHTML = `
             <span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
-            <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}</span>&gt;</span>
+            <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}</span><span class="nym-bracket">&gt;</span></span>
             <div class="message-content">
                 <div class="poll-container" data-poll-id="${pollId}">
                     <div class="poll-header">📊 Poll</div>
@@ -328,11 +330,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Polls split bubble groups since they lack data-pubkey — rewrap so
-        // adjacent same-author messages regroup around the inserted poll.
+        // In bubble layout polls need their own .message-group wrapper to get
+        // the side avatar; the rewrap also splits adjacent same-author groups.
         if (!this._suppressBubbleRewrap
             && typeof this._rewrapBubbleGroups === 'function'
-            && container.querySelector(':scope > .message-group')) {
+            && document.body.classList.contains('chat-bubbles')) {
             this._rewrapBubbleGroups(container);
         }
 
@@ -452,7 +454,7 @@ Object.assign(NYM.prototype, {
         }
 
         if (typeof this._rewrapBubbleGroups === 'function'
-            && container.querySelector(':scope > .message-group')) {
+            && document.body.classList.contains('chat-bubbles')) {
             this._rewrapBubbleGroups(container);
         }
     },

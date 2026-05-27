@@ -1653,11 +1653,16 @@ Object.assign(NYM.prototype, {
 
     _applyBubbleGroupingTo(el) {
         if (!el || !el.classList || !el.dataset || !el.dataset.pubkey) return;
+        if (el.classList.contains('poll-message')) {
+            el.classList.remove('bubble-grouped');
+            return;
+        }
         const groupWindowMs = 5 * 60 * 1000;
         const prev = el.previousElementSibling;
         const samePrev = prev
             && prev.dataset
             && prev.dataset.pubkey === el.dataset.pubkey
+            && !prev.classList.contains('poll-message')
             && !!el.dataset.messageId
             && !!prev.dataset.messageId;
         const ts = parseInt(el.dataset.timestamp) || 0;
@@ -1746,7 +1751,10 @@ Object.assign(NYM.prototype, {
             }
             const ts = parseInt(child.dataset.timestamp) || 0;
             const pk = child.dataset.pubkey;
-            const sameAuthor = pk === lastPubkey;
+            // Polls render as standalone bubbles — never merge with adjacent
+            // messages on either side, even when same-author within window.
+            const isPoll = child.classList.contains('poll-message');
+            const sameAuthor = !isPoll && pk === lastPubkey;
             const inWindow = sameAuthor && lastTs && ts && Math.abs(ts - lastTs) <= groupWindowMs;
 
             if (!inWindow || !currentGroup) {
@@ -1756,8 +1764,14 @@ Object.assign(NYM.prototype, {
                 container.insertBefore(currentGroup, child);
             }
             currentGroup.querySelector(':scope > .message-group-stack').appendChild(child);
-            lastPubkey = pk;
-            lastTs = ts;
+            if (isPoll) {
+                currentGroup = null;
+                lastPubkey = null;
+                lastTs = 0;
+            } else {
+                lastPubkey = pk;
+                lastTs = ts;
+            }
         }
 
         const finalWrappers = container.querySelectorAll(':scope > .message-group');
