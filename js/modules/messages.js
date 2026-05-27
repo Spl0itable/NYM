@@ -1000,37 +1000,28 @@ Object.assign(NYM.prototype, {
             const msgMs = msgHasMs ? message._ms : 0;
             const msgSeq = message._seq || 0;
 
-            // Walk from the end (newest) backwards — most inserts are newer
-            // than what's currently rendered, so we exit after one comparison.
+            const allTimestamped = container.querySelectorAll('[data-created-at]');
             let insertBefore = null;
-            let cursor = container.lastElementChild;
-            while (cursor) {
-                if (!cursor.dataset || cursor.dataset.createdAt === undefined) {
-                    cursor = cursor.previousElementSibling;
-                    continue;
-                }
+            for (let i = allTimestamped.length - 1; i >= 0; i--) {
+                const cursor = allTimestamped[i];
                 const existingCreatedAt = parseInt(cursor.dataset.createdAt) || 0;
                 if (msgCreatedAt > existingCreatedAt) break;
                 if (msgCreatedAt < existingCreatedAt) {
                     insertBefore = cursor;
-                    cursor = cursor.previousElementSibling;
                     continue;
                 }
-                // Same second
                 const existingMsRaw = parseInt(cursor.dataset.ms) || 0;
                 const existingHasMs = existingMsRaw > existingCreatedAt * 1000;
                 if (msgHasMs && existingHasMs) {
                     if (msgMs > existingMsRaw) break;
                     if (msgMs < existingMsRaw) {
                         insertBefore = cursor;
-                        cursor = cursor.previousElementSibling;
                         continue;
                     }
                 }
                 const existingSeq = parseInt(cursor.dataset.seq) || 0;
                 if (msgSeq >= existingSeq) break;
                 insertBefore = cursor;
-                cursor = cursor.previousElementSibling;
             }
 
             if (insertBefore && insertBefore.parentNode) {

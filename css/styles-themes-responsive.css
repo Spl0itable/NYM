@@ -1604,7 +1604,8 @@ body.solid-ui .emoji-autocomplete,
 body.solid-ui .command-palette,
 body.solid-ui .reaction-picker,
 body.solid-ui .enhanced-emoji-modal,
-body.solid-ui .upload-progress {
+body.solid-ui .upload-progress,
+body.solid-ui .poll-container {
     background: var(--glass-bg);
 }
 
@@ -1630,7 +1631,8 @@ body.solid-ui.light-mode .emoji-autocomplete,
 body.solid-ui.light-mode .command-palette,
 body.solid-ui.light-mode .reaction-picker,
 body.solid-ui.light-mode .enhanced-emoji-modal,
-body.solid-ui.light-mode .upload-progress {
+body.solid-ui.light-mode .upload-progress,
+body.solid-ui.light-mode .poll-container {
     background: var(--glass-bg);
 }
 
