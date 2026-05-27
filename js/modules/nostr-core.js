@@ -1804,6 +1804,17 @@ Object.assign(NYM.prototype, {
             this.sendToRelay(['EVENT', signedEvent]);
 
             this.deletedEventIds.add(messageId);
+
+            // PM/group bubbles use nymMessageId as data-message-id; capture both ids
+            // for every matching stored message so a late re-render can't resurrect it.
+            this.pmMessages.forEach(msgs => {
+                for (const m of msgs) {
+                    if (m.id === messageId || m.nymMessageId === messageId) {
+                        if (m.id) this.deletedEventIds.add(m.id);
+                        if (m.nymMessageId) this.deletedEventIds.add(m.nymMessageId);
+                    }
+                }
+            });
             if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
 
             // For NIP-17 messages: also publish kind-5 against every actual gift-wrap
@@ -1851,9 +1862,14 @@ Object.assign(NYM.prototype, {
 
             // Remove message from stored PM messages
             this.pmMessages.forEach((msgs, convKey) => {
-                const idx = msgs.findIndex(m => m.id === messageId);
-                if (idx !== -1) {
-                    msgs.splice(idx, 1);
+                let removed = false;
+                for (let i = msgs.length - 1; i >= 0; i--) {
+                    if (msgs[i].id === messageId || msgs[i].nymMessageId === messageId) {
+                        msgs.splice(i, 1);
+                        removed = true;
+                    }
+                }
+                if (removed) {
                     this.channelDOMCache.delete(convKey);
                     this.persistPMMessages(convKey);
                 }
@@ -1871,8 +1887,17 @@ Object.assign(NYM.prototype, {
         for (const eTag of eTags) {
             const deletedId = eTag[1];
 
-            // Track deleted event ID to prevent re-displaying
             this.deletedEventIds.add(deletedId);
+
+            this.pmMessages.forEach(msgs => {
+                for (const m of msgs) {
+                    if (m.id === deletedId || m.nymMessageId === deletedId) {
+                        if (m.id) this.deletedEventIds.add(m.id);
+                        if (m.nymMessageId) this.deletedEventIds.add(m.nymMessageId);
+                    }
+                }
+            });
+
             if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
 
             // Prune if too large
@@ -1900,9 +1925,14 @@ Object.assign(NYM.prototype, {
 
             // Remove from PM messages
             this.pmMessages.forEach((msgs, convKey) => {
-                const idx = msgs.findIndex(m => m.id === deletedId);
-                if (idx !== -1) {
-                    msgs.splice(idx, 1);
+                let removed = false;
+                for (let i = msgs.length - 1; i >= 0; i--) {
+                    if (msgs[i].id === deletedId || msgs[i].nymMessageId === deletedId) {
+                        msgs.splice(i, 1);
+                        removed = true;
+                    }
+                }
+                if (removed) {
                     this.channelDOMCache.delete(convKey);
                     this.persistPMMessages(convKey);
                 }

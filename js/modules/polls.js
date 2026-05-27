@@ -187,7 +187,16 @@ Object.assign(NYM.prototype, {
     displayPollMessage(pollId, nym, pubkey, question, options, votes, created_at, isOwn) {
         const container = document.getElementById('messagesContainer');
         const messageEl = document.createElement('div');
-        messageEl.className = 'message poll-message' + (isOwn ? ' self' : '');
+        const pollUserShopItems = this.getUserShopItems(pubkey);
+        const pollClasses = ['message', 'poll-message'];
+        if (isOwn) pollClasses.push('self');
+        if (pollUserShopItems?.style) pollClasses.push(pollUserShopItems.style);
+        if (pollUserShopItems?.supporter) pollClasses.push('supporter-style');
+        if (Array.isArray(pollUserShopItems?.cosmetics) &&
+            pollUserShopItems.cosmetics.includes('cosmetic-aura-gold')) {
+            pollClasses.push('cosmetic-aura-gold');
+        }
+        messageEl.className = pollClasses.join(' ');
         messageEl.dataset.messageId = pollId;
         messageEl.dataset.pollId = pollId;
         messageEl.dataset.pubkey = pubkey;

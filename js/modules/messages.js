@@ -412,8 +412,9 @@ Object.assign(NYM.prototype, {
 
     displayMessage(message) {
         // Check if message has been deleted (kind 5)
-        if (this.deletedEventIds.has(message.id)) {
-            return; // Don't display deleted messages
+        if (this.deletedEventIds.has(message.id) ||
+            (message.nymMessageId && this.deletedEventIds.has(message.nymMessageId))) {
+            return;
         }
 
         // Apply pending edits that arrived before the original message
@@ -2901,6 +2902,7 @@ Object.assign(NYM.prototype, {
 
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
+            if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
             if (!msg.isOwn && !this.isFriend(msg.pubkey) &&
                 !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
                 return false;

@@ -100,6 +100,7 @@ Object.assign(NYM.prototype, {
 
         document.body.appendChild(stage);
         wrapper.classList.add('msg-disintegrate-hidden');
+        if (messageEl !== wrapper) messageEl.classList.add('msg-disintegrate-hidden');
 
         setTimeout(() => {
             if (stage.parentNode) stage.remove();
@@ -134,7 +135,13 @@ Object.assign(NYM.prototype, {
 
     _recentEmojisForPicker() {
         const isMobile = window.innerWidth <= 768;
-        return this.recentEmojis.slice(0, isMobile ? 20 : 24);
+        const limit = isMobile ? 20 : 24;
+        return this.recentEmojis.filter(e => {
+            if (typeof e !== 'string') return true;
+            const m = e.match(/^:([a-zA-Z0-9_]+):$/);
+            if (!m) return true;
+            return this.customEmojis && this.customEmojis.has(m[1]);
+        }).slice(0, limit);
     },
 
     // Move reaction state from oldId to newId so reaction keys always match the

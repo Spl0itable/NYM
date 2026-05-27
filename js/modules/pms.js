@@ -2664,6 +2664,7 @@ Object.assign(NYM.prototype, {
 
         return pmMessages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
+            if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
             const isOwn = msg.pubkey === this.pubkey;
             if (!isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
             if (!isOwn && this.hasBlockedKeyword(msg.content, msg.author)) return false;
