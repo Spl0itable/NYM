@@ -1835,7 +1835,9 @@ Object.assign(NYM.prototype, {
             // Remove message from DOM
             const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
             if (messageEl) {
-                messageEl.remove();
+                if (typeof this._playMessageDisintegration !== 'function' || !this._playMessageDisintegration(messageEl)) {
+                    messageEl.remove();
+                }
             }
 
             // Remove message from stored channel messages
@@ -1882,7 +1884,9 @@ Object.assign(NYM.prototype, {
             // Remove from DOM
             const messageEl = document.querySelector(`[data-message-id="${deletedId}"]`);
             if (messageEl) {
-                messageEl.remove();
+                if (typeof this._playMessageDisintegration !== 'function' || !this._playMessageDisintegration(messageEl)) {
+                    messageEl.remove();
+                }
             }
 
             // Remove from channel messages

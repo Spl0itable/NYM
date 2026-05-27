@@ -1882,7 +1882,7 @@ function addPollOption() {
 function submitPoll() {
     const question = document.getElementById('pollQuestion').value.trim();
     if (!question) {
-        alert('Please enter a question.');
+        window.showAppAlert('Please enter a question.');
         return;
     }
     const optionInputs = document.querySelectorAll('[data-poll-option]');
@@ -1892,7 +1892,7 @@ function submitPoll() {
         if (val) options.push(val);
     });
     if (options.length < 2) {
-        alert('Please add at least 2 options.');
+        window.showAppAlert('Please add at least 2 options.');
         return;
     }
     nym.publishPoll(question, options);
@@ -2552,7 +2552,7 @@ async function changeRelay() {
     const newRelayUrl = relaySelect === 'custom' ? customRelay : relaySelect;
 
     if (!newRelayUrl) {
-        alert('Please select or enter a relay URL');
+        window.showAppAlert('Please select or enter a relay URL');
         return;
     }
 
@@ -3338,7 +3338,7 @@ async function saveSettings() {
 
 // Clears the on-device app cache only
 async function clearLocalStorageCache() {
-    if (!confirm('Clear cached channel history, PMs, group chats, profiles, and reactions? This will not log you out or change your settings.')) {
+    if (!(await window.showAppConfirm('Clear cached channel history, PMs, group chats, profiles, and reactions? This will not log you out or change your settings.', { danger: true, okLabel: 'Clear' }))) {
         return;
     }
 
@@ -3377,7 +3377,7 @@ async function clearLocalStorageCache() {
 // app cache. Useful when the user wants to start over visually without
 // nuking conversations.
 async function resetSettings() {
-    if (!confirm('Reset all settings and preferences to defaults? This will reset theme, layout, wallpaper, sound, favorited/hidden/blocked channels, blocked users, and blocked keywords. Your login, group memberships, and PMs will be preserved.')) {
+    if (!(await window.showAppConfirm('Reset all settings and preferences to defaults? This will reset theme, layout, wallpaper, sound, favorited/hidden/blocked channels, blocked users, and blocked keywords. Your login, group memberships, and PMs will be preserved.', { danger: true, okLabel: 'Reset' }))) {
         return;
     }
 
@@ -3539,7 +3539,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.404';
+const NYMCHAT_VERSION = 'v3.66.405';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4117,7 +4117,7 @@ async function initializeNym() {
         // Restore button state on error
         enterBtn.disabled = false;
         enterBtn.innerHTML = originalBtnText;
-        alert('Failed to initialize: ' + error.message);
+        window.showAppAlert('Failed to initialize: ' + error.message);
     }
 }
 
@@ -4141,11 +4141,11 @@ function isNostrLoggedIn() {
     return localStorage.getItem('nym_nostr_login_method') !== null;
 }
 
-function openNostrLogin() {
+async function openNostrLogin() {
     if (isNostrLoggedIn()) {
         const method = localStorage.getItem('nym_nostr_login_method');
         const npub = localStorage.getItem('nym_nostr_login_npub') || '';
-        if (confirm(`Already logged in via ${method}${npub ? ' (' + npub + ')' : ''}.\n\nWould you like to log out of your Nostr identity?`)) {
+        if (await window.showAppConfirm(`Already logged in via ${method}${npub ? ' (' + npub + ')' : ''}.\n\nWould you like to log out of your Nostr identity?`, { okLabel: 'Log out', danger: true })) {
             nostrLogout();
         }
         return;
@@ -5697,30 +5697,29 @@ async function applyNostrSettings(s) {
 }
 
 // Sign-out button
-function signOut() {
-    if (confirm('Sign out and disconnect from Nymchat?')) {
-        // Clear auto-ephemeral preferences on logout
-        localStorage.removeItem('nym_auto_ephemeral');
-        localStorage.removeItem('nym_auto_ephemeral_nick');
-        localStorage.removeItem('nym_auto_ephemeral_channel');
-        localStorage.removeItem('nym_session_nsec');
-        localStorage.removeItem('nym_random_keypair_per_session');
-        localStorage.removeItem('nym_dev_nsec');
-        localStorage.removeItem('nym_color_mode');
-        localStorage.removeItem('nym_purchases_cache');
-        localStorage.removeItem('nym_active_style');
-        localStorage.removeItem('nym_active_flair');
-        // Clear Nostr login state
-        localStorage.removeItem('nym_nostr_login_method');
-        localStorage.removeItem('nym_nostr_login_pubkey');
-        localStorage.removeItem('nym_nostr_login_nsec');
-        localStorage.removeItem('nym_nostr_login_npub');
-        localStorage.removeItem('nym_bio');
-        localStorage.removeItem('nym_lightning_address_global');
-        localStorage.removeItem('nym_avatar_url');
-        localStorage.removeItem('nym_banner_url');
-        nym.cmdQuit();
-    }
+async function signOut() {
+    if (!(await window.showAppConfirm('Sign out and disconnect from Nymchat?', { okLabel: 'Sign out', danger: true }))) return;
+    // Clear auto-ephemeral preferences on logout
+    localStorage.removeItem('nym_auto_ephemeral');
+    localStorage.removeItem('nym_auto_ephemeral_nick');
+    localStorage.removeItem('nym_auto_ephemeral_channel');
+    localStorage.removeItem('nym_session_nsec');
+    localStorage.removeItem('nym_random_keypair_per_session');
+    localStorage.removeItem('nym_dev_nsec');
+    localStorage.removeItem('nym_color_mode');
+    localStorage.removeItem('nym_purchases_cache');
+    localStorage.removeItem('nym_active_style');
+    localStorage.removeItem('nym_active_flair');
+    // Clear Nostr login state
+    localStorage.removeItem('nym_nostr_login_method');
+    localStorage.removeItem('nym_nostr_login_pubkey');
+    localStorage.removeItem('nym_nostr_login_nsec');
+    localStorage.removeItem('nym_nostr_login_npub');
+    localStorage.removeItem('nym_bio');
+    localStorage.removeItem('nym_lightning_address_global');
+    localStorage.removeItem('nym_avatar_url');
+    localStorage.removeItem('nym_banner_url');
+    nym.cmdQuit();
 }
 
 // Initialize on load

@@ -2,6 +2,29 @@
 
 Object.assign(NYM.prototype, {
 
+    _pmHeaderAvatarHtml(pubkey, avatarSrc, safePk) {
+        const status = (typeof this.getEffectiveUserStatus === 'function')
+            ? this.getEffectiveUserStatus(pubkey) : 'offline';
+        const isHidden = status === 'hidden';
+        const dotStatus = isHidden ? 'offline' : status;
+        return `<span class="user-avatar-wrap pm-header-avatar${isHidden ? ' no-status' : ''}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="user-status-dot status-${dotStatus}"></span></span>`;
+    },
+
+    refreshPMHeaderStatus() {
+        if (!this.inPMMode || !this.currentPM) return;
+        const channelEl = document.getElementById('currentChannel');
+        if (!channelEl) return;
+        const dot = channelEl.querySelector('.pm-header-avatar .user-status-dot');
+        if (!dot) return;
+        const status = (typeof this.getEffectiveUserStatus === 'function')
+            ? this.getEffectiveUserStatus(this.currentPM) : 'offline';
+        const isHidden = status === 'hidden';
+        const dotStatus = isHidden ? 'offline' : status;
+        const wrap = dot.parentElement;
+        if (wrap) wrap.classList.toggle('no-status', isHidden);
+        dot.className = `user-status-dot status-${dotStatus}`;
+    },
+
     // Update the delivery checkmark on a PM message in-place
     _updateDeliveryStatusEl(messageId, receiptType) {
         const msgEl = this.findMessageElementAnywhere(messageId);
@@ -1831,7 +1854,7 @@ Object.assign(NYM.prototype, {
             const channelEl = document.getElementById('currentChannel');
             if (channelEl && channelEl.dataset.pmHeaderSig !== pmHeaderSig) {
                 const displayNym = `${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-                const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">${displayNym} <span class="nm-pms-1">(PM)</span>`;
+                const pmHeaderHtml = `${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym} <span class="nm-pms-1">(PM)</span>`;
                 channelEl.innerHTML = pmHeaderHtml;
                 channelEl.dataset.pmHeaderSig = pmHeaderSig;
             }
@@ -1973,37 +1996,36 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    deletePM(pubkey) {
-        if (confirm('Delete this PM conversation?')) {
-            this.pmConversations.delete(pubkey);
+    async deletePM(pubkey) {
+        if (!(await window.showAppConfirm('Delete this PM conversation?', { danger: true, okLabel: 'Delete' }))) return;
+        this.pmConversations.delete(pubkey);
 
-            const conversationKey = this.getPMConversationKey(pubkey);
-            this.pmMessages.delete(conversationKey);
-            if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
-            if (this.channelLastRead) {
-                this.channelLastRead.set(conversationKey, Math.floor(Date.now() / 1000));
-            }
-            if (this.unreadCounts) this.unreadCounts.delete(conversationKey);
-            if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
-
-            this.closedPMs.add(pubkey);
-            if (!this.closedPMTimes) this.closedPMTimes = new Map();
-            this.closedPMTimes.set(pubkey, Math.floor(Date.now() / 1000));
-            try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
-            try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes))); } catch { }
-            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-
-            // Remove from UI
-            const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
-            if (item) item.remove();
-
-            // If currently viewing this PM, switch to bar
-            if (this.inPMMode && this.currentPM === pubkey) {
-                this.switchChannel('nymchat', 'nymchat');
-            }
-
-            this.displaySystemMessage('PM conversation deleted');
+        const conversationKey = this.getPMConversationKey(pubkey);
+        this.pmMessages.delete(conversationKey);
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
+        if (this.channelLastRead) {
+            this.channelLastRead.set(conversationKey, Math.floor(Date.now() / 1000));
         }
+        if (this.unreadCounts) this.unreadCounts.delete(conversationKey);
+        if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
+
+        this.closedPMs.add(pubkey);
+        if (!this.closedPMTimes) this.closedPMTimes = new Map();
+        this.closedPMTimes.set(pubkey, Math.floor(Date.now() / 1000));
+        try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
+        try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes))); } catch { }
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+
+        // Remove from UI
+        const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
+        if (item) item.remove();
+
+        // If currently viewing this PM, switch to bar
+        if (this.inPMMode && this.currentPM === pubkey) {
+            this.switchChannel('nymchat', 'nymchat');
+        }
+
+        this.displaySystemMessage('PM conversation deleted');
     },
 
     deletePMDirect(pubkey) {
@@ -2076,7 +2098,7 @@ Object.assign(NYM.prototype, {
                 ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                 : '';
         const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-        const pmHeaderHtml = `<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">${displayNym} <span class="nm-pms-1">(PM)</span>`;
+        const pmHeaderHtml = `${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym} <span class="nm-pms-1">(PM)</span>`;
 
         // Update UI with formatted nym
         const _pmHeaderEl = document.getElementById('currentChannel');

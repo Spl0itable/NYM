@@ -569,16 +569,16 @@ body.sidebar-reorder-mode .nav-title {
     font-weight: 100;
 }
 
-.user-item span:last-child,
+.user-item > span:last-child,
 .pm-name {
     color: var(--text-dim);
 }
 
-.user-item:hover span:last-child {
+.user-item:hover > span:last-child {
     color: var(--text);
 }
 
-.user-item span:last-child {
+.user-item > span:last-child {
     word-break: break-word;
     overflow-wrap: break-word;
     flex: 1;

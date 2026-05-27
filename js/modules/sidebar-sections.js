@@ -188,9 +188,9 @@ Object.assign(NYM.prototype, {
                     label: 'Block channel',
                     svg: blockSvg,
                     cls: 'danger',
-                    action: () => {
+                    action: async () => {
                         const name = geohash || channel;
-                        if (!confirm(`Block channel #${name}? Messages to it will be dropped.`)) return;
+                        if (!(await window.showAppConfirm(`Block channel #${name}? Messages to it will be dropped.`, { danger: true, okLabel: 'Block' }))) return;
                         this.blockChannel(channel, geohash);
                         this.displaySystemMessage(`Blocked channel #${name}`);
                         if (typeof this.updateBlockedChannelsList === 'function') this.updateBlockedChannelsList();

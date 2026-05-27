@@ -358,10 +358,62 @@ Object.assign(NYM.prototype, {
         return this._translateDirect(text, targetLang);
     },
 
+    async translatePoll(pollId) {
+        const poll = this.polls && this.polls.get && this.polls.get(pollId);
+        if (!poll) return;
+        let targetLang = this.settings.translateLanguage;
+        if (!targetLang) {
+            targetLang = await this._promptTranslateLanguage();
+            if (!targetLang) return;
+        }
+
+        const msgEl = document.querySelector(`[data-message-id="${pollId}"]`);
+        let translationEl = msgEl && msgEl.querySelector('.message-translation');
+        if (msgEl && !translationEl) {
+            translationEl = document.createElement('div');
+            translationEl.className = 'message-translation';
+            const contentEl = msgEl.querySelector('.message-content') || msgEl;
+            contentEl.after(translationEl);
+        }
+        if (translationEl) translationEl.innerHTML = '<span class="translation-loading">Translating...</span>';
+
+        const segments = [poll.question, ...poll.options.map(o => o.text)];
+
+        try {
+            const results = await Promise.all(segments.map(s => this._translatePreservingMentions(s, targetLang)));
+            const translated = results.map(r => r.translatedText || '');
+            const detectedLang = (results.find(r => r.detectedLanguage && r.detectedLanguage !== 'auto') || {}).detectedLanguage || 'auto';
+
+            const allNoop = translated.every((t, i) => !t || !t.trim() || t.trim() === segments[i].trim());
+            if (translationEl) {
+                if (allNoop) {
+                    translationEl.innerHTML = `<span class="translation-icon">🌐</span> <span class="translation-error">Already in ${this.escapeHtml(this._languageName(targetLang))} (nothing to translate)</span>`;
+                } else {
+                    const tq = translated[0] || poll.question;
+                    const optsHtml = poll.options.map((o, i) => {
+                        const t = translated[i + 1] || o.text;
+                        return `<div class="poll-translation-option">• ${this.escapeHtml(t)}</div>`;
+                    }).join('');
+                    const langLabel = detectedLang !== 'auto' && detectedLang !== targetLang
+                        ? `<span class="translation-lang">${this.escapeHtml(this._languageName(detectedLang))} → ${this.escapeHtml(this._languageName(targetLang))}</span>` : '';
+                    translationEl.innerHTML = `<span class="translation-icon">🌐</span> <div class="poll-translation"><div class="poll-translation-question">${this.escapeHtml(tq)}</div>${optsHtml}</div> ${langLabel}`;
+                }
+            }
+        } catch (err) {
+            if (translationEl) translationEl.innerHTML = '<span class="translation-error">Translation failed</span>';
+            this.displaySystemMessage('Translation failed: ' + (err.message || 'Unknown error'));
+        }
+    },
+
     translateHoverMessage(btn) {
         const msgEl = btn.closest('[data-message-id]');
         if (!msgEl) return;
         const messageId = msgEl.getAttribute('data-message-id');
+        if (msgEl.classList.contains('poll-message')) {
+            const pollId = msgEl.dataset.pollId || messageId;
+            if (typeof this.translatePoll === 'function') this.translatePoll(pollId);
+            return;
+        }
         const contentEl = msgEl.querySelector('.message-content');
         if (!contentEl) return;
         // Extract only the non-quoted text (skip blockquote content)

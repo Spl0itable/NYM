@@ -271,6 +271,22 @@ Object.assign(NYM.prototype, {
         const safePk = this._safePubkey(pubkey);
         const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
 
+        const isMobile = window.innerWidth <= 768;
+        const hoverButtons = !isMobile ? `
+    <div class="msg-hover-buttons">
+        <button class="reaction-btn" data-action="reactionShowPicker" data-message-id="${pollId}">
+            <svg viewBox="0 0 20 20" class="nm-msg-2">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 15.5 1m-13 10a6.5 6.5 0 0 1 7.166-6.466.75.75 0 0 0 .152-1.493 8 8 0 1 0 7.14 7.139.75.75 0 0 0-1.492.152A7 7 0 0 1 15.5 11a6.5 6.5 0 1 1-13 0m4.25-.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m4.5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5M9 15c1.277 0 2.553-.724 3.06-2.173.148-.426-.209-.827-.66-.827H6.6c-.452 0-.808.4-.66.827C6.448 14.276 7.724 15 9 15"></path>
+            </svg>
+        </button>
+        <button class="translate-msg-btn" data-action="translateHoverMessage" title="Translate">
+            <svg viewBox="0 0 24 24">
+                <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
+            </svg>
+        </button>
+    </div>
+` : '';
+
         messageEl.innerHTML = `
             <span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
             <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}</span><span class="nym-bracket">&gt;</span></span>
@@ -279,9 +295,9 @@ Object.assign(NYM.prototype, {
                     <div class="poll-header">📊 Poll</div>
                     <div class="poll-question">${this.escapeHtml(question)}</div>
                     <div class="poll-options">${optionsHtml}</div>
-                    <div class="poll-footer">${totalVotes} vote${totalVotes !== 1 ? 's' : ''}</div>
+                    <div class="poll-footer" data-action="showPollVoters" data-poll-id="${pollId}">${totalVotes} vote${totalVotes !== 1 ? 's' : ''}</div>
                 </div>
-                <span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
+                <span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>${hoverButtons}
             </div>
         `;
         messageEl.querySelectorAll('.poll-option-bar[data-pct]').forEach(b => { b.style.width = b.dataset.pct + '%'; });
@@ -418,6 +434,92 @@ Object.assign(NYM.prototype, {
 
         const pollFooter = container.querySelector('.poll-footer');
         if (pollFooter) pollFooter.textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
+    },
+
+    showPollVotersModal(pollId, anchorEl, ev) {
+        if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        const poll = this.polls.get(pollId);
+        if (!poll || poll.votes.size === 0) return;
+
+        this.closePollVotersModal();
+
+        const optionLabel = new Map(poll.options.map(o => [o.index, o.text]));
+        const MAX_ROWS = 100;
+        const entries = Array.from(poll.votes.entries());
+        const shown = entries.slice(0, MAX_ROWS);
+        const rows = shown.map(([pubkey, optIdx]) => {
+            const isYou = pubkey === this.pubkey;
+            const knownUser = this.users && this.users.get && this.users.get(pubkey);
+            const nym = knownUser ? this.parseNymFromDisplay(knownUser.nym) : (this.getNymFromPubkey ? this.getNymFromPubkey(pubkey) : 'nym');
+            const suffix = this.getPubkeySuffix(pubkey);
+            const choice = optionLabel.has(optIdx) ? optionLabel.get(optIdx) : `Option ${optIdx + 1}`;
+            const avatar = this.getAvatarUrl(pubkey);
+            const sk = this._safePubkey(pubkey);
+            return `<div class="reactors-modal-user poll-voters-row" data-pubkey="${pubkey}">
+                <img src="${this.escapeHtml(avatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">
+                <span class="reactors-modal-nym">${this.escapeHtml(nym)}<span class="nym-suffix">#${suffix}</span></span>
+                ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
+                <span class="poll-voters-choice">${this.escapeHtml(choice)}</span>
+            </div>`;
+        }).join('');
+        const overflow = entries.length - shown.length;
+        const overflowItem = overflow > 0 ? `<div class="reactors-modal-more">+${overflow} more</div>` : '';
+
+        const modal = document.createElement('div');
+        modal.className = 'reactors-modal poll-voters-modal';
+        modal.innerHTML = `
+            <div class="reactors-modal-header"><span>📊 Voters</span> <span class="reactors-modal-count">${poll.votes.size}</span></div>
+            <div class="reactors-modal-list">${rows}${overflowItem}</div>
+        `;
+        document.body.appendChild(modal);
+        this._pollVotersModal = modal;
+
+        const rect = anchorEl.getBoundingClientRect();
+        const modalRect = modal.getBoundingClientRect();
+        let left = rect.left;
+        if (left + modalRect.width > window.innerWidth - 10) {
+            left = window.innerWidth - modalRect.width - 10;
+        }
+        if (left < 10) left = 10;
+        modal.style.left = left + 'px';
+        const spaceAbove = rect.top;
+        if (spaceAbove > modalRect.height + 10) {
+            modal.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+        } else {
+            modal.style.top = (rect.bottom + 6) + 'px';
+        }
+
+        modal.querySelectorAll('.poll-voters-row').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const pk = el.dataset.pubkey;
+                if (pk && pk !== this.pubkey) {
+                    const user = this.users.get(pk);
+                    const baseNym = user ? this.parseNymFromDisplay(user.nym) : 'nym';
+                    if (typeof this.openUserPM === 'function') this.openUserPM(baseNym, pk);
+                }
+                this.closePollVotersModal();
+            });
+        });
+
+        const onDocClick = (e) => {
+            if (!modal.contains(e.target) && e.target !== anchorEl) {
+                this.closePollVotersModal();
+            }
+        };
+        setTimeout(() => document.addEventListener('click', onDocClick), 0);
+        this._pollVotersModalCloser = () => document.removeEventListener('click', onDocClick);
+    },
+
+    closePollVotersModal() {
+        if (this._pollVotersModal) {
+            this._pollVotersModal.remove();
+            this._pollVotersModal = null;
+        }
+        if (this._pollVotersModalCloser) {
+            this._pollVotersModalCloser();
+            this._pollVotersModalCloser = null;
+        }
     },
 
     renderChannelPolls() {

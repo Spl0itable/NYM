@@ -2,6 +2,115 @@
 
 Object.assign(NYM.prototype, {
 
+    _playReactionBurst(anchorEl, emoji) {
+        if (!anchorEl) return;
+        const rect = anchorEl.getBoundingClientRect();
+        if (!rect.width && !rect.height) return;
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+
+        const burst = document.createElement('div');
+        burst.className = 'reaction-burst';
+        burst.style.left = cx + 'px';
+        burst.style.top = cy + 'px';
+        burst.innerHTML = this.renderReactionEmoji(emoji);
+
+        const sparks = document.createElement('div');
+        sparks.className = 'reaction-burst-sparks';
+        sparks.style.left = cx + 'px';
+        sparks.style.top = cy + 'px';
+        const sparkCount = 10;
+        for (let i = 0; i < sparkCount; i++) {
+            const s = document.createElement('span');
+            s.className = 'reaction-spark';
+            const angle = (i / sparkCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+            const dist = 22 + Math.random() * 22;
+            s.style.setProperty('--dx', (Math.cos(angle) * dist).toFixed(1) + 'px');
+            s.style.setProperty('--dy', (Math.sin(angle) * dist).toFixed(1) + 'px');
+            s.style.animationDelay = (Math.random() * 40) + 'ms';
+            sparks.appendChild(s);
+        }
+
+        document.body.appendChild(burst);
+        document.body.appendChild(sparks);
+        setTimeout(() => {
+            if (burst.parentNode) burst.remove();
+            if (sparks.parentNode) sparks.remove();
+        }, 900);
+    },
+
+    _playMessageDisintegration(messageEl) {
+        if (!messageEl) return false;
+        if (messageEl.dataset.disintegrating === '1') return true;
+
+        const isBubble = document.body.classList.contains('chat-bubbles');
+        const group = isBubble ? messageEl.closest('.message-group') : null;
+        const stack = group ? group.querySelector(':scope > .message-group-stack') : null;
+        const siblingCount = stack ? stack.querySelectorAll(':scope > .message').length : 1;
+        const wrapper = (group && siblingCount <= 1) ? group : messageEl;
+
+        const rect = wrapper.getBoundingClientRect();
+        if (!rect.width || !rect.height) return false;
+        messageEl.dataset.disintegrating = '1';
+
+        const stage = document.createElement('div');
+        stage.className = 'msg-disintegrate-stage';
+        stage.style.left = rect.left + 'px';
+        stage.style.top = rect.top + 'px';
+        stage.style.width = rect.width + 'px';
+        stage.style.height = rect.height + 'px';
+
+        const aspect = rect.width / rect.height;
+        const cols = Math.max(6, Math.min(12, Math.round(Math.sqrt(rect.width * rect.height) / 26)));
+        const rows = Math.max(3, Math.min(10, Math.round(cols / Math.max(0.6, aspect))));
+
+        const tileWPct = 100 / cols;
+        const tileHPct = 100 / rows;
+
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const tile = wrapper.cloneNode(true);
+                tile.removeAttribute('id');
+                tile.removeAttribute('data-message-id');
+                tile.querySelectorAll('[data-message-id]').forEach(n => n.removeAttribute('data-message-id'));
+                tile.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
+                tile.classList.add('msg-disintegrate-tile');
+                tile.style.width = rect.width + 'px';
+                tile.style.height = rect.height + 'px';
+
+                const x1 = c * tileWPct;
+                const y1 = r * tileHPct;
+                const x2 = (c + 1) * tileWPct;
+                const y2 = (r + 1) * tileHPct;
+                tile.style.clipPath = `polygon(${x1}% ${y1}%, ${x2}% ${y1}%, ${x2}% ${y2}%, ${x1}% ${y2}%)`;
+
+                const dx = (Math.random() - 0.35) * 130;
+                const dy = -20 - Math.random() * 110;
+                const rot = (Math.random() - 0.5) * 90;
+                const sweep = (c / cols) * 280;
+                const delay = sweep + Math.random() * 160;
+                tile.style.setProperty('--dx', dx.toFixed(1) + 'px');
+                tile.style.setProperty('--dy', dy.toFixed(1) + 'px');
+                tile.style.setProperty('--rot', rot.toFixed(0) + 'deg');
+                tile.style.animationDelay = delay + 'ms';
+
+                stage.appendChild(tile);
+            }
+        }
+
+        document.body.appendChild(stage);
+        wrapper.classList.add('msg-disintegrate-hidden');
+
+        setTimeout(() => {
+            if (stage.parentNode) stage.remove();
+            if (messageEl.parentNode) messageEl.remove();
+            if (group && !group.querySelector(':scope > .message-group-stack > .message')) {
+                if (group.parentNode) group.remove();
+            }
+        }, 1400);
+        return true;
+    },
+
     loadRecentEmojis() {
         const saved = localStorage.getItem('nym_recent_emojis');
         if (saved) {
@@ -853,6 +962,13 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
 
             // Update UI immediately
             this.updateMessageReactions(messageId);
+
+            let newBadge = null;
+            const badges = messageEl.querySelectorAll('.reaction-badge');
+            for (let i = 0; i < badges.length; i++) {
+                if (badges[i].dataset.emoji === emoji) { newBadge = badges[i]; break; }
+            }
+            this._playReactionBurst(newBadge || messageEl, emoji);
 
             // Bump our own presence so status stays "online".
             this.recordOwnActivity();

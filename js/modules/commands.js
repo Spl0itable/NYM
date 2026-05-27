@@ -819,7 +819,7 @@ Object.assign(NYM.prototype, {
         const pk = this._resolveGroupTarget(args, 'Usage: /transferowner @nym (or hex pubkey)');
         if (!pk) return;
         if (pk === this.pubkey) { this.displaySystemMessage("You're already the owner."); return; }
-        if (!confirm('Transfer group ownership to this user? You will lose owner privileges.')) return;
+        if (!(await window.showAppConfirm('Transfer group ownership to this user? You will lose owner privileges.', { danger: true, okLabel: 'Transfer' }))) return;
         await this.transferOwner(pk);
     },
 
@@ -839,7 +839,7 @@ Object.assign(NYM.prototype, {
             }
 
             // Block current channel
-            if (confirm(`Block channel #${currentChannelName}?`)) {
+            if (await window.showAppConfirm(`Block channel #${currentChannelName}?`, { danger: true, okLabel: 'Block' })) {
                 this.blockChannel(this.currentGeohash, this.currentGeohash);
                 this.displaySystemMessage(
                     this.isValidGeohash(this.currentGeohash)
@@ -865,7 +865,7 @@ Object.assign(NYM.prototype, {
             // Check if it's current channel
             if (this.currentGeohash === channelName) {
                 // Block current channel and switch to #nymchat
-                if (confirm(`Block and leave channel #${channelName}?`)) {
+                if (await window.showAppConfirm(`Block and leave channel #${channelName}?`, { danger: true, okLabel: 'Block' })) {
                     this.blockChannel(channelName, channelName);
                     this.displaySystemMessage(
                         this.isValidGeohash(channelName)

@@ -1974,3 +1974,44 @@
     justify-content: center;
     align-items: center;
 }
+
+.app-dialog {
+    z-index: 10003;
+}
+
+.app-dialog-content {
+    max-width: 440px;
+}
+
+.app-dialog-message {
+    white-space: pre-line;
+    word-wrap: break-word;
+    color: var(--text);
+    line-height: 1.45;
+    font-size: 14px;
+}
+
+.app-dialog-content .modal-actions {
+    margin-top: 8px;
+}
+
+.send-btn.danger {
+    background: rgb(from var(--danger) r g b / 0.1);
+    border-color: rgb(from var(--danger) r g b / 0.35);
+    color: var(--danger);
+}
+
+.send-btn.danger:hover:not(:disabled) {
+    background: rgb(from var(--danger) r g b / 0.18);
+    box-shadow: 0 0 15px rgb(from var(--danger) r g b / 0.15);
+}
+
+body.light-mode .send-btn.danger {
+    background: rgb(from var(--danger) r g b / 0.1);
+    border-color: rgb(from var(--danger) r g b / 0.35);
+    color: var(--danger);
+}
+
+body.light-mode .send-btn.danger:hover:not(:disabled) {
+    background: rgb(from var(--danger) r g b / 0.18);
+}

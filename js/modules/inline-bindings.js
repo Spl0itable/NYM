@@ -274,6 +274,7 @@ window.nymHapticTap = function (ms) {
         'downloadTorrent':            function (_e, t) { nym().downloadTorrent(t.dataset.offerId); },
         'requestP2PFile':             function (_e, t) { nym().requestP2PFile(t.dataset.offerId); },
         'votePoll':                   function (_e, t) { nym().votePoll(t.dataset.pollId, parseInt(t.dataset.optionIndex, 10)); },
+        'showPollVoters':             function (e, t) { nym().showPollVotersModal(t.dataset.pollId, t, e); },
         'expandVideoFromContainer':   function (e, t) {
             e.stopPropagation();
             var v = t.previousElementSibling;
@@ -312,9 +313,9 @@ window.nymHapticTap = function (ms) {
         'banMemberFromContext':       function () {
             var d = nym().contextMenuData;
             if (!d || !d.pubkey) return;
-            if (window.confirm('Ban this user from the group? They cannot be re-invited unless the owner unbans them.')) {
-                nym().banFromGroup(d.pubkey);
-            }
+            window.showAppConfirm('Ban this user from the group? They cannot be re-invited unless the owner unbans them.', { danger: true, okLabel: 'Ban' }).then(function (ok) {
+                if (ok) nym().banFromGroup(d.pubkey);
+            });
         },
         'addModFromContext':          function () {
             var d = nym().contextMenuData;
@@ -327,27 +328,28 @@ window.nymHapticTap = function (ms) {
         'transferOwnerFromContext':   function () {
             var d = nym().contextMenuData;
             if (!d || !d.pubkey) return;
-            if (window.confirm('Transfer group ownership to this user? You will lose owner privileges.')) {
-                nym().transferOwner(d.pubkey);
-            }
+            window.showAppConfirm('Transfer group ownership to this user? You will lose owner privileges.', { danger: true, okLabel: 'Transfer' }).then(function (ok) {
+                if (ok) nym().transferOwner(d.pubkey);
+            });
         },
         'deleteMessageFromContext':   function () {
             var n = nym();
             var d = n.contextMenuData;
             if (!d || !d.messageId) { n.closeContextMenu(); return; }
             var isOwn = d.pubkey === n.pubkey;
+            n.closeContextMenu();
             if (isOwn) {
-                if (window.confirm('Are you sure you want to delete this message? This will send a deletion request to relays.')) {
+                window.showAppConfirm('Are you sure you want to delete this message? This will send a deletion request to relays.', { danger: true, okLabel: 'Delete' }).then(function (ok) {
+                    if (!ok) return;
                     n.publishDeletionEvent(d.messageId, n.inPMMode ? 1059 : n.channelWire(n.currentGeohash).kind).then(function () {
                         n.displaySystemMessage('Deletion request sent to relays');
                     });
-                }
+                });
             } else if (n.inPMMode && n.currentGroup) {
-                if (window.confirm("Delete this member's message for everyone in the group?")) {
-                    n.modDeleteGroupMessage(d.messageId, d.pubkey);
-                }
+                window.showAppConfirm("Delete this member's message for everyone in the group?", { danger: true, okLabel: 'Delete' }).then(function (ok) {
+                    if (ok) n.modDeleteGroupMessage(d.messageId, d.pubkey);
+                });
             }
-            n.closeContextMenu();
         },
 
         // Error-event actions (referenced via data-error-action)

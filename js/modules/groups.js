@@ -1443,8 +1443,8 @@ Object.assign(NYM.prototype, {
     },
 
     // Delete a group conversation locally
-    deleteGroup(groupId) {
-        if (!confirm('Leave and delete this group conversation?')) return;
+    async deleteGroup(groupId) {
+        if (!(await window.showAppConfirm('Leave and delete this group conversation?', { danger: true, okLabel: 'Leave' }))) return;
         this.leaveGroup(groupId);
     },
 

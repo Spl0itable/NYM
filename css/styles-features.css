@@ -473,6 +473,94 @@
     }
 }
 
+.reaction-burst {
+    position: fixed;
+    z-index: 9999;
+    pointer-events: none;
+    font-size: 36px;
+    line-height: 1;
+    transform: translate(-50%, -50%) scale(0);
+    animation: reactionBurst 0.85s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    filter: drop-shadow(0 0 12px rgba(255, 200, 100, 0.45));
+}
+
+.reaction-burst img.custom-emoji-reaction,
+.reaction-burst img {
+    width: 36px;
+    height: 36px;
+    vertical-align: top;
+}
+
+@keyframes reactionBurst {
+    0% { transform: translate(-50%, -50%) scale(0) rotate(-25deg); opacity: 0; }
+    25% { transform: translate(-50%, -50%) scale(1.5) rotate(8deg); opacity: 1; }
+    55% { transform: translate(-50%, -70%) scale(1.15) rotate(-4deg); opacity: 1; }
+    100% { transform: translate(-50%, -130%) scale(0.5) rotate(0); opacity: 0; }
+}
+
+.reaction-burst-sparks {
+    position: fixed;
+    z-index: 9998;
+    pointer-events: none;
+    width: 0;
+    height: 0;
+}
+
+.reaction-spark {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #ffd86b 0%, #ff7b1f 70%, transparent 100%);
+    transform: translate(-50%, -50%);
+    animation: reactionSpark 0.7s ease-out forwards;
+    opacity: 0;
+}
+
+@keyframes reactionSpark {
+    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
+    100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(0.15); opacity: 0; }
+}
+
+.msg-disintegrate-stage {
+    position: fixed;
+    z-index: 9999;
+    pointer-events: none;
+    overflow: visible;
+}
+
+.msg-disintegrate-tile {
+    position: absolute !important;
+    left: 0;
+    top: 0;
+    margin: 0 !important;
+    pointer-events: none;
+    will-change: transform, opacity, filter;
+    animation: msgDisintegrateTile 1.1s cubic-bezier(0.4, 0, 0.6, 1) both;
+}
+
+.msg-disintegrate-tile .message-group-avatar {
+    position: static !important;
+}
+
+.msg-disintegrate-tile .msg-hover-buttons,
+.msg-disintegrate-tile .bubble-time,
+.msg-disintegrate-tile .bubble-time-inner {
+    display: none !important;
+}
+
+@keyframes msgDisintegrateTile {
+    0% { transform: translate(0, 0) rotate(0); opacity: 1; filter: blur(0); }
+    15% { opacity: 1; filter: blur(0.2px); }
+    100% { transform: translate(var(--dx, 0), var(--dy, -50px)) rotate(var(--rot, 0)); opacity: 0; filter: blur(2.5px); }
+}
+
+.msg-disintegrate-hidden {
+    visibility: hidden !important;
+}
+
 .style-preview-satoshi {
     position: relative;
     display: inline-block;
@@ -1567,6 +1655,24 @@ body:not(.chat-bubbles) .message.supporter-style {
     flex-shrink: 0;
     margin-right: 4px;
     vertical-align: middle;
+}
+
+.pm-header-avatar {
+    width: 18px;
+    height: 18px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.pm-header-avatar .avatar-message {
+    margin-right: 0;
+}
+
+.pm-header-avatar .user-status-dot {
+    width: 7px;
+    height: 7px;
+    bottom: -2px;
+    right: -2px;
 }
 
 .avatar-user-list {
@@ -3279,6 +3385,70 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     margin-top: 12px;
     font-size: 11px;
     color: var(--text-dim);
+    cursor: pointer;
+    display: inline-block;
+    border-radius: var(--radius-xs, 6px);
+    padding: 2px 6px;
+    margin-left: -6px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.poll-footer:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+}
+
+.poll-voters-modal .reactors-modal-list {
+    max-height: 320px;
+}
+
+.poll-voters-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+}
+
+.poll-voters-row .poll-voter-avatar {
+    width: 18px;
+    height: 18px;
+    margin-left: 0;
+}
+
+.poll-voters-row .reactors-modal-nym {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.poll-voters-choice {
+    font-size: 0.85em;
+    color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: var(--radius-xs, 6px);
+    padding: 2px 6px;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.poll-translation {
+    display: inline-block;
+    vertical-align: top;
+}
+
+.poll-translation-question {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.poll-translation-option {
+    font-size: 0.95em;
+    opacity: 0.9;
+    line-height: 1.4;
 }
 
 .poll-option-input-row {
