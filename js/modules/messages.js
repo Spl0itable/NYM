@@ -1880,7 +1880,14 @@ Object.assign(NYM.prototype, {
         const preview = document.getElementById('quotePreview');
         const authorEl = document.getElementById('quotePreviewAuthor');
         const textEl = document.getElementById('quotePreviewText');
-        authorEl.textContent = `@${author}`;
+        const hashIdx = author.indexOf('#');
+        if (hashIdx >= 0) {
+            const base = author.substring(0, hashIdx);
+            const suffix = author.substring(hashIdx);
+            authorEl.innerHTML = `@${this.escapeHtml(base)}<span class="nym-suffix">${this.escapeHtml(suffix)}</span>`;
+        } else {
+            authorEl.textContent = `@${author}`;
+        }
         // Strip markdown/HTML, keep shortcodes so they can render as images
         const cleanText = text.replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
         const truncated = cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText;

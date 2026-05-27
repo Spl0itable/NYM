@@ -1143,12 +1143,17 @@ Object.assign(NYM.prototype, {
         const sendBtn = document.getElementById('sendBtn');
         let sendLongPressTimer = null;
         let sendLongPressFired = false;
+        let sendSuppressClickUntil = 0;
 
         const startSendLongPress = (e) => {
+            if (e && e.type === 'mousedown' && e.button !== 0) return;
+            if (sendLongPressTimer) return;
             sendLongPressFired = false;
             sendLongPressTimer = setTimeout(() => {
+                sendLongPressTimer = null;
                 if (this.nostrLoginMethod) {
                     sendLongPressFired = true;
+                    sendSuppressClickUntil = Date.now() + 800;
                     window.nymHapticTap && window.nymHapticTap();
                     sendBtn.style.boxShadow = '0 0 15px rgb(from var(--primary) r g b / 0.4)';
                     sendBtn.textContent = 'ANON';
@@ -1156,10 +1161,10 @@ Object.assign(NYM.prototype, {
                     setTimeout(() => {
                         sendBtn.textContent = 'SEND';
                         sendBtn.style.boxShadow = '';
+                        sendLongPressFired = false;
                     }, 1000);
                 }
             }, 2000);
-            // Visual feedback: after 700ms start pulsing if Nostr logged in
             if (this.nostrLoginMethod) {
                 setTimeout(() => {
                     if (sendLongPressTimer) {
@@ -1176,24 +1181,27 @@ Object.assign(NYM.prototype, {
                 sendLongPressTimer = null;
                 sendBtn.style.boxShadow = '';
             }
-            if (sendLongPressFired) {
+            if (sendLongPressFired && e && e.cancelable) {
                 e.preventDefault();
                 e.stopPropagation();
-                sendLongPressFired = false;
             }
         };
 
         sendBtn.addEventListener('click', (e) => {
-            if (!sendLongPressFired) {
-                sendMessage();
+            if (sendLongPressFired || Date.now() < sendSuppressClickUntil) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
             }
+            sendMessage();
         });
         sendBtn.addEventListener('mousedown', startSendLongPress);
-        sendBtn.addEventListener('touchstart', startSendLongPress, { passive: true });
+        sendBtn.addEventListener('touchstart', startSendLongPress, { passive: false });
         sendBtn.addEventListener('mouseup', cancelSendLongPress);
         sendBtn.addEventListener('mouseleave', cancelSendLongPress);
         sendBtn.addEventListener('touchend', cancelSendLongPress);
         sendBtn.addEventListener('touchcancel', cancelSendLongPress);
+        sendBtn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
 
         // Long-press on messages to show quick emoji reaction popup
         const messagesEl = document.getElementById('messagesContainer');
