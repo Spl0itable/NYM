@@ -182,6 +182,17 @@ Object.assign(NYM.prototype, {
                     }
                 }
             }
+
+            const isMobile = window.innerWidth <= 768;
+            if (!isMobile && !el.querySelector('.msg-hover-buttons')) {
+                const contentEl = el.querySelector(':scope > .message-content');
+                if (contentEl) {
+                    const hb = document.createElement('div');
+                    hb.className = 'msg-hover-buttons';
+                    hb.innerHTML = `<button class="reaction-btn" data-action="reactionShowPicker" data-message-id="${signedEvent.id}"><svg viewBox="0 0 20 20" class="nm-msg-2"><path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 15.5 1m-13 10a6.5 6.5 0 0 1 7.166-6.466.75.75 0 0 0 .152-1.493 8 8 0 1 0 7.14 7.139.75.75 0 0 0-1.492.152A7 7 0 0 1 15.5 11a6.5 6.5 0 1 1-13 0m4.25-.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m4.5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5M9 15c1.277 0 2.553-.724 3.06-2.173.148-.426-.209-.827-.66-.827H6.6c-.452 0-.808.4-.66.827C6.448 14.276 7.724 15 9 15"></path></svg></button><button class="translate-msg-btn" data-action="translateHoverMessage" title="Translate"><svg viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg></button>`;
+                    contentEl.appendChild(hb);
+                }
+            }
         }
     },
 

@@ -754,6 +754,8 @@ body.sidebar-reorder-mode .nav-title {
     background: var(--glass-bg);
     backdrop-filter: blur(30px) saturate(1.5);
     -webkit-backdrop-filter: blur(30px) saturate(1.5);
+    min-width: 0;
+    overflow: hidden;
 }
 
 .channel-info {
@@ -771,7 +773,7 @@ body.sidebar-reorder-mode .nav-title {
     overflow: hidden;
 }
 
-.channel-info > .nm-h-15 > div:not([class]) {
+.channel-title-wrap {
     min-width: 0;
     flex: 1 1 auto;
     overflow: hidden;

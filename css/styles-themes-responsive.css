@@ -297,8 +297,9 @@ body.light-mode .verified-badge::before {
     .chat-header {
         padding: 15px 10px;
         padding-top: 12px;
-        padding-right: 55px;
+        padding-right: 108px;
         flex-shrink: 0;
+        overflow: hidden;
     }
 
     .channel-nav-buttons {
