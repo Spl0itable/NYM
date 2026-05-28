@@ -306,7 +306,7 @@ Object.assign(NYM.prototype, {
                     <div class="poll-options">${optionsHtml}</div>
                     <div class="poll-footer" data-action="showPollVoters" data-poll-id="${pollId}">${totalVotes} vote${totalVotes !== 1 ? 's' : ''}</div>
                 </div>
-                <span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${timeStr}</span>${hoverButtons}
+                <span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp"><span class="bubble-time-text">${document.body.classList.contains('chat-bubbles') ? this._formatRelativeTime(displayTimestamp.getTime()) : timeStr}</span></span>${hoverButtons}
             </div>
         `;
         messageEl.querySelectorAll('.poll-option-bar[data-pct]').forEach(b => { b.style.width = b.dataset.pct + '%'; });

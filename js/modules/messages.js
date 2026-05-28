@@ -842,6 +842,8 @@ Object.assign(NYM.prototype, {
                 (this.isEmojiOnly(message.content) || this.isCustomEmojiOnly(message.content)) ? ' emoji-only' : '';
 
             const bubbleTime = time || displayTimestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: this.settings.timeFormat === '12hr' });
+            const isBubbleLayout = document.body.classList.contains('chat-bubbles');
+            const bubbleTimeText = isBubbleLayout ? this._formatRelativeTime(displayTimestamp.getTime()) : bubbleTime;
 
             // Check if this message has been edited
             const isEdited = message.isEdited;
@@ -851,7 +853,7 @@ Object.assign(NYM.prototype, {
             messageEl.innerHTML = `
     ${time ? `<span class="message-time clickable-timestamp ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${time}</span>` : ''}
     <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span></span>
-    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${editedBubble}${bubbleTime}</span>${hoverButtons}</span>
+    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${editedBubble}<span class="bubble-time-text">${bubbleTimeText}</span></span>${hoverButtons}</span>
     ${editedIRC}
     ${deliveryCheckmark}
 `;
@@ -1053,6 +1055,10 @@ Object.assign(NYM.prototype, {
             document.body.classList.contains('chat-bubbles')) {
             messageEl.classList.add('bubble-snap');
             setTimeout(() => { messageEl.classList.remove('bubble-snap'); }, 320);
+        }
+
+        if (document.body.classList.contains('chat-bubbles')) {
+            this._ensureBubbleRelativeTimer();
         }
 
         // Sending your own channel message should always jump to the latest,
@@ -3140,6 +3146,44 @@ Object.assign(NYM.prototype, {
         this.updateUserList();
     },
 
+    _formatRelativeTime(ts) {
+        const now = Date.now();
+        const diff = Math.max(0, now - ts);
+        const s = Math.floor(diff / 1000);
+        if (s < 45) return 'now';
+        if (s < 90) return '1m';
+        const m = Math.floor(s / 60);
+        if (m < 60) return m + 'm';
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + 'h';
+        const d = Math.floor(h / 24);
+        if (d < 7) return d + 'd';
+        const date = new Date(ts);
+        const sameYear = date.getFullYear() === new Date().getFullYear();
+        return date.toLocaleDateString('en-US',
+            sameYear ? { month: 'short', day: 'numeric' }
+                     : { month: 'short', day: 'numeric', year: 'numeric' });
+    },
+
+    _refreshBubbleRelativeTimes() {
+        if (!document.body.classList.contains('chat-bubbles')) return;
+        document.querySelectorAll('.bubble-time-inner > .bubble-time-text').forEach(el => {
+            const msgEl = el.closest('[data-timestamp]');
+            const ts = msgEl ? parseInt(msgEl.dataset.timestamp) : 0;
+            if (!ts) return;
+            const next = this._formatRelativeTime(ts);
+            if (el.textContent !== next) el.textContent = next;
+        });
+    },
+
+    _ensureBubbleRelativeTimer() {
+        if (this._bubbleRelTimer) return;
+        if (typeof this._setManagedInterval === 'function') {
+            this._bubbleRelTimer = true;
+            this._setManagedInterval('bubble-rel-times', () => this._refreshBubbleRelativeTimes(), 30000);
+        }
+    },
+
     showTimestampPopup(anchorEl, fullTime) {
         this.closeTimestampPopup();
         if (!anchorEl || !fullTime) return;
@@ -3157,12 +3201,24 @@ Object.assign(NYM.prototype, {
             ? `bottom:${window.innerHeight - rect.top + 6}px;`
             : `top:${rect.bottom + 6}px;`;
         modal.style.cssText += `right:${right}px;${verticalDecl}`;
+
+        const onScroll = () => this.closeTimestampPopup();
+        this._timestampPopupScrollHandler = onScroll;
+        const scroller = document.getElementById('messagesContainer');
+        if (scroller) scroller.addEventListener('scroll', onScroll, { passive: true, capture: true });
+        window.addEventListener('scroll', onScroll, { passive: true, capture: true });
     },
 
     closeTimestampPopup() {
         if (this.timestampPopup) {
             this.timestampPopup.remove();
             this.timestampPopup = null;
+        }
+        if (this._timestampPopupScrollHandler) {
+            const scroller = document.getElementById('messagesContainer');
+            if (scroller) scroller.removeEventListener('scroll', this._timestampPopupScrollHandler, { capture: true });
+            window.removeEventListener('scroll', this._timestampPopupScrollHandler, { capture: true });
+            this._timestampPopupScrollHandler = null;
         }
     },
 

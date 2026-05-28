@@ -831,11 +831,15 @@ Object.assign(NYM.prototype, {
     // Render the custom wallpaper from a local blob
     async _ensureWallpaperCached(customUrl) {
         if (this.wallpaperBlobUrl && this._wallpaperCachedUrl === customUrl) return;
+        if (this._wallpaperCacheLoading === customUrl) return;
+        this._wallpaperCacheLoading = customUrl;
         try {
             const meta = await this._cacheGetAll('meta');
             const entry = meta.find(m => m.key === 'customWallpaper');
             if (entry && entry.blob && entry.url === customUrl) {
-                this._setWallpaperBlobUrl(entry.blob);
+                if (this._wallpaperCachedUrl !== customUrl) {
+                    this._setWallpaperBlobUrl(entry.blob);
+                }
             } else {
                 const res = await fetch(customUrl);
                 if (!res.ok) return;
@@ -847,7 +851,12 @@ Object.assign(NYM.prototype, {
             if ((localStorage.getItem('nym_wallpaper_type') || '') === 'custom') {
                 this.applyWallpaper('custom', customUrl);
             }
-        } catch (_) { }
+        } catch (_) {
+        } finally {
+            if (this._wallpaperCacheLoading === customUrl) {
+                this._wallpaperCacheLoading = null;
+            }
+        }
     },
 
     async uploadImage(fileOrFiles) {

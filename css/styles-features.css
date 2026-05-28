@@ -2932,6 +2932,8 @@ body.chat-bubbles .bubble-time {
 
 body.chat-bubbles .bubble-time-inner {
     display: block;
+    width: fit-content;
+    margin-left: auto;
     font-size: 10px;
     color: var(--text-dim);
     text-align: right;
@@ -3031,6 +3033,7 @@ body.chat-bubbles .message.supporter-style .message-content {
 }
 
 body.chat-bubbles .message.cosmetic-aura-gold .message-content {
+    background: linear-gradient(135deg, rgba(255, 215, 0, 0.16), rgba(255, 215, 0, 0.06)) !important;
     box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.55), 0 0 12px rgba(255, 215, 0, 0.18);
 }
 

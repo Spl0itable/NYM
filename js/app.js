@@ -3461,6 +3461,18 @@ function applyMessageLayout(layout) {
         const container = document.getElementById('messagesContainer');
         if (container) nym._recomputeAllBubbleGrouping(container);
     }
+    if (layout === 'bubbles' && typeof nym !== 'undefined') {
+        if (typeof nym._refreshBubbleRelativeTimes === 'function') nym._refreshBubbleRelativeTimes();
+        if (typeof nym._ensureBubbleRelativeTimer === 'function') nym._ensureBubbleRelativeTimer();
+    } else if (layout !== 'bubbles' && typeof nym !== 'undefined') {
+        document.querySelectorAll('.bubble-time-inner > .bubble-time-text').forEach(el => {
+            const msgEl = el.closest('[data-timestamp]');
+            const ts = msgEl ? parseInt(msgEl.dataset.timestamp) : 0;
+            if (!ts) return;
+            const d = new Date(ts);
+            el.textContent = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: nym.settings.timeFormat === '12hr' });
+        });
+    }
 }
 
 // Wallpaper Functions
@@ -3542,7 +3554,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.412';
+const NYMCHAT_VERSION = 'v3.66.420';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5276,12 +5288,18 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_wallpaper_custom_url', s.wallpaperCustomUrl);
     }
     if (s.wallpaperType) {
+        const prevType = localStorage.getItem('nym_wallpaper_type') || '';
+        const prevUrl = localStorage.getItem('nym_wallpaper_custom_url') || '';
+        const sameAsCurrent = prevType === s.wallpaperType
+            && (s.wallpaperType !== 'custom' || prevUrl === (s.wallpaperCustomUrl || ''));
         localStorage.setItem('nym_wallpaper_type', s.wallpaperType);
         if (s.wallpaperType === 'custom' && s.wallpaperCustomUrl) {
-            nym.applyWallpaper('custom', s.wallpaperCustomUrl);
-            nym.saveWallpaper('custom', s.wallpaperCustomUrl);
-            nym._ensureWallpaperCached(s.wallpaperCustomUrl);
-        } else if (typeof selectWallpaper === 'function') {
+            if (!sameAsCurrent || !nym.wallpaperBlobUrl) {
+                nym.applyWallpaper('custom', s.wallpaperCustomUrl);
+                nym.saveWallpaper('custom', s.wallpaperCustomUrl);
+                nym._ensureWallpaperCached(s.wallpaperCustomUrl);
+            }
+        } else if (!sameAsCurrent && typeof selectWallpaper === 'function') {
             selectWallpaper(s.wallpaperType);
         }
     }
