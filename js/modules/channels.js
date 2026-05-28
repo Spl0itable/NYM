@@ -1023,6 +1023,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // switching back from PM mode to the same channel correctly
         this.loadChannelMessages(displayName);
 
+        // Report receipts for messages that piled up here while we were away
+        if (typeof this.markVisibleChannelMessagesRead === 'function') {
+            this.markVisibleChannelMessagesRead();
+        }
+
         // Update user list for this channel
         this.updateUserList();
 

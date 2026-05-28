@@ -515,6 +515,10 @@ Object.assign(NYM.prototype, {
                             this._schedulePoolReconnectInBackground(true);
                         }
                     }
+
+                    if (typeof this.markVisibleChannelMessagesRead === 'function') {
+                        this.markVisibleChannelMessagesRead();
+                    }
                 }, delay);
             } else {
                 this._backgroundedAt = Date.now();
@@ -555,6 +559,10 @@ Object.assign(NYM.prototype, {
                     if (this._poolFallbackActive && navigator.onLine) {
                         this._schedulePoolReconnectInBackground(true);
                     }
+                }
+
+                if (typeof this.markVisibleChannelMessagesRead === 'function') {
+                    this.markVisibleChannelMessagesRead();
                 }
             }, delay);
         });

@@ -1469,6 +1469,22 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
+    // Catch-up receipts for the current channel
+    markVisibleChannelMessagesRead() {
+        if (this.inPMMode || !this.currentGeohash) return;
+        if (document.hidden || this.userScrolledUp) return;
+        if (!this.isReadReceiptAllowedFor('channel')) return;
+        if (!this._canPublishChannelEvent()) return;
+        const messages = this.messages.get(`#${this.currentGeohash}`);
+        if (!messages || !messages.length) return;
+        const geohash = this.currentGeohash;
+        for (const m of messages.slice(-this.channelPageSize)) {
+            if (!m || m.isOwn || m.isHistorical) continue;
+            if (!m.id || !/^[0-9a-f]{64}$/i.test(m.id)) continue;
+            this.sendChannelReadReceipt(m.id, m.pubkey, m.geohash || geohash);
+        }
+    },
+
     handleChannelReadReceipt(event) {
         if (!event || event.pubkey === this.pubkey) return;
 
