@@ -3554,7 +3554,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.420';
+const NYMCHAT_VERSION = 'v3.66.413';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
