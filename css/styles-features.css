@@ -3830,6 +3830,7 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     text-decoration: none;
 }
 
+/* ===== Audio/Video Calls ===== */
 .incoming-call-content {
     text-align: center;
     max-width: 320px;
@@ -3890,7 +3891,7 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 }
 
 .incoming-call-btn:hover { transform: scale(1.08); filter: brightness(1.1); }
-.incoming-call-btn.accept { background: #1db954; }
+.incoming-call-btn.accept { background: var(--primary); color: var(--bg); }
 .incoming-call-btn.decline { background: var(--danger); }
 .incoming-call-btn.decline svg { transform: rotate(135deg); }
 
@@ -4023,3 +4024,6 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 .call-control-btn.active { background: var(--danger); color: #fff; border-color: var(--danger); }
 .call-control-btn.hangup { background: var(--danger); color: #fff; border-color: var(--danger); }
 .call-control-btn.hangup svg { transform: rotate(135deg); }
+
+body.light-mode .call-overlay { background: rgba(245, 245, 242, 0.95); }
+body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
