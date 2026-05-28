@@ -700,6 +700,9 @@ class NYM {
         this.p2pReceivedChunks = new Map();
         this.p2pSignalingSubscriptions = new Set();
         this.p2pIceServers = [
+            // 0xchat public relay (enables calls/transfers behind symmetric NATs)
+            { urls: 'stun:rtc.0xchat.com:5349' },
+            { urls: 'turn:rtc.0xchat.com:5349', username: '0xchat', credential: 'Prettyvs511' },
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
@@ -3578,7 +3581,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.416';
+const NYMCHAT_VERSION = 'v3.67.417';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
