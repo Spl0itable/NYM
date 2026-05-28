@@ -3581,7 +3581,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.417';
+const NYMCHAT_VERSION = 'v3.67.418';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5478,6 +5478,19 @@ async function applyNostrSettings(s) {
     if (s.acceptPMs) {
         nym.settings.acceptPMs = s.acceptPMs;
         localStorage.setItem('nym_accept_pms', s.acceptPMs);
+    }
+
+    // Accept calls setting
+    if (s.acceptCalls) {
+        nym.settings.acceptCalls = s.acceptCalls;
+        localStorage.setItem('nym_accept_calls', s.acceptCalls);
+        const acceptCallsSel = document.getElementById('acceptCallsSelect');
+        if (acceptCallsSel) acceptCallsSel.value = s.acceptCalls;
+    }
+
+    // Seen calls (cross-device call dedup)
+    if (s.seenCalls && typeof nym._mergeSeenCalls === 'function') {
+        nym._mergeSeenCalls(s.seenCalls);
     }
 
     // Blocked keywords

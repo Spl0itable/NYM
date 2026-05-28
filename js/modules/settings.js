@@ -123,6 +123,8 @@ Object.assign(NYM.prototype, {
             leftGroupTimes: this.leftGroupTimes ? Object.fromEntries(this.leftGroupTimes) : {},
             channelLastRead: this.channelLastRead ? Object.fromEntries(this.channelLastRead) : {},
             acceptPMs: this.settings.acceptPMs || 'enabled',
+            acceptCalls: this.settings.acceptCalls || 'enabled',
+            seenCalls: this._seenCallsForSync(),
             syncMLSHistory: this.settings.syncMLSHistory !== false,
             showStatus: this.settings.showStatus !== false,
             cachePMs: this.settings.cachePMs !== false,

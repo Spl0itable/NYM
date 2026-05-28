@@ -119,7 +119,7 @@ Object.assign(NYM.prototype, {
         let data;
         try { data = JSON.parse(event.content); } catch (e) { return; }
         switch (data.type) {
-            case 'invite': this._onCallInvite(sender, data); break;
+            case 'invite': this._onCallInvite(sender, data, event); break;
             case 'accept': this._onCallAccept(sender, data); break;
             case 'reject': this._onCallReject(sender, data); break;
             case 'cancel': this._onCallCancel(sender, data); break;
@@ -130,7 +130,63 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _onCallInvite(sender, data) {
+    _getSeenCalls() {
+        if (this._seenCalls) return this._seenCalls;
+        let map = {};
+        try { map = JSON.parse(localStorage.getItem('nym_seen_calls') || '{}') || {}; } catch (_) { map = {}; }
+        this._seenCalls = map;
+        return map;
+    },
+
+    _seenCallsForSync() {
+        const map = this._getSeenCalls();
+        const ids = Object.keys(map).sort((a, b) => map[b] - map[a]).slice(0, 100);
+        const out = {};
+        ids.forEach(id => { out[id] = map[id]; });
+        return out;
+    },
+
+    _hasSeenCall(callId) {
+        if (!callId) return false;
+        return Object.prototype.hasOwnProperty.call(this._getSeenCalls(), callId);
+    },
+
+    _persistSeenCalls(map) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const cutoff = nowSec - 3600;
+        for (const id in map) { if (map[id] < cutoff) delete map[id]; }
+        try { localStorage.setItem('nym_seen_calls', JSON.stringify(map)); } catch (_) { }
+    },
+
+    _markCallSeen(callId) {
+        if (!callId) return;
+        const map = this._getSeenCalls();
+        map[callId] = Math.floor(Date.now() / 1000);
+        this._persistSeenCalls(map);
+        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave();
+    },
+
+    // Merge a synced seen-call map from another device so a handled call
+    // isn't re-rung after a reload elsewhere
+    _mergeSeenCalls(incoming) {
+        if (!incoming || typeof incoming !== 'object') return;
+        const map = this._getSeenCalls();
+        const cutoff = Math.floor(Date.now() / 1000) - 3600;
+        for (const id in incoming) {
+            const ts = incoming[id];
+            if (typeof ts !== 'number' || ts < cutoff) continue;
+            if (!map[id] || ts > map[id]) map[id] = ts;
+        }
+        this._persistSeenCalls(map);
+    },
+
+    _onCallInvite(sender, data, event) {
+        // Drop replayed/stale invites so a reload doesn't ring on old signaling events
+        const createdAt = event && event.created_at ? event.created_at : 0;
+        if (createdAt && (Math.floor(Date.now() / 1000) - createdAt) > 60) return;
+        if (this._hasSeenCall(data.callId)) return;
+        this._markCallSeen(data.callId);
+
         if (this.activeCall || this.incomingCall) {
             this._sendCallSignal(sender, { type: 'reject', callId: data.callId, reason: 'busy' });
             return;
