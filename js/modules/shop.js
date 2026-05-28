@@ -155,7 +155,8 @@ Object.assign(NYM.prototype, {
         if (data.active && typeof data.active === 'object') {
             this.activeMessageStyle = data.active.style || null;
             this.localActiveStyle = this.activeMessageStyle;
-            this.activeFlairs = new Set(Array.isArray(data.active.flair) ? data.active.flair : []);
+            const flairArr = Array.isArray(data.active.flair) ? data.active.flair : [];
+            this.activeFlairs = new Set(flairArr.length ? [flairArr[flairArr.length - 1]] : []);
             this.activeCosmetics = new Set(Array.isArray(data.active.cosmetics) ? data.active.cosmetics : []);
             this.supporterBadgeActive = !!data.active.supporter;
         }
@@ -349,6 +350,7 @@ Object.assign(NYM.prototype, {
             this.activeFlairs.delete(flairId);
             this.displaySystemMessage(`Deactivated ${item.name}`);
         } else {
+            this.activeFlairs.clear();
             this.activeFlairs.add(flairId);
             this.displaySystemMessage(`Activated ${item.name}`);
         }

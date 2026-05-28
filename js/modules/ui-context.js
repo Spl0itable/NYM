@@ -1085,6 +1085,10 @@ Object.assign(NYM.prototype, {
                 !e.target.closest('.group-readers')) {
                 this.closeReadersModal();
             }
+            if (!e.target.closest('.timestamp-popup') &&
+                !e.target.closest('.clickable-timestamp')) {
+                if (typeof this.closeTimestampPopup === 'function') this.closeTimestampPopup();
+            }
 
             // Handle command palette item click
             if (e.target.closest('.command-item')) {

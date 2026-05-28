@@ -291,6 +291,11 @@ window.nymHapticTap = function (ms) {
             nym().handleChannelLink(t.dataset.channelRef, e);
             return false;
         },
+        'showFullTimestamp':          function (e, t) {
+            if (e && e.stopPropagation) e.stopPropagation();
+            var full = (t && t.dataset && t.dataset.fullTime) || (t && t.getAttribute && t.getAttribute('title')) || '';
+            if (full) nym().showTimestampPopup(t, full);
+        },
         'codeBlockCopy':              function (_e, t) {
             try {
                 var code = t.dataset.code;

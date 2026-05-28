@@ -3542,7 +3542,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.411';
+const NYMCHAT_VERSION = 'v3.66.412';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4911,6 +4911,20 @@ async function applyNostrSettingsAdditive(s) {
         && s.notificationLastReadTime > (nym.notificationLastReadTime || 0)) {
         nym.notificationLastReadTime = s.notificationLastReadTime;
         try { localStorage.setItem('nym_notification_last_read', String(s.notificationLastReadTime)); } catch (_) { }
+        if (Array.isArray(nym.notificationHistory)) {
+            let retroChanged = false;
+            for (const n of nym.notificationHistory) {
+                if (!n || n.viewed === true) continue;
+                const observedAt = n.receivedAt || n.timestamp || 0;
+                if (observedAt <= nym.notificationLastReadTime) {
+                    n.viewed = true;
+                    retroChanged = true;
+                }
+            }
+            if (retroChanged && typeof nym._saveNotificationHistory === 'function') {
+                nym._saveNotificationHistory();
+            }
+        }
         if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
     }
 

@@ -1770,6 +1770,7 @@ Object.assign(NYM.prototype, {
                 list.splice(idx, 1);
                 this.channelDOMCache.delete(groupConvKey);
                 if (typeof this.persistPMMessages === 'function') this.persistPMMessages(groupConvKey);
+                if (typeof this.updateUnreadCount === 'function') this.updateUnreadCount(groupConvKey);
             } else if (this.deletedEventIds && this.deletedEventIds.add) {
                 // Not in our local list yet — remember so a late-arriving copy stays gone.
                 this.deletedEventIds.add(messageId);

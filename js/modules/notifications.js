@@ -240,19 +240,18 @@ Object.assign(NYM.prototype, {
 
         if (!this.notificationsEnabled) {
             [desktopBadge, mobileBadge].forEach(badge => {
-                if (badge) badge.style.display = 'none';
+                if (badge) badge.classList.add('nm-hidden');
             });
             return;
         }
 
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+        const lastRead = this.notificationLastReadTime || 0;
         const unreadCount = this.notificationHistory.filter(n => {
             if (n.timestamp <= cutoff24h) return false;
             if (n.viewed === true) return false;
-            if (typeof n.viewed !== 'boolean') {
-                const observedAt = n.receivedAt || n.timestamp || 0;
-                if (observedAt <= (this.notificationLastReadTime || 0)) return false;
-            }
+            const observedAt = n.receivedAt || n.timestamp || 0;
+            if (observedAt <= lastRead) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
             return true;
@@ -262,9 +261,9 @@ Object.assign(NYM.prototype, {
             if (!badge) return;
             if (unreadCount > 0) {
                 badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
-                badge.style.display = '';
+                badge.classList.remove('nm-hidden');
             } else {
-                badge.style.display = 'none';
+                badge.classList.add('nm-hidden');
             }
         });
     },

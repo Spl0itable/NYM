@@ -297,8 +297,8 @@ Object.assign(NYM.prototype, {
 ` : '';
 
         messageEl.innerHTML = `
-            <span class="message-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>
-            <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}</span><span class="nym-bracket">&gt;</span></span>
+            <span class="message-time clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${timeStr}</span>
+            <span class="message-author ${isOwn ? 'self' : ''} ${userColorClass}"><span class="bubble-time clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${timeStr}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}</span><span class="nym-bracket">&gt;</span></span>
             <div class="message-content">
                 <div class="poll-container" data-poll-id="${pollId}">
                     <div class="poll-header">📊 Poll</div>
@@ -306,7 +306,7 @@ Object.assign(NYM.prototype, {
                     <div class="poll-options">${optionsHtml}</div>
                     <div class="poll-footer" data-action="showPollVoters" data-poll-id="${pollId}">${totalVotes} vote${totalVotes !== 1 ? 's' : ''}</div>
                 </div>
-                <span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${timeStr}</span>${hoverButtons}
+                <span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${timeStr}</span>${hoverButtons}
             </div>
         `;
         messageEl.querySelectorAll('.poll-option-bar[data-pct]').forEach(b => { b.style.width = b.dataset.pct + '%'; });

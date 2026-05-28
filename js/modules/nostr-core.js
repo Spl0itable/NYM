@@ -1963,6 +1963,9 @@ Object.assign(NYM.prototype, {
             if (idx !== -1) {
                 msgs.splice(idx, 1);
                 this.persistChannelMessages(channel);
+                if (typeof this.updateUnreadCount === 'function') {
+                    this.updateUnreadCount(channel);
+                }
             }
         });
 
@@ -1977,6 +1980,9 @@ Object.assign(NYM.prototype, {
             if (removed) {
                 this.channelDOMCache.delete(convKey);
                 this.persistPMMessages(convKey);
+                if (typeof this.updateUnreadCount === 'function') {
+                    this.updateUnreadCount(convKey);
+                }
             }
         });
     },

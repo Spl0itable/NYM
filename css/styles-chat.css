@@ -579,6 +579,22 @@
     min-width: 50px;
 }
 
+.clickable-timestamp {
+    cursor: pointer;
+    transition: color 120ms ease;
+}
+
+.clickable-timestamp:hover {
+    color: var(--primary);
+}
+
+.timestamp-popup-body {
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+}
+
 .group-readers,
 .channel-readers {
     display: flex;

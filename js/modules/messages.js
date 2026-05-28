@@ -849,9 +849,9 @@ Object.assign(NYM.prototype, {
             const editedIRC = isEdited ? '<span class="edited-indicator edited-indicator-irc" title="This message has been edited">(edited)</span>' : '';
 
             messageEl.innerHTML = `
-    ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
-    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span></span>
-    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${editedBubble}${bubbleTime}</span>${hoverButtons}</span>
+    ${time ? `<span class="message-time clickable-timestamp ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${time}</span>` : ''}
+    <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span></span>
+    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${editedBubble}${bubbleTime}</span>${hoverButtons}</span>
     ${editedIRC}
     ${deliveryCheckmark}
 `;
@@ -1047,6 +1047,13 @@ Object.assign(NYM.prototype, {
         }
 
         this._updateBubbleGrouping(messageEl);
+
+        if (!this._bulkAppending && !message.isHistorical &&
+            messageEl.classList.contains('bubble-grouped') &&
+            document.body.classList.contains('chat-bubbles')) {
+            messageEl.classList.add('bubble-snap');
+            setTimeout(() => { messageEl.classList.remove('bubble-snap'); }, 320);
+        }
 
         // Sending your own channel message should always jump to the latest,
         // even if you'd scrolled up — reverse-column auto-pinning only holds
@@ -3131,6 +3138,32 @@ Object.assign(NYM.prototype, {
 
         // Also refresh user list
         this.updateUserList();
+    },
+
+    showTimestampPopup(anchorEl, fullTime) {
+        this.closeTimestampPopup();
+        if (!anchorEl || !fullTime) return;
+
+        const modal = document.createElement('div');
+        modal.className = 'reactors-modal timestamp-popup';
+        modal.innerHTML = `<div class="timestamp-popup-body">${this.escapeHtml(fullTime)}</div>`;
+        document.body.appendChild(modal);
+        this.timestampPopup = modal;
+
+        const rect = anchorEl.getBoundingClientRect();
+        const right = Math.max(4, window.innerWidth - rect.right);
+        const approxHeight = 90;
+        const verticalDecl = (rect.top > approxHeight + 20)
+            ? `bottom:${window.innerHeight - rect.top + 6}px;`
+            : `top:${rect.bottom + 6}px;`;
+        modal.style.cssText += `right:${right}px;${verticalDecl}`;
+    },
+
+    closeTimestampPopup() {
+        if (this.timestampPopup) {
+            this.timestampPopup.remove();
+            this.timestampPopup = null;
+        }
     },
 
     refreshMessageTimestamps() {
