@@ -2862,8 +2862,14 @@ async function showSettings() {
     document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
     document.getElementById('timestampSelect').value = nym.settings.showTimestamps;
     document.getElementById('timeFormatSelect').value = nym.settings.timeFormat;
+    const dateFormatSelectEl = document.getElementById('dateFormatSelect');
+    if (dateFormatSelectEl) dateFormatSelectEl.value = nym.settings.dateFormat || 'default';
 
     // Show/hide time format option based on timestamp visibility
+    const dateFormatGroup = document.getElementById('dateFormatGroup');
+    if (dateFormatGroup) {
+        dateFormatGroup.style.display = nym.settings.showTimestamps ? 'block' : 'none';
+    }
     const timeFormatGroup = document.getElementById('timeFormatGroup');
     if (timeFormatGroup) {
         timeFormatGroup.style.display = nym.settings.showTimestamps ? 'block' : 'none';
@@ -3077,6 +3083,8 @@ async function saveSettings() {
     const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
     const showTimestamps = document.getElementById('timestampSelect').value === 'true';
     const timeFormat = document.getElementById('timeFormatSelect').value;
+    const dateFormatEl = document.getElementById('dateFormatSelect');
+    const dateFormat = dateFormatEl ? dateFormatEl.value : (nym.settings.dateFormat || 'default');
     const sortByProximity = document.getElementById('proximitySelect').value === 'true';
     const blurImagesVal = document.getElementById('blurImagesSelect').value;
     const blurImages = blurImagesVal === 'friends' ? 'friends' : blurImagesVal === 'true';
@@ -3099,6 +3107,7 @@ async function saveSettings() {
     nym.settings.autoscroll = autoscroll;
     nym.settings.showTimestamps = showTimestamps;
     nym.settings.timeFormat = timeFormat;
+    nym.settings.dateFormat = dateFormat;
 
     // Apply blur settings
     nym.blurOthersImages = blurImages;
@@ -3299,6 +3308,7 @@ async function saveSettings() {
     nym.applyTheme(theme);
     nym.saveSettings();
     localStorage.setItem('nym_time_format', timeFormat);
+    localStorage.setItem('nym_date_format', dateFormat);
 
     // Refresh messages to apply new time format
     nym.refreshMessageTimestamps();
@@ -3392,7 +3402,7 @@ async function resetSettings() {
         'nym_chat_layout',
         'nym_wallpaper_type', 'nym_wallpaper_custom_url',
         'nym_text_size', 'nym_transparency_enabled', 'nym_nick_style', 'nym_show_status',
-        'nym_autoscroll', 'nym_timestamps', 'nym_time_format',
+        'nym_autoscroll', 'nym_timestamps', 'nym_time_format', 'nym_date_format',
         'nym_sound', 'nym_notifications_enabled', 'nym_notify_friends_only',
         'nym_sort_proximity',
         'nym_dm_fwdsec_enabled', 'nym_dm_ttl_seconds',
@@ -3554,7 +3564,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.413';
+const NYMCHAT_VERSION = 'v3.66.414';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5205,6 +5215,12 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_time_format', s.timeFormat);
     }
 
+    // Date format
+    if (s.dateFormat) {
+        nym.settings.dateFormat = s.dateFormat;
+        localStorage.setItem('nym_date_format', s.dateFormat);
+    }
+
     // Sort by proximity
     if (typeof s.sortByProximity === 'boolean') {
         nym.settings.sortByProximity = s.sortByProximity;
@@ -5806,6 +5822,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const timeFormatGroup = document.getElementById('timeFormatGroup');
         if (timeFormatGroup) {
             timeFormatGroup.style.display = e.target.value === 'true' ? 'block' : 'none';
+        }
+        const dateFormatGroup = document.getElementById('dateFormatGroup');
+        if (dateFormatGroup) {
+            dateFormatGroup.style.display = e.target.value === 'true' ? 'block' : 'none';
         }
     });
 

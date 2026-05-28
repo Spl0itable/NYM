@@ -1096,6 +1096,15 @@ Object.assign(NYM.prototype, {
             }
         });
 
+        // Anchored popups are positioned against a specific message; once that
+        // message scrolls they'd float out of place, so dismiss them on scroll.
+        // Capture phase so scroll events from inner containers are caught too.
+        document.addEventListener('scroll', () => {
+            if (this.reactorsModal && typeof this.closeReactorsModal === 'function') this.closeReactorsModal();
+            if (this.readersModal && typeof this.closeReadersModal === 'function') this.closeReadersModal();
+            if (this._pollVotersModal && typeof this.closePollVotersModal === 'function') this.closePollVotersModal();
+        }, { passive: true, capture: true });
+
         // File input
         document.getElementById('fileInput').addEventListener('change', (e) => {
             if (e.target.files && e.target.files.length) {
@@ -1514,15 +1523,23 @@ Object.assign(NYM.prototype, {
                 closeAll();
                 removeCloseListeners();
             };
+            const closeOnScroll = () => {
+                if (Date.now() - openedAt < 400) return;
+                closeAll();
+                removeCloseListeners();
+            };
             const removeCloseListeners = () => {
                 document.removeEventListener('mousedown', closePopup);
                 document.removeEventListener('touchstart', closePopup);
+                document.removeEventListener('scroll', closeOnScroll, { capture: true });
             };
             // Use mousedown/touchstart (not mouseup/click) so the popup
             // closes on the start of a new gesture, not the end of the
             // opening gesture.
             document.addEventListener('mousedown', closePopup);
             document.addEventListener('touchstart', closePopup);
+            // Anchored to a message — dismiss if the list scrolls underneath it.
+            document.addEventListener('scroll', closeOnScroll, { passive: true, capture: true });
         };
 
         let msgLongPressStartX = 0;

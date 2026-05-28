@@ -73,6 +73,7 @@ Object.assign(NYM.prototype, {
             autoscroll: this.settings.autoscroll,
             showTimestamps: this.settings.showTimestamps,
             timeFormat: this.settings.timeFormat,
+            dateFormat: this.settings.dateFormat || 'default',
             sortByProximity: this.settings.sortByProximity,
             blurOthersImages: this.blurOthersImages,
             pinnedChannels: Array.from(this.pinnedChannels),
@@ -693,6 +694,7 @@ Object.assign(NYM.prototype, {
             showTimestamps: localStorage.getItem('nym_timestamps') !== 'false',
             sortByProximity: localStorage.getItem('nym_sort_proximity') === 'true',
             timeFormat: localStorage.getItem('nym_time_format') || '12hr',
+            dateFormat: localStorage.getItem('nym_date_format') || 'default',
             dmForwardSecrecyEnabled: localStorage.getItem('nym_dm_fwdsec_enabled') === 'true',
             dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
             readReceiptsScope: _normalizeIndicatorScope(

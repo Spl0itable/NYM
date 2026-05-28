@@ -160,9 +160,7 @@ Object.assign(NYM.prototype, {
             this._refreshNotifModalTimer = null;
             const m = document.getElementById('notificationsModal');
             if (!m || !m.classList.contains('active')) return;
-            const wasReadTs = this.notificationLastReadTime;
             this.openNotificationsModal();
-            this.notificationLastReadTime = wasReadTs;
         }, 150);
     },
 
@@ -269,24 +267,6 @@ Object.assign(NYM.prototype, {
     },
 
     openNotificationsModal() {
-        // Mark all as read and broadcast so other devices stay in sync.
-        // Also flip each individual notification's viewed flag so the read
-        // state is preserved per-item across device sync, not just by the
-        // bulk-timestamp heuristic.
-        this.notificationLastReadTime = Date.now();
-        try { localStorage.setItem('nym_notification_last_read', String(this.notificationLastReadTime)); } catch { }
-        let viewedChanged = false;
-        for (const n of this.notificationHistory) {
-            if (n && !n.viewed) { n.viewed = true; viewedChanged = true; }
-        }
-        if (viewedChanged && typeof this._saveNotificationHistory === 'function') {
-            this._saveNotificationHistory();
-        }
-        this._updateNotificationBadge();
-        if (typeof this._debouncedNostrSettingsSave === 'function') {
-            this._debouncedNostrSettingsSave(2000);
-        }
-
         const modal = document.getElementById('notificationsModal');
         const body = document.getElementById('notificationsModalBody');
         if (!modal || !body) return;
@@ -320,6 +300,8 @@ Object.assign(NYM.prototype, {
                 const n = recent[i];
                 const item = document.createElement('div');
                 item.className = 'notification-item';
+                item._notif = n;
+                if (!n.viewed) item.classList.add('notification-item-unread');
                 if (n.channelInfo) item.style.cursor = 'pointer';
                 const dt = new Date(n.timestamp);
                 const time = dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -411,6 +393,53 @@ Object.assign(NYM.prototype, {
         }
 
         modal.classList.add('active');
+        this._setupNotificationSeenObserver(body);
+    },
+
+    // Mark notifications viewed only as they actually scroll into view, so the
+    // unread badge deducts per-item rather than zeroing on open.
+    _setupNotificationSeenObserver(body) {
+        if (this._notifSeenObserver) {
+            this._notifSeenObserver.disconnect();
+            this._notifSeenObserver = null;
+        }
+        if (!body) return;
+        const items = Array.from(body.querySelectorAll('.notification-item'))
+            .filter(el => el._notif && !el._notif.viewed);
+        if (items.length === 0) return;
+
+        const markSeen = (els) => {
+            let changed = false;
+            for (const el of els) {
+                const n = el._notif;
+                if (n && !n.viewed) {
+                    n.viewed = true;
+                    changed = true;
+                    el.classList.remove('notification-item-unread');
+                }
+            }
+            if (changed) {
+                if (typeof this._saveNotificationHistory === 'function') this._saveNotificationHistory();
+                this._updateNotificationBadge();
+                if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
+            }
+        };
+
+        if (!('IntersectionObserver' in window)) {
+            markSeen(items);
+            return;
+        }
+        const obs = new IntersectionObserver((entries) => {
+            const seen = [];
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                seen.push(entry.target);
+                obs.unobserve(entry.target);
+            }
+            if (seen.length) markSeen(seen);
+        }, { root: body, threshold: 0.6 });
+        items.forEach(el => obs.observe(el));
+        this._notifSeenObserver = obs;
     },
 
     // Refresh author name/avatar in the notifications modal when a kind 0 profile arrives
@@ -433,6 +462,10 @@ Object.assign(NYM.prototype, {
     },
 
     closeNotificationsModal() {
+        if (this._notifSeenObserver) {
+            this._notifSeenObserver.disconnect();
+            this._notifSeenObserver = null;
+        }
         const modal = document.getElementById('notificationsModal');
         if (modal) {
             modal.classList.remove('active');

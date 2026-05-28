@@ -1251,6 +1251,10 @@ ${code ? `
                     if (timeFormatGroup) timeFormatGroup.style.display = s.showTimestamps ? 'block' : 'none';
                 }
                 if (s.timeFormat !== undefined) document.getElementById('timeFormatSelect').value = s.timeFormat;
+                if (s.dateFormat !== undefined) {
+                    const dfEl = document.getElementById('dateFormatSelect');
+                    if (dfEl) dfEl.value = s.dateFormat;
+                }
                 if (s.sortByProximity !== undefined) {
                     const el = document.getElementById('proximitySelect');
                     if (el) el.value = String(s.sortByProximity);

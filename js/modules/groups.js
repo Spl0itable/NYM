@@ -2471,22 +2471,24 @@ Object.assign(NYM.prototype, {
             const nb = (this.getNymFromPubkey(b) || '').toLowerCase();
             return na.localeCompare(nb);
         });
-        const memberList = sorted.map(pk => {
-            const name = this.getNymFromPubkey(pk);
+        const memberRow = (pk) => {
+            const baseNym = this.parseNymFromDisplay(this.getNymFromPubkey(pk) || '');
+            const suffix = this.getPubkeySuffix(pk);
+            const safePk = this._safePubkey(pk);
+            const avatarSrc = this.getAvatarUrl(pk);
+            const flairHtml = this.getFlairForUser(pk) || '';
             const labels = [];
             if (pk === ownerPk) labels.push('owner');
             else if (mods.includes(pk)) labels.push('mod');
             if (pk === this.pubkey) labels.push('you');
-            const suffix = labels.length ? ` (${labels.join(', ')})` : '';
-            return `  @${name}${suffix}`;
-        }).join('\n');
-        const ownerLine = ownerPk
-            ? `Owner: @${this.getNymFromPubkey(ownerPk)}`
-            : 'Owner: unknown';
-        const modLine = mods.length > 0
-            ? `Moderators: ${mods.map(pk => '@' + this.getNymFromPubkey(pk)).join(', ')}`
-            : 'Moderators: none';
-        this.displaySystemMessage(`Group: "${group.name}"\n${ownerLine}\n${modLine}\nMembers (${group.members.length}):\n${memberList}`);
+            const labelHtml = labels.length
+                ? `<span class="group-info-label">${labels.join(', ')}</span>`
+                : '';
+            return `<div class="group-info-member"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="group-info-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}</span>${labelHtml}</div>`;
+        };
+        const membersHtml = sorted.map(memberRow).join('');
+        const html = `<div class="group-info"><div class="group-info-title">Group: "${this.escapeHtml(group.name)}"</div><div class="group-info-count">Members (${group.members.length})</div><div class="group-info-members">${membersHtml}</div></div>`;
+        this.displaySystemMessage(html, 'system', { html: true });
     },
 
     toggleGroupMentionsOnly(enabled) {

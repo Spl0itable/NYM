@@ -1505,6 +1505,17 @@
                     </select>
                 </div>
 
+                <div class="form-group" id="dateFormatGroup">
+                    <label class="form-label">Date Format</label>
+                    <select class="form-select" id="dateFormatSelect">
+                        <option value="default" selected>Default (May 28, 2026)</option>
+                        <option value="mdy">MM/DD/YYYY (05/28/2026)</option>
+                        <option value="dmy">DD/MM/YYYY (28/05/2026)</option>
+                        <option value="ymd">YYYY-MM-DD (2026-05-28)</option>
+                    </select>
+                    <div class="form-hint">Used in the full timestamp shown when tapping a message time</div>
+                </div>
+
                 <div class="form-group nm-hidden" id="autoEphemeralSettingGroup">
                     <label class="form-label">Auto Ephemeral Mode on Restart</label>
                     <select class="form-select" id="autoEphemeralSelect">

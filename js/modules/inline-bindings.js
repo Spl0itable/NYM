@@ -293,8 +293,14 @@ window.nymHapticTap = function (ms) {
         },
         'showFullTimestamp':          function (e, t) {
             if (e && e.stopPropagation) e.stopPropagation();
-            var full = (t && t.dataset && t.dataset.fullTime) || (t && t.getAttribute && t.getAttribute('title')) || '';
-            if (full) nym().showTimestampPopup(t, full);
+            var n = nym();
+            var full = '';
+            var msgEl = t && t.closest ? t.closest('[data-timestamp]') : null;
+            if (msgEl && msgEl.dataset && msgEl.dataset.timestamp && typeof n._formatFullTimestamp === 'function') {
+                full = n._formatFullTimestamp(parseInt(msgEl.dataset.timestamp));
+            }
+            if (!full) full = (t && t.dataset && t.dataset.fullTime) || (t && t.getAttribute && t.getAttribute('title')) || '';
+            if (full) n.showTimestampPopup(t, full);
         },
         'codeBlockCopy':              function (_e, t) {
             try {

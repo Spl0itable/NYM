@@ -790,6 +790,11 @@
     background: rgba(255, 255, 255, 0.05);
 }
 
+.notification-item-unread {
+    background: rgba(0, 255, 255, 0.06);
+    border-left: 2px solid var(--primary);
+}
+
 .notification-item:last-child {
     border-bottom: none;
 }
@@ -802,6 +807,47 @@
 
 .notification-item-header .avatar-message {
     margin-top: 2px;
+}
+
+.group-info-title {
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.group-info-count {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+
+.group-info-members {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.group-info-member {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.group-info-member .avatar-message {
+    width: 22px;
+    height: 22px;
+    margin-right: 0;
+}
+
+.group-info-nym {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.group-info-label {
+    font-size: 10px;
+    color: var(--primary);
+    opacity: 0.8;
 }
 
 .notification-item-meta {

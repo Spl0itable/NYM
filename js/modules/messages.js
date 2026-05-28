@@ -1268,7 +1268,7 @@ Object.assign(NYM.prototype, {
                         ? `${this.escapeHtml(suffixMatch[1])}<span class="nym-suffix">${this.escapeHtml(suffixMatch[2])}</span>${flairHtml}`
                         : `${this.escapeHtml(cleanAuthor)}${flairHtml}`;
 
-                    html += `<blockquote><span class="quote-author">@${displayAuthor}:</span> ${this.formatMessageWithQuotes(quotedMessage, depth + 1)}</blockquote>`;
+                    html += `<blockquote><span class="quote-author">${displayAuthor}:</span> ${this.formatMessageWithQuotes(quotedMessage, depth + 1)}</blockquote>`;
                 } else {
                     // Regular quote without author
                     const quotedMessage = quoteLines.join('\n');
@@ -3151,18 +3151,38 @@ Object.assign(NYM.prototype, {
         const diff = Math.max(0, now - ts);
         const s = Math.floor(diff / 1000);
         if (s < 45) return 'now';
-        if (s < 90) return '1m';
+        if (s < 90) return '1m ago';
         const m = Math.floor(s / 60);
-        if (m < 60) return m + 'm';
+        if (m < 60) return m + 'm ago';
         const h = Math.floor(m / 60);
-        if (h < 24) return h + 'h';
+        if (h < 24) return h + 'h ago';
         const d = Math.floor(h / 24);
-        if (d < 7) return d + 'd';
+        if (d < 7) return d + 'd ago';
         const date = new Date(ts);
         const sameYear = date.getFullYear() === new Date().getFullYear();
         return date.toLocaleDateString('en-US',
             sameYear ? { month: 'short', day: 'numeric' }
                      : { month: 'short', day: 'numeric', year: 'numeric' });
+    },
+
+    // Build a full date/time string honoring the timeFormat + dateFormat settings.
+    _formatFullTimestamp(ts) {
+        const date = new Date(ts);
+        const hour12 = this.settings.timeFormat === '12hr';
+        const timeStr = date.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12
+        });
+        const y = date.getFullYear();
+        const mo = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        let dateStr;
+        switch (this.settings.dateFormat || 'default') {
+            case 'mdy': dateStr = `${mo}/${d}/${y}`; break;
+            case 'dmy': dateStr = `${d}/${mo}/${y}`; break;
+            case 'ymd': dateStr = `${y}-${mo}-${d}`; break;
+            default: dateStr = date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        }
+        return `${dateStr}, ${timeStr}`;
     },
 
     _refreshBubbleRelativeTimes() {
