@@ -2287,6 +2287,7 @@ Object.assign(NYM.prototype, {
         if (shareBtn) shareBtn.style.display = 'none';
         const favBtn = document.getElementById('favoriteChannelBtn');
         if (favBtn) favBtn.style.display = 'none';
+        if (typeof this._refreshCallButtons === 'function') this._refreshCallButtons();
 
         // Mark only the matching group item as active
         document.querySelectorAll('.channel-item').forEach(i => i.classList.remove('active'));

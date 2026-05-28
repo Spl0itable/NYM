@@ -534,6 +534,19 @@
                                             d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z" />
                                     </svg>
                                 </button>
+                                <button class="call-channel-btn nm-call-hidden" id="audioCallBtn" data-action="initiateAudioCall"
+                                    title="Start audio call">
+                                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                                    </svg>
+                                </button>
+                                <button class="call-channel-btn nm-call-hidden" id="videoCallBtn" data-action="initiateVideoCall"
+                                    title="Start video call">
+                                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                                        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                                    </svg>
+                                </button>
                             </div>
                         </div>
                         <div class="channel-title-wrap">
@@ -754,6 +767,58 @@
             <div class="modal-actions">
                 <button class="icon-btn" data-action="closeModal" data-modal-id="p2pTransfersModal">Close</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Incoming Call Modal -->
+    <div class="modal" id="incomingCallModal">
+        <div class="modal-content incoming-call-content">
+            <div class="incoming-call-avatar-wrap">
+                <img src="" id="incomingCallAvatar" class="incoming-call-avatar" alt="">
+            </div>
+            <div class="incoming-call-name" id="incomingCallName"></div>
+            <div class="incoming-call-sub" id="incomingCallSub">Incoming call</div>
+            <div class="incoming-call-actions">
+                <button class="incoming-call-btn decline" data-action="rejectIncomingCall" title="Decline">
+                    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                    </svg>
+                </button>
+                <button class="incoming-call-btn accept" data-action="acceptIncomingCall" title="Accept">
+                    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Call Overlay -->
+    <div class="call-overlay" id="callOverlay">
+        <div class="call-overlay-top">
+            <div class="call-title" id="callTitle"></div>
+            <div class="call-status" id="callStatus">Calling…</div>
+        </div>
+        <div class="call-grid" id="callGrid"></div>
+        <div class="call-controls">
+            <button class="call-control-btn" id="callMuteBtn" data-action="toggleCallMute" title="Mute microphone">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                </svg>
+            </button>
+            <button class="call-control-btn nm-call-hidden" id="callVideoBtn" data-action="toggleCallVideo" title="Turn off camera">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                </svg>
+            </button>
+            <button class="call-control-btn hangup" id="callHangupBtn" data-action="hangupCall" title="End call">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                </svg>
+            </button>
         </div>
     </div>
 
@@ -1289,6 +1354,17 @@
                         <option value="disabled">Disabled</option>
                     </select>
                     <div class="form-hint">Control who can send you PMs and group chat invites. "Friends only" filters messages from non-friends.</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Accept Audio &amp; Video Calls</label>
+                    <select class="form-select" id="acceptCallsSelect">
+                        <option value="enabled">Enabled</option>
+                        <option value="friends">Friends only</option>
+                        <option value="disabled">Disabled</option>
+                    </select>
+                    <div class="form-hint">Control who can ring you with an audio or video call. "Friends only" silently ignores calls from non-friends.</div>
+                    <div class="form-warning">⚠ Audio/video calls and P2P file sharing connect peers directly over WebRTC, which can reveal your true IP address to the other party. Use a VPN or Tor to help conceal it.</div>
                 </div>
 
                 <div class="form-group">
@@ -1850,6 +1926,7 @@
     <script defer src="js/modules/shop.js"></script>
     <script defer src="js/modules/zaps.js"></script>
     <script defer src="js/modules/p2p.js"></script>
+    <script defer src="js/modules/calls.js"></script>
     <script defer src="js/modules/translate.js"></script>
     <script defer src="js/modules/sidebar-sections.js"></script>
     <script defer src="js/modules/polls.js"></script>

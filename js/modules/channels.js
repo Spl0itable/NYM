@@ -490,6 +490,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     _refreshFavoriteChannelBtn() {
+        if (typeof this._refreshCallButtons === 'function') this._refreshCallButtons();
         const btn = document.getElementById('favoriteChannelBtn');
         if (!btn) return;
         const key = this.currentGeohash || this.currentChannel;

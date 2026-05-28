@@ -707,6 +707,9 @@ class NYM {
         ];
         this.P2P_SIGNALING_KIND = 25051;
         this.P2P_FILE_STATUS_KIND = 25052;
+        this.CALL_SIGNALING_KIND = 25053;
+        this.activeCall = null;
+        this.incomingCall = null;
         this.PRESENCE_KIND = 30078;
         this.POLL_KIND = 30078;
         this.POLL_VOTE_KIND = 30078;
@@ -2886,6 +2889,11 @@ async function showSettings() {
         acceptPMsSel.value = nym.settings.acceptPMs || 'enabled';
     }
 
+    const acceptCallsSel = document.getElementById('acceptCallsSelect');
+    if (acceptCallsSel) {
+        acceptCallsSel.value = nym.settings.acceptCalls || 'enabled';
+    }
+
     // Fill in disappearing message controls
     const dmEnabledSel = document.getElementById('dmForwardSecrecySelect');
     const dmTtlSel = document.getElementById('dmTTLSelect');
@@ -3118,6 +3126,12 @@ async function saveSettings() {
     if (acceptPMsEl) {
         nym.settings.acceptPMs = acceptPMsEl.value;
         localStorage.setItem('nym_accept_pms', acceptPMsEl.value);
+    }
+
+    const acceptCallsEl = document.getElementById('acceptCallsSelect');
+    if (acceptCallsEl) {
+        nym.settings.acceptCalls = acceptCallsEl.value;
+        localStorage.setItem('nym_accept_calls', acceptCallsEl.value);
     }
 
     // Read disappearing message controls
@@ -3564,7 +3578,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.66.415';
+const NYMCHAT_VERSION = 'v3.67.415';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');

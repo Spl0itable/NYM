@@ -719,6 +719,7 @@ Object.assign(NYM.prototype, {
             swipeThreshold: parseInt(localStorage.getItem('nym_swipe_threshold') || '60', 10),
             swipeReactEmoji: localStorage.getItem('nym_swipe_react_emoji') || '❤️',
             acceptPMs: localStorage.getItem('nym_accept_pms') || 'enabled',
+            acceptCalls: localStorage.getItem('nym_accept_calls') || 'enabled',
             cachePMs: localStorage.getItem('nym_cache_pms') !== 'false', // default true
             syncMLSHistory: localStorage.getItem('nym_sync_mls_history') !== 'false', // default true
             showStatus: localStorage.getItem('nym_show_status') !== 'false' // default true

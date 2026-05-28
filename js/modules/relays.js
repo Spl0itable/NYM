@@ -2505,6 +2505,7 @@ Object.assign(NYM.prototype, {
         // Less critical — anything past position 9 is bundled into a single sub upstream
         if (this.pubkey) {
             filters.push({ kinds: [25051], "#p": [this.pubkey], since: nowSec - 120, limit: 50 });
+            filters.push({ kinds: [25053], "#p": [this.pubkey], since: nowSec - 120, limit: 50 });
         }
         filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
         if (channelMode) {
@@ -3479,7 +3480,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
 
         const is30078Fanout = evt && evt.kind === 30078 && evt.tags && evt.tags.some(t => t[0] === 't' && ['nym-poll', 'nym-poll-vote'].includes(t[1]));
-        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || is30078Fanout);
+        const wideFanout = evt && (evt.kind === 0 || evt.kind === 5 || evt.kind === 7 || evt.kind === 20000 || evt.kind === 23333 || evt.kind === 9734 || evt.kind === 9735 || evt.kind === 1059 || evt.kind === 25051 || evt.kind === 25052 || evt.kind === 25053 || is30078Fanout);
 
         const writeOnly = this.writeOnlyRelays || new Set();
         const writeOnlyTargets = [];

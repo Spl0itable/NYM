@@ -2119,6 +2119,7 @@ Object.assign(NYM.prototype, {
         }
         const favBtn = document.getElementById('favoriteChannelBtn');
         if (favBtn) favBtn.style.display = 'none';
+        if (typeof this._refreshCallButtons === 'function') this._refreshCallButtons();
 
         // Update active states
         document.querySelectorAll('.channel-item').forEach(item => {

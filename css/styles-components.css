@@ -180,6 +180,17 @@
     margin-top: 5px;
 }
 
+.form-warning {
+    font-size: 11px;
+    color: var(--danger);
+    margin-top: 6px;
+    padding: 6px 8px;
+    border: 1px solid rgb(from var(--danger) r g b / 0.4);
+    border-radius: 6px;
+    background: rgb(from var(--danger) r g b / 0.08);
+    line-height: 1.4;
+}
+
 .form-range {
     -webkit-appearance: none;
     appearance: none;
@@ -1200,6 +1211,28 @@
 .favorite-channel-btn.active svg {
     fill: currentColor;
     stroke: currentColor;
+}
+
+.call-channel-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    opacity: 0.4;
+    transition: opacity 0.2s, transform 0.2s;
+    padding: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--primary);
+}
+
+.call-channel-btn:hover {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+.nm-call-hidden {
+    display: none !important;
 }
 
 .share-modal {
