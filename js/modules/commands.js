@@ -379,11 +379,10 @@ Object.assign(NYM.prototype, {
 
     showBotCommandPalette(input) {
         const palette = document.getElementById('commandPalette');
-        // Credit commands only work in the Nymbot private chat — list them there first
+        // The premium Nymbot private chat only supports the PM commands — the
+        // public-channel bot commands aren't wired there, so don't list them.
         const inBotPM = this.inPMMode && this.currentPM && this.isVerifiedBot(this.currentPM);
-        const available = inBotPM
-            ? { ...this.botPMCommands, ...this.botCommands }
-            : this.botCommands;
+        const available = inBotPM ? this.botPMCommands : this.botCommands;
         const matchingCommands = Object.entries(available)
             .filter(([cmd]) => cmd.startsWith(input.toLowerCase()));
 

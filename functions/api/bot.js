@@ -2787,6 +2787,9 @@ var NYMBOT_PM_SYSTEM_PROMPT = [
   "This is a 1:1 end-to-end encrypted NIP-17 chat with one user. No one else can read it. No channel context, no other participants.",
   "Use the full message history as context. The user paid Bitcoin sats per reply, so be thorough and useful — don't give one-line answers when a real explanation helps.",
   "",
+  "=== MESSAGE SENDER VERIFICATION (lock icon) ===",
+  "Received private/group messages show a small lock by the sender's nym. GREEN lock + checkmark = verified: the NIP-17 seal (kind 13) was signed by the sender's identity key and matches the claimed author, so the sender is cryptographically authenticated and can't be forged. RED lock + X = unverified: a Bitchat-format seal signed with a throwaway per-message key with no identity binding, so the sender is a self-asserted claim that could be spoofed. The icon shows only on incoming messages; tapping it explains the status.",
+  "",
   "=== PREMIUM MULTI-MODEL ROUTING ===",
   "Each message is auto-classified (coding, reasoning/math, creative writing, translation, or general chat) and routed to the best AI model for that task. The free public-channel bot uses one general model; this private chat is sharper because of routing. Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — say 'AI models' or 'large language models' instead.",
   "Pricing: coding and reasoning queries cost 2 credits each (they use larger, more expensive models). General chat, creative writing, and translation cost 1 credit each. If a user asks why some queries cost more, explain it's because those routes use bigger models.",
@@ -3659,7 +3662,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 }
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.67.418";
+var NYMCHAT_VERSION = "3.67.419";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -4171,6 +4174,12 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Read receipts: enabled by default — others see when you read their DMs. Toggle in Settings > DM Security.",
   "Typing indicators: enabled by default — others see when you're typing. Toggle in Settings > DM Security.",
   "",
+  "=== MESSAGE SENDER VERIFICATION (lock icon) ===",
+  "Received private and group messages show a small lock icon next to the sender's nym indicating whether the sender could be cryptographically verified.",
+  "GREEN lock with a checkmark = VERIFIED: the NIP-17 seal (kind 13) was signed by the sender's long-term identity key and that signer matches the author the message claims, so the identity is cryptographically authenticated and cannot be forged by a relay or third party.",
+  "RED lock with an X = UNVERIFIED: the message uses a Bitchat-format seal signed with a throwaway, per-message key that has no binding to a long-term identity. The displayed sender is an unverified, self-asserted claim that could be spoofed — treat the identity with caution.",
+  "The icon appears only on incoming messages, never your own. Tapping or clicking it opens a popup explaining the verification status.",
+  "",
   "=== ENHANCED GROUP CHAT SECURITY ===",
   "Group chats use NIP-17 gift wraps (kind 1059) over NIP-44-encrypted seals (kind 13) wrapping the actual chat rumor (kind 14). Every recipient gets their own gift wrap signed by a throwaway pubkey, so nothing on the wire links a message to its real author or recipients.",
   "Rotating ephemeral recipient keys: Standard NIP-17 still leaks group membership because an observer can see N gift wraps appear at the same time pointing to N pubkeys. Nymchat eliminates this by rotating recipient pubkeys on every message.",
@@ -4296,7 +4305,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.67.418 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.67.419 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -5129,7 +5138,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.67.418")
+  // Prefix match (e.g. "3.61" matches "3.67.419")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -5184,7 +5193,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.67.418", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.67.419", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

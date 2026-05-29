@@ -689,6 +689,24 @@ Object.assign(NYM.prototype, {
                     ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
                     : '';
 
+            let _lockVerified = '';
+            let _lockExtraClass = '';
+            let _lockTitle = '';
+            let _lockSvgInner = '';
+            if (!message.isOwn && message.senderVerified === true) {
+                _lockVerified = 'true';
+                _lockTitle = 'Cryptographically verified sender — tap for details';
+                _lockSvgInner = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M8.5 16.5l2.5 2.5 4.5-4.5"></path>';
+            } else if (!message.isOwn && message.senderVerified === false) {
+                _lockVerified = 'false';
+                _lockExtraClass = ' unverified';
+                _lockTitle = 'Unverified sender — tap for details';
+                _lockSvgInner = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M9.5 14l5 5"></path><path d="M14.5 14l-5 5"></path>';
+            }
+            const mkLock = (layoutClass) => _lockVerified === '' ? '' :
+                `<span class="crypto-verified-badge ${layoutClass}${_lockExtraClass}" data-action="showVerificationInfo" data-verified="${_lockVerified}" title="${_lockTitle}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${_lockSvgInner}</svg></span>`;
+            if (_lockVerified !== '') messageEl.dataset.senderVerified = _lockVerified;
+
             // Check if this is a valid event ID (not temporary PM ID)
             // PM messages use nymMessageId (UUID) as the shared reaction key, so accept those too
             const isValidEventId = (message.isPM && message.nymMessageId)
@@ -851,9 +869,9 @@ Object.assign(NYM.prototype, {
             const editedIRC = isEdited ? '<span class="edited-indicator edited-indicator-irc" title="This message has been edited">(edited)</span>' : '';
 
             messageEl.innerHTML = `
-    ${time ? `<span class="message-time clickable-timestamp ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${time}</span>` : ''}
+    ${time ? `<span class="message-time clickable-timestamp ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${time}</span>${mkLock('crypto-lock-irc')}` : ''}
     <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span></span>
-    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${editedBubble}<span class="bubble-time-text">${bubbleTimeText}</span></span>${hoverButtons}</span>
+    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${editedBubble}<span class="bubble-time-text">${bubbleTimeText}</span>${mkLock('crypto-lock-bubble')}</span>${hoverButtons}</span>
     ${editedIRC}
     ${deliveryCheckmark}
 `;
@@ -3259,6 +3277,36 @@ Object.assign(NYM.prototype, {
             window.removeEventListener('scroll', this._timestampPopupScrollHandler, { capture: true });
             this._timestampPopupScrollHandler = null;
         }
+    },
+
+    showVerificationPopup(anchorEl, verified) {
+        this.closeTimestampPopup();
+        if (!anchorEl) return;
+
+        const title = verified ? 'Cryptographically verified' : 'Unverified sender';
+        const body = verified
+            ? "The seal wrapping this message (NIP-17 / NIP-59 kind 13) was signed by the sender's long-term identity key, and that signer matches the author the message claims. The displayed identity is cryptographically authenticated and cannot be forged by a relay or third party."
+            : "This message uses a Bitchat-format seal signed with a throwaway, per-message key that has no binding to any long-term identity. The displayed sender is an unverified, self-asserted claim — treat the identity with caution, as it could be spoofed.";
+
+        const modal = document.createElement('div');
+        modal.className = `reactors-modal verification-popup${verified ? '' : ' unverified'}`;
+        modal.innerHTML = `<div class="verification-popup-title">${this.escapeHtml(title)}</div><div class="verification-popup-body">${this.escapeHtml(body)}</div>`;
+        document.body.appendChild(modal);
+        this.timestampPopup = modal;
+
+        const rect = anchorEl.getBoundingClientRect();
+        const right = Math.max(4, window.innerWidth - rect.right);
+        const approxHeight = 170;
+        const verticalDecl = (rect.top > approxHeight + 20)
+            ? `bottom:${window.innerHeight - rect.top + 6}px;`
+            : `top:${rect.bottom + 6}px;`;
+        modal.style.cssText += `right:${right}px;${verticalDecl}`;
+
+        const onScroll = () => this.closeTimestampPopup();
+        this._timestampPopupScrollHandler = onScroll;
+        const scroller = document.getElementById('messagesContainer');
+        if (scroller) scroller.addEventListener('scroll', onScroll, { passive: true, capture: true });
+        window.addEventListener('scroll', onScroll, { passive: true, capture: true });
     },
 
     refreshMessageTimestamps() {

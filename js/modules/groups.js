@@ -469,7 +469,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Handle incoming group message (rumor with 'g' tag)
-    async handleGroupMessage(rumor, event, senderPubkey, isOwn) {
+    async handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified) {
         const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && t[1]);
         if (!groupTag) return;
         const groupId = groupTag[1];
@@ -975,6 +975,7 @@ Object.assign(NYM.prototype, {
             conversationPubkey: null,
             eventKind: 1059,
             isHistorical: this._isGiftWrapBacklog(),
+            senderVerified,
             nymMessageId: nymMsgId,
             deliveryStatus: isOwn ? 'sent' : undefined
         };

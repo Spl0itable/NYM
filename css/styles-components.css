@@ -1157,12 +1157,43 @@
     transform: scale(1.15);
 }
 
+.crypto-verified-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    margin-left: 4px;
+    color: #2ecc71;
+    cursor: help;
+    vertical-align: middle;
+    flex-shrink: 0;
+    transition: transform 0.2s;
+}
+
+.crypto-verified-badge.unverified {
+    color: #e74c3c;
+}
+
+.crypto-verified-badge svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.crypto-verified-badge:hover {
+    transform: scale(1.15);
+}
+
+body.chat-bubbles .crypto-lock-irc {
+    display: none;
+}
+
 .share-channel-btn {
     background: transparent;
     border: none;
     cursor: pointer;
-    opacity: 0.4;
-    transition: opacity 0.2s, transform 0.2s;
+    transition: transform 0.2s;
     padding: 5px;
     display: flex;
     align-items: center;
@@ -1170,20 +1201,23 @@
 }
 
 .share-channel-btn:hover {
-    opacity: 1;
     transform: scale(1.1);
 }
 
-.share-channel-btn svg {
+.share-channel-btn:hover svg {
     fill: var(--primary);
+}
+
+.share-channel-btn svg {
+    fill: var(--text-dim);
+    transition: fill 0.2s;
 }
 
 .favorite-channel-btn {
     background: transparent;
     border: none;
     cursor: pointer;
-    opacity: 0.4;
-    transition: opacity 0.2s, transform 0.2s, color 0.2s;
+    transition: transform 0.2s, color 0.2s;
     padding: 5px;
     display: flex;
     align-items: center;
@@ -1192,8 +1226,8 @@
 }
 
 .favorite-channel-btn:hover {
-    opacity: 1;
     transform: scale(1.1);
+    color: var(--primary);
 }
 
 .favorite-channel-btn svg {
@@ -1217,18 +1251,17 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    opacity: 0.4;
-    transition: opacity 0.2s, transform 0.2s;
+    transition: transform 0.2s, color 0.2s;
     padding: 5px;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--primary);
+    color: var(--text-dim);
 }
 
 .call-channel-btn:hover {
-    opacity: 1;
     transform: scale(1.1);
+    color: var(--primary);
 }
 
 .nm-call-hidden {

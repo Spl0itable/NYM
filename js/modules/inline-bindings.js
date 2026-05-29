@@ -309,6 +309,12 @@ window.nymHapticTap = function (ms) {
             if (!full) full = (t && t.dataset && t.dataset.fullTime) || (t && t.getAttribute && t.getAttribute('title')) || '';
             if (full) n.showTimestampPopup(t, full);
         },
+        'showVerificationInfo':       function (e, t) {
+            if (e && e.preventDefault) e.preventDefault();
+            if (e && e.stopPropagation) e.stopPropagation();
+            nym().showVerificationPopup(t, t && t.dataset && t.dataset.verified === 'true');
+            return false;
+        },
         'codeBlockCopy':              function (_e, t) {
             try {
                 var code = t.dataset.code;

@@ -776,6 +776,19 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            // NIP-59 sender auth: a native seal is signed by the sender's
+            // identity key, so its signer must match the claimed author or the
+            // event is forged. Bitchat seals use a throwaway key and can't be
+            // authenticated — decrypt but flag unverified.
+            if (!rumor.pubkey) return;
+            const isBitchatWrap = isBitchatFormat(event.content);
+            let senderVerified = true;
+            if (isBitchatWrap) {
+                senderVerified = false;
+            } else if (!seal || seal.pubkey !== rumor.pubkey || !NT.verifyEvent(seal)) {
+                return;
+            }
+
             // Route encrypted settings events to settings handler
             if (rumor.kind === 30078) {
                 const dTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'd' && t[1])?.[1];
@@ -820,11 +833,6 @@ Object.assign(NYM.prototype, {
                 return;
             }
             if (typeof rumor.content !== 'string') {
-                return;
-            }
-            // Note: Bitchat uses ephemeral key for seal, so seal.pubkey may differ from rumor.pubkey
-            // We only require rumor.pubkey to be present (the actual sender identity)
-            if (!rumor.pubkey) {
                 return;
             }
 
@@ -947,7 +955,7 @@ Object.assign(NYM.prototype, {
             // Route group messages before 1:1 PM logic
             const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && typeof t[1] === 'string');
             if (groupTag) {
-                await this.handleGroupMessage(rumor, event, senderPubkey, isOwn);
+                await this.handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified);
                 return;
             }
 
@@ -1113,7 +1121,14 @@ Object.assign(NYM.prototype, {
                     dupMsg.content = messageContent;
                     needsRerender = true;
                 }
-                if (needsRerender) this.channelDOMCache.delete(conversationKey);
+                if (senderVerified === true && dupMsg.senderVerified !== true) {
+                    dupMsg.senderVerified = true;
+                    needsRerender = true;
+                }
+                if (needsRerender) {
+                    this.channelDOMCache.delete(conversationKey);
+                    this.persistPMMessages(conversationKey);
+                }
                 return;
             }
 
@@ -1156,6 +1171,7 @@ Object.assign(NYM.prototype, {
                 conversationPubkey: peerPubkey,
                 eventKind: 1059,
                 isHistorical: this._isGiftWrapBacklog(),
+                senderVerified,
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
                 nymMessageId: nymMsgId  // For sending Nymchat read receipts
             };
