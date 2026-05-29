@@ -1123,6 +1123,9 @@ Object.assign(NYM.prototype, {
                 }
                 if (senderVerified === true && dupMsg.senderVerified !== true) {
                     dupMsg.senderVerified = true;
+                    // Flip the on-screen lock immediately so the verified copy
+                    // wins even when the unverified Bitchat copy rendered first.
+                    this._setMessageVerifiedDOM(dupMsg.nymMessageId || dupMsg.id, true);
                     needsRerender = true;
                 }
                 if (needsRerender) {

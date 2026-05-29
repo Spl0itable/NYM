@@ -3339,4 +3339,32 @@ Object.assign(NYM.prototype, {
         });
     },
 
+    // Markup for the verification lock (green check / red X), scoped to a layout.
+    _verificationLockSpan(verified, layoutClass) {
+        const extra = verified ? '' : ' unverified';
+        const title = verified ? 'Cryptographically verified sender — tap for details' : 'Unverified sender — tap for details';
+        const inner = verified
+            ? '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M8.5 16.5l2.5 2.5 4.5-4.5"></path>'
+            : '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M9.5 14l5 5"></path><path d="M14.5 14l-5 5"></path>';
+        return `<span class="crypto-verified-badge ${layoutClass}${extra}" data-action="showVerificationInfo" data-verified="${verified}" title="${title}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg></span>`;
+    },
+
+    // Update a message's verification lock in the live DOM without a full
+    // re-render — used when a dual-wrapped message's verified copy arrives
+    // after the unverified one already rendered.
+    _setMessageVerifiedDOM(messageId, verified) {
+        if (!messageId) return;
+        const el = document.querySelector(`[data-message-id="${CSS.escape(String(messageId))}"]`);
+        if (!el) return;
+        el.dataset.senderVerified = String(verified);
+        el.querySelectorAll('.crypto-verified-badge').forEach(n => n.remove());
+        const timeEl = el.querySelector(':scope > .message-time');
+        if (timeEl) timeEl.insertAdjacentHTML('afterend', this._verificationLockSpan(verified, 'crypto-lock-irc'));
+        const bubbleInner = el.querySelector('.bubble-time-inner');
+        if (bubbleInner) {
+            const txt = bubbleInner.querySelector('.bubble-time-text');
+            (txt || bubbleInner).insertAdjacentHTML(txt ? 'afterend' : 'beforeend', this._verificationLockSpan(verified, 'crypto-lock-bubble'));
+        }
+    },
+
 });
