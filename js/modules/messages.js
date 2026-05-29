@@ -869,7 +869,7 @@ Object.assign(NYM.prototype, {
             const editedIRC = isEdited ? '<span class="edited-indicator edited-indicator-irc" title="This message has been edited">(edited)</span>' : '';
 
             messageEl.innerHTML = `
-    ${time ? `<span class="message-time clickable-timestamp ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${time}</span>${mkLock('crypto-lock-irc')}` : ''}
+    ${time ? `<span class="message-time clickable-timestamp ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${time}${mkLock('crypto-lock-irc')}</span>` : ''}
     <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span></span>
     <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${editedBubble}<span class="bubble-time-text">${bubbleTimeText}</span>${mkLock('crypto-lock-bubble')}</span>${hoverButtons}</span>
     ${editedIRC}
@@ -3295,12 +3295,14 @@ Object.assign(NYM.prototype, {
         this.timestampPopup = modal;
 
         const rect = anchorEl.getBoundingClientRect();
-        const right = Math.max(4, window.innerWidth - rect.right);
         const approxHeight = 170;
         const verticalDecl = (rect.top > approxHeight + 20)
             ? `bottom:${window.innerHeight - rect.top + 6}px;`
             : `top:${rect.bottom + 6}px;`;
-        modal.style.cssText += `right:${right}px;${verticalDecl}`;
+        modal.style.cssText += verticalDecl;
+        const width = modal.offsetWidth || 280;
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+        modal.style.left = `${left}px`;
 
         const onScroll = () => this.closeTimestampPopup();
         this._timestampPopupScrollHandler = onScroll;
@@ -3320,7 +3322,9 @@ Object.assign(NYM.prototype, {
                     minute: '2-digit',
                     hour12: this.settings.timeFormat === '12hr'
                 });
+                const lock = timeEl.querySelector('.crypto-verified-badge');
                 timeEl.textContent = newTime;
+                if (lock) timeEl.appendChild(lock);
 
                 // Update class for spacing
                 if (this.settings.timeFormat === '12hr') {
@@ -3359,7 +3363,7 @@ Object.assign(NYM.prototype, {
         el.dataset.senderVerified = String(verified);
         el.querySelectorAll('.crypto-verified-badge').forEach(n => n.remove());
         const timeEl = el.querySelector(':scope > .message-time');
-        if (timeEl) timeEl.insertAdjacentHTML('afterend', this._verificationLockSpan(verified, 'crypto-lock-irc'));
+        if (timeEl) timeEl.insertAdjacentHTML('beforeend', this._verificationLockSpan(verified, 'crypto-lock-irc'));
         const bubbleInner = el.querySelector('.bubble-time-inner');
         if (bubbleInner) {
             const txt = bubbleInner.querySelector('.bubble-time-text');

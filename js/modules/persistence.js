@@ -168,6 +168,7 @@
                 conversationPubkey: m.conversationPubkey,
                 eventKind: m.eventKind,
                 isHistorical: m.isHistorical,
+                senderVerified: m.senderVerified,
                 bitchatMessageId: m.bitchatMessageId,
                 nymMessageId: m.nymMessageId,
                 deliveryStatus: m.deliveryStatus,
