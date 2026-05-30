@@ -783,7 +783,7 @@ body.sidebar-reorder-mode .nav-title {
     display: grid;
     grid-template-columns: auto auto;
     grid-auto-rows: auto;
-    row-gap: 4px;
+    row-gap: 12px;
     column-gap: 2px;
     justify-content: start;
     align-items: center;
@@ -806,18 +806,16 @@ body.sidebar-reorder-mode .nav-title {
     background: transparent;
     color: var(--text-dim);
     cursor: pointer;
-    opacity: 0.7;
-    transition: opacity 0.15s, background 0.15s, color 0.15s;
+    transition: background 0.15s, color 0.15s;
 }
 
 .channel-nav-btn:hover:not(:disabled) {
-    opacity: 1;
     background: rgba(255, 255, 255, 0.08);
-    color: var(--text-bright);
+    color: var(--primary);
 }
 
 .channel-nav-btn:disabled {
-    opacity: 0.2;
+    opacity: 0.3;
     cursor: default;
 }
 

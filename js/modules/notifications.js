@@ -341,6 +341,9 @@ Object.assign(NYM.prototype, {
                         contextHtml = `<span class="notification-item-context">PM</span>`;
                     } else if (n.channelInfo.type === 'reaction') {
                         contextHtml = `<span class="notification-item-context">Reaction</span>`;
+                    } else if (n.channelInfo.type === 'call') {
+                        const label = n.channelInfo.callKind === 'video' ? 'Missed video call' : 'Missed audio call';
+                        contextHtml = `<span class="notification-item-context">${label}</span>`;
                     }
                 }
 
@@ -383,6 +386,12 @@ Object.assign(NYM.prototype, {
                                 this.openGroup(info.sourceGroupId);
                             } else if (info.sourceType === 'geohash' && info.sourceGeohash) {
                                 this.switchChannel(info.sourceChannel, info.sourceGeohash);
+                            }
+                        } else if (info.type === 'call') {
+                            if (info.isGroup && info.groupId) {
+                                this.openGroup(info.groupId);
+                            } else if (info.pubkey) {
+                                this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
                             }
                         }
                         this.closeNotificationsModal();

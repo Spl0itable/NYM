@@ -300,6 +300,15 @@ body.light-mode .verified-badge::before {
         padding-right: 108px;
         flex-shrink: 0;
         overflow: hidden;
+        touch-action: pan-x;
+    }
+
+    .input-container {
+        overscroll-behavior: none;
+    }
+
+    .messages-container {
+        overscroll-behavior: contain;
     }
 
     .channel-nav-buttons {

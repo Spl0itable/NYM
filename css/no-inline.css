@@ -141,13 +141,13 @@
 
 /* users.js */
 .nm-usr-1 { vertical-align: middle; margin-left: 3px; opacity: 0.7; }
-.nm-usr-2 { font-size: 12px; color: var(--text-dim); }
+.nm-usr-2 { font-size: 12px; color: var(--text-dim); font-weight: 400; }
 
 /* reactions.js */
 .nm-react-1 { fill: var(--text); stroke: none; }
 
 /* pms.js */
-.nm-pms-1 { font-size: 12px; color: var(--text-dim); }
+.nm-pms-1 { font-size: 12px; color: var(--text-dim); font-weight: 400; }
 .nm-pms-2 { vertical-align: -1px; margin-right: 4px; }
 .nm-pms-3 { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); text-align: center; padding: 40px; }
 .nm-pms-4 { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
@@ -181,7 +181,7 @@
 .nm-geo-2 { background: var(--warning); }
 
 /* groups.js */
-.nm-grp-1 { font-size: 12px; color: var(--text-dim); margin-left: 4px; }
+.nm-grp-1 { font-size: 12px; color: var(--text-dim); margin-left: 4px; font-weight: 400; }
 .nm-grp-2 { vertical-align: -1px; margin-right: 4px; }
 .nm-grp-ml8 { margin-left: 8px; }
 .group-avatar-stack-img:nth-child(1) { z-index: 3; }

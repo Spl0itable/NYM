@@ -180,6 +180,29 @@ Object.assign(NYM.prototype, {
         this._persistSeenCalls(map);
     },
 
+    _recordMissedCall(callerPubkey, callerNym, kind, callId, isGroup, groupId) {
+        if (!callerPubkey || !callId) return;
+        const niceKind = kind === 'video' ? 'video' : 'audio';
+        const baseTitle = callerNym || this._nymForPubkey(callerPubkey);
+        let body = `Missed ${niceKind} call`;
+        if (isGroup && groupId && this.groupConversations) {
+            const g = this.groupConversations.get(groupId);
+            if (g && g.name) body += ` in ${g.name}`;
+        }
+        const channelInfo = {
+            type: 'call',
+            pubkey: callerPubkey,
+            callKind: niceKind,
+            isGroup: !!isGroup,
+            groupId: groupId || null,
+            eventId: `missed-call-${callId}`,
+            nym: baseTitle
+        };
+        if (typeof this._addNotificationToHistory === 'function') {
+            this._addNotificationToHistory(baseTitle, body, channelInfo, Date.now());
+        }
+    },
+
     _onCallInvite(sender, data, event) {
         // Drop replayed/stale invites so a reload doesn't ring on old signaling events
         const createdAt = event && event.created_at ? event.created_at : 0;
@@ -211,11 +234,12 @@ Object.assign(NYM.prototype, {
         this._startRingtone();
         this.incomingCall.timeout = setTimeout(() => {
             if (this.incomingCall && this.incomingCall.callId === data.callId) {
-                const nym = this.incomingCall.nym;
+                const inc = this.incomingCall;
                 this._stopRingtone();
                 this._hideIncomingCallUI();
                 this.incomingCall = null;
-                this.displaySystemMessage('Missed call from ' + nym);
+                this.displaySystemMessage('Missed call from ' + inc.nym);
+                this._recordMissedCall(inc.from, inc.nym, inc.kind, inc.callId, inc.isGroup, inc.groupId);
             }
         }, 45000);
     },
@@ -298,12 +322,13 @@ Object.assign(NYM.prototype, {
 
     _onCallCancel(sender, data) {
         if (this.incomingCall && this.incomingCall.callId === data.callId) {
-            const nym = this.incomingCall.nym;
+            const inc = this.incomingCall;
             this._stopRingtone();
-            if (this.incomingCall.timeout) clearTimeout(this.incomingCall.timeout);
+            if (inc.timeout) clearTimeout(inc.timeout);
             this._hideIncomingCallUI();
             this.incomingCall = null;
-            this.displaySystemMessage('Missed call from ' + nym);
+            this.displaySystemMessage('Missed call from ' + inc.nym);
+            this._recordMissedCall(inc.from, inc.nym, inc.kind, inc.callId, inc.isGroup, inc.groupId);
         }
     },
 

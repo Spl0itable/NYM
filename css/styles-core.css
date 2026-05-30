@@ -96,6 +96,12 @@
     --user-text-size: 15px;
 }
 
+html {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+}
+
 body {
     font-family: var(--font-sans);
     line-height: 1.4;
@@ -104,6 +110,7 @@ body {
     height: 100vh;
     overflow: hidden;
     position: relative;
+    overscroll-behavior: none;
 }
 
 body::before {
