@@ -2788,28 +2788,76 @@ Object.assign(NYM.prototype, {
 
         const container = document.getElementById('messagesContainer');
         if (!container) return;
-        const candidates = container.querySelectorAll('.message[data-message-id]');
-        let best = null;
-        let bestScore = -1;
-        for (const el of candidates) {
-            if (hostKey && el.dataset.messageId === hostKey) continue;
-            const elAuthor = (el.dataset.author || '').trim();
-            const elPk = el.dataset.pubkey || '';
-            const elSuffix = elPk.slice(-4).toLowerCase();
-            if (quotedSuffix && elSuffix !== quotedSuffix) continue;
-            const baseAuthor = this.stripPubkeySuffix(elAuthor);
-            if (quotedName && baseAuthor !== quotedName && elAuthor !== quotedName) continue;
-            const raw = (el.dataset.rawContent || '').replace(/\s+/g, ' ').trim();
-            if (!raw) continue;
-            const replyOnly = raw.split(/\r?\n/).filter(l => !l.startsWith('>')).join(' ').replace(/\s+/g, ' ').trim();
-            const haystack = replyOnly || raw;
-            let score = 0;
-            const needle = quotedText.slice(0, 200);
-            if (haystack === needle) score = 1000;
-            else if (haystack.includes(needle)) score = 500;
-            else if (needle.length > 20 && haystack.includes(needle.slice(0, 80))) score = 250;
-            if (score > bestScore) { bestScore = score; best = el; }
+
+        const needle = quotedText.slice(0, 200);
+        const scoreHaystack = (haystack) => {
+            if (!haystack) return 0;
+            if (haystack === needle) return 1000;
+            if (haystack.includes(needle)) return 500;
+            if (needle.length > 20 && haystack.includes(needle.slice(0, 80))) return 250;
+            return 0;
+        };
+        const matchesAuthor = (author, pubkey) => {
+            const suffix = (pubkey || '').slice(-4).toLowerCase();
+            if (quotedSuffix && suffix !== quotedSuffix) return false;
+            const trimmed = (author || '').trim();
+            const baseAuthor = this.stripPubkeySuffix(trimmed);
+            if (quotedName && baseAuthor !== quotedName && trimmed !== quotedName) return false;
+            return true;
+        };
+        const stripQuoteLines = (raw) => raw.split(/\r?\n/).filter(l => !l.startsWith('>')).join(' ').replace(/\s+/g, ' ').trim();
+
+        const findInDom = () => {
+            const candidates = container.querySelectorAll('.message[data-message-id]');
+            let bestEl = null;
+            let bestScore = -1;
+            for (const el of candidates) {
+                if (hostKey && el.dataset.messageId === hostKey) continue;
+                if (!matchesAuthor(el.dataset.author, el.dataset.pubkey)) continue;
+                const raw = (el.dataset.rawContent || '').replace(/\s+/g, ' ').trim();
+                if (!raw) continue;
+                const replyOnly = stripQuoteLines(el.dataset.rawContent || '');
+                const score = scoreHaystack(replyOnly || raw);
+                if (score > bestScore) { bestScore = score; bestEl = el; }
+            }
+            return bestScore > 0 ? bestEl : null;
+        };
+
+        let best = findInDom();
+
+        if (!best) {
+            const isPM = container.dataset.virtualScrollIsPM === 'true';
+            const storageKey = container.dataset.virtualScrollKey;
+            if (storageKey) {
+                const store = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
+                const startMap = isPM ? this.pmRenderedStart : this.channelRenderedStart;
+                const renderedStart = startMap.get(storageKey) || 0;
+                let targetIdx = -1;
+                let bestScore = -1;
+                for (let i = 0; i < Math.min(renderedStart, store.length); i++) {
+                    const m = store[i];
+                    if (!m) continue;
+                    if (hostKey && m.id === hostKey) continue;
+                    if (!matchesAuthor(m.author, m.pubkey)) continue;
+                    const raw = (m.content || '').replace(/\s+/g, ' ').trim();
+                    if (!raw) continue;
+                    const replyOnly = stripQuoteLines(m.content || '');
+                    const score = scoreHaystack(replyOnly || raw);
+                    if (score > bestScore) { bestScore = score; targetIdx = i; }
+                }
+                if (targetIdx >= 0) {
+                    let safety = 60;
+                    while (safety-- > 0) {
+                        const currentStart = startMap.get(storageKey) || 0;
+                        if (currentStart <= targetIdx) break;
+                        const advanced = isPM ? this.loadOlderPMMessages(storageKey) : this.loadOlderChannelMessages(storageKey);
+                        if (!advanced) break;
+                    }
+                    best = findInDom();
+                }
+            }
         }
+
         if (!best) {
             this.displaySystemMessage('Original message is not available');
             return;
