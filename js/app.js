@@ -2077,6 +2077,7 @@ async function changeNick() {
         if (!cmdResult && profileDirty) {
             await nym.saveToNostrProfile();
         }
+        nym.displaySystemMessage("Nym's profile changes saved");
         return;
     }
 
@@ -2084,6 +2085,7 @@ async function changeNick() {
     // so avatar, banner, bio, and lightning changes are all persisted
     await nym.saveToNostrProfile();
     closeModal('nickEditModal');
+    nym.displaySystemMessage("Nym's profile changes saved");
 }
 
 function randomizeNick() {
