@@ -461,6 +461,7 @@ async function handleProfileAction(context, body) {
   if (!env.R2_BUCKET) return json({ error: "Profile storage is not configured (missing R2_BUCKET binding)." }, 503);
 
   // Public batch read so clients can fetch profiles without a Nostr REQ.
+  // Per-pubkey edge cache: hits skip R2, misses GET then populate the cache.
   if (body.action === "profile-get") {
     var rawPks = Array.isArray(body.pubkeys) ? body.pubkeys.slice(0, 100) : [];
     var pks = [];
@@ -468,7 +469,14 @@ async function handleProfileAction(context, body) {
       var pk = rawPks[i];
       if (typeof pk === "string" && /^[0-9a-f]{64}$/i.test(pk)) pks.push(pk.toLowerCase());
     }
-    var recs = await Promise.all(pks.map(async function (pk) {
+    var profiles = {};
+    var misses = [];
+    await Promise.all(pks.map(async function (pk) {
+      var cached = await readCacheGet("/profile/" + pk);
+      if (cached !== null) profiles[pk] = cached.rec || null; // cached null-result is { rec: null }
+      else misses.push(pk);
+    }));
+    var recs = await Promise.all(misses.map(async function (pk) {
       try {
         var obj = await env.R2_BUCKET.get("profile/" + pk);
         if (!obj) return [pk, null];
@@ -479,8 +487,10 @@ async function handleProfileAction(context, body) {
         return [pk, null];
       }
     }));
-    var profiles = {};
-    recs.forEach(function (r) { profiles[r[0]] = r[1]; });
+    recs.forEach(function (r) {
+      profiles[r[0]] = r[1];
+      readCachePut(context, "/profile/" + r[0], { rec: r[1] }, PROFILE_READ_TTL);
+    });
     return json({ profiles: profiles });
   }
 
@@ -505,6 +515,8 @@ async function handleProfileAction(context, body) {
     } catch (e) { }
     var updatedAt = Date.now();
     await env.R2_BUCKET.put("profile/" + userPubkey, JSON.stringify({ event: ev, updatedAt: updatedAt }));
+    // Refresh the edge cache so the new profile is served immediately.
+    readCachePut(context, "/profile/" + userPubkey, { rec: { event: ev, updatedAt: updatedAt } }, PROFILE_READ_TTL);
     return json({ ok: true, updatedAt: updatedAt });
   }
 
@@ -530,6 +542,38 @@ function archiveMarkHandled(context, eventId, ttlSeconds) {
     var headers = new Headers();
     headers.set("Cache-Control", "public, max-age=" + (ttlSeconds || 3600));
     var op = caches.default.put(archiveDedupRequest(eventId), new Response("1", { headers: headers }));
+    if (context && context.waitUntil) context.waitUntil(op);
+  } catch (e) { }
+}
+
+// Read-through edge cache for PUBLIC reads (channel-get, profile-get) so many
+// stateless workers serve them from the per-colo cache instead of hitting R2.
+// Stores the JSON payload only; never used for private (settings/PM) reads.
+var READ_CACHE_HOST = "https://nymchat-read.invalid";
+var CHANNEL_READ_TTL = 45;
+var PROFILE_READ_TTL = 300;
+function readCacheRequest(path) {
+  return new Request(READ_CACHE_HOST + path, { method: "GET" });
+}
+async function readCacheGet(path) {
+  try {
+    var hit = await caches.default.match(readCacheRequest(path));
+    if (!hit) return null;
+    return await hit.json();
+  } catch (e) { return null; }
+}
+function readCachePut(context, path, obj, ttlSeconds) {
+  try {
+    var headers = new Headers();
+    headers.set("Content-Type", "application/json");
+    headers.set("Cache-Control", "public, max-age=" + (ttlSeconds || 60));
+    var op = caches.default.put(readCacheRequest(path), new Response(JSON.stringify(obj), { headers: headers }));
+    if (context && context.waitUntil) context.waitUntil(op);
+  } catch (e) { }
+}
+function readCacheDelete(context, path) {
+  try {
+    var op = caches.default.delete(readCacheRequest(path));
     if (context && context.waitUntil) context.waitUntil(op);
   } catch (e) { }
 }
@@ -693,6 +737,12 @@ async function handleChannelAction(context, body) {
     if (!name) return json({ error: "Invalid channel." }, 400);
     var minTs = Date.now() - CHANNEL_TTL_MS;
     var since = Number(body.since) || 0;
+    // Read-through edge cache for the common full-recent read (no `since`).
+    // Short TTL: the live relay feed covers real-time, R2 is just backfill.
+    if (!since) {
+      var cachedChan = await readCacheGet("/channel/" + name);
+      if (cachedChan) return json(cachedChan);
+    }
     var idx = await archiveReadIndex(env, "channel-index/" + name);
     var ids = [];
     for (var i = 0; i < idx.items.length; i++) {
@@ -710,7 +760,9 @@ async function handleChannelAction(context, body) {
         return await o.json();
       } catch (e) { return null; }
     }));
-    return json({ channel: name, events: evs.filter(Boolean) });
+    var chanResp = { channel: name, events: evs.filter(Boolean) };
+    if (!since) readCachePut(context, "/channel/" + name, chanResp, CHANNEL_READ_TTL);
+    return json(chanResp);
   }
 
   // NIP-09 deletion: the signed kind 5 event IS the authorization. We only
@@ -748,6 +800,8 @@ async function handleChannelAction(context, body) {
       var cidx = await archiveReadIndex(env, "channel-index/" + name2);
       cidx.items = cidx.items.filter(function (it) { return !removedSet.has(it[0]); });
       await archiveWriteIndex(env, "channel-index/" + name2, cidx);
+      // Purge the cached channel read so the deletion isn't served stale.
+      readCacheDelete(context, "/channel/" + name2);
     }
     return json({ ok: true, removed: removedSet.size });
   }

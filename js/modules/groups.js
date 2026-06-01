@@ -1205,7 +1205,31 @@ Object.assign(NYM.prototype, {
     // Uses the local privkey when available, otherwise falls back to the
     // NIP-07 extension for sealing (nip44.encrypt + signEvent) while still
     // wrapping with a local ephemeral keypair.
+    // Archive every group rumor — messages, edits, reactions, deletions AND
+    // control events (membership, mods, bans, ownership, key rotation) — so a
+    // new device can fully reconstruct group state. Replaying them in order
+    // mirrors the existing relay reconnect catch-up.
+    _isArchivableGroupRumor(rumor) {
+        return !!rumor && (rumor.kind === 14 || rumor.kind === 7);
+    },
+
+    // Mirror a group rumor to R2 as a self-addressed gift wrap (to our real
+    // pubkey) so group chats restore on other devices like 1:1 PMs. Local-key
+    // path only, matching how 1:1 PM archival works.
+    _archiveGroupRumorSelf(rumor, expirationTs) {
+        try {
+            if (!this.privkey) return;
+            if (!this._isArchivableGroupRumor(rumor)) return;
+            if (typeof this._pmArchiveAllowed !== 'function' || !this._pmArchiveAllowed()) return;
+            const wrap = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
+            if (wrap) this._archivePMEvent(wrap);
+        } catch (_) { }
+    },
+
     async _sendGiftWrapsAsync(members, rumor, expirationTs, groupId = null) {
+        // Archive-only self copy so group messages also hydrate from R2.
+        if (groupId) this._archiveGroupRumorSelf(rumor, expirationTs);
+
         // Fast path — local key available
         if (this.privkey) {
             this._sendGiftWraps(members, rumor, expirationTs, groupId);
