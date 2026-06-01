@@ -580,7 +580,7 @@ Object.assign(NYM.prototype, {
         } else if (event.kind === 9735) {
             this.handleZapReceipt(event);
         } else if (event.kind === 1059) {
-            await this.handleGiftWrapDM(event);
+            this._enqueueGiftWrapDM(event);
         } else if (event.kind === 10000) {
             // Handle mute list of users/keywords
             this.handleMuteList(event);

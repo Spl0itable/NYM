@@ -508,27 +508,70 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
+    // Drop wraps with no valid 'p' tag or none addressed to us (NIP-59).
+    _giftWrapIsForMe(event) {
+        if (!this.pubkey) return true;
+        const wrapRecipients = [];
+        for (const t of (event && event.tags) || []) {
+            if (Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string') {
+                wrapRecipients.push(t[1]);
+            }
+        }
+        if (wrapRecipients.length === 0) return false;
+        const myEphPks = this._getAllKnownEphemeralPubkeys();
+        return wrapRecipients.includes(this.pubkey) ||
+            wrapRecipients.some(r => myEphPks.includes(r));
+    },
+
+    // Bounded dispatcher: caps concurrent decryptions and yields between them.
+    _enqueueGiftWrapDM(event, opts) {
+        if (!this._giftWrapIsForMe(event)) return;
+        if (!this._decryptQueue) {
+            this._decryptQueue = [];
+            this._decryptActive = 0;
+        }
+        this._decryptQueue.push({ event, opts });
+        this._pumpDecryptQueue();
+    },
+
+    _pumpDecryptQueue() {
+        const MAX_PARALLEL_DECRYPTS = 3;
+        while (this._decryptActive < MAX_PARALLEL_DECRYPTS && this._decryptQueue.length) {
+            const { event, opts } = this._decryptQueue.shift();
+            this._decryptActive++;
+            Promise.resolve()
+                .then(() => this.handleGiftWrapDM(event, opts))
+                .catch(() => { })
+                .then(() => this._yieldToIdle())
+                .then(() => {
+                    this._decryptActive--;
+                    this._pumpDecryptQueue();
+                });
+        }
+    },
+
+    // Bounded cache of NIP-44 conversation keys (ECDH + HKDF) by sender pubkey.
+    _getConvKey(pubkey) {
+        const NT = window.NostrTools;
+        if (this._convKeyBasis !== this.privkey) {
+            this._convKeyCache = new Map();
+            this._convKeyBasis = this.privkey;
+        }
+        const hit = this._convKeyCache.get(pubkey);
+        if (hit) return hit;
+        const k = NT.nip44.getConversationKey(this.privkey, pubkey);
+        if (this._convKeyCache.size >= 1000) {
+            this._convKeyCache.delete(this._convKeyCache.keys().next().value);
+        }
+        this._convKeyCache.set(pubkey, k);
+        return k;
+    },
+
     async handleGiftWrapDM(event, opts) {
         try {
             const NT = window.NostrTools;
 
-            // Process only gift wraps addressed to me (real pubkey or any ephemeral pubkey)
-            if (this.pubkey) {
-                const wrapRecipients = [];
-                for (const t of event.tags || []) {
-                    if (Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string') {
-                        wrapRecipients.push(t[1]);
-                    }
-                }
-                if (wrapRecipients.length > 0) {
-                    // Use ALL known ephemeral pubkeys (not the subscription-limited set)
-                    // so messages to older keys aren't dropped before decryption.
-                    const myEphPks = this._getAllKnownEphemeralPubkeys();
-                    const isForMe = wrapRecipients.includes(this.pubkey) ||
-                        wrapRecipients.some(r => myEphPks.includes(r));
-                    if (!isForMe) return; // not for me
-                }
-            }
+            if (!this._giftWrapIsForMe(event)) return;
 
             // Early deduplication - check before expensive decryption
             if (this.processedPMEventIds.has(event.id)) {
@@ -711,8 +754,7 @@ Object.assign(NYM.prototype, {
                     if (isBitchatFormat(seal.content)) {
                         rumorJson = decryptBitchat(seal.content, seal.pubkey);
                     } else {
-                        const ckSeal = NT.nip44.getConversationKey(this.privkey, seal.pubkey);
-                        rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
+                        rumorJson = NT.nip44.decrypt(seal.content, this._getConvKey(seal.pubkey));
                     }
                     rumor = JSON.parse(rumorJson);
                 } else {
@@ -721,8 +763,7 @@ Object.assign(NYM.prototype, {
                     sealJson = NT.nip44.decrypt(event.content, ckWrap);
                     seal = JSON.parse(sealJson);
 
-                    const ckSeal = NT.nip44.getConversationKey(this.privkey, seal.pubkey);
-                    rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
+                    rumorJson = NT.nip44.decrypt(seal.content, this._getConvKey(seal.pubkey));
                     rumor = JSON.parse(rumorJson);
                 }
 
