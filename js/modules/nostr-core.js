@@ -227,25 +227,28 @@ Object.assign(NYM.prototype, {
         }
         const batch = toFetch.slice(0, 100);
         if (!batch.length) return found;
-        let data;
+        const pending = [];
         try {
-            data = await this._storageApiRequest('profile-get', { pubkeys: batch }, false);
+            const resp = await this._storageApiStream('profile-get', { pubkeys: batch }, false);
+            await this._readNdjsonStream(resp, (item) => {
+                if (!Array.isArray(item) || item.length < 2) return;
+                const pk = item[0];
+                const rec = item[1];
+                if (!rec || !rec.event) return;
+                if (pk === this.pubkey && rec.event.id) this._lastMirroredOwnProfileId = rec.event.id;
+                pending.push((async () => {
+                    try {
+                        await this.handleEvent(rec.event);
+                        if (this.profileFetchedAt) this.profileFetchedAt.set(pk, Date.now());
+                        this._cacheR2Profile(pk, rec.event);
+                        found.add(pk);
+                    } catch (_) { }
+                })());
+            });
         } catch (_) {
             return found;
         }
-        const profiles = (data && data.profiles) || {};
-        for (const [pk, rec] of Object.entries(profiles)) {
-            if (!rec || !rec.event) continue;
-            try {
-                // This profile is already in R2, so mark it as mirrored to keep
-                // the kind 0 handler from writing it straight back.
-                if (pk === this.pubkey && rec.event.id) this._lastMirroredOwnProfileId = rec.event.id;
-                await this.handleEvent(rec.event);
-                if (this.profileFetchedAt) this.profileFetchedAt.set(pk, Date.now());
-                this._cacheR2Profile(pk, rec.event);
-                found.add(pk);
-            } catch (_) { }
-        }
+        await Promise.all(pending);
         return found;
     },
 

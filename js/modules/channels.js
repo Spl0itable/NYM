@@ -894,8 +894,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // net correctly. Throttled per channel.
     async channelRestoreFromR2(channelName) {
         if (!channelName) return;
-        const apiHost = this._getApiHost && this._getApiHost();
-        if (!apiHost) return;
+        if (!this._getApiHost || !this._getApiHost()) return;
         const name = String(channelName).toLowerCase();
         if (!this._channelR2FetchedAt) this._channelR2FetchedAt = new Map();
         const last = this._channelR2FetchedAt.get(name) || 0;
@@ -903,31 +902,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this._channelR2FetchedAt.set(name, Date.now());
         const events = [];
         try {
-            const resp = await fetch(`https://${apiHost}/api/storage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'channel-get', channel: name })
-            });
-            if (!resp.ok || !resp.body) return;
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let buf = '';
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                buf += decoder.decode(value, { stream: true });
-                let nl;
-                while ((nl = buf.indexOf('\n')) >= 0) {
-                    const line = buf.slice(0, nl);
-                    buf = buf.slice(nl + 1);
-                    if (!line) continue;
-                    try { events.push(JSON.parse(line)); } catch (_) { }
-                }
-            }
-            buf += decoder.decode();
-            if (buf) {
-                try { events.push(JSON.parse(buf)); } catch (_) { }
-            }
+            const resp = await this._storageApiStream('channel-get', { channel: name }, false);
+            await this._readNdjsonStream(resp, (ev) => events.push(ev));
         } catch (_) {
             return;
         }

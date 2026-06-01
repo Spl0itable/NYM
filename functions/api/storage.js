@@ -469,29 +469,45 @@ async function handleProfileAction(context, body) {
       var pk = rawPks[i];
       if (typeof pk === "string" && /^[0-9a-f]{64}$/i.test(pk)) pks.push(pk.toLowerCase());
     }
-    var profiles = {};
-    var misses = [];
-    await Promise.all(pks.map(async function (pk) {
+    var cacheLookups = await Promise.all(pks.map(async function (pk) {
       var cached = await readCacheGet("/profile/" + pk);
-      if (cached !== null) profiles[pk] = cached.rec || null; // cached null-result is { rec: null }
-      else misses.push(pk);
+      return [pk, cached];
     }));
-    var recs = await Promise.all(misses.map(async function (pk) {
-      try {
-        var obj = await env.R2_BUCKET.get("profile/" + pk);
-        if (!obj) return [pk, null];
-        var d = await obj.json();
-        if (!d || !d.event) return [pk, null];
-        return [pk, { event: d.event, updatedAt: d.updatedAt || 0 }];
-      } catch (e) {
-        return [pk, null];
+    var profEncoder = new TextEncoder();
+    var profStream = new ReadableStream({
+      start(controller) {
+        var misses = [];
+        cacheLookups.forEach(function (pair) {
+          var pk = pair[0], cached = pair[1];
+          if (cached !== null) {
+            controller.enqueue(profEncoder.encode(JSON.stringify([pk, cached.rec || null]) + "\n"));
+          } else {
+            misses.push(pk);
+          }
+        });
+        var pending = misses.map(async function (pk) {
+          var rec = null;
+          try {
+            var obj = await env.R2_BUCKET.get("profile/" + pk);
+            if (obj) {
+              var d = await obj.json();
+              if (d && d.event) rec = { event: d.event, updatedAt: d.updatedAt || 0 };
+            }
+          } catch (e) { }
+          readCachePut(context, "/profile/" + pk, { rec: rec }, PROFILE_READ_TTL);
+          controller.enqueue(profEncoder.encode(JSON.stringify([pk, rec]) + "\n"));
+        });
+        Promise.all(pending).then(function () {
+          try { controller.close(); } catch (_) { }
+        }).catch(function (e) {
+          try { controller.error(e); } catch (_) { }
+        });
       }
-    }));
-    recs.forEach(function (r) {
-      profiles[r[0]] = r[1];
-      readCachePut(context, "/profile/" + r[0], { rec: r[1] }, PROFILE_READ_TTL);
     });
-    return json({ profiles: profiles });
+    return new Response(profStream, {
+      status: 200,
+      headers: { "Content-Type": "application/x-ndjson", ...BOT_CORS_HEADERS }
+    });
   }
 
   var userPubkey = body.pubkey;
@@ -709,14 +725,35 @@ async function handlePmAction(context, body) {
       ids.push(it[0]);
       if (ids.length >= limit) break;
     }
-    var evs = await Promise.all(ids.map(async function (id) {
-      try {
-        var o = await env.R2_BUCKET.get("pm/" + userPubkey + "/" + id);
-        if (!o) return null;
-        return await o.json();
-      } catch (e) { return null; }
-    }));
-    return json({ events: evs.filter(Boolean), hasMore: ids.length >= limit });
+    var hasMore = ids.length >= limit;
+    var pmEncoder = new TextEncoder();
+    var pmStream = new ReadableStream({
+      start(controller) {
+        var pending = ids.map(async function (id) {
+          try {
+            var o = await env.R2_BUCKET.get("pm/" + userPubkey + "/" + id);
+            if (!o) return;
+            var ev = await o.json();
+            if (!ev) return;
+            controller.enqueue(pmEncoder.encode(JSON.stringify(ev) + "\n"));
+          } catch (e) { }
+        });
+        Promise.all(pending).then(function () {
+          try { controller.close(); } catch (_) { }
+        }).catch(function (e) {
+          try { controller.error(e); } catch (_) { }
+        });
+      }
+    });
+    return new Response(pmStream, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "X-Has-More": hasMore ? "1" : "0",
+        "Access-Control-Expose-Headers": "X-Has-More",
+        ...BOT_CORS_HEADERS
+      }
+    });
   }
 
   // Delete the user's own stored wraps (e.g. after a NIP-09 kind 5). Objects

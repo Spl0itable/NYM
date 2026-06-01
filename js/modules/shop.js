@@ -28,6 +28,52 @@ Object.assign(NYM.prototype, {
         return this._storageApiRequest(action, extra, withAuth);
     },
 
+    async _storageApiStream(action, extra, withAuth = true) {
+        const apiHost = this._getApiHost();
+        if (!apiHost) throw new Error('Storage is unavailable on this host.');
+        const body = Object.assign({ action }, extra || {});
+        if (withAuth) {
+            if (!this.pubkey) throw new Error('Login required.');
+            body.pubkey = this.pubkey;
+            body.auth = await this._signBotAuth();
+        }
+        const resp = await fetch(`https://${apiHost}/api/storage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const ct = resp.headers.get('Content-Type') || '';
+        if (!resp.ok || ct.indexOf('application/x-ndjson') < 0) {
+            let msg = `Request failed (${resp.status})`;
+            try { const j = await resp.json(); if (j && j.error) msg = j.error; } catch (_) { }
+            throw new Error(msg);
+        }
+        return resp;
+    },
+
+    async _readNdjsonStream(resp, onItem) {
+        if (!resp || !resp.body) return;
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        const handle = (line) => {
+            if (!line) return;
+            try { onItem(JSON.parse(line)); } catch (_) { }
+        };
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+                handle(buf.slice(0, nl));
+                buf = buf.slice(nl + 1);
+            }
+        }
+        buf += decoder.decode();
+        if (buf) handle(buf);
+    },
+
     // Cache of other users' active items, persisted across sessions
     loadShopActiveCache() {
         try {

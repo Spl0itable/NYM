@@ -1375,15 +1375,16 @@ Object.assign(NYM.prototype, {
         if (!this._pmArchiveAllowed()) return false;
         if (this._pmR2Loading) return false;
         this._pmR2Loading = true;
-        let data;
+        const events = [];
+        let hasMore = false;
         try {
-            data = await this._storageApiRequest('pm-get', { since: 0, before, limit });
+            const resp = await this._storageApiStream('pm-get', { since: 0, before, limit });
+            hasMore = resp.headers.get('X-Has-More') === '1';
+            await this._readNdjsonStream(resp, (ev) => events.push(ev));
         } catch (_) {
             this._pmR2Loading = false;
             return false;
         }
-        const events = (data && Array.isArray(data.events)) ? data.events : [];
-        const hasMore = !!(data && data.hasMore);
         if (!hasMore || events.length < limit) this._pmR2NoMore = true;
         events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
         if (events.length) {
