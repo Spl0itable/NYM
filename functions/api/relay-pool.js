@@ -65,6 +65,16 @@ export async function onRequest(context) {
   const DEDUP_MAX = 50000;
   let dedupCounter = 0;
 
+  // Public-channel 24hr archival
+  const archiveEnabled = !!(env && env.R2_BUCKET);
+  const ARCHIVE_DEDUP_HOST = 'https://nymchat-archive.invalid';
+  const CHANNEL_ARCHIVE_TTL = 24 * 60 * 60;   // seconds; matches bucket lifecycle rule
+  const CHANNEL_EVENT_MAX = 64 * 1024;
+  const CHANNEL_INDEX_CAP = 2000;
+  const CHANNEL_FLUSH_INTERVAL = 15000;
+  const channelArchiveBuf = new Map();        // channelName -> Map<eventId, createdAt>
+  const channelIndexLastFlush = new Map();    // channelName -> last flush ts
+
   function trimDedup() {
     if (++dedupCounter < 500) return;
     dedupCounter = 0;
@@ -100,6 +110,7 @@ export async function onRequest(context) {
     try {
       if (serverOpen && server.readyState === 1) {
         server.send(JSON.stringify(['POOL:PING', Date.now()]));
+        flushChannelIndexes().catch(() => { });
       } else {
         clearInterval(keepaliveTimer);
         keepaliveTimer = null;
@@ -465,6 +476,133 @@ export async function onRequest(context) {
     const end = raw.indexOf('"', start);
     if (end === -1 || end - start > 256) return null;
     return raw.substring(start, end);
+  }
+
+  // Numeric created_at from an event frame, without JSON.parse.
+  function extractEventCreatedAt(raw) {
+    const braceIdx = raw.indexOf('{');
+    if (braceIdx === -1) return 0;
+    const idx = raw.indexOf('"created_at":', braceIdx);
+    if (idx === -1) return 0;
+    let i = idx + 13;
+    while (raw.charCodeAt(i) === 32) i++;
+    let n = 0, saw = false;
+    while (i < raw.length) {
+      const c = raw.charCodeAt(i);
+      if (c < 48 || c > 57) break;
+      n = n * 10 + (c - 48); saw = true; i++;
+    }
+    return saw ? n : 0;
+  }
+
+  // The event object is the last element of ["EVENT","subId",{...}].
+  function extractEventObjectJson(raw) {
+    const start = raw.indexOf('{');
+    if (start === -1) return null;
+    const end = raw.lastIndexOf('}');
+    if (end <= start) return null;
+    return raw.substring(start, end + 1);
+  }
+
+  function sanitizeChannelKey(name) {
+    if (typeof name !== 'string') return '';
+    return name.trim().toLowerCase().replace(/[^a-z0-9_\-.]/g, '').slice(0, 80);
+  }
+
+  function archiveDedupReq(eventId) {
+    return new Request(ARCHIVE_DEDUP_HOST + '/handled/' + eventId, { method: 'GET' });
+  }
+
+  const isArchivableChannelKind = (k) => k === 20000 || k === 23333 || k === 7;
+
+  // Channel name for an event: 'g' for geohash (20000), 'd' for named (23333),
+  // either for reactions (7).
+  function channelFromTags(getTag, kind) {
+    if (kind === 20000) return getTag('g');
+    if (kind === 23333) return getTag('d');
+    return getTag('g') || getTag('d');
+  }
+
+  // Store one channel event, gated by the edge cache so concurrent stateless
+  // instances write it at most once. Fire-and-forget; never blocks forwarding.
+  async function doArchiveChannel(channel, eventId, objJson, createdAt) {
+    if (!channel || !eventId || !objJson || objJson.length > CHANNEL_EVENT_MAX) return;
+    try {
+      const dedupReq = archiveDedupReq(eventId);
+      if (await caches.default.match(dedupReq)) return;
+      const key = 'channel/' + channel + '/' + eventId;
+      let exists = false;
+      try { exists = !!(await env.R2_BUCKET.head(key)); } catch { exists = false; }
+      if (!exists) await env.R2_BUCKET.put(key, objJson);
+      const headers = new Headers();
+      headers.set('Cache-Control', 'public, max-age=' + CHANNEL_ARCHIVE_TTL);
+      await caches.default.put(dedupReq, new Response('1', { headers }));
+      let buf = channelArchiveBuf.get(channel);
+      if (!buf) { buf = new Map(); channelArchiveBuf.set(channel, buf); }
+      buf.set(eventId, createdAt || 0);
+    } catch { /* best-effort */ }
+  }
+
+  function runArchive(work) {
+    if (context && context.waitUntil) { try { context.waitUntil(work); } catch { /* noop */ } }
+  }
+
+  // Inbound event from a relay (string frame).
+  function archiveInboundEvent(raw, kind, eventId) {
+    if (!archiveEnabled || !eventId) return;
+    const channel = sanitizeChannelKey(channelFromTags((n) => extractTagValue(raw, n), kind));
+    if (!channel) return;
+    const objJson = extractEventObjectJson(raw);
+    if (!objJson) return;
+    runArchive(doArchiveChannel(channel, eventId, objJson, extractEventCreatedAt(raw)));
+  }
+
+  // Outbound event the client is publishing — archived immediately so sends
+  // land in R2 without waiting for the relay echo (deduped, so saved once).
+  function archiveOutgoingEvent(ev) {
+    if (!archiveEnabled || !ev || typeof ev.id !== 'string' || !isArchivableChannelKind(ev.kind)) return;
+    const tags = Array.isArray(ev.tags) ? ev.tags : [];
+    const getTag = (n) => { const t = tags.find((x) => Array.isArray(x) && x[0] === n); return t ? t[1] : null; };
+    const channel = sanitizeChannelKey(channelFromTags(getTag, ev.kind));
+    if (!channel) return;
+    runArchive(doArchiveChannel(channel, ev.id, JSON.stringify(ev),
+      typeof ev.created_at === 'number' ? ev.created_at : 0));
+  }
+
+  // Merge buffered ids into each channel's index (one PUT per channel per
+  // interval). Read-merge-write; an occasional lost update is backfilled by relays.
+  async function flushChannelIndexes() {
+    if (!archiveEnabled || channelArchiveBuf.size === 0) return;
+    const now = Date.now();
+    const minTs = now - CHANNEL_ARCHIVE_TTL * 1000;
+    for (const [channel, buf] of channelArchiveBuf) {
+      if (buf.size === 0) continue;
+      const last = channelIndexLastFlush.get(channel) || 0;
+      if (now - last < CHANNEL_FLUSH_INTERVAL) continue;
+      channelIndexLastFlush.set(channel, now);
+      const additions = Array.from(buf.entries());
+      buf.clear();
+      try {
+        const key = 'channel-index/' + channel;
+        let items = [];
+        try {
+          const obj = await env.R2_BUCKET.get(key);
+          if (obj) { const d = await obj.json(); if (d && Array.isArray(d.items)) items = d.items; }
+        } catch { items = []; }
+        const seen = new Set();
+        const merged = [];
+        for (const it of additions.concat(items)) {
+          if (!Array.isArray(it) || typeof it[0] !== 'string') continue;
+          if (seen.has(it[0])) continue;
+          if ((it[1] || 0) * 1000 < minTs) continue;
+          seen.add(it[0]);
+          merged.push([it[0], it[1] || 0]);
+        }
+        merged.sort((a, b) => (b[1] || 0) - (a[1] || 0));
+        const capped = merged.length > CHANNEL_INDEX_CAP ? merged.slice(0, CHANNEL_INDEX_CAP) : merged;
+        await env.R2_BUCKET.put(key, JSON.stringify({ v: 1, items: capped }));
+      } catch { /* best-effort */ }
+    }
   }
 
   // Mirror of the client-side _looksLikeRandomToken heuristic.
@@ -865,6 +1003,10 @@ export async function onRequest(context) {
             return;
           }
           info.eventCount++;
+          if (archiveEnabled) {
+            const archiveKind = extractEventKind(raw);
+            if (isArchivableChannelKind(archiveKind)) archiveInboundEvent(raw, archiveKind, eventId);
+          }
           const relayTail = ',"' + relayUrl + '"]';
           if (childToParent.size > 0) {
             const subEnd = raw.indexOf('"', 10);
@@ -1091,6 +1233,7 @@ export async function onRequest(context) {
             }
           } else if (msgType === 'EVENT') {
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
+            if (archiveEnabled) archiveOutgoingEvent(msg[1]);
             sendToUpstreams(event.data, (url) => {
               if (evtKind < 0) return true;
               const blocked = kindBlacklist.get(url);
@@ -1099,6 +1242,7 @@ export async function onRequest(context) {
           } else if (msgType === 'GEO_EVENT') {
             const geoEvt = msg[1];
             const evtKind = geoEvt && typeof geoEvt.kind === 'number' ? geoEvt.kind : -1;
+            if (archiveEnabled) archiveOutgoingEvent(geoEvt);
             const isBlockedFor = (url) => {
               if (evtKind < 0) return false;
               const blocked = kindBlacklist.get(url);
@@ -1220,6 +1364,12 @@ export async function onRequest(context) {
   // Handle client disconnect
   function cleanupAll() {
     serverOpen = false;
+    // Final, un-throttled flush of buffered channel index entries.
+    if (archiveEnabled && channelArchiveBuf.size > 0) {
+      channelIndexLastFlush.clear();
+      const finalFlush = flushChannelIndexes().catch(() => { });
+      if (context && context.waitUntil) { try { context.waitUntil(finalFlush); } catch { /* noop */ } }
+    }
     if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
     connectionQueue = [];
     for (const [, timerId] of reconnectTimers) clearTimeout(timerId);

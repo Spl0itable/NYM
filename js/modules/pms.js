@@ -321,6 +321,9 @@ Object.assign(NYM.prototype, {
                 const selfWrapped = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', selfWrapped]);
                 this._recordGiftWrapId(nymMessageId, selfWrapped.id);
+                // Archive our own self-addressed copy so sent messages also
+                // restore across devices, without waiting for the relay echo.
+                this._archivePMEvent(selfWrapped);
             }
 
             const conversationKey = this.getPMConversationKey(recipientPubkey);
@@ -533,6 +536,10 @@ Object.assign(NYM.prototype, {
             }
             this.processedPMEventIds.add(event.id);
             if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+
+            // Mirror the gift wrap to R2 so PMs restore on other devices. Gated
+            // server-side (must be addressed to us) and deduped by event id.
+            this._archivePMEvent(event);
 
             // Update lastPMSyncTime to track newest received PM
             if (event.created_at && event.created_at > this.lastPMSyncTime) {
@@ -1287,6 +1294,75 @@ Object.assign(NYM.prototype, {
         // Create a unique key for this PM conversation between two users
         const keys = [this.pubkey, otherPubkey].sort();
         return `pm-${keys.join('-')}`;
+    },
+
+    // Only durable (logged-in) identities mirror PMs to R2 for cross-device restore.
+    _pmArchiveAllowed() {
+        if (!this.pubkey) return false;
+        if (!this._getApiHost || !this._getApiHost()) return false;
+        if (typeof isNostrLoggedIn === 'function' && !isNostrLoggedIn()) return false;
+        return true;
+    },
+
+    // Queue a gift wrap (kind 1059, addressed to us) for batched upload to R2.
+    _archivePMEvent(event) {
+        if (!event || typeof event.id !== 'string') return;
+        if (!this._pmArchiveAllowed()) return;
+        // The server only stores wraps addressed to the authenticated pubkey.
+        const addressedToMe = (event.tags || []).some(t =>
+            Array.isArray(t) && t[0] === 'p' && t[1] === this.pubkey);
+        if (!addressedToMe) return;
+        if (!this._pmArchivedIds) this._pmArchivedIds = new Set();
+        if (this._pmArchivedIds.has(event.id)) return;
+        this._pmArchivedIds.add(event.id);
+        if (this._pmArchivedIds.size > 6000) {
+            this._pmArchivedIds = new Set(Array.from(this._pmArchivedIds).slice(-4000));
+        }
+        if (!this._pmArchiveQueue) this._pmArchiveQueue = [];
+        this._pmArchiveQueue.push(event);
+        if (this._pmArchiveQueue.length > 300) this._pmArchiveQueue.shift();
+        if (this._pmArchiveFlushTimer) return;
+        this._pmArchiveFlushTimer = setTimeout(() => {
+            this._pmArchiveFlushTimer = null;
+            this._flushPMArchive();
+        }, 4000);
+    },
+
+    async _flushPMArchive() {
+        if (!this._pmArchiveQueue || this._pmArchiveQueue.length === 0) return;
+        const batch = this._pmArchiveQueue.splice(0, 100);
+        try {
+            await this._storageApiRequest('pm-put', { events: batch });
+        } catch (_) {
+            // Best-effort: drop on failure rather than risk an upload loop.
+        }
+        if (this._pmArchiveQueue.length > 0 && !this._pmArchiveFlushTimer) {
+            this._pmArchiveFlushTimer = setTimeout(() => {
+                this._pmArchiveFlushTimer = null;
+                this._flushPMArchive();
+            }, 4000);
+        }
+    },
+
+    // Restore archived PMs from R2 via the normal gift-wrap handler (which
+    // dedupes). Oldest-first so edits and reaction add/remove net correctly.
+    // Marks each id as archived so a restore doesn't trigger a re-upload.
+    async pmRestoreFromR2() {
+        if (!this._pmArchiveAllowed()) return;
+        let data;
+        try {
+            data = await this._storageApiRequest('pm-get', { since: 0 });
+        } catch (_) {
+            return;
+        }
+        const events = (data && Array.isArray(data.events)) ? data.events : [];
+        events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+        if (!this._pmArchivedIds) this._pmArchivedIds = new Set();
+        for (const ev of events) {
+            if (!ev || typeof ev.id !== 'string') continue;
+            this._pmArchivedIds.add(ev.id);
+            try { await this.handleGiftWrapDM(ev); } catch (_) { }
+        }
     },
 
     async sendPM(content, recipientPubkey) {

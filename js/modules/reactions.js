@@ -997,6 +997,9 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             const reactionGeohash = (originalKind === '20000' && this.currentGeohash) ? this.currentGeohash : '';
             if (reactionGeohash) {
                 reactionTags.push(['g', reactionGeohash]);
+            } else if (originalKind === '23333' && this.currentChannel) {
+                // Carry the named-channel id so the R2 archive can key the reaction.
+                reactionTags.push(['d', this.currentChannel]);
             }
 
             const event = {
@@ -1116,6 +1119,8 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             const removeGeohash = (originalKind === '20000' && this.currentGeohash) ? this.currentGeohash : '';
             if (removeGeohash) {
                 removeTags.push(['g', removeGeohash]);
+            } else if (originalKind === '23333' && this.currentChannel) {
+                removeTags.push(['d', this.currentChannel]);
             }
 
             const event = {

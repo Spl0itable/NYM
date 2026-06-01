@@ -3585,7 +3585,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.425';
+const NYMCHAT_VERSION = 'v3.67.426';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4818,6 +4818,10 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Load settings (R2-first, relay fallback) and shop purchases for this identity
     settingsLoad();
     nym.loadShopFromServer();
+    // Restore PMs archived in R2 so private messages reappear across devices.
+    if (typeof nym.pmRestoreFromR2 === 'function') {
+        nym.pmRestoreFromR2().catch(() => { });
+    }
 }
 
 function nostrLogout() {
@@ -4883,6 +4887,10 @@ async function settingsLoad() {
         try { loaded = await nym.settingsLoadFromR2(); } catch (_) { loaded = false; }
     }
     if (!loaded) nostrSettingsLoad();
+    // Safety net: never block saves indefinitely if neither source responds.
+    if (nym && typeof nym._markSettingsHydrated === 'function') {
+        setTimeout(() => nym._markSettingsHydrated(), 10000);
+    }
 }
 
 function nostrSettingsLoad() {

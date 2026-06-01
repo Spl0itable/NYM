@@ -412,8 +412,22 @@ async function handleSettingsAction(context, body) {
     if (SETTINGS_CATEGORIES.indexOf(cat) === -1) return json({ error: "Unknown settings category." }, 400);
     if (typeof body.blob !== "string" || !body.blob) return json({ error: "Missing settings blob." }, 400);
     if (body.blob.length > SETTINGS_MAX_BLOB) return json({ error: "Settings payload too large." }, 413);
+    var contentHash = (typeof body.contentHash === "string" && /^[0-9a-f]{64}$/i.test(body.contentHash))
+      ? body.contentHash.toLowerCase() : null;
+    var settingsKey = "settings/" + userPubkey + "/" + cat;
+    if (contentHash) {
+      try {
+        var prevObj = await env.R2_BUCKET.get(settingsKey);
+        if (prevObj) {
+          var prevDoc = await prevObj.json();
+          if (prevDoc && prevDoc.contentHash === contentHash) {
+            return json({ ok: true, category: cat, updatedAt: prevDoc.updatedAt || 0, unchanged: true });
+          }
+        }
+      } catch (e) { }
+    }
     var updatedAt = Date.now();
-    await env.R2_BUCKET.put("settings/" + userPubkey + "/" + cat, JSON.stringify({ blob: body.blob, updatedAt: updatedAt, v: 2 }));
+    await env.R2_BUCKET.put(settingsKey, JSON.stringify({ blob: body.blob, updatedAt: updatedAt, contentHash: contentHash, v: 2 }));
     return json({ ok: true, category: cat, updatedAt: updatedAt });
   }
 
@@ -497,6 +511,250 @@ async function handleProfileAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
+var PM_EVENT_MAX = 96 * 1024;
+var PM_INDEX_CAP = 4000;
+var CHANNEL_EVENT_MAX = 64 * 1024;
+var CHANNEL_INDEX_CAP = 2000;
+var CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
+var ARCHIVE_DEDUP_HOST = "https://nymchat-archive.invalid";
+
+function archiveDedupRequest(eventId) {
+  return new Request(ARCHIVE_DEDUP_HOST + "/handled/" + eventId, { method: "GET" });
+}
+async function archiveAlreadyHandled(eventId) {
+  try { return !!(await caches.default.match(archiveDedupRequest(eventId))); }
+  catch (e) { return false; }
+}
+function archiveMarkHandled(context, eventId, ttlSeconds) {
+  try {
+    var headers = new Headers();
+    headers.set("Cache-Control", "public, max-age=" + (ttlSeconds || 3600));
+    var op = caches.default.put(archiveDedupRequest(eventId), new Response("1", { headers: headers }));
+    if (context && context.waitUntil) context.waitUntil(op);
+  } catch (e) { }
+}
+
+// Small JSON index: { v:1, items: [[id, created_at], ...] } newest-first.
+async function archiveReadIndex(env, key) {
+  try {
+    var obj = await env.R2_BUCKET.get(key);
+    if (!obj) return { v: 1, items: [] };
+    var d = await obj.json();
+    if (!d || !Array.isArray(d.items)) return { v: 1, items: [] };
+    return d;
+  } catch (e) { return { v: 1, items: [] }; }
+}
+async function archiveWriteIndex(env, key, idx) {
+  try { await env.R2_BUCKET.put(key, JSON.stringify({ v: 1, items: idx.items })); }
+  catch (e) { }
+}
+// Merge new [id, ts] entries, drop anything older than minTs, cap to `cap`.
+function archiveMergeIndex(idx, additions, cap, minTs) {
+  var seen = new Set();
+  var merged = [];
+  var all = additions.concat(idx.items);
+  for (var i = 0; i < all.length; i++) {
+    var it = all[i];
+    if (!Array.isArray(it) || typeof it[0] !== "string") continue;
+    if (seen.has(it[0])) continue;
+    if (minTs && (it[1] || 0) * 1000 < minTs) continue;
+    seen.add(it[0]);
+    merged.push([it[0], it[1] || 0]);
+  }
+  merged.sort(function (a, b) { return (b[1] || 0) - (a[1] || 0); });
+  if (merged.length > cap) merged = merged.slice(0, cap);
+  idx.items = merged;
+  return idx;
+}
+
+// Channel names become R2 key segments; keep them to a safe, bounded charset.
+function archiveSanitizeChannel(name) {
+  if (typeof name !== "string") return "";
+  return name.trim().toLowerCase().replace(/[^a-z0-9_\-.]/g, "").slice(0, 80);
+}
+
+// A gift wrap is storable for a user only if it is a kind 1059/1060 event that
+// is cryptographically valid and addressed to that user via a `p` tag.
+function pmIsValidWrapForUser(ev, pubkey) {
+  try {
+    if (!ev || typeof ev !== "object") return false;
+    if (ev.kind !== 1059 && ev.kind !== 1060) return false;
+    if (typeof ev.id !== "string" || typeof ev.sig !== "string" || typeof ev.pubkey !== "string") return false;
+    if (typeof ev.content !== "string" || !Array.isArray(ev.tags)) return false;
+    var addressed = ev.tags.some(function (t) {
+      return Array.isArray(t) && t[0] === "p" && typeof t[1] === "string" && t[1].toLowerCase() === pubkey;
+    });
+    if (!addressed) return false;
+    if (getEventHash(ev) !== ev.id) return false;
+    return schnorr.verify(ev.sig, ev.id, ev.pubkey);
+  } catch (e) { return false; }
+}
+
+async function handlePmAction(context, body) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+    });
+  };
+  if (!env.R2_BUCKET) return json({ error: "PM storage is not configured (missing R2_BUCKET binding)." }, 503);
+
+  var userPubkey = body.pubkey;
+  if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
+  userPubkey = userPubkey.toLowerCase();
+  if (!verifyBotAuth(body.auth, userPubkey)) return json({ error: "Authentication failed" }, 401);
+
+  // Upload one or more gift wraps addressed to the authenticated user. Already
+  // stored events are skipped (edge cache, then a Class B existence check).
+  if (body.action === "pm-put") {
+    var events = Array.isArray(body.events) ? body.events.slice(0, 100)
+      : (body.event ? [body.event] : []);
+    var idxKey = "pm-index/" + userPubkey;
+    var idx = await archiveReadIndex(env, idxKey);
+    var added = [];
+    for (var i = 0; i < events.length; i++) {
+      var ev = events[i];
+      if (!pmIsValidWrapForUser(ev, userPubkey)) continue;
+      if (JSON.stringify(ev).length > PM_EVENT_MAX) continue;
+      if (await archiveAlreadyHandled(ev.id)) continue;
+      var key = "pm/" + userPubkey + "/" + ev.id;
+      var exists = false;
+      try { exists = !!(await env.R2_BUCKET.head(key)); } catch (e) { exists = false; }
+      if (exists) { archiveMarkHandled(context, ev.id, 86400); continue; }
+      await env.R2_BUCKET.put(key, JSON.stringify(ev));
+      archiveMarkHandled(context, ev.id, 86400);
+      added.push([ev.id, ev.created_at || 0]);
+    }
+    if (added.length) {
+      archiveMergeIndex(idx, added, PM_INDEX_CAP, 0);
+      await archiveWriteIndex(env, idxKey, idx);
+    }
+    return json({ ok: true, added: added.length, stored: idx.items.length });
+  }
+
+  // Restore PMs: return every stored wrap with created_at >= since.
+  if (body.action === "pm-get") {
+    var since = Number(body.since) || 0;
+    var idx2 = await archiveReadIndex(env, "pm-index/" + userPubkey);
+    var ids = [];
+    for (var j = 0; j < idx2.items.length; j++) {
+      var it = idx2.items[j];
+      if ((it[1] || 0) >= since) ids.push(it[0]);
+      if (ids.length >= 1000) break;
+    }
+    var evs = await Promise.all(ids.map(async function (id) {
+      try {
+        var o = await env.R2_BUCKET.get("pm/" + userPubkey + "/" + id);
+        if (!o) return null;
+        return await o.json();
+      } catch (e) { return null; }
+    }));
+    return json({ events: evs.filter(Boolean) });
+  }
+
+  // Delete the user's own stored wraps (e.g. after a NIP-09 kind 5). Objects
+  // live under the authenticated user's own prefix, so ownership is implicit.
+  if (body.action === "pm-delete") {
+    var delIds = Array.isArray(body.ids) ? body.ids.slice(0, 200) : [];
+    var removed = 0;
+    var rmSet = new Set();
+    for (var k = 0; k < delIds.length; k++) {
+      var did = delIds[k];
+      if (typeof did !== "string" || !/^[0-9a-f]{64}$/i.test(did)) continue;
+      did = did.toLowerCase();
+      try { await env.R2_BUCKET.delete("pm/" + userPubkey + "/" + did); removed++; rmSet.add(did); } catch (e) { }
+    }
+    if (rmSet.size) {
+      var idx3 = await archiveReadIndex(env, "pm-index/" + userPubkey);
+      idx3.items = idx3.items.filter(function (it) { return !rmSet.has(it[0]); });
+      await archiveWriteIndex(env, "pm-index/" + userPubkey, idx3);
+    }
+    return json({ ok: true, removed: removed });
+  }
+
+  return json({ error: "Unknown action" }, 400);
+}
+
+async function handleChannelAction(context, body) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+    });
+  };
+  if (!env.R2_BUCKET) return json({ error: "Channel storage is not configured (missing R2_BUCKET binding)." }, 503);
+
+  // Public read: hydrate a channel's recent history. No auth (channels are
+  // public); the worker's origin gate already limits this to Nymchat clients.
+  if (body.action === "channel-get") {
+    var name = archiveSanitizeChannel(body.channel);
+    if (!name) return json({ error: "Invalid channel." }, 400);
+    var minTs = Date.now() - CHANNEL_TTL_MS;
+    var since = Number(body.since) || 0;
+    var idx = await archiveReadIndex(env, "channel-index/" + name);
+    var ids = [];
+    for (var i = 0; i < idx.items.length; i++) {
+      var it = idx.items[i];
+      var tsMs = (it[1] || 0) * 1000;
+      if (tsMs < minTs) continue;
+      if ((it[1] || 0) < since) continue;
+      ids.push(it[0]);
+      if (ids.length >= 500) break;
+    }
+    var evs = await Promise.all(ids.map(async function (id) {
+      try {
+        var o = await env.R2_BUCKET.get("channel/" + name + "/" + id);
+        if (!o) return null;
+        return await o.json();
+      } catch (e) { return null; }
+    }));
+    return json({ channel: name, events: evs.filter(Boolean) });
+  }
+
+  // NIP-09 deletion: the signed kind 5 event IS the authorization. We only
+  // delete an archived event when its author matches the deletion's signer.
+  if (body.action === "channel-delete") {
+    var name2 = archiveSanitizeChannel(body.channel);
+    var del = body.deletionEvent;
+    if (!name2) return json({ error: "Invalid channel." }, 400);
+    if (!del || del.kind !== 5 || typeof del.id !== "string" || typeof del.sig !== "string"
+      || typeof del.pubkey !== "string" || !Array.isArray(del.tags)) {
+      return json({ error: "Invalid deletion event." }, 400);
+    }
+    try {
+      if (getEventHash(del) !== del.id || !schnorr.verify(del.sig, del.id, del.pubkey)) {
+        return json({ error: "Deletion event failed verification." }, 400);
+      }
+    } catch (e) { return json({ error: "Deletion event failed verification." }, 400); }
+    var targets = del.tags.filter(function (t) { return Array.isArray(t) && t[0] === "e" && typeof t[1] === "string"; })
+      .map(function (t) { return t[1].toLowerCase(); }).slice(0, 100);
+    var removedSet = new Set();
+    for (var d = 0; d < targets.length; d++) {
+      var tid = targets[d];
+      if (!/^[0-9a-f]{64}$/.test(tid)) continue;
+      try {
+        var o2 = await env.R2_BUCKET.get("channel/" + name2 + "/" + tid);
+        if (!o2) continue;
+        var ev2 = await o2.json();
+        if (ev2 && ev2.pubkey === del.pubkey) {
+          await env.R2_BUCKET.delete("channel/" + name2 + "/" + tid);
+          removedSet.add(tid);
+        }
+      } catch (e) { }
+    }
+    if (removedSet.size) {
+      var cidx = await archiveReadIndex(env, "channel-index/" + name2);
+      cidx.items = cidx.items.filter(function (it) { return !removedSet.has(it[0]); });
+      await archiveWriteIndex(env, "channel-index/" + name2, cidx);
+    }
+    return json({ ok: true, removed: removedSet.size });
+  }
+
+  return json({ error: "Unknown action" }, 400);
+}
+
 async function onRequest(context) {
   const { request } = context;
 
@@ -536,6 +794,26 @@ async function onRequest(context) {
   if (body && typeof body.action === "string" && body.action.indexOf("profile-") === 0) {
     try {
       return await handleProfileAction(context, body);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      });
+    }
+  }
+
+  if (body && typeof body.action === "string" && body.action.indexOf("pm-") === 0) {
+    try {
+      return await handlePmAction(context, body);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      });
+    }
+  }
+
+  if (body && typeof body.action === "string" && body.action.indexOf("channel-") === 0) {
+    try {
+      return await handleChannelAction(context, body);
     } catch (e) {
       return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
         status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }

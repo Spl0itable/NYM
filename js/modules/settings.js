@@ -142,8 +142,21 @@ Object.assign(NYM.prototype, {
         }, delayMs);
     },
 
+    // Marks the initial settings load complete so saves may begin. Flushes one
+    // reconcile save if a save was suppressed while loading.
+    _markSettingsHydrated() {
+        if (this._settingsHydrated) return;
+        this._settingsHydrated = true;
+        if (this._settingsSavePending) {
+            this._settingsSavePending = false;
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        }
+    },
+
     // Apply only the newest buffered settings event from an initial REQ
     _flushSettingsLoadBuffer(subId) {
+        // Reaching EOSE means the relay load resolved (with or without data).
+        this._markSettingsHydrated();
         if (!this._settingsLoadBuffer || !subId) return;
         const buf = this._settingsLoadBuffer.get(subId);
         if (!buf) return;
@@ -225,6 +238,13 @@ Object.assign(NYM.prototype, {
     },
 
     async _publishEncryptedSettings(settingsData) {
+        // Don't overwrite stored settings until we've loaded them. On a fresh
+        // device an early save (e.g. from an incoming group message) would
+        // otherwise clobber R2/relay with default state before the load lands.
+        if (!this._settingsHydrated) {
+            this._settingsSavePending = true;
+            return;
+        }
         const now = Math.floor(Date.now() / 1000);
 
         // Category data is published separately, never bundled into core settings
@@ -501,12 +521,35 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
+    // SHA-256 hex of a string (used to gate redundant settings writes).
+    async _sha256Hex(str) {
+        try {
+            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        } catch (_) {
+            return null;
+        }
+    },
+
     async _saveSettingsBlobToR2(dTag, plaintext) {
         if (!this.pubkey) return false;
         try {
+            // Skip the encrypt + POST when this category's plaintext is
+            // unchanged. NIP-44 ciphertext is non-deterministic, so we hash the
+            // plaintext, not the blob. The server enforces the same check.
+            const hash = await this._sha256Hex(plaintext);
+            const hashKey = `nym_settings_hash_${this.pubkey}_${dTag}`;
+            if (hash) {
+                let lastHash = null;
+                try { lastHash = localStorage.getItem(hashKey); } catch (_) { }
+                if (lastHash === hash) return true; // unchanged — nothing to write
+            }
             const blob = await this._encryptSettingsBlob(plaintext);
             if (!blob) return false;
-            await this._storageApiRequest('settings-set', { category: dTag, blob });
+            const resp = await this._storageApiRequest('settings-set', { category: dTag, blob, contentHash: hash || undefined });
+            if (hash && resp) {
+                try { localStorage.setItem(hashKey, hash); } catch (_) { }
+            }
             return true;
         } catch (_) {
             return false;
@@ -553,6 +596,8 @@ Object.assign(NYM.prototype, {
                 this._lastSettingsSyncTs = ts;
                 try { localStorage.setItem('nym_last_settings_sync_ts', String(ts)); } catch (_) { }
             }
+            // R2 had real settings and we applied them — safe to save from here.
+            this._markSettingsHydrated();
             return true;
         } catch (_) {
             return false;

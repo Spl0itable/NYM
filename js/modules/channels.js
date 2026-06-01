@@ -889,6 +889,30 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (typeof this.handleInputChange === 'function') this.handleInputChange(draft);
     },
 
+    // Replay a channel's archived events (messages, reactions, edits) through
+    // handleEvent, which dedupes. Oldest-first so edits and reaction add/remove
+    // net correctly. Throttled per channel.
+    async channelRestoreFromR2(channelName) {
+        if (!channelName) return;
+        if (!this._getApiHost || !this._getApiHost()) return;
+        const name = String(channelName).toLowerCase();
+        if (!this._channelR2FetchedAt) this._channelR2FetchedAt = new Map();
+        const last = this._channelR2FetchedAt.get(name) || 0;
+        if (Date.now() - last < 60000) return;
+        this._channelR2FetchedAt.set(name, Date.now());
+        let data;
+        try {
+            data = await this._storageApiRequest('channel-get', { channel: name }, false);
+        } catch (_) {
+            return;
+        }
+        const events = (data && Array.isArray(data.events)) ? data.events : [];
+        events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+        for (const ev of events) {
+            try { await this.handleEvent(ev); } catch (_) { }
+        }
+    },
+
     switchChannel(channel, geohash = '') {
         // Keep the current conversation's unsent input before switching away
         this._saveCurrentDraft();
@@ -935,6 +959,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.currentChannel = channel;
         this.currentGeohash = geohash;
         this.userScrolledUp = false;
+
+        // Hydrate recent history from the R2 channel archive (best-effort). This
+        // feeds the same event handler as the relays, so the two merge and sort
+        // by created_at + the millisecond 'ms' tag.
+        if (typeof this.channelRestoreFromR2 === 'function') {
+            this.channelRestoreFromR2(geohash || channel);
+        }
         this.clearQuoteReply();
         if (this.pendingEdit) this.cancelEditMessage();
 

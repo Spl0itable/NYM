@@ -1913,6 +1913,36 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Mirror a NIP-09 deletion to R2: channel objects are author-verified
+    // server-side via the signed kind 5; PM objects sit under our own prefix.
+    async _propagateDeletionToR2(deletionEvent, messageId, originalKind) {
+        try {
+            if (!this._getApiHost || !this._getApiHost()) return;
+
+            // Channel message? Find its channel name from the in-memory store.
+            let channelName = null;
+            if (this.messages) {
+                for (const [key, msgs] of this.messages.entries()) {
+                    if (Array.isArray(msgs) && msgs.some(m => m && m.id === messageId)) {
+                        channelName = key.startsWith('#') ? key.slice(1) : key;
+                        break;
+                    }
+                }
+            }
+            if (channelName) {
+                this._storageApiRequest('channel-delete', { channel: channelName, deletionEvent }, false).catch(() => { });
+            }
+
+            // PM/group wraps we archived are keyed by their gift-wrap event ids.
+            if (originalKind === 1059 && this._pmArchiveAllowed && this._pmArchiveAllowed()) {
+                const ids = new Set([messageId]);
+                const wraps = this._giftWrapsForSharedId && this._giftWrapsForSharedId.get(messageId);
+                if (wraps) for (const w of wraps) ids.add(w);
+                this._storageApiRequest('pm-delete', { ids: Array.from(ids) }).catch(() => { });
+            }
+        } catch (_) { }
+    },
+
     async publishDeletionEvent(messageId, originalKind) {
         try {
             const tags = [['e', messageId]];
@@ -1929,6 +1959,10 @@ Object.assign(NYM.prototype, {
 
             const signedEvent = await this.signEvent(event);
             this.sendToRelay(['EVENT', signedEvent]);
+
+            // Mirror the deletion to the R2 archive so the event doesn't
+            // resurrect on reload or on another device.
+            this._propagateDeletionToR2(signedEvent, messageId, originalKind);
 
             this.deletedEventIds.add(messageId);
 
