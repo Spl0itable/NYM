@@ -420,6 +420,83 @@ async function handleSettingsAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
+// Public Nostr kind 0 profile mirror. Stored as the signed event so clients can
+// verify it and reconcile against live relay updates by created_at.
+var PROFILE_MAX_EVENT = 64 * 1024;
+
+function profileIsValidEvent(ev, pubkey) {
+  try {
+    if (!ev || typeof ev !== "object") return false;
+    if (ev.kind !== 0 || ev.pubkey !== pubkey) return false;
+    if (typeof ev.content !== "string" || typeof ev.id !== "string" || typeof ev.sig !== "string") return false;
+    if (getEventHash(ev) !== ev.id) return false;
+    return schnorr.verify(ev.sig, ev.id, ev.pubkey);
+  } catch (e) {
+    return false;
+  }
+}
+
+async function handleProfileAction(context, body) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+    });
+  };
+  if (!env.R2_BUCKET) return json({ error: "Profile storage is not configured (missing R2_BUCKET binding)." }, 503);
+
+  // Public batch read so clients can fetch profiles without a Nostr REQ.
+  if (body.action === "profile-get") {
+    var rawPks = Array.isArray(body.pubkeys) ? body.pubkeys.slice(0, 100) : [];
+    var pks = [];
+    for (var i = 0; i < rawPks.length; i++) {
+      var pk = rawPks[i];
+      if (typeof pk === "string" && /^[0-9a-f]{64}$/i.test(pk)) pks.push(pk.toLowerCase());
+    }
+    var recs = await Promise.all(pks.map(async function (pk) {
+      try {
+        var obj = await env.R2_BUCKET.get("profile/" + pk);
+        if (!obj) return [pk, null];
+        var d = await obj.json();
+        if (!d || !d.event) return [pk, null];
+        return [pk, { event: d.event, updatedAt: d.updatedAt || 0 }];
+      } catch (e) {
+        return [pk, null];
+      }
+    }));
+    var profiles = {};
+    recs.forEach(function (r) { profiles[r[0]] = r[1]; });
+    return json({ profiles: profiles });
+  }
+
+  var userPubkey = body.pubkey;
+  if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
+  userPubkey = userPubkey.toLowerCase();
+  if (!verifyBotAuth(body.auth, userPubkey)) return json({ error: "Authentication failed" }, 401);
+
+  if (body.action === "profile-set") {
+    var ev = body.event;
+    if (!profileIsValidEvent(ev, userPubkey)) return json({ error: "Invalid profile event." }, 400);
+    if (JSON.stringify(ev).length > PROFILE_MAX_EVENT) return json({ error: "Profile too large." }, 413);
+    // Keep only the newest profile, ordered by the event's own created_at.
+    try {
+      var existing = await env.R2_BUCKET.get("profile/" + userPubkey);
+      if (existing) {
+        var prev = await existing.json();
+        if (prev && prev.event && (prev.event.created_at || 0) >= (ev.created_at || 0)) {
+          return json({ ok: true, updatedAt: prev.updatedAt || 0, stale: true });
+        }
+      }
+    } catch (e) { }
+    var updatedAt = Date.now();
+    await env.R2_BUCKET.put("profile/" + userPubkey, JSON.stringify({ event: ev, updatedAt: updatedAt }));
+    return json({ ok: true, updatedAt: updatedAt });
+  }
+
+  return json({ error: "Unknown action" }, 400);
+}
+
 async function onRequest(context) {
   const { request } = context;
 
@@ -449,6 +526,16 @@ async function onRequest(context) {
   if (body && typeof body.action === "string" && body.action.indexOf("settings-") === 0) {
     try {
       return await handleSettingsAction(context, body);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      });
+    }
+  }
+
+  if (body && typeof body.action === "string" && body.action.indexOf("profile-") === 0) {
+    try {
+      return await handleProfileAction(context, body);
     } catch (e) {
       return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
         status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }

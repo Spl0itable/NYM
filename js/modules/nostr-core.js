@@ -153,9 +153,46 @@ Object.assign(NYM.prototype, {
                 this.sendToRelay(["EVENT", signedEvent]);
                 // Also publish to DM relays so group chat members see updated profiles
                 this.sendDMToRelays(["EVENT", signedEvent]);
+                // Mirror to R2 so others can fetch the profile fast
+                this._saveProfileToR2(signedEvent);
             }
         } catch (error) {
         }
+    },
+
+    // Upload the signed kind 0 profile event to R2 for fast public reads.
+    async _saveProfileToR2(signedEvent) {
+        if (!signedEvent || !this.pubkey) return;
+        try {
+            await this._storageApiRequest('profile-set', { event: signedEvent });
+        } catch (_) { }
+    },
+
+    // Batch-read profiles from R2 and apply them through the kind 0 handler so the
+    // _kind0Ts dedup keeps live relay updates authoritative. Returns the set of
+    // pubkeys served from R2 so callers can fall back to relays for the rest.
+    async _fetchProfilesFromR2(pubkeys) {
+        const found = new Set();
+        const apiHost = this._getApiHost && this._getApiHost();
+        if (!apiHost) return found;
+        const valid = pubkeys.filter(pk => /^[0-9a-f]{64}$/.test(pk)).slice(0, 100);
+        if (!valid.length) return found;
+        let data;
+        try {
+            data = await this._storageApiRequest('profile-get', { pubkeys: valid }, false);
+        } catch (_) {
+            return found;
+        }
+        const profiles = (data && data.profiles) || {};
+        for (const [pk, rec] of Object.entries(profiles)) {
+            if (!rec || !rec.event) continue;
+            try {
+                await this.handleEvent(rec.event);
+                if (this.profileFetchedAt) this.profileFetchedAt.set(pk, Date.now());
+                found.add(pk);
+            } catch (_) { }
+        }
+        return found;
     },
 
     async handleEvent(event) {
@@ -1737,16 +1774,24 @@ Object.assign(NYM.prototype, {
         }, 150);
     },
 
-    _flushProfileBatch() {
+    async _flushProfileBatch() {
         const pubkeys = this._profileBatchQueue;
         this._profileBatchQueue = [];
         this._profileBatchSet = new Set();
         this._profileBatchTimer = null;
         if (pubkeys.length === 0) return;
 
+        // R2 first; fall back to a relay REQ for anyone not stored there.
+        let missing = pubkeys;
+        try {
+            const found = await this._fetchProfilesFromR2(pubkeys);
+            if (found && found.size) missing = pubkeys.filter(pk => !found.has(pk));
+        } catch (_) { }
+        if (missing.length === 0) return;
+
         const run = () => {
             const subId = 'batch-profile-' + Math.random().toString(36).slice(2);
-            const req = ["REQ", subId, { kinds: [0], authors: pubkeys, limit: pubkeys.length }];
+            const req = ["REQ", subId, { kinds: [0], authors: missing, limit: missing.length }];
             try { this.sendRequestToFewRelays(req); } catch (_) { }
 
             setTimeout(() => {
