@@ -2516,11 +2516,16 @@ Object.assign(NYM.prototype, {
             filters.push({ kinds: [25052], since: nowSec - 86400, limit: 100 });
             filters.push({ kinds: [10030], authors: [this.pubkey], limit: 1 });
         }
-        const pmAuthors = this.pmConversations
+        const profileAuthors = this.pmConversations
             ? Array.from(this.pmConversations.keys()).filter(pk => typeof pk === 'string' && pk.length === 64)
             : [];
-        if (pmAuthors.length > 0) {
-            filters.push({ kinds: [0], authors: pmAuthors });
+        // Keep a live kind 0 subscription on our own pubkey so profile edits made
+        // in another Nostr client arrive in real time and get mirrored to R2.
+        if (this.pubkey && !profileAuthors.includes(this.pubkey)) {
+            profileAuthors.push(this.pubkey);
+        }
+        if (profileAuthors.length > 0) {
+            filters.push({ kinds: [0], authors: profileAuthors });
         }
 
         return filters;

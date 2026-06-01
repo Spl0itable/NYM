@@ -1036,6 +1036,8 @@ class NYM {
         this._proxyFetchActive = 0;
         this._proxyFetchMaxConcurrent = 3;
         this.profileFetchedAt = new Map();
+        this._r2ProfileCache = new Map();
+        this.R2_PROFILE_CACHE_TTL = 5 * 60 * 1000;
         this.profileFetchQueue = [];
         this.profileFetchTimer = null;
         this.profileFetchBatchDelay = 100;
@@ -3581,7 +3583,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.424';
+const NYMCHAT_VERSION = 'v3.67.425';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4007,6 +4009,8 @@ async function initializeNym() {
         localStorage.setItem('nym_auto_ephemeral', 'true');
         if (nymInput) {
             localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
+            // Mark this as a user-chosen nick so it qualifies for R2 mirroring
+            try { localStorage.setItem('nym_custom_nick', nym.parseNymFromDisplay(nymInput)); } catch (e) { }
             // If developer verified, also save nsec for auto-login
             if (nym.isReservedNick(nymInput)) {
                 const nsecVal = document.getElementById('devNsecInput').value.trim();
@@ -4769,6 +4773,10 @@ function applyNostrLogin(pubkey, secretKey, method) {
             });
         }, 3000);
     });
+    // No dedicated relay REQ for our own profile is needed here: the live kind 0
+    // subscription (built in _buildCriticalFilters and (re)issued by the
+    // resubscribeAllRelays call below) delivers the authoritative profile through
+    // the main event handler, which applies it and mirrors any newer copy to R2.
 
     // Reload blur setting now that pubkey is known
     nym.blurOthersImages = nym.loadImageBlurSettings();
@@ -4844,6 +4852,7 @@ function nostrLogout() {
     nym.userBios = new Map();
     nym.userBanners = new Map();
     nym.userAvatars = new Map();
+    nym._r2ProfileCache = new Map();
     if (typeof nym.resetCache === 'function') {
         nym.resetCache().catch(() => { });
     }
