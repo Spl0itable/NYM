@@ -894,19 +894,43 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // net correctly. Throttled per channel.
     async channelRestoreFromR2(channelName) {
         if (!channelName) return;
-        if (!this._getApiHost || !this._getApiHost()) return;
+        const apiHost = this._getApiHost && this._getApiHost();
+        if (!apiHost) return;
         const name = String(channelName).toLowerCase();
         if (!this._channelR2FetchedAt) this._channelR2FetchedAt = new Map();
         const last = this._channelR2FetchedAt.get(name) || 0;
         if (Date.now() - last < 60000) return;
         this._channelR2FetchedAt.set(name, Date.now());
-        let data;
+        const events = [];
         try {
-            data = await this._storageApiRequest('channel-get', { channel: name }, false);
+            const resp = await fetch(`https://${apiHost}/api/storage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'channel-get', channel: name })
+            });
+            if (!resp.ok || !resp.body) return;
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buf = '';
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buf += decoder.decode(value, { stream: true });
+                let nl;
+                while ((nl = buf.indexOf('\n')) >= 0) {
+                    const line = buf.slice(0, nl);
+                    buf = buf.slice(nl + 1);
+                    if (!line) continue;
+                    try { events.push(JSON.parse(line)); } catch (_) { }
+                }
+            }
+            buf += decoder.decode();
+            if (buf) {
+                try { events.push(JSON.parse(buf)); } catch (_) { }
+            }
         } catch (_) {
             return;
         }
-        const events = (data && Array.isArray(data.events)) ? data.events : [];
         events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
         const CHUNK = 25;
         for (let i = 0; i < events.length; i += CHUNK) {

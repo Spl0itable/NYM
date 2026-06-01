@@ -571,6 +571,22 @@ function readCachePut(context, path, obj, ttlSeconds) {
     if (context && context.waitUntil) context.waitUntil(op);
   } catch (e) { }
 }
+async function readCacheGetRaw(path) {
+  try {
+    var hit = await caches.default.match(readCacheRequest(path));
+    if (!hit) return null;
+    return await hit.text();
+  } catch (e) { return null; }
+}
+function readCachePutRaw(context, path, bodyText, contentType, ttlSeconds) {
+  try {
+    var headers = new Headers();
+    headers.set("Content-Type", contentType || "text/plain");
+    headers.set("Cache-Control", "public, max-age=" + (ttlSeconds || 60));
+    var op = caches.default.put(readCacheRequest(path), new Response(bodyText, { headers: headers }));
+    if (context && context.waitUntil) context.waitUntil(op);
+  } catch (e) { }
+}
 function readCacheDelete(context, path) {
   try {
     var op = caches.default.delete(readCacheRequest(path));
@@ -743,11 +759,12 @@ async function handleChannelAction(context, body) {
     if (!name) return json({ error: "Invalid channel." }, 400);
     var minTs = Date.now() - CHANNEL_TTL_MS;
     var since = Number(body.since) || 0;
-    // Read-through edge cache for the common full-recent read (no `since`).
-    // Short TTL: the live relay feed covers real-time, R2 is just backfill.
+    var ndjsonHeaders = { "Content-Type": "application/x-ndjson", ...BOT_CORS_HEADERS };
     if (!since) {
-      var cachedChan = await readCacheGet("/channel/" + name);
-      if (cachedChan) return json(cachedChan);
+      var cachedBody = await readCacheGetRaw("/channel/" + name);
+      if (cachedBody !== null) {
+        return new Response(cachedBody, { status: 200, headers: ndjsonHeaders });
+      }
     }
     var idx = await archiveReadIndex(env, "channel-index/" + name);
     var ids = [];
@@ -759,16 +776,32 @@ async function handleChannelAction(context, body) {
       ids.push(it[0]);
       if (ids.length >= 500) break;
     }
-    var evs = await Promise.all(ids.map(async function (id) {
-      try {
-        var o = await env.R2_BUCKET.get("channel/" + name + "/" + id);
-        if (!o) return null;
-        return await o.json();
-      } catch (e) { return null; }
-    }));
-    var chanResp = { channel: name, events: evs.filter(Boolean) };
-    if (!since) readCachePut(context, "/channel/" + name, chanResp, CHANNEL_READ_TTL);
-    return json(chanResp);
+    var encoder = new TextEncoder();
+    var cacheBuf = !since ? [] : null;
+    var stream = new ReadableStream({
+      start(controller) {
+        var pending = ids.map(async function (id) {
+          try {
+            var o = await env.R2_BUCKET.get("channel/" + name + "/" + id);
+            if (!o) return;
+            var ev = await o.json();
+            if (!ev) return;
+            var line = JSON.stringify(ev) + "\n";
+            controller.enqueue(encoder.encode(line));
+            if (cacheBuf) cacheBuf.push(line);
+          } catch (e) { }
+        });
+        Promise.all(pending).then(function () {
+          try { controller.close(); } catch (_) { }
+          if (cacheBuf) {
+            readCachePutRaw(context, "/channel/" + name, cacheBuf.join(""), "application/x-ndjson", CHANNEL_READ_TTL);
+          }
+        }).catch(function (e) {
+          try { controller.error(e); } catch (_) { }
+        });
+      }
+    });
+    return new Response(stream, { status: 200, headers: ndjsonHeaders });
   }
 
   // NIP-09 deletion: the signed kind 5 event IS the authorization. We only
