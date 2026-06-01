@@ -625,9 +625,6 @@ Object.assign(NYM.prototype, {
         } else if (event.kind === this.P2P_FILE_STATUS_KIND) {
             // Handle P2P file status events (unseeded notifications)
             this.handleP2PFileStatusEvent(event);
-        } else if (event.kind === this.CALL_SIGNALING_KIND) {
-            // Handle audio/video call signaling (WebRTC + call control)
-            this.handleCallSignalingEvent(event);
         }
     },
 

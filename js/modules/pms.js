@@ -771,8 +771,8 @@ Object.assign(NYM.prototype, {
             // Validate rumor and identity
             // Accept kind 14 (DM), kind 15 (file), kind 69420 (Nymchat receipt),
             // kind 7 (group reaction gift-wrapped to the group),
-            // and kind 30078 (encrypted settings sync)
-            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 30078)) {
+            // kind 30078 (encrypted settings sync), and CALL_SIGNALING_KIND (audio/video call signaling)
+            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 30078 && rumor.kind !== this.CALL_SIGNALING_KIND)) {
                 return;
             }
 
@@ -786,6 +786,20 @@ Object.assign(NYM.prototype, {
             if (isBitchatWrap) {
                 senderVerified = false;
             } else if (!seal || seal.pubkey !== rumor.pubkey || !NT.verifyEvent(seal)) {
+                return;
+            }
+
+            // Route audio/video call signaling rumors
+            if (rumor.kind === this.CALL_SIGNALING_KIND) {
+                if (!senderVerified) return;
+                this.handleCallSignalingEvent({
+                    id: event.id,
+                    kind: rumor.kind,
+                    pubkey: rumor.pubkey,
+                    content: rumor.content,
+                    created_at: rumor.created_at,
+                    tags: rumor.tags || []
+                });
                 return;
             }
 

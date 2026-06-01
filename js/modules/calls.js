@@ -1,4 +1,4 @@
-// calls.js - P2P audio/video calling for 1:1 PMs and group chats over Nostr signaling
+// calls.js - P2P audio/video calling for 1:1 PMs and group chats over NIP-17 gift-wrapped signaling
 
 Object.assign(NYM.prototype, {
 
@@ -94,16 +94,19 @@ Object.assign(NYM.prototype, {
     },
 
     async _sendCallSignal(targetPubkey, payload) {
+        if (!this._canSendGiftWraps()) {
+            console.error('Call signal error: gift-wrap signing unavailable');
+            return;
+        }
         try {
-            const event = {
+            const rumor = {
                 kind: this.CALL_SIGNALING_KIND,
                 created_at: Math.floor(Date.now() / 1000),
                 tags: [['p', targetPubkey]],
                 content: JSON.stringify({ ...payload, nym: this.nym }),
                 pubkey: this.pubkey
             };
-            const signed = await this.signEvent(event);
-            this.sendToRelay(['EVENT', signed]);
+            await this._sendGiftWrapsAsync([targetPubkey], rumor, null);
         } catch (e) {
             console.error('Call signal error:', e);
         }
