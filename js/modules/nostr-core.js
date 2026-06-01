@@ -65,10 +65,6 @@ Object.assign(NYM.prototype, {
         try {
             let profileToSave;
 
-            // Users who own a real profile (Nostr login or the verified developer)
-            // merge changes into their existing kind 0 so we never clobber curated
-            // fields the app doesn't manage. Other callers for these identities are
-            // explicit edits, so the publish should go through.
             const ownsRealProfile = (typeof isNostrLoggedIn === 'function' && isNostrLoggedIn())
                 || this.isVerifiedDeveloper(this.pubkey);
 

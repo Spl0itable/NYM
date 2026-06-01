@@ -4773,10 +4773,6 @@ function applyNostrLogin(pubkey, secretKey, method) {
             });
         }, 3000);
     });
-    // No dedicated relay REQ for our own profile is needed here: the live kind 0
-    // subscription (built in _buildCriticalFilters and (re)issued by the
-    // resubscribeAllRelays call below) delivers the authoritative profile through
-    // the main event handler, which applies it and mirrors any newer copy to R2.
 
     // Reload blur setting now that pubkey is known
     nym.blurOthersImages = nym.loadImageBlurSettings();
