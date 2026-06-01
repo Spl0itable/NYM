@@ -519,6 +519,8 @@ Object.assign(NYM.prototype, {
                     if (typeof this.markVisibleChannelMessagesRead === 'function') {
                         this.markVisibleChannelMessagesRead();
                     }
+
+                    this.backfillFromR2OnReconnect();
                 }, delay);
             } else {
                 this._backgroundedAt = Date.now();
@@ -564,6 +566,8 @@ Object.assign(NYM.prototype, {
                 if (typeof this.markVisibleChannelMessagesRead === 'function') {
                     this.markVisibleChannelMessagesRead();
                 }
+
+                this.backfillFromR2OnReconnect();
             }, delay);
         });
 
@@ -597,6 +601,8 @@ Object.assign(NYM.prototype, {
                             this._schedulePoolReconnectInBackground(true);
                         }
                     }
+
+                    this.backfillFromR2OnReconnect();
                 }, 200);
             });
         }
@@ -2679,12 +2685,29 @@ Object.assign(NYM.prototype, {
         setTimeout(() => {
             this.loadJoinedChannelsFromRelays();
         }, 1000);
+
+        this.backfillFromR2OnReconnect();
     },
 
-    // Re-shard and update relay config across all workers.
-    // Debounced so rapid permanent-blacklist or other config-change events
-    // coalesce into one RELAYS push. Only sends to shards whose relay list
-    // actually changed (compared to the worker's last known config).
+    backfillFromR2OnReconnect() {
+        if (!this._getApiHost || !this._getApiHost()) return;
+        const now = Date.now();
+        if (this._lastR2BackfillAt && now - this._lastR2BackfillAt < 30000) return;
+        this._lastR2BackfillAt = now;
+
+        if (typeof this.pmRestoreFromR2 === 'function') {
+            this.pmRestoreFromR2().catch(() => { });
+        }
+
+        if (typeof this.channelRestoreFromR2 === 'function') {
+            const channels = new Set();
+            const current = this.currentGeohash || this.currentChannel;
+            if (current) channels.add(current);
+            if (this.userJoinedChannels) this.userJoinedChannels.forEach(k => channels.add(k));
+            channels.forEach(name => this.channelRestoreFromR2(name).catch(() => { }));
+        }
+    },
+
     _poolSendRelayConfig() {
         if (!this._isAnyPoolOpen()) return;
         if (this._poolSendRelayConfigTimer) return;
