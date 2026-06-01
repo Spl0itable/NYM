@@ -3581,7 +3581,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.422';
+const NYMCHAT_VERSION = 'v3.67.423';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -3881,8 +3881,8 @@ async function checkSavedConnection() {
             nym._loadLastPMSyncTime();
             nym._loadLeftGroups();
 
-            // Load synced settings from relay (groups, closed PMs, etc.)
-            nostrSettingsLoad();
+            // Load synced settings from R2 (encrypted), falling back to relays
+            settingsLoad();
 
             if (isDeveloperLogin) {
                 // Developer login - load lightning address from their kind 0 profile
@@ -4069,8 +4069,8 @@ async function initializeNym() {
         nym._loadLastPMSyncTime();
         nym._loadLeftGroups();
 
-        // Load synced settings from relay (groups, closed PMs, etc.)
-        nostrSettingsLoad();
+        // Load synced settings from R2 (encrypted), falling back to relays
+        settingsLoad();
 
         if (isDeveloperLogin) {
             // Developer login - load lightning address from their kind 0 profile
@@ -4809,8 +4809,8 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // events for this identity flow through the main event handler
     nym.resubscribeAllRelays();
 
-    // Load settings from relays and shop purchases from R2 for this identity
-    nostrSettingsLoad();
+    // Load settings (R2-first, relay fallback) and shop purchases for this identity
+    settingsLoad();
     nym.loadShopFromServer();
 }
 
@@ -4866,6 +4866,16 @@ async function nostrSettingsSave() {
     } catch (err) {
         console.warn('[NostrSync] Failed to save settings to relays:', err.message);
     }
+}
+
+// Load settings from R2 first, falling back to the Nostr
+// gift-wrap load only when R2 can't be read or has no record yet.
+async function settingsLoad() {
+    let loaded = false;
+    if (nym && typeof nym.settingsLoadFromR2 === 'function') {
+        try { loaded = await nym.settingsLoadFromR2(); } catch (_) { loaded = false; }
+    }
+    if (!loaded) nostrSettingsLoad();
 }
 
 function nostrSettingsLoad() {

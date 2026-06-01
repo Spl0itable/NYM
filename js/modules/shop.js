@@ -2,17 +2,17 @@
 
 Object.assign(NYM.prototype, {
 
-    // POST a shop action to the bot worker. Signs a NIP-27235 auth event
-    async _shopApiRequest(action, extra, withAuth = true) {
+    // POST an action to the storage worker. Signs a NIP-27235 auth event.
+    async _storageApiRequest(action, extra, withAuth = true) {
         const apiHost = this._getApiHost();
-        if (!apiHost) throw new Error('Shop is unavailable on this host.');
+        if (!apiHost) throw new Error('Storage is unavailable on this host.');
         const body = Object.assign({ action }, extra || {});
         if (withAuth) {
             if (!this.pubkey) throw new Error('Login required.');
             body.pubkey = this.pubkey;
             body.auth = await this._signBotAuth();
         }
-        const resp = await fetch(`https://${apiHost}/api/bot`, {
+        const resp = await fetch(`https://${apiHost}/api/storage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -22,6 +22,10 @@ Object.assign(NYM.prototype, {
             throw new Error((data && data.error) || `Request failed (${resp.status})`);
         }
         return data || {};
+    },
+
+    _shopApiRequest(action, extra, withAuth = true) {
+        return this._storageApiRequest(action, extra, withAuth);
     },
 
     // Cache of other users' active items, persisted across sessions

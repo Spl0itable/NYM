@@ -390,6 +390,10 @@ Object.assign(NYM.prototype, {
         const NT = window.NostrTools;
         const now = createdAt || Math.floor(Date.now() / 1000);
 
+        // Primary persistence: encrypted blob in R2. The Nostr gift wrap below
+        // is kept as a fallback copy that loads only when R2 can't be read.
+        this._saveSettingsBlobToR2(dTag, JSON.stringify(payload));
+
         const rumor = {
             kind: 30078,
             created_at: now,
@@ -459,6 +463,100 @@ Object.assign(NYM.prototype, {
         };
         const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
         this.sendDMToRelays(['EVENT', wrapped]);
+    },
+
+    // Encrypt a settings payload to the user themselves (NIP-44) using whichever
+    // signer is active: local nsec, NIP-07 extension, or NIP-46 remote signer.
+    async _encryptSettingsBlob(plaintext) {
+        const NT = window.NostrTools;
+        try {
+            if (this.privkey) {
+                const ck = NT.nip44.getConversationKey(this.privkey, this.pubkey);
+                return NT.nip44.encrypt(plaintext, ck);
+            }
+            if (window.nostr?.nip44?.encrypt) {
+                return await window.nostr.nip44.encrypt(this.pubkey, plaintext);
+            }
+            if (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected) {
+                return await _nip46Encrypt(this.pubkey, plaintext);
+            }
+        } catch (_) { }
+        return null;
+    },
+
+    async _decryptSettingsBlob(ciphertext) {
+        const NT = window.NostrTools;
+        try {
+            if (this.privkey) {
+                const ck = NT.nip44.getConversationKey(this.privkey, this.pubkey);
+                return NT.nip44.decrypt(ciphertext, ck);
+            }
+            if (window.nostr?.nip44?.decrypt) {
+                return await window.nostr.nip44.decrypt(this.pubkey, ciphertext);
+            }
+            if (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected) {
+                return await _nip46Decrypt(this.pubkey, ciphertext);
+            }
+        } catch (_) { }
+        return null;
+    },
+
+    async _saveSettingsBlobToR2(dTag, plaintext) {
+        if (!this.pubkey) return false;
+        try {
+            const blob = await this._encryptSettingsBlob(plaintext);
+            if (!blob) return false;
+            await this._storageApiRequest('settings-set', { category: dTag, blob });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    },
+
+    // Load encrypted settings categories from R2 and apply them. Returns true
+    // when core settings were applied; false (e.g. fetch error, no record) tells
+    // the caller to fall back to the Nostr gift-wrap load.
+    async settingsLoadFromR2() {
+        const pubkey = (typeof isNostrLoggedIn === 'function' && isNostrLoggedIn())
+            ? localStorage.getItem('nym_nostr_login_pubkey')
+            : this.pubkey;
+        if (!pubkey) return false;
+
+        let data;
+        try {
+            data = await this._storageApiRequest('settings-get', {});
+        } catch (_) {
+            return false;
+        }
+        const cats = data && data.categories;
+        if (!cats || typeof cats !== 'object') return false;
+
+        for (const cat of ['nymchat-keys', 'nymchat-groups', 'nymchat-history', 'nymchat-notifications']) {
+            const entry = cats[cat];
+            if (!entry || !entry.blob) continue;
+            try {
+                const plain = await this._decryptSettingsBlob(entry.blob);
+                if (plain) await applyNostrSettingsAdditive(JSON.parse(plain));
+            } catch (_) { }
+        }
+
+        const core = cats['nymchat-settings'];
+        if (!core || !core.blob) return false;
+        try {
+            const plain = await this._decryptSettingsBlob(core.blob);
+            if (!plain) return false;
+            const s = JSON.parse(plain);
+            await applyNostrSettingsAdditive(s);
+            await applyNostrSettings(s);
+            const ts = core.updatedAt ? Math.floor(core.updatedAt / 1000) : Math.floor(Date.now() / 1000);
+            if (ts > (this._lastSettingsSyncTs || 0)) {
+                this._lastSettingsSyncTs = ts;
+                try { localStorage.setItem('nym_last_settings_sync_ts', String(ts)); } catch (_) { }
+            }
+            return true;
+        } catch (_) {
+            return false;
+        }
     },
 
     toggleNotificationsEnabled(enabled) {

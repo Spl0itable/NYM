@@ -1342,14 +1342,23 @@ Object.assign(NYM.prototype, {
     // that the caller actually controls the pubkey it claims (prevents draining
     // someone else's credits or reading their balance).
     async _signBotAuth() {
+        // Reuse a recent signature so frequent storage writes don't re-sign (or
+        // re-prompt an extension/remote signer). The worker accepts a 300s skew.
+        const nowSec = Math.floor(Date.now() / 1000);
+        const cache = this._botAuthCache;
+        if (cache && cache.pubkey === this.pubkey && (nowSec - cache.auth.created_at) < 240) {
+            return cache.auth;
+        }
         const event = {
             kind: 27235,
-            created_at: Math.floor(Date.now() / 1000),
+            created_at: nowSec,
             tags: [['domain', 'nymbot-pm']],
             content: 'nymbot-pm-auth',
             pubkey: this.pubkey
         };
-        return await this.signEvent(event);
+        const auth = await this.signEvent(event);
+        this._botAuthCache = { pubkey: this.pubkey, auth };
+        return auth;
     },
 
     // Ask the worker to wipe the server-side gift-wrap thread it uses for AI context
