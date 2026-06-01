@@ -677,15 +677,21 @@ async function handlePmAction(context, body) {
     return json({ ok: true, added: added.length, stored: idx.items.length });
   }
 
-  // Restore PMs: return every stored wrap with created_at >= since.
   if (body.action === "pm-get") {
     var since = Number(body.since) || 0;
+    var before = Number(body.before) || 0;
+    var limit = Number(body.limit);
+    if (!Number.isFinite(limit) || limit <= 0) limit = 1000;
+    if (limit > 1000) limit = 1000;
     var idx2 = await archiveReadIndex(env, "pm-index/" + userPubkey);
     var ids = [];
     for (var j = 0; j < idx2.items.length; j++) {
       var it = idx2.items[j];
-      if ((it[1] || 0) >= since) ids.push(it[0]);
-      if (ids.length >= 1000) break;
+      var ts = it[1] || 0;
+      if (ts < since) continue;
+      if (before && ts >= before) continue;
+      ids.push(it[0]);
+      if (ids.length >= limit) break;
     }
     var evs = await Promise.all(ids.map(async function (id) {
       try {
@@ -694,7 +700,7 @@ async function handlePmAction(context, body) {
         return await o.json();
       } catch (e) { return null; }
     }));
-    return json({ events: evs.filter(Boolean) });
+    return json({ events: evs.filter(Boolean), hasMore: ids.length >= limit });
   }
 
   // Delete the user's own stored wraps (e.g. after a NIP-09 kind 5). Objects

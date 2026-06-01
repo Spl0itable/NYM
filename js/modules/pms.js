@@ -1344,25 +1344,82 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Restore archived PMs from R2 via the normal gift-wrap handler (which
-    // dedupes). Oldest-first so edits and reaction add/remove net correctly.
-    // Marks each id as archived so a restore doesn't trigger a re-upload.
+    _yieldToIdle() {
+        return new Promise(resolve => {
+            if (typeof requestIdleCallback === 'function') {
+                try { requestIdleCallback(() => resolve(), { timeout: 50 }); return; } catch (_) { }
+            }
+            if (typeof requestAnimationFrame === 'function') {
+                requestAnimationFrame(() => resolve());
+            } else {
+                setTimeout(resolve, 0);
+            }
+        });
+    },
+
     async pmRestoreFromR2() {
         if (!this._pmArchiveAllowed()) return;
+        this._pmR2OldestTs = null;
+        this._pmR2NoMore = false;
+        this._pmR2InitialPageSize = 200;
+        await this._pmRestoreR2Page({ before: 0, limit: this._pmR2InitialPageSize });
+    },
+
+    async pmLoadOlderFromR2() {
+        if (this._pmR2NoMore) return false;
+        if (!this._pmR2OldestTs) return false;
+        return this._pmRestoreR2Page({ before: this._pmR2OldestTs, limit: 200 });
+    },
+
+    async _pmRestoreR2Page({ before = 0, limit = 200 } = {}) {
+        if (!this._pmArchiveAllowed()) return false;
+        if (this._pmR2Loading) return false;
+        this._pmR2Loading = true;
         let data;
         try {
-            data = await this._storageApiRequest('pm-get', { since: 0 });
+            data = await this._storageApiRequest('pm-get', { since: 0, before, limit });
         } catch (_) {
-            return;
+            this._pmR2Loading = false;
+            return false;
         }
         const events = (data && Array.isArray(data.events)) ? data.events : [];
+        const hasMore = !!(data && data.hasMore);
+        if (!hasMore || events.length < limit) this._pmR2NoMore = true;
         events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
-        if (!this._pmArchivedIds) this._pmArchivedIds = new Set();
-        for (const ev of events) {
-            if (!ev || typeof ev.id !== 'string') continue;
-            this._pmArchivedIds.add(ev.id);
-            try { await this.handleGiftWrapDM(ev); } catch (_) { }
+        if (events.length) {
+            const oldest = events[0].created_at || 0;
+            if (oldest && (!this._pmR2OldestTs || oldest < this._pmR2OldestTs)) {
+                this._pmR2OldestTs = oldest;
+            }
         }
+        if (!this._pmArchivedIds) this._pmArchivedIds = new Set();
+        const CHUNK = 10;
+        for (let i = 0; i < events.length; i += CHUNK) {
+            const end = Math.min(i + CHUNK, events.length);
+            for (let k = i; k < end; k++) {
+                const ev = events[k];
+                if (!ev || typeof ev.id !== 'string') continue;
+                this._pmArchivedIds.add(ev.id);
+                try { await this.handleGiftWrapDM(ev); } catch (_) { }
+            }
+            if (end < events.length) await this._yieldToIdle();
+        }
+        this._pmR2Loading = false;
+        return events.length > 0;
+    },
+
+    async pmLazyLoadOlderForConversation(conversationKey) {
+        if (!conversationKey) return false;
+        if (this._pmR2NoMore || this._pmR2Loading) return false;
+        const beforeLen = this.getFilteredPMMessages(conversationKey).length;
+        const fetched = await this.pmLoadOlderFromR2();
+        if (!fetched) return false;
+        const afterLen = this.getFilteredPMMessages(conversationKey).length;
+        const added = afterLen - beforeLen;
+        if (added <= 0) return false;
+        const cur = this.pmRenderedStart.get(conversationKey) || 0;
+        this.pmRenderedStart.set(conversationKey, cur + added);
+        return this.loadOlderPMMessages(conversationKey);
     },
 
     async sendPM(content, recipientPubkey) {
