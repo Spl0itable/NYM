@@ -1800,7 +1800,7 @@ Object.assign(NYM.prototype, {
                 if (channelEl.dataset.pmHeaderSig !== sig) {
                     const pmAvatarSrc = this.getAvatarUrl(pubkey);
                     const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${friendBadge}`;
-                    channelEl.innerHTML = `${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym} <span class="nm-usr-2">(PM)</span>`;
+                    channelEl.innerHTML = `${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}`;
                     channelEl.dataset.pmHeaderSig = sig;
                 }
             }

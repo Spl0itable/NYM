@@ -770,14 +770,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const titleLine = document.createElement('span');
         titleLine.className = 'channel-title-line';
-        titleLine.appendChild(document.createTextNode(displayName + ' '));
-
-        const typeLabel = document.createElement('span');
-        typeLabel.className = 'channel-type-label';
-        typeLabel.textContent = isGeo ? '(Geohash)' : '(Non-Geohash)';
-        titleLine.appendChild(typeLabel);
+        titleLine.appendChild(document.createTextNode(displayName));
 
         const nodes = [titleLine];
+
+        if (!isGeo) {
+            const locWrap = document.createElement('div');
+            locWrap.className = 'channel-location';
+            const notGeo = document.createElement('span');
+            notGeo.className = 'loc-country';
+            notGeo.textContent = 'Not a geohash';
+            locWrap.appendChild(notGeo);
+            nodes.push(locWrap);
+        }
 
         if (isGeo) {
             const locWrap = document.createElement('div');

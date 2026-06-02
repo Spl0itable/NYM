@@ -1992,7 +1992,7 @@ Object.assign(NYM.prototype, {
             const channelEl = document.getElementById('currentChannel');
             if (channelEl && channelEl.dataset.pmHeaderSig !== pmHeaderSig) {
                 const displayNym = `<span class="pm-name-text">${this.escapeHtml(clean)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-                const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym} <span class="nm-pms-1">(PM)</span></span>`;
+                const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>`;
                 channelEl.innerHTML = pmHeaderHtml;
                 channelEl.dataset.pmHeaderSig = pmHeaderSig;
             }
@@ -2236,7 +2236,7 @@ Object.assign(NYM.prototype, {
                 ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                 : '';
         const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-        const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym} <span class="nm-pms-1">(PM)</span></span>`;
+        const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>`;
 
         // Update UI with formatted nym
         const _pmHeaderEl = document.getElementById('currentChannel');

@@ -2279,8 +2279,8 @@ Object.assign(NYM.prototype, {
                             return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
                         }).join('');
                         const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-                        const memberLabel = `<span class="nm-grp-1">(${this.abbreviateNumber(group.members.length)} members)</span>`;
-                        const headerHtml = `<span class="group-header-row"><span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="group-name-text ${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span>${memberLabel}</span>`;
+                        const memberLabel = `<div class="channel-location"><span class="loc-country">${this.abbreviateNumber(group.members.length)} members</span></div>`;
+                        const headerHtml = `<span class="group-header-row"><span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="group-name-text ${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span></span>${memberLabel}`;
                         channelEl.innerHTML = headerHtml;
                         channelEl.dataset.groupHeaderSig = sig;
                     }
@@ -2328,8 +2328,8 @@ Object.assign(NYM.prototype, {
         }).join('');
 
         const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-        const memberLabel = `<span class="nm-grp-1">(${this.abbreviateNumber(group.members.length)} members)</span>`;
-        const headerHtml = `<span class="group-header-row"><span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="group-name-text ${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span>${memberLabel}</span>`;
+        const memberLabel = `<div class="channel-location"><span class="loc-country">${this.abbreviateNumber(group.members.length)} members</span></div>`;
+        const headerHtml = `<span class="group-header-row"><span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="group-name-text ${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span></span>${memberLabel}`;
 
         const channelEl = document.getElementById('currentChannel');
         channelEl.innerHTML = headerHtml;

@@ -869,12 +869,6 @@ body.sidebar-reorder-mode .nav-title {
     white-space: nowrap;
 }
 
-.channel-type-label {
-    font-size: 12px;
-    color: var(--text-dim);
-    font-weight: 400;
-}
-
 .channel-location {
     font-size: 12px;
     color: var(--text-dim);
