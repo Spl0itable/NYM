@@ -1728,10 +1728,20 @@ Object.assign(NYM.prototype, {
         // Geo = CSV relays not already reserved
         const geo = [...geoSet].filter(url => isValid(url) && !reservedSet.has(url));
 
-        // Discovered = any URL in allRelays that isn't already reserved or geo (NIP-66 / NIP-65)
+        // Discovered = any URL in allRelays that isn't already reserved or geo
         const geoSetForDiscovered = new Set(geo);
+        const claimedCanon = new Set(
+            [...reservedSet, ...geoSetForDiscovered].map(u => this._canonicalRelayUrl(u))
+        );
+        const seenDiscoveredCanon = new Set();
         const discovered = [...new Set(allRelays || [])]
-            .filter(url => isValid(url) && !reservedSet.has(url) && !geoSetForDiscovered.has(url));
+            .filter(url => {
+                if (!isValid(url) || reservedSet.has(url) || geoSetForDiscovered.has(url)) return false;
+                const canon = this._canonicalRelayUrl(url);
+                if (claimedCanon.has(canon) || seenDiscoveredCanon.has(canon)) return false;
+                seenDiscoveredCanon.add(canon);
+                return true;
+            });
 
         // Split each category into chunks of RELAYS_PER_WORKER
         const chunkArray = (arr, size) => {
@@ -2427,6 +2437,8 @@ Object.assign(NYM.prototype, {
             }
             const now = Date.now();
             for (const p of this.poolSockets) {
+                // Direct relay entries get no POOL:PING, so silence is normal
+                // during quiet periods — closing them would churn a healthy link
                 if (p.direct) continue;
                 if (p.ws && p.ws.readyState === WebSocket.OPEN) {
                     const silenceSec = (now - (p.lastMessage || 0)) / 1000;
@@ -3391,6 +3403,20 @@ Object.assign(NYM.prototype, {
         });
     },
 
+    _canonicalRelayUrl(url) {
+        if (typeof url !== 'string') return url;
+        try {
+            const u = new URL(url.trim());
+            const defaultPort = (u.protocol === 'wss:' && u.port === '443') ||
+                (u.protocol === 'ws:' && u.port === '80');
+            const port = (u.port && !defaultPort) ? ':' + u.port : '';
+            const path = u.pathname.replace(/\/+$/, '');
+            return `${u.protocol}//${u.hostname.toLowerCase()}${port}${path}`;
+        } catch (_) {
+            return url;
+        }
+    },
+
     _normalizeNip66RelayUrl(raw) {
         if (typeof raw !== 'string') return null;
         let s = raw.trim();
@@ -3407,7 +3433,8 @@ Object.assign(NYM.prototype, {
             if (u.hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)) return null;
             if (u.hostname.endsWith('.onion') || u.hostname.endsWith('.i2p')) return null;
             const path = u.pathname.replace(/\/+$/, '');
-            return `wss://${u.hostname}${u.port ? ':' + u.port : ''}${path}`;
+            const port = (u.port && u.port !== '443') ? ':' + u.port : '';
+            return `wss://${u.hostname.toLowerCase()}${port}${path}`;
         } catch (_) {
             return null;
         }
