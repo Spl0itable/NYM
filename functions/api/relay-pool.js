@@ -59,6 +59,7 @@ export async function onRequest(context) {
   const relayLatency = new Map();    // relayUrl -> latency ms
   let dmRelays = [];
   const kindBlacklist = new Map();
+  const closedKindRetries = new Map();   // relayUrl+'\n'+parentSubId -> resend count
   let serverOpen = true;
 
   // Dedup housekeeping — increased capacity for high relay counts
@@ -360,6 +361,7 @@ export async function onRequest(context) {
       || /\bmust\s+reference\b/i.test(reason)
       || /\bweb\s+of\s+trust\b/i.test(reason)
       || /\bpolicy\s+violated\b/i.test(reason)
+      || /\bonly\s+(serves|accepts|supports)\b/i.test(reason)
       || /\blow\s+trust\b/i.test(reason);
   }
 
@@ -1108,6 +1110,11 @@ export async function onRequest(context) {
             const closedSubId = m ? m[1] : '';
             const reason = m ? m[2] : '';
             const parentSubId = childToParent.get(closedSubId) || closedSubId;
+            if (m && isRelayWideRejection(reason)) {
+              markPermanentlySkipped(relayUrl, reason);
+              sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
+              return;
+            }
             if (m && isUnsupportedKind(reason)) {
               const rejectedKind = extractRejectedKind(reason);
               if (rejectedKind !== null) {
@@ -1118,26 +1125,35 @@ export async function onRequest(context) {
               const blockedSet = kindBlacklist.get(relayUrl);
               const children = splitChildren.get(parentSubId);
               const upstreamInfo = upstreams.get(relayUrl);
-              if (children && upstreamInfo && upstreamInfo.ws && upstreamInfo.ws.readyState === 1) {
-                const child = children.find(c => c.childSubId === closedSubId);
-                if (child) {
-                  const newPayload = buildChildPayload(child, blockedSet);
-                  if (newPayload) {
-                    try { upstreamInfo.ws.send(newPayload); } catch { /* noop */ }
+              const retryKey = relayUrl + '\n' + parentSubId;
+              const retries = closedKindRetries.get(retryKey) || 0;
+              const ready = upstreamInfo && upstreamInfo.ws && upstreamInfo.ws.readyState === 1;
+              let resent = false;
+              // Resend only if the request actually changed, capped, to avoid loops
+              if (ready && retries < 3) {
+                if (children) {
+                  const child = children.find(c => c.childSubId === closedSubId);
+                  if (child) {
+                    const newPayload = buildChildPayload(child, blockedSet);
+                    if (newPayload && newPayload !== child.rawChild) {
+                      try { upstreamInfo.ws.send(newPayload); resent = true; } catch { /* noop */ }
+                    }
+                  }
+                } else if (activeSubscriptions.has(parentSubId) && blockedSet && blockedSet.size > 0) {
+                  const rawReq = activeSubscriptions.get(parentSubId);
+                  const stripped = stripKindsFromReq(rawReq, blockedSet);
+                  if (stripped && stripped !== rawReq) {
+                    try { upstreamInfo.ws.send(stripped); resent = true; } catch { /* noop */ }
                   }
                 }
-              } else if (activeSubscriptions.has(parentSubId) && blockedSet && blockedSet.size > 0) {
-                const rawReq = activeSubscriptions.get(parentSubId);
-                const stripped = stripKindsFromReq(rawReq, blockedSet);
-                if (stripped && upstreamInfo && upstreamInfo.ws && upstreamInfo.ws.readyState === 1) {
-                  try { upstreamInfo.ws.send(stripped); } catch { /* noop */ }
-                }
               }
-              sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
-              return;
-            }
-            if (m && isRelayWideRejection(reason)) {
-              markPermanentlySkipped(relayUrl, reason);
+              if (resent) {
+                if (closedKindRetries.size > 5000) closedKindRetries.clear();
+                closedKindRetries.set(retryKey, retries + 1);
+              } else {
+                const targets = subRelays.get(parentSubId);
+                if (targets) targets.delete(relayUrl);
+              }
               sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
               return;
             }
@@ -1158,6 +1174,9 @@ export async function onRequest(context) {
         info.status = 'closed';
         upstreams.delete(relayUrl);
         for (const targets of subRelays.values()) targets.delete(relayUrl);
+        for (const k of closedKindRetries.keys()) {
+          if (k.startsWith(relayUrl + '\n')) closedKindRetries.delete(k);
+        }
         schedulePoolStatus();
 
         if (intentionallyClosed.has(relayUrl)) {
