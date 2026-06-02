@@ -36,8 +36,8 @@ Object.assign(NYM.prototype, {
                 relays = await fetchAndParseCsvLocally();
             }
             if (relays && relays.length > 0) {
-                this.geoRelays = relays;
-                for (const r of relays) this.allRelayUrls.add(r.url);
+                this.geoRelays = relays.map(r => ({ ...r, url: this._canonicalRelayUrl(r.url) }));
+                for (const r of this.geoRelays) this.allRelayUrls.add(r.url);
                 if (this.useRelayProxy && this._isAnyPoolOpen()) {
                     this._poolSendRelayConfig();
                 }
