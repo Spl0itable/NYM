@@ -556,16 +556,17 @@ Object.assign(NYM.prototype, {
 
             if (!this._giftWrapIsForMe(event)) return;
 
-            // Early deduplication - check before expensive decryption
-            if (this.processedPMEventIds.has(event.id)) {
-                return; // Already processed this event
+            const fromR2 = !!(opts && opts.fromR2);
+
+            // Early deduplication before expensive decryption
+            if (!fromR2 && this.processedPMEventIds.has(event.id)) {
+                return;
             }
             this.processedPMEventIds.add(event.id);
             if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
 
-            // Mirror the gift wrap to R2 so PMs restore on other devices. Gated
-            // server-side (must be addressed to us) and deduped by event id.
-            this._archivePMEvent(event);
+            // Mirror the gift wrap to R2 so PMs restore on other devices
+            if (!fromR2) this._archivePMEvent(event);
 
             // Update lastPMSyncTime to track newest received PM
             if (event.created_at && event.created_at > this.lastPMSyncTime) {
@@ -1318,7 +1319,13 @@ Object.assign(NYM.prototype, {
         this._pmR2OldestTs = null;
         this._pmR2NoMore = false;
         this._pmR2InitialPageSize = 200;
-        await this._pmRestoreR2Page({ before: 0, limit: this._pmR2InitialPageSize });
+        const maxPages = 5;
+        let before = 0;
+        for (let page = 0; page < maxPages; page++) {
+            const got = await this._pmRestoreR2Page({ before, limit: this._pmR2InitialPageSize });
+            if (!got || this._pmR2NoMore || !this._pmR2OldestTs) break;
+            before = this._pmR2OldestTs;
+        }
     },
 
     async pmLoadOlderFromR2() {
@@ -1356,8 +1363,9 @@ Object.assign(NYM.prototype, {
             for (let k = i; k < end; k++) {
                 const ev = events[k];
                 if (!ev || typeof ev.id !== 'string') continue;
+                if (this._pmArchivedIds.has(ev.id)) continue;
                 this._pmArchivedIds.add(ev.id);
-                try { await this.handleGiftWrapDM(ev); } catch (_) { }
+                try { await this.handleGiftWrapDM(ev, { fromR2: true }); } catch (_) { }
             }
             if (end < events.length) await this._yieldToIdle();
         }
