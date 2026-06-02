@@ -67,6 +67,9 @@ Object.assign(NYM.prototype, {
 
             this._appInitTime = Date.now();
 
+            // Warm up the crypto worker pool (no-op fallback if unsupported)
+            if (typeof this._ensureCryptoPool === 'function') this._ensureCryptoPool();
+
             // Setup event listeners
             this.setupEventListeners();
             this.setupCommands();

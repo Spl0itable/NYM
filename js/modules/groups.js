@@ -145,6 +145,22 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
+    // Ordered ephemeral secret keys to try when unwrapping (p-tag match first).
+    _ephemeralCandidateSks(event) {
+        const out = [], seen = new Set();
+        const pTag = (event.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
+        if (pTag) { const sk = this._lookupEphemeralSk(pTag[1]); if (sk) { out.push(sk); seen.add(pTag[1]); } }
+        for (const [, ek] of this.groupEphemeralKeys) {
+            if (!ek.self) continue;
+            for (const key of [ek.self.current, ...ek.self.prev]) {
+                if (seen.has(key.pk)) continue;
+                seen.add(key.pk);
+                out.push(key.sk);
+            }
+        }
+        return out;
+    },
+
     // O(1) lookup: find the ephemeral secret key for a given ephemeral pubkey.
     _lookupEphemeralSk(ephemeralPk) {
         if (!this._ephPkCache) this._rebuildEphPkCache();

@@ -29,9 +29,14 @@ Object.assign(NYM.prototype, {
         return pow >= minimumDifficulty;
     },
 
-    // Cooperative NIP-13 miner: hashes for ~4ms, yields to the event loop,
-    // then resumes. Keeps the UI at 60fps while mining without a Worker.
+    // NIP-13 miner: offloaded to the crypto worker; cooperative main-thread fallback.
     async _minePow(event, difficulty) {
+        if (!difficulty || difficulty <= 0) return event;
+        return this._cryptoCall('minePow', [event, difficulty], () => this._minePowMainThread(event, difficulty));
+    },
+
+    // Hashes for ~4ms, yields to the event loop, then resumes. Keeps 60fps.
+    async _minePowMainThread(event, difficulty) {
         if (!difficulty || difficulty <= 0) return event;
         let nonceIdx = event.tags.findIndex(t => Array.isArray(t) && t[0] === 'nonce');
         if (nonceIdx < 0) {
@@ -1172,7 +1177,7 @@ Object.assign(NYM.prototype, {
             pubkey: this.pubkey
         };
 
-        const wrapped = this.bitchatWrapEvent(rumor, this.privkey, recipientPubkey, null);
+        const wrapped = await this.bitchatWrapEventAsync(rumor, this.privkey, recipientPubkey, null);
         this.sendDMToRelays(['EVENT', wrapped]);
     },
 
@@ -1202,7 +1207,7 @@ Object.assign(NYM.prototype, {
 
         // Wrap using standard NIP-59 format
         if (this.privkey) {
-            const wrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, null);
+            const wrapped = await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, null);
             this.sendDMToRelays(['EVENT', wrapped]);
         } else {
             await this._sendGiftWrapsAsync([recipientPubkey], rumor, null);
@@ -1286,7 +1291,7 @@ Object.assign(NYM.prototype, {
             tags.push(['p', this.currentPM]);
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
             if (this.privkey) {
-                const wrapped = this.nip59WrapEvent(rumor, this.privkey, this.currentPM, null);
+                const wrapped = await this.nip59WrapEventAsync(rumor, this.privkey, this.currentPM, null);
                 this.sendDMToRelays(['EVENT', wrapped]);
             } else {
                 await this._sendGiftWrapsAsync([this.currentPM], rumor, null);
@@ -1636,122 +1641,28 @@ Object.assign(NYM.prototype, {
         return xTag ? xTag[1] : null;
     },
 
-    // Key derivation: HKDF(full compressed shared point 33 bytes, empty salt, "nip44-v2" info)
+    // Synchronous gift-wrap helpers (main-thread fallback / sync callers).
     encryptBitchat(plaintext, senderPrivateKey, recipientPublicKey) {
-        const NT = window.NostrTools;
-
-        // Get full compressed shared point (33 bytes including prefix)
-        // Try 02 prefix first - Bitchat will try both prefixes when decrypting
-        const sharedPoint = NT._secp256k1.getSharedSecret(senderPrivateKey, '02' + recipientPublicKey);
-
-        // Bitchat key derivation: HKDF with full compressed point, empty salt, "nip44-v2" as info
-        const prk = NT._hkdfExtract(NT._sha256, sharedPoint, new Uint8Array(0)); // truly empty salt
-        const info = new TextEncoder().encode('nip44-v2');
-        const bitchatKey = NT._hkdfExpand(NT._sha256, prk, info, 32);
-
-        // Generate random 24-byte nonce
-        const nonce = crypto.getRandomValues(new Uint8Array(24));
-
-        // Encrypt using XChaCha20-Poly1305
-        const plaintextBytes = new TextEncoder().encode(plaintext);
-        const ciphertextWithTag = NT._xchacha20poly1305(bitchatKey, nonce).encrypt(plaintextBytes);
-
-        // Combine: nonce || ciphertext || tag
-        const payload = new Uint8Array(nonce.length + ciphertextWithTag.length);
-        payload.set(nonce, 0);
-        payload.set(ciphertextWithTag, nonce.length);
-
-        // Encode as base64url with v2: prefix
-        const base64 = btoa(String.fromCharCode(...payload));
-        const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        return 'v2:' + base64url;
+        return window.NymCrypto.encryptBitchat(plaintext, senderPrivateKey, recipientPublicKey);
     },
 
-    // Bitchat-compatible gift wrap (uses raw XChaCha20-Poly1305 instead of NIP-44)
     bitchatWrapEvent(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
-        const NT = window.NostrTools;
-
-        // Rumor (unsigned) with computed id
-        const now = Math.floor(Date.now() / 1000);
-        const rumor = {
-            created_at: now,
-            content: '',
-            tags: [],
-            ...event,
-            pubkey: NT.getPublicKey(senderPrivateKey)
-        };
-        rumor.id = NT.getEventHash(rumor);
-
-        // Bitchat decrypts seal using ECDH(recipient_privkey, seal.pubkey)
-        const senderPubkey = NT.getPublicKey(senderPrivateKey);
-        const sealedContent = this.encryptBitchat(JSON.stringify(rumor), senderPrivateKey, recipientPublicKey);
-        const sealUnsigned = {
-            kind: 13,
-            content: sealedContent,
-            created_at: this.randomNow(),
-            tags: []
-        };
-        const seal = NT.finalizeEvent(sealUnsigned, senderPrivateKey);
-
-        // GiftWrap (kind 1059) with different ephemeral keypair
-        const wrapEphSk = NT.generateSecretKey();
-        const wrapEphPk = NT.getPublicKey(wrapEphSk);
-        const wrapContent = this.encryptBitchat(JSON.stringify(seal), wrapEphSk, recipientPublicKey);
-        const wrapUnsigned = {
-            kind: 1059,
-            content: wrapContent,
-            created_at: this.randomNow(),
-            tags: [['p', recipientPublicKey]],
-            pubkey: wrapEphPk
-        };
-
-        return NT.finalizeEvent(wrapUnsigned, wrapEphSk);
+        return window.NymCrypto.bitchatWrap(event, senderPrivateKey, recipientPublicKey);
     },
 
     nip59WrapEvent(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
-        const NT = window.NostrTools;
+        return window.NymCrypto.nip59Wrap(event, senderPrivateKey, recipientPublicKey, expirationTs);
+    },
 
-        // Rumor (unsigned) with computed id
-        const now = Math.floor(Date.now() / 1000);
-        const rumor = {
-            created_at: now,
-            content: '',
-            tags: [],
-            ...event,
-            pubkey: NT.getPublicKey(senderPrivateKey)
-        };
-        rumor.id = NT.getEventHash(rumor);
+    // Worker-offloaded gift-wrap (encrypt + sign), falling back to the sync path.
+    async bitchatWrapEventAsync(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
+        return this._cryptoCall('bitchatWrap', [event, senderPrivateKey, recipientPublicKey],
+            () => window.NymCrypto.bitchatWrap(event, senderPrivateKey, recipientPublicKey));
+    },
 
-        // Seal (kind 13)
-        const ckSeal = NT.nip44.getConversationKey(senderPrivateKey, recipientPublicKey);
-        const sealedContent = NT.nip44.encrypt(JSON.stringify(rumor), ckSeal);
-        const sealUnsigned = {
-            kind: 13,
-            content: sealedContent,
-            created_at: this.randomNow(),
-            tags: []
-        };
-        const seal = NT.finalizeEvent(sealUnsigned, senderPrivateKey);
-
-        // GiftWrap (kind 1059) with ephemeral keypair
-        const ephSk = NT.generateSecretKey();
-        const ephPk = NT.getPublicKey(ephSk);
-        const ckWrap = NT.nip44.getConversationKey(ephSk, recipientPublicKey);
-        const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
-        const wrapUnsigned = {
-            kind: 1059,
-            content: wrapContent,
-            created_at: this.randomNow(),
-            tags: [['p', recipientPublicKey]],
-            pubkey: ephPk
-        };
-
-        // Add expiration only if enabled
-        if (expirationTs) {
-            wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
-        }
-
-        return NT.finalizeEvent(wrapUnsigned, ephSk);
+    async nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
+        return this._cryptoCall('nip59Wrap', [event, senderPrivateKey, recipientPublicKey, expirationTs ?? null],
+            () => window.NymCrypto.nip59Wrap(event, senderPrivateKey, recipientPublicKey, expirationTs ?? null));
     },
 
     requestUserProfile(pubkey) {

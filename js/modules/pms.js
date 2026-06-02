@@ -294,7 +294,7 @@ Object.assign(NYM.prototype, {
                     content: encoded.content,
                     pubkey: this.pubkey
                 };
-                const bitchatWrapped = this.bitchatWrapEvent(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
+                const bitchatWrapped = await this.bitchatWrapEventAsync(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', bitchatWrapped]);
                 sentWrappedEvents.push(['EVENT', bitchatWrapped]);
                 wrapped = bitchatWrapped;
@@ -306,7 +306,7 @@ Object.assign(NYM.prototype, {
             }
 
             if (isKnownNym || isUnknownPeer) {
-                const nymWrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
+                const nymWrapped = await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', nymWrapped]);
                 sentWrappedEvents.push(['EVENT', nymWrapped]);
                 wrapped = nymWrapped;
@@ -318,7 +318,7 @@ Object.assign(NYM.prototype, {
             }
 
             if (recipientPubkey !== this.pubkey) {
-                const selfWrapped = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
+                const selfWrapped = await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', selfWrapped]);
                 this._recordGiftWrapId(nymMessageId, selfWrapped.id);
                 // Archive our own self-addressed copy so sent messages also
@@ -550,23 +550,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Bounded cache of NIP-44 conversation keys (ECDH + HKDF) by sender pubkey.
-    _getConvKey(pubkey) {
-        const NT = window.NostrTools;
-        if (this._convKeyBasis !== this.privkey) {
-            this._convKeyCache = new Map();
-            this._convKeyBasis = this.privkey;
-        }
-        const hit = this._convKeyCache.get(pubkey);
-        if (hit) return hit;
-        const k = NT.nip44.getConversationKey(this.privkey, pubkey);
-        if (this._convKeyCache.size >= 1000) {
-            this._convKeyCache.delete(this._convKeyCache.keys().next().value);
-        }
-        this._convKeyCache.set(pubkey, k);
-        return k;
-    },
-
     async handleGiftWrapDM(event, opts) {
         try {
             const NT = window.NostrTools;
@@ -595,42 +578,6 @@ Object.assign(NYM.prototype, {
                 const idsArray = Array.from(this.processedPMEventIds);
                 this.processedPMEventIds = new Set(idsArray.slice(-2500));
             }
-
-            // Bitchat uses XChaCha20-Poly1305 with HKDF key derivation
-            // Format: v2: + base64url(nonce(24) || ciphertext || tag(16))
-            // Key: HKDF(full compressed shared point 33 bytes, salt=empty, info="nip44-v2")
-            const decryptBitchat = (content, senderPubkey) => {
-                // Strip v2: prefix
-                if (content.startsWith('v2:')) {
-                    content = content.slice(3);
-                }
-                // Convert base64url to standard base64
-                content = content.replace(/-/g, '+').replace(/_/g, '/');
-                while (content.length % 4) content += '=';
-
-                const payload = Uint8Array.from(atob(content), c => c.charCodeAt(0));
-                const info = new TextEncoder().encode('nip44-v2');
-                const nonce = payload.subarray(0, 24);
-                const ciphertextWithTag = payload.subarray(24);
-
-                // Bitchat tries both 02 (even Y) and 03 (odd Y) prefixes for x-only pubkeys
-                for (const prefix of ['02', '03']) {
-                    try {
-                        const sharedPoint = NT._secp256k1.getSharedSecret(this.privkey, prefix + senderPubkey);
-
-                        // Method 5: Full compressed point (33 bytes) -> HKDF
-                        const prk = NT._hkdfExtract(NT._sha256, sharedPoint, new Uint8Array(0));
-                        const key = NT._hkdfExpand(NT._sha256, prk, info, 32);
-
-                        const plaintext = NT._xchacha20poly1305(key, nonce).decrypt(ciphertextWithTag);
-                        return new TextDecoder().decode(plaintext);
-                    } catch (e) {
-                        // Try other prefix
-                    }
-                }
-
-                throw new Error('Bitchat decryption failed');
-            };
 
             // Parse Bitchat message format: bitchat1:<base64url payload>
             // Returns { type, content } where type is NoisePayloadType
@@ -742,34 +689,6 @@ Object.assign(NYM.prototype, {
             // Check if content is Bitchat format (v2: prefix)
             const isBitchatFormat = (content) => content.startsWith('v2:');
 
-            // Unwrap local privkey path
-            const unwrapWithLocal = () => {
-                let sealJson, seal, rumorJson, rumor;
-
-                if (isBitchatFormat(event.content)) {
-                    // Bitchat raw XChaCha20-Poly1305 format
-                    sealJson = decryptBitchat(event.content, event.pubkey);
-                    seal = JSON.parse(sealJson);
-
-                    if (isBitchatFormat(seal.content)) {
-                        rumorJson = decryptBitchat(seal.content, seal.pubkey);
-                    } else {
-                        rumorJson = NT.nip44.decrypt(seal.content, this._getConvKey(seal.pubkey));
-                    }
-                    rumor = JSON.parse(rumorJson);
-                } else {
-                    // Standard NIP-44 format
-                    const ckWrap = NT.nip44.getConversationKey(this.privkey, event.pubkey);
-                    sealJson = NT.nip44.decrypt(event.content, ckWrap);
-                    seal = JSON.parse(sealJson);
-
-                    rumorJson = NT.nip44.decrypt(seal.content, this._getConvKey(seal.pubkey));
-                    rumor = JSON.parse(rumorJson);
-                }
-
-                return { seal, rumor };
-            };
-
             // Unwrap extension-only path (only works for standard NIP-44, not Bitchat)
             const unwrapWithExtension = async () => {
                 // Extensions can't do raw ECDH, so Bitchat format won't work
@@ -788,17 +707,13 @@ Object.assign(NYM.prototype, {
 
             let seal, rumor;
             if (this.privkey) {
-                try {
-                    ({ seal, rumor } = unwrapWithLocal());
-                } catch (_realKeyErr) {
-                    // Real privkey failed — try ephemeral keys (timing-attack mitigation scheme)
-                    const ephResult = this._tryDecryptWithEphemeralKeys(event);
-                    if (ephResult) {
-                        ({ seal, rumor } = ephResult);
-                    } else {
-                        throw _realKeyErr; // re-throw original error
-                    }
-                }
+                // Real key (Bitchat + NIP-44) first, then ephemeral keys (NIP-44).
+                const candidates = [{ sk: this.privkey, bitchat: true, selfId: this.pubkey },
+                    ...this._ephemeralCandidateSks(event).map(sk => ({ sk, bitchat: false }))];
+                const res = await this._cryptoCall('unwrapGiftWrap', [event, candidates],
+                    () => window.NymCrypto.unwrapGiftWrap(event, candidates));
+                if (!res) return;
+                ({ seal, rumor } = res);
             } else if (window.nostr?.nip44?.decrypt) {
                 try {
                     ({ seal, rumor } = await unwrapWithExtension());
@@ -2514,13 +2429,13 @@ Object.assign(NYM.prototype, {
                 const isUnknownPeer = !isKnownBitchat && !isKnownNym;
 
                 if (isKnownNym || isUnknownPeer) {
-                    const nymWrapped = this.nip59WrapEvent(rumor, this.privkey, recipientPubkey, expirationTs);
+                    const nymWrapped = await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', nymWrapped]);
                     this._recordGiftWrapId(nymMessageId, nymWrapped.id);
                 }
 
                 if (recipientPubkey !== this.pubkey) {
-                    const selfWrapped = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
+                    const selfWrapped = await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', selfWrapped]);
                     this._recordGiftWrapId(nymMessageId, selfWrapped.id);
                 }
