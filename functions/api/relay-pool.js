@@ -506,7 +506,7 @@ export async function onRequest(context) {
 
   function sanitizeChannelKey(name) {
     if (typeof name !== 'string') return '';
-    return name.trim().toLowerCase().replace(/[^a-z0-9_\-.]/g, '').slice(0, 80);
+    return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, '').slice(0, 80);
   }
 
   function archiveDedupReq(eventId) {
@@ -589,6 +589,12 @@ export async function onRequest(context) {
           const obj = await env.R2_BUCKET.get(key);
           if (obj) { const d = await obj.json(); if (d && Array.isArray(d.items)) items = d.items; }
         } catch { items = []; }
+        const existingIds = new Set();
+        for (const it of items) {
+          if (Array.isArray(it) && typeof it[0] === 'string') existingIds.add(it[0]);
+        }
+        const hasNew = additions.some((it) => Array.isArray(it) && typeof it[0] === 'string' && !existingIds.has(it[0]));
+        if (!hasNew) continue;
         const seen = new Set();
         const merged = [];
         for (const it of additions.concat(items)) {

@@ -646,7 +646,7 @@ function archiveMergeIndex(idx, additions, cap, minTs) {
 // Channel names become R2 key segments; keep them to a safe, bounded charset.
 function archiveSanitizeChannel(name) {
   if (typeof name !== "string") return "";
-  return name.trim().toLowerCase().replace(/[^a-z0-9_\-.]/g, "").slice(0, 80);
+  return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, "").slice(0, 80);
 }
 
 // A gift wrap is storable for a user only if it is a kind 1059/1060 event that
