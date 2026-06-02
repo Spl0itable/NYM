@@ -1080,11 +1080,7 @@ class NYM {
         });
         // Seed nymbot avatar so it shows in sidebar and user list instead of the generated identicon
         this.userAvatars.set(this.verifiedBot.pubkey, 'https://nymchat.app/images/nymbot-icon.png');
-        this.isFlutterWebView = navigator.userAgent.includes('NYMApp') ||
-            navigator.userAgent.includes('Flutter');
-
-        if (this.isFlutterWebView) {
-        }
+        this.isFlutterWebView = /NymchatApp\//i.test(navigator.userAgent);
         this.shopItems = {
             styles: [
                 {
@@ -1641,6 +1637,11 @@ function closeImageModal() {
     if (typeof window.updateImageModalGalleryNav === 'function') window.updateImageModalGalleryNav();
     const modalVid = document.getElementById('modalVideo');
     modalVid.pause();
+    if (modalVid.dataset.ownBlob) {
+        URL.revokeObjectURL(modalVid.dataset.ownBlob);
+        delete modalVid.dataset.ownBlob;
+        delete modalVid.dataset.blobLoaded;
+    }
     modalVid.removeAttribute('src');
     while (modalVid.firstChild) modalVid.firstChild.remove();
     modalVid.load();
@@ -3585,7 +3586,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.434';
+const NYMCHAT_VERSION = 'v3.67.435';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4342,18 +4343,21 @@ function nostrLoginStartRemoteSigner() {
         // Generate QR code
         const qrContainer = document.getElementById('nostrLoginRemoteSignerQR');
         qrContainer.innerHTML = '';
-        try {
-            new QRCode(qrContainer, {
-                text: connectURI,
-                width: 220,
-                height: 220,
-                colorDark: '#000000',
-                colorLight: '#ffffff',
-                correctLevel: QRCode.CorrectLevel.L
-            });
-        } catch (qrErr) {
-            qrContainer.textContent = 'QR code generation failed';
-        }
+        (async () => {
+            try {
+                if (typeof QRCode === 'undefined') await window.loadScriptOnce(window.NYM_CDN.qrcode);
+                new QRCode(qrContainer, {
+                    text: connectURI,
+                    width: 220,
+                    height: 220,
+                    colorDark: '#000000',
+                    colorLight: '#ffffff',
+                    correctLevel: QRCode.CorrectLevel.L
+                });
+            } catch (qrErr) {
+                qrContainer.textContent = 'QR code generation failed';
+            }
+        })();
 
         // Store state for the connection flow
         _nip46State = {
@@ -6287,6 +6291,7 @@ let _rsRenderInterval = null;
 function startRelayStatsSampling() {
     if (_rsSampleInterval) return;
     _rsSampleInterval = setInterval(() => {
+        if (document.hidden) return;
         if (typeof nym === 'undefined') return;
         const s = nym.relayStats;
         s.throughputHistory.push(s.eventsThisSecond);

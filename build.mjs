@@ -90,6 +90,12 @@ async function run() {
   // robots.txt verbatim.
   await emit('robots.txt', await fs.readFile(path.join(root, 'robots.txt')));
 
+  // Service worker: stamp a per-build cache version so each deploy gets a fresh
+  // cache and old ones are pruned on activate.
+  const swVersion = sha8([...assetMap.values()].sort().join('|'));
+  const swSrc = await fs.readFile(path.join(root, 'sw.js'), 'utf8');
+  await emit('sw.js', swSrc.replace('__CACHE_VERSION__', swVersion));
+
   // _headers + immutable caching for hashed assets, no-cache for entry.
   const headers = await fs.readFile(path.join(root, '_headers'), 'utf8');
   const cacheRules = `
@@ -101,6 +107,8 @@ async function run() {
 /index.html
   Cache-Control: no-cache
 /
+  Cache-Control: no-cache
+/sw.js
   Cache-Control: no-cache
 `;
   await emit('_headers', headers.replace(/\s*$/, '') + cacheRules);

@@ -1,5 +1,45 @@
 // inline-bindings.js - Single delegated dispatcher that replaces inline event handlers
 
+// On-demand external script loader, cached per URL so heavy CDN libs load only
+// when a feature first needs them.
+window.loadScriptOnce = function (url) {
+    window._loadedScripts = window._loadedScripts || new Map();
+    if (window._loadedScripts.has(url)) return window._loadedScripts.get(url);
+    const p = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = url;
+        s.async = true;
+        s.onload = () => resolve();
+        s.onerror = () => { window._loadedScripts.delete(url); reject(new Error('Failed to load ' + url)); };
+        document.head.appendChild(s);
+    });
+    window._loadedScripts.set(url, p);
+    return p;
+};
+
+window.NYM_CDN = {
+    qrcode: 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js',
+    webtorrent: 'https://cdn.jsdelivr.net/npm/webtorrent@2.5.1/webtorrent.min.js'
+};
+
+// Shared observer that pauses cosmetic animations while their element is
+// off-screen. Detached (pruned) targets are unobserved automatically.
+window._animObserver = ('IntersectionObserver' in window)
+    ? new IntersectionObserver((entries, obs) => {
+        for (const e of entries) {
+            if (!e.target.isConnected) { obs.unobserve(e.target); continue; }
+            e.target.classList.toggle('nym-anim-paused', !e.isIntersecting);
+        }
+    }, { rootMargin: '100px' })
+    : null;
+
+window.nymObserveAnim = function (el) {
+    if (window._animObserver && el) {
+        el.classList.add('nym-anim-paused');
+        window._animObserver.observe(el);
+    }
+};
+
 // Short haptic pulse used to confirm a long-press fired on mobile
 window.nymHapticTap = function (ms) {
     try {
@@ -430,4 +470,23 @@ window.nymHapticTap = function (ms) {
         // PMs dynamic
         'removeNewPMRecipient':       function (_e, t) { nym().removeNewPMRecipient(t.dataset.pubkey); }
     });
+})();
+
+// Track the on-screen keyboard via visualViewport so the chat input can stay
+// above it. On Android the native shell already resizes the viewport (inset
+// ~0); on iOS WKWebView the layout viewport does not shrink, so this exposes
+// the gap as --keyboard-inset for CSS to consume.
+(function () {
+    var vv = window.visualViewport;
+    if (!vv) return;
+    var raf = 0;
+    function update() {
+        raf = 0;
+        var inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+        document.documentElement.style.setProperty('--keyboard-inset', inset + 'px');
+    }
+    function schedule() { if (!raf) raf = requestAnimationFrame(update); }
+    vv.addEventListener('resize', schedule);
+    vv.addEventListener('scroll', schedule);
+    update();
 })();

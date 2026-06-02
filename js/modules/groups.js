@@ -1246,9 +1246,24 @@ Object.assign(NYM.prototype, {
         // Archive-only self copy so group messages also hydrate from R2.
         if (groupId) this._archiveGroupRumorSelf(rumor, expirationTs);
 
-        // Fast path — local key available
+        // Fast path — local key available. Offload each wrap to the crypto
+        // worker pool so large groups don't block the UI thread.
         if (this.privkey) {
-            this._sendGiftWraps(members, rumor, expirationTs, groupId);
+            const sharedId = this.getNymMessageId(rumor);
+            const wrapLocal = async (pubkey) => {
+                const encryptTo = groupId ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
+                const wrapped = await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
+                this.sendDMToRelays(['EVENT', wrapped]);
+                this._recordGiftWrapId(sharedId, wrapped.id);
+                if (this.activeCosmetics?.has('cosmetic-redacted')) {
+                    setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
+                }
+            };
+            const queue = members.slice();
+            const workers = new Array(Math.min(8, queue.length)).fill(0).map(async () => {
+                while (queue.length) await wrapLocal(queue.shift());
+            });
+            await Promise.all(workers);
             return;
         }
 

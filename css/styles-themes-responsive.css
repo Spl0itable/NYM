@@ -189,6 +189,7 @@ body.light-mode .verified-badge::before {
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
         height: 100vh;
+        height: 100dvh;
         border-left: 1px solid var(--glass-border);
     }
 
@@ -213,9 +214,9 @@ body.light-mode .verified-badge::before {
 
     .main-content {
         height: 100vh;
-        height: 100dvh;
+        height: calc(100dvh - var(--keyboard-inset, 0px));
         max-height: 100vh;
-        max-height: 100dvh;
+        max-height: calc(100dvh - var(--keyboard-inset, 0px));
         display: flex;
         flex-direction: column;
         overflow: hidden;
@@ -250,7 +251,7 @@ body.light-mode .verified-badge::before {
     .main-container {
         display: flex;
         flex-direction: column;
-        height: 100dvh;
+        height: calc(100dvh - var(--keyboard-inset, 0px));
         overflow: hidden;
     }
 
@@ -1504,6 +1505,11 @@ body.performance-mode .status-dot {
 body.performance-mode .message {
     animation: none;
     transition: none;
+}
+
+.nym-anim-paused,
+.nym-anim-paused .message-content {
+    animation-play-state: paused !important;
 }
 
 body.performance-mode .message:hover {

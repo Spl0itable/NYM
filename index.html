@@ -1935,12 +1935,9 @@
     <script defer src="js/modules/geohash-globe.js"></script>
     <script defer src="js/modules/notifications.js"></script>
     <script defer src="js/modules/settings.js"></script>
+    <script defer src="js/sw-register.js"></script>
 
-    <!-- QRCode library for Lightning invoices (used lazily; safe to async) -->
-    <script async src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-
-    <!-- WebTorrent for P2P torrent-based file sharing (used lazily; safe to async) -->
-    <script async src="https://cdn.jsdelivr.net/npm/webtorrent@2.5.1/webtorrent.min.js"></script>
+    <!-- QRCode + WebTorrent are injected on first use via window.loadScriptOnce -->
 
     <!-- Notifications Modal -->
     <div class="modal" id="notificationsModal">

@@ -3742,6 +3742,7 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     overflow: auto;
     height: auto;
     min-height: 100vh;
+    min-height: 100dvh;
     padding: 0;
     margin: 0;
 }

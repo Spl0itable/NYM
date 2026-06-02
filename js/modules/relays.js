@@ -318,6 +318,7 @@ Object.assign(NYM.prototype, {
         if (!this.useRelayProxy) return;
         this.ensureAppRelayConnected();
         this._appRelayWatchdog = setInterval(() => {
+            if (document.hidden) return;
             if (!navigator.onLine) return;
             this.ensureAppRelayConnected();
         }, 15000);

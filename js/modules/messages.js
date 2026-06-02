@@ -667,6 +667,7 @@ Object.assign(NYM.prototype, {
             }
 
             messageEl.className = classes.join(' ');
+            if (userShopItems?.style && window.nymObserveAnim) window.nymObserveAnim(messageEl);
             // For PM messages use nymMessageId as the stable shared key (gift wrap IDs differ per recipient)
             messageEl.dataset.messageId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             messageEl.dataset.author = message.author;
@@ -967,6 +968,7 @@ Object.assign(NYM.prototype, {
 
             if (activeStyle) {
                 messageEl.classList.add(activeStyle);
+                if (window.nymObserveAnim) window.nymObserveAnim(messageEl);
             }
             if (this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false) {
                 messageEl.classList.add('supporter-style');
@@ -1119,6 +1121,7 @@ Object.assign(NYM.prototype, {
             if (domMessages.length > domLimit) {
                 const toRemove = domMessages.length - domLimit;
                 for (let i = 0; i < toRemove; i++) {
+                    this._revokeNodeBlobs(domMessages[i]);
                     domMessages[i].remove();
                 }
                 const firstAfterPrune = container.querySelector('[data-message-id]');
@@ -1371,6 +1374,14 @@ Object.assign(NYM.prototype, {
         );
     },
 
+    _revokeNodeBlobs(node) {
+        if (!node || !node.querySelectorAll) return;
+        node.querySelectorAll('video[data-blob-src]').forEach(v => {
+            URL.revokeObjectURL(v.dataset.blobSrc);
+            delete v.dataset.blobSrc;
+        });
+    },
+
     formatMessage(content) {
         let formatted = content;
 
@@ -1616,6 +1627,11 @@ Object.assign(NYM.prototype, {
         modalImg.style.display = '';
         modalVid.style.display = 'none';
         modalVid.pause();
+        if (modalVid.dataset.ownBlob) {
+            URL.revokeObjectURL(modalVid.dataset.ownBlob);
+            delete modalVid.dataset.ownBlob;
+            delete modalVid.dataset.blobLoaded;
+        }
         modalVid.removeAttribute('src');
         while (modalVid.firstChild) modalVid.firstChild.remove();
         if (context && Array.isArray(context.gallery) && context.gallery.length > 1) {
@@ -1633,6 +1649,11 @@ Object.assign(NYM.prototype, {
         modalImg.style.display = 'none';
         modalImg.src = '';
         // Clear existing sources
+        if (modalVid.dataset.ownBlob) {
+            URL.revokeObjectURL(modalVid.dataset.ownBlob);
+            delete modalVid.dataset.ownBlob;
+            delete modalVid.dataset.blobLoaded;
+        }
         modalVid.removeAttribute('src');
         while (modalVid.firstChild) modalVid.firstChild.remove();
 
@@ -1658,7 +1679,9 @@ Object.assign(NYM.prototype, {
                     const blob = await resp.blob();
                     modalVid.removeAttribute('src');
                     while (modalVid.firstChild) modalVid.firstChild.remove();
-                    modalVid.src = URL.createObjectURL(blob);
+                    const ownBlob = URL.createObjectURL(blob);
+                    modalVid.dataset.ownBlob = ownBlob;
+                    modalVid.src = ownBlob;
                     modalVid.load();
                 } catch (e) {
                     console.warn('Modal video blob fallback failed:', e);
@@ -1830,9 +1853,24 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        const finalWrappers = container.querySelectorAll(':scope > .message-group');
-        for (const wrapper of finalWrappers) {
-            this._syncMessageGroupAvatarOffset(wrapper);
+        this._syncAllAvatarOffsets(container.querySelectorAll(':scope > .message-group'));
+    },
+
+    // Batched read-then-write so N groups cost one reflow instead of N.
+    _syncAllAvatarOffsets(wrappers) {
+        const writes = [];
+        for (const wrapper of wrappers) {
+            const avatarBox = wrapper.querySelector(':scope > .message-group-avatar');
+            const stack = wrapper.querySelector(':scope > .message-group-stack');
+            if (!avatarBox || !stack) continue;
+            const lastMsg = stack.lastElementChild;
+            const contentEl = lastMsg && lastMsg.querySelector(':scope > .message-content');
+            if (!contentEl) { writes.push({ avatarBox, below: 0 }); continue; }
+            const below = wrapper.getBoundingClientRect().bottom - contentEl.getBoundingClientRect().bottom;
+            writes.push({ avatarBox, below });
+        }
+        for (const w of writes) {
+            w.avatarBox.style.marginBottom = w.below > 0 ? w.below + 'px' : '';
         }
     },
 
@@ -3167,6 +3205,7 @@ Object.assign(NYM.prototype, {
         const excess = msgEls.length - this.channelPageSize;
         if (excess <= 0) return false;
         for (let i = 0; i < excess; i++) {
+            this._revokeNodeBlobs(msgEls[i]);
             msgEls[i].remove();
         }
 

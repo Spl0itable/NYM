@@ -775,9 +775,13 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Initialize WebTorrent client (lazy)
-    getTorrentClient() {
-        if (!this.torrentClient && typeof WebTorrent !== 'undefined') {
+    // Initialize WebTorrent client, loading the library on first use.
+    async getTorrentClient() {
+        if (!this.torrentClient) {
+            if (typeof WebTorrent === 'undefined') {
+                try { await window.loadScriptOnce(window.NYM_CDN.webtorrent); } catch (_) { return null; }
+            }
+            if (typeof WebTorrent === 'undefined') return null;
             this.torrentClient = new WebTorrent();
             this.torrentClient.on('error', (err) => {
                 console.error('WebTorrent error:', err);
@@ -794,7 +798,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const client = this.getTorrentClient();
+        const client = await this.getTorrentClient();
         if (!client) {
             this.displaySystemMessage('WebTorrent is not available. Falling back to direct P2P.');
             return this.shareP2PFile(file);
@@ -917,7 +921,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const client = this.getTorrentClient();
+        const client = await this.getTorrentClient();
         if (!client) {
             this.displaySystemMessage('WebTorrent is not available in this browser');
             return;

@@ -706,27 +706,28 @@ Object.assign(NYM.prototype, {
         qrDiv.style.cssText = 'display: inline-block; padding: 15px; background: white; border: 5px solid white; border-radius: 10px;';
         qrContainer.appendChild(qrDiv);
 
-        // Generate QR using the invoice
-        try {
-            new QRCode(qrDiv, {
-                text: invoice.pr,  // Just the raw invoice, no lightning: prefix
-                width: 200,
-                height: 200,
-                colorDark: "#000000",
-                colorLight: "#ffffff",
-                correctLevel: QRCode.CorrectLevel.L
-            });
-
-        } catch (err) {
-            // Fallback if QRCode library not loaded
-            qrContainer.innerHTML = `
+        // Generate QR using the invoice (QRCode lib loaded on demand)
+        (async () => {
+            try {
+                if (typeof QRCode === 'undefined') await window.loadScriptOnce(window.NYM_CDN.qrcode);
+                new QRCode(qrDiv, {
+                    text: invoice.pr,  // Just the raw invoice, no lightning: prefix
+                    width: 200,
+                    height: 200,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: QRCode.CorrectLevel.L
+                });
+            } catch (err) {
+                qrContainer.innerHTML = `
     <div class="nm-zap-1">
         <div class="nm-zap-2">Lightning Invoice</div>
         <div class="nm-zap-3">${this.escapeHtml(invoice.pr.substring(0, 60))}...</div>
         <div class="nm-zap-4">QR generation failed - copy invoice manually</div>
     </div>
 `;
-        }
+            }
+        })();
 
         // Update button
         const sendBtn = document.getElementById('zapSendBtn');
@@ -1181,6 +1182,7 @@ Object.assign(NYM.prototype, {
 
             // Insert at beginning of reactions row
             reactionsRow.insertBefore(zapBadge, reactionsRow.firstChild);
+            if (window.nymObserveAnim) window.nymObserveAnim(zapBadge);
 
             // Add quick zap button ONLY if zaps exist and not own message
             const pubkey = messageEl.dataset.pubkey;
