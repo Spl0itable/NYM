@@ -854,9 +854,15 @@ export async function onRequest(context) {
     connectUpstream(relayUrl, type);
   }
 
+  // The app relay and the client's curated default relays (sent as dmRelays)
+  // must never be permanently skipped — they always stay reconnectable.
+  function isProtectedRelay(relayUrl) {
+    return relayUrl === APP_RELAY || dmRelays.includes(relayUrl);
+  }
+
   function markPermanentlySkipped(relayUrl, reason) {
     if (!relayUrl || permanentlySkipped.has(relayUrl)) return;
-    if (relayUrl === APP_RELAY) return;
+    if (isProtectedRelay(relayUrl)) return;
     permanentlySkipped.add(relayUrl);
     intentionallyClosed.add(relayUrl);
     const pendingTimer = reconnectTimers.get(relayUrl);
@@ -879,9 +885,9 @@ export async function onRequest(context) {
     if (!serverOpen) return;
     if (pendingReconnect.has(relayUrl)) return;
 
-    const isAppRelay = relayUrl === APP_RELAY;
+    const isProtected = isProtectedRelay(relayUrl);
     const attempts = reconnectAttempts.get(relayUrl) || 0;
-    if (!isAppRelay && attempts >= MAX_RECONNECT_ATTEMPTS) {
+    if (!isProtected && attempts >= MAX_RECONNECT_ATTEMPTS) {
       trackRelayFailure(relayUrl);
       reconnectAttempts.delete(relayUrl);
       markPermanentlySkipped(relayUrl, 'connection-failed: max reconnect attempts');
@@ -892,7 +898,7 @@ export async function onRequest(context) {
     pendingReconnect.add(relayUrl);
 
     const baseDelay = 3000;
-    const maxAttemptsForBackoff = isAppRelay ? 6 : attempts;
+    const maxAttemptsForBackoff = isProtected ? 6 : attempts;
     const delay = baseDelay * Math.pow(1.5, Math.min(attempts, maxAttemptsForBackoff)) + Math.random() * 2000;
 
     const timerId = setTimeout(() => {
@@ -1075,7 +1081,9 @@ export async function onRequest(context) {
           }
 
           if (raw.startsWith('["AUTH"')) {
-            markPermanentlySkipped(relayUrl, 'auth-required');
+            // NIP-42 challenge only; we don't authenticate. Most relays still
+            // serve reads after sending it, so don't skip — a real auth wall
+            // arrives as a CLOSED/NOTICE rejection and is handled there.
             return;
           }
 

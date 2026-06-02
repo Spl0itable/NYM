@@ -503,11 +503,10 @@ Object.assign(NYM.prototype, {
                     }
 
                     if (this.useRelayProxy) {
-                        if (this._isAnyPoolOpen()) {
+                        if (this._isAnyWorkerPoolOpen()) {
                             this._poolSubscribe();
                             this._ensureAllShardsConnected();
-                        }
-                        if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
+                        } else if (!this._poolReconnecting && navigator.onLine) {
                             this._schedulePoolReconnect();
                         }
                     } else {
@@ -549,11 +548,10 @@ Object.assign(NYM.prototype, {
 
                 // Pool mode: only resubscribe if sockets are healthy
                 if (this.useRelayProxy) {
-                    if (this._isAnyPoolOpen()) {
+                    if (this._isAnyWorkerPoolOpen()) {
                         this._poolSubscribe();
                         this._ensureAllShardsConnected();
-                    }
-                    if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
+                    } else if (!this._poolReconnecting && navigator.onLine) {
                         this._schedulePoolReconnect();
                     }
                 } else {
@@ -588,11 +586,10 @@ Object.assign(NYM.prototype, {
 
                     // Pool mode: only resubscribe if sockets are healthy
                     if (this.useRelayProxy) {
-                        if (this._isAnyPoolOpen()) {
+                        if (this._isAnyWorkerPoolOpen()) {
                             this._poolSubscribe();
                             this._ensureAllShardsConnected();
-                        }
-                        if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
+                        } else if (!this._poolReconnecting && navigator.onLine) {
                             this._schedulePoolReconnect();
                         }
                     } else {
@@ -643,6 +640,8 @@ Object.assign(NYM.prototype, {
             const STALE_MS = 120000;
             let closedAny = false;
             for (const p of this.poolSockets) {
+                // Direct relay entries get no POOL:PING; silence is expected
+                if (p.direct) continue;
                 if (p.ws && p.ws.readyState === WebSocket.OPEN) {
                     const silenceMs = now - (p.lastMessage || 0);
                     if (silenceMs > STALE_MS) {
@@ -656,7 +655,7 @@ Object.assign(NYM.prototype, {
                 this._syncLegacyPoolSocket();
             }
             this.updateConnectionStatus();
-            if (!this._isAnyPoolOpen() && !this._poolReconnecting && navigator.onLine) {
+            if (!this._isAnyWorkerPoolOpen() && !this._poolReconnecting && navigator.onLine) {
                 this._schedulePoolReconnect();
             }
             return;
@@ -1551,6 +1550,9 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
+    // True when the page is served from the app's own domain, so the browser
+    // can connect straight to wss://relay.nymchat.app instead of hopping
+    // through the relay-pool worker.
     _canDirectConnectAppRelay() {
         if (!this.appRelay) return false;
         try {
@@ -1691,9 +1693,14 @@ Object.assign(NYM.prototype, {
         return `wss://${host}/api/relay-pool`;
     },
 
-    // Returns true if any pool worker socket is open
+    // Returns true if any pool socket is open (including the direct app relay)
     _isAnyPoolOpen() {
         return this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.OPEN);
+    },
+
+    // Returns true if any *worker* socket is open
+    _isAnyWorkerPoolOpen() {
+        return this.poolSockets.some(p => !p.direct && p.ws && p.ws.readyState === WebSocket.OPEN);
     },
 
     // Shard relays into role-based worker groups, splitting large groups into chunks
@@ -1819,7 +1826,7 @@ Object.assign(NYM.prototype, {
         this._lastPoolReconnectSchedule = now;
 
         const attempt = (retries) => {
-            if (this._isAnyPoolOpen()) {
+            if (this._isAnyWorkerPoolOpen()) {
                 this._poolReconnecting = false;
                 return;
             }
@@ -1837,7 +1844,7 @@ Object.assign(NYM.prototype, {
 
             setTimeout(() => {
                 // Re-check: another path may have reconnected while we waited
-                if (this._isAnyPoolOpen()) {
+                if (this._isAnyWorkerPoolOpen()) {
                     this._poolReconnecting = false;
                     return;
                 }
@@ -1877,10 +1884,17 @@ Object.assign(NYM.prototype, {
         const shardId = shard.id;
 
         if (!this._shardReconnecting) this._shardReconnecting = new Set();
-        if (this._shardReconnecting.has(shardId)) return;
+        if (!this._shardReconnectAt) this._shardReconnectAt = new Map();
+        // Self-heal a stuck flag: if a prior loop set the flag but died without
+        // clearing it, a stale timestamp lets a fresh call take over.
+        if (this._shardReconnecting.has(shardId)) {
+            const startedAt = this._shardReconnectAt.get(shardId) || 0;
+            if (Date.now() - startedAt < 90000) return;
+        }
         this._shardReconnecting.add(shardId);
 
         const attempt = (retries) => {
+            this._shardReconnectAt.set(shardId, Date.now());
             const existing = this.poolSockets.find(p => p.id === shardId);
             if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
                 this._shardReconnecting.delete(shardId);
@@ -2211,8 +2225,9 @@ Object.assign(NYM.prototype, {
                 this._mergePoolStatus();
                 this._syncLegacyPoolSocket();
 
-                // If ALL workers are down, update status and trigger full reconnect
-                if (!this._isAnyPoolOpen()) {
+                // If ALL workers are down, rebuild the whole pool. The direct
+                // app relay staying up must not suppress this.
+                if (!this._isAnyWorkerPoolOpen()) {
                     this.poolReady = false;
                     this.connected = false;
                     this.updateConnectionStatus('Disconnected');
@@ -2243,7 +2258,7 @@ Object.assign(NYM.prototype, {
                 ws: ws,
                 role: shard.role,
                 relays: shard.relays,
-                dmRelays: [],
+                dmRelays: shard.dmRelays || [],
                 connectedRelays: [],
                 direct: true,
                 lastMessage: Date.now()
@@ -2943,6 +2958,7 @@ Object.assign(NYM.prototype, {
         for (const shard of shards) {
             const existing = this.poolSockets.find(p => p.id === shard.id);
             if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
+                if (existing.direct) continue; // raw relays don't take RELAYS config
                 const sameRelays = arraysEqual(existing.relays, shard.relays);
                 const sameDm = arraysEqual(existing.dmRelays || [], shard.dmRelays || []);
                 if (sameRelays && sameDm) continue;
@@ -4151,6 +4167,9 @@ Object.assign(NYM.prototype, {
     _permanentlyBlacklistRelay(relayUrl, reason) {
         if (!relayUrl || relayUrl === 'relay-pool') return;
         if (relayUrl === this.appRelay) return;
+        // Default relays are curated and must stay eligible — a transient or
+        // over-eager ban must not exclude them for the whole session.
+        if (this.defaultRelays && this.defaultRelays.includes(relayUrl)) return;
         if (!this._permanentBlacklist) this._permanentBlacklist = new Set();
         if (this._permanentBlacklist.has(relayUrl)) return;
         this._permanentBlacklist.add(relayUrl);
