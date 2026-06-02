@@ -800,7 +800,7 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    _RX_ZERO_WIDTH: /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/,
+    _RX_ZERO_WIDTH: /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g,
     _RARE_BIGRAMS: ['xw','xz','xj','xk','wx','wz','wj','wq','jq','jx','jz','kq','kx','kz','vq','vx','vz','zx','zk','zp','pq','pz','fq','fz','gq','gz','hq','hz'],
 
     _scoreSingleAlphanumWord(token) {
@@ -842,7 +842,7 @@ Object.assign(NYM.prototype, {
     _spamScore(trimmed) {
         let score = 0;
 
-        if (this._RX_ZERO_WIDTH.test(trimmed)) score += 3;
+        trimmed = trimmed.replace(this._RX_ZERO_WIDTH, '');
         if (this._hasRepeatedTokenSpam(trimmed)) score += 3;
         if (this._hasMixedScriptToken(trimmed)) score += 2;
 

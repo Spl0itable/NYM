@@ -640,7 +640,7 @@ export async function onRequest(context) {
     return false;
   }
 
-  const RX_ZERO_WIDTH = /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/;
+  const RX_ZERO_WIDTH = /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
   const RARE_BIGRAMS = ['xw','xz','xj','xk','wx','wz','wj','wq','jq','jx','jz','kq','kx','kz','vq','vx','vz','zx','zk','zp','pq','pz','fq','fz','gq','gz','hq','hz'];
 
   function scoreSingleAlphanumWord(token) {
@@ -712,7 +712,7 @@ export async function onRequest(context) {
   function spamScore(trimmed) {
     let score = 0;
 
-    if (RX_ZERO_WIDTH.test(trimmed)) score += 3;
+    trimmed = trimmed.replace(RX_ZERO_WIDTH, '');
     if (hasRepeatedTokenSpam(trimmed)) score += 3;
     if (hasMixedScriptToken(trimmed)) score += 2;
 
