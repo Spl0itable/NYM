@@ -636,24 +636,6 @@ Object.assign(NYM.prototype, {
     async checkConnectionHealth() {
 
         if (this.useRelayProxy) {
-            const now = Date.now();
-            const STALE_MS = 120000;
-            let closedAny = false;
-            for (const p of this.poolSockets) {
-                // Direct relay entries get no POOL:PING; silence is expected
-                if (p.direct) continue;
-                if (p.ws && p.ws.readyState === WebSocket.OPEN) {
-                    const silenceMs = now - (p.lastMessage || 0);
-                    if (silenceMs > STALE_MS) {
-                        p.ws.close();
-                        closedAny = true;
-                    }
-                }
-            }
-            if (closedAny) {
-                this._mergePoolStatus();
-                this._syncLegacyPoolSocket();
-            }
             this.updateConnectionStatus();
             if (!this._isAnyWorkerPoolOpen() && !this._poolReconnecting && navigator.onLine) {
                 this._schedulePoolReconnect();
@@ -1056,7 +1038,6 @@ Object.assign(NYM.prototype, {
 
                 if (this.useRelayProxy && poolConnected) {
                     this.connected = true;
-                    this._startPoolKeepalive();
                     this._startPoolShardHealthCheck();
                     document.getElementById('messageInput').disabled = false;
                     document.getElementById('sendBtn').disabled = false;
@@ -1654,7 +1635,6 @@ Object.assign(NYM.prototype, {
                     this._bgPoolReconnectAttempts = 0;
                     this._poolFallbackActive = false;
                     console.log('[NYM] Pool mode restored');
-                    this._startPoolKeepalive();
                     this._startPoolShardHealthCheck();
                     this._poolSubscribe();
                     this.relayPool.forEach((relay) => {
@@ -1862,7 +1842,6 @@ Object.assign(NYM.prototype, {
                     .then(() => {
                         this._poolReconnecting = false;
                         this._poolReconnectRetries = 0;
-                        this._startPoolKeepalive();
                         this._startPoolShardHealthCheck();
                         this._poolSubscribe();
                         this.retryPendingDMsOnReconnect();
@@ -1931,7 +1910,6 @@ Object.assign(NYM.prototype, {
                 this._connectSinglePoolWorker(shard)
                     .then(() => {
                         this._shardReconnecting.delete(shardId);
-                        this._startPoolKeepalive();
                         this._poolSubscribeOnWorker(shard.id);
                     })
                     .catch(() => {
@@ -2424,30 +2402,6 @@ Object.assign(NYM.prototype, {
     _syncLegacyPoolSocket() {
         const open = this.poolSockets.find(p => p.ws && p.ws.readyState === WebSocket.OPEN);
         this.poolSocket = open ? open.ws : null;
-    },
-
-    // Start client-side keepalive: detect stale worker connections
-    _startPoolKeepalive() {
-        if (this._poolKeepaliveTimer) clearInterval(this._poolKeepaliveTimer);
-        this._poolKeepaliveTimer = setInterval(() => {
-            if (!this._isAnyPoolOpen()) {
-                clearInterval(this._poolKeepaliveTimer);
-                this._poolKeepaliveTimer = null;
-                return;
-            }
-            const now = Date.now();
-            for (const p of this.poolSockets) {
-                // Direct relay entries get no POOL:PING, so silence is normal
-                // during quiet periods — closing them would churn a healthy link
-                if (p.direct) continue;
-                if (p.ws && p.ws.readyState === WebSocket.OPEN) {
-                    const silenceSec = (now - (p.lastMessage || 0)) / 1000;
-                    if (silenceSec > 90) {
-                        p.ws.close();
-                    }
-                }
-            }
-        }, 30000);
     },
 
     // Normalize a filter array: dedup values inside any array field (kinds,
