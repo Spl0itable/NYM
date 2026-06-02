@@ -2223,8 +2223,19 @@ function handleNostr() {
   return "\u{1F4E1} " + tip;
 }
 
-// Trivia and Fun Commands (AI-generated)
+// Trivia and Fun Commands (AI-generated, web-search backed)
 var TRIVIA_CATEGORIES = ["general", "history", "science", "crypto", "nostr"];
+var TRIVIA_SEEDS = {
+  general: ["geography", "world records", "food and cuisine", "animals", "outer space", "music", "film", "literature", "sports", "inventions", "mythology", "famous art", "languages", "the human body", "the natural world"],
+  history: ["ancient civilizations", "the world wars", "famous explorers", "royal dynasties", "historic revolutions", "ancient Egypt", "the Roman empire", "medieval Europe", "the cold war", "historic inventions"],
+  science: ["physics", "chemistry", "astronomy", "biology", "the periodic table", "quantum mechanics", "evolution", "genetics", "famous scientists", "marine life", "geology"],
+  crypto: ["Bitcoin history", "Ethereum", "blockchain technology", "Satoshi Nakamoto", "crypto mining", "stablecoins", "decentralized finance", "the Bitcoin halving", "notable crypto events", "the lightning network"],
+  nostr: ["the Nostr protocol", "Nostr improvement proposals", "Nostr relays", "Nostr clients", "decentralized social media", "public key cryptography", "zaps and lightning", "the history of Nostr"]
+};
+
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
 async function handleTrivia(args, context) {
   var category = (args || "").trim().toLowerCase();
@@ -2232,17 +2243,28 @@ async function handleTrivia(args, context) {
     return "Unknown category! Available: " + TRIVIA_CATEGORIES.join(", ") + "\nUsage: ?trivia [category]";
   }
   if (!category) {
-    category = TRIVIA_CATEGORIES[Math.floor(Math.random() * TRIVIA_CATEGORIES.length)];
+    category = pickRandom(TRIVIA_CATEGORIES);
   }
   var ai = context.env.AI || null;
   if (!ai) return "AI is not configured.";
   try {
+    var seed = pickRandom(TRIVIA_SEEDS[category] || [category]);
+    var searchResults = await webSearch("interesting facts about " + seed).catch(function() { return []; });
+    var srcBlock = "";
+    if (searchResults.length > 0) {
+      srcBlock = "Live source facts — base your question on one specific detail from these:\n";
+      for (var s = 0; s < searchResults.length && s < 4; s++) {
+        srcBlock += "- " + searchResults[s] + "\n";
+      }
+      srcBlock += "\n";
+    }
     var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
       messages: [
-        { role: "system", content: "You generate trivia questions. Use this EXACT format with no other text:\nQ: <question>\nA: <short answer>" },
-        { role: "user", content: "Generate one unique, interesting " + category + " trivia question with a concise answer (1-10 words). Use the exact Q:/A: format." }
+        { role: "system", content: "You generate fresh, original trivia questions. Never repeat cliché questions. Use this EXACT format with no other text:\nQ: <question>\nA: <short answer>" },
+        { role: "user", content: srcBlock + "Generate one unique, specific, interesting " + category + " trivia question about " + seed + " with a concise answer (1-10 words). Avoid commonly-asked or obvious questions. Use the exact Q:/A: format." }
       ],
-      max_tokens: 256
+      max_tokens: 256,
+      temperature: 0.9
     });
     if (result && result.response) {
       var text = String(result.response).trim();
@@ -2266,13 +2288,14 @@ async function handleJoke(context) {
   if (!ai) return "AI is not configured.";
   try {
     var themes = ["tech", "Bitcoin", "crypto", "programming", "internet", "science", "hacker", "AI", "gaming", "Nostr"];
-    var theme = themes[Math.floor(Math.random() * themes.length)];
+    var theme = pickRandom(themes);
     var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
       messages: [
         { role: "system", content: "You are a comedian. Tell ONE short, funny joke. Just the joke — no intro, no 'here's a joke', no extra commentary. Keep it under 280 characters. Be creative and original." },
         { role: "user", content: "Tell me a funny " + theme + "-themed joke. Be original — don't use overused jokes." }
       ],
-      max_tokens: 256
+      max_tokens: 256,
+      temperature: 0.95
     });
     if (result && result.response) {
       return "\u{1F602} " + sanitizeBotResponse(String(result.response).trim());
@@ -2283,16 +2306,20 @@ async function handleJoke(context) {
   }
 }
 
+var RIDDLE_THEMES = ["nature", "everyday objects", "animals", "time", "the human body", "weather", "food", "technology", "abstract concepts", "the home", "wordplay", "numbers", "the night sky", "water", "fire", "music", "the seasons", "tools"];
+
 async function handleRiddle(context) {
   var ai = context.env.AI || null;
   if (!ai) return "AI is not configured.";
   try {
+    var theme = pickRandom(RIDDLE_THEMES);
     var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
       messages: [
-        { role: "system", content: "You generate riddles. Use this EXACT format with no other text:\nR: <riddle>\nA: <short answer>" },
-        { role: "user", content: "Generate one unique, clever riddle with a concise answer (1-5 words). Be creative — avoid overused riddles. Use the exact R:/A: format." }
+        { role: "system", content: "You generate fresh, original riddles. Never repeat well-known riddles. Use this EXACT format with no other text:\nR: <riddle>\nA: <short answer>" },
+        { role: "user", content: "Generate one unique, clever riddle themed around " + theme + ", with a concise answer (1-5 words). Be creative — invent a new riddle, never use overused or famous ones. Use the exact R:/A: format." }
       ],
-      max_tokens: 256
+      max_tokens: 256,
+      temperature: 0.95
     });
     if (result && result.response) {
       var text = String(result.response).trim();
@@ -2323,14 +2350,18 @@ function shuffleString(str) {
   return arr.join("");
 }
 
+var WORD_START_LETTERS = "abcdefghijklmnoprstuvw".split("");
+
 async function generateWord(ai, letterCount) {
   try {
+    var startLetter = pickRandom(WORD_START_LETTERS);
     var result = await ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
       messages: [
         { role: "system", content: "You generate single English words for word games. Output ONLY the word — no explanation, no quotes, no punctuation, no extra text. Just one common English word." },
-        { role: "user", content: "Give me one common English word that is exactly " + letterCount + " letters long. Just the word, nothing else." }
+        { role: "user", content: "Give me one common English word that is exactly " + letterCount + " letters long and starts with the letter '" + startLetter + "'. Just the word, nothing else." }
       ],
-      max_tokens: 32
+      max_tokens: 32,
+      temperature: 0.9
     });
     if (result && result.response) {
       var word = String(result.response).trim().toLowerCase().replace(/[^a-z]/g, "");
