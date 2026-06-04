@@ -166,10 +166,27 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       var pk = rawPks[i];
       if (typeof pk === "string" && /^[0-9a-f]{64}$/i.test(pk)) pks.push(pk.toLowerCase());
     }
-    var recs = await Promise.all(pks.map(function (pk) { return shopGetRecord(env, pk); }));
+    var forceFresh = new Set();
+    if (Array.isArray(body.fresh)) {
+      body.fresh.forEach(function (pk) {
+        if (typeof pk === "string" && /^[0-9a-f]{64}$/i.test(pk)) forceFresh.add(pk.toLowerCase());
+      });
+    }
     var statuses = {};
-    pks.forEach(function (pk, idx) {
-      statuses[pk] = { active: recs[idx].active, updatedAt: recs[idx].updatedAt };
+    var cacheLookups = await Promise.all(pks.map(async function (pk) {
+      if (forceFresh.has(pk)) return [pk, null];
+      return [pk, await readCacheGet("/shop-status/" + pk)];
+    }));
+    var misses = [];
+    cacheLookups.forEach(function (pair) {
+      if (pair[1] && pair[1].st) statuses[pair[0]] = pair[1].st;
+      else misses.push(pair[0]);
+    });
+    var recs = await Promise.all(misses.map(function (pk) { return shopGetRecord(env, pk); }));
+    misses.forEach(function (pk, idx) {
+      var st = { active: recs[idx].active, updatedAt: recs[idx].updatedAt };
+      statuses[pk] = st;
+      readCachePut(context, "/shop-status/" + pk, { st: st }, SHOP_READ_TTL);
     });
     return json({ statuses: statuses });
   }
@@ -205,6 +222,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       supporter: !!want.supporter && !!rec.owned["supporter-badge"]
     };
     await shopPutRecord(env, userPubkey, rec);
+    readCachePut(context, "/shop-status/" + userPubkey, { st: { active: rec.active, updatedAt: rec.updatedAt } }, SHOP_READ_TTL);
     return json({ active: rec.active, updatedAt: rec.updatedAt });
   }
 
@@ -321,6 +339,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     toRec.owned[itemId] = { at: Date.now(), amountSats: entry.amountSats || 0, gift: true, code: entry.code, transferredFrom: userPubkey };
     await shopPutRecord(env, userPubkey, fromRec);
     await shopPutRecord(env, toPubkey, toRec);
+    readCacheDelete(context, "/shop-status/" + userPubkey);
     if (entry.code) {
       try {
         await env.R2_BUCKET.put("shop-code/" + entry.code, JSON.stringify({ itemId: itemId, owner: toPubkey, createdAt: Date.now() }));
@@ -362,6 +381,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
         delete prevRec.owned[redeemItem];
         shopPruneActive(prevRec);
         await shopPutRecord(env, prevOwner, prevRec);
+        readCacheDelete(context, "/shop-status/" + prevOwner);
       }
     }
     var rrec = await shopGetRecord(env, userPubkey);
@@ -573,6 +593,7 @@ function archiveMarkHandled(context, eventId, ttlSeconds) {
 var READ_CACHE_HOST = "https://nymchat-read.invalid";
 var CHANNEL_READ_TTL = 45;
 var PROFILE_READ_TTL = 300;
+var SHOP_READ_TTL = 300;
 function readCacheRequest(path) {
   return new Request(READ_CACHE_HOST + path, { method: "GET" });
 }

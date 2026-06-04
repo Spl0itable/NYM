@@ -112,6 +112,8 @@ Object.assign(NYM.prototype, {
         if (!pubkey || pubkey === this.pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
         if (this.shopItemsCache) this.shopItemsCache.delete(pubkey);
         if (this._shopStatusInFlight) this._shopStatusInFlight.delete(pubkey);
+        if (!this._shopStatusForceFresh) this._shopStatusForceFresh = new Set();
+        this._shopStatusForceFresh.add(pubkey);
         try {
             const raw = localStorage.getItem('nym_shop_active_cache');
             if (raw) {
@@ -257,8 +259,12 @@ Object.assign(NYM.prototype, {
         if (!pubkeys.length) return;
         if (!this._shopStatusInFlight) this._shopStatusInFlight = new Set();
         pubkeys.forEach(pk => this._shopStatusInFlight.add(pk));
+        let fresh = [];
+        if (this._shopStatusForceFresh && this._shopStatusForceFresh.size) {
+            fresh = pubkeys.filter(pk => this._shopStatusForceFresh.delete(pk));
+        }
         try {
-            const data = await this._shopApiRequest('shop-status', { pubkeys }, false);
+            const data = await this._shopApiRequest('shop-status', fresh.length ? { pubkeys, fresh } : { pubkeys }, false);
             const statuses = (data && data.statuses) || {};
             Object.entries(statuses).forEach(([pk, st]) => {
                 const active = (st && st.active) || {};
