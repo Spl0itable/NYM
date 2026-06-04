@@ -74,7 +74,9 @@ Object.assign(NYM.prototype, {
       base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   },
 
-  // WebAuthn PRF (biometric + passkeys)
+  // True when a WebAuthn authenticator of any kind is usable (platform
+  // biometric, roaming security key, or a synced passkey). Used to offer the
+  // "Passkey" method.
   webauthnAvailable() {
     return !!(window.PublicKeyCredential && navigator.credentials &&
       navigator.credentials.create && navigator.credentials.get);
@@ -523,7 +525,7 @@ Object.assign(NYM.prototype, {
       (bio ? '<option value="biometric">Biometric (Face/Touch ID)</option>' : '') +
       '</select>' +
       '</div>' +
-      '<div class="form-group"><input id="nymVPw" type="password" inputmode="text" autocomplete="new-password" placeholder="Choose a password / PIN" class="form-input"></div>' +
+      '<div class="form-group"><input id="nymVPw" type="password" inputmode="text" autocomplete="new-password" placeholder="Choose a password" class="form-input"></div>' +
       '<div class="form-group"><input id="nymVPw2" type="password" autocomplete="new-password" placeholder="Confirm" class="form-input"></div>' +
       '<p id="nymVWaHint" class="form-hint nm-hidden">You\'ll be prompted to create/select a passkey. It must support the WebAuthn PRF extension; if it doesn\'t, pick a password or PIN instead.</p>' +
       (passkey ? '' : '<p class="form-hint">Passkey/biometric unlock isn\'t available in this browser/app, so password or PIN is used.</p>') +
@@ -547,6 +549,7 @@ Object.assign(NYM.prototype, {
       if (waHint) waHint.classList.toggle('nm-hidden', !isWa);
       pw.setAttribute('inputmode', isPin ? 'numeric' : 'text');
       pw2.setAttribute('inputmode', isPin ? 'numeric' : 'text');
+      pw.placeholder = isPin ? 'Choose a PIN code' : 'Choose a password';
       if (isPin) { stripNonDigits(pw); stripNonDigits(pw2); }
     };
     methodSel.onchange = syncPwVisibility; syncPwVisibility();
