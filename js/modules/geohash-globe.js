@@ -286,6 +286,11 @@ Object.assign(NYM.prototype, {
         if (!modal) return;
         modal.style.display = 'flex';
         setTimeout(() => this.initializeGeohashMap(), 30);
+        // Quietly pull recent-activity counts from R2 so the globe reflects real
+        // activity (especially the default 24h view) without loading messages.
+        if (typeof this.fetchGeohashActivityFromR2 === 'function') {
+            this.fetchGeohashActivityFromR2();
+        }
     },
 
     closeGeohashExplorer() {
@@ -1113,6 +1118,11 @@ Object.assign(NYM.prototype, {
 
         const activeWindowTimer = setInterval(() => {
             if (!this.geohashMap) return;
+            // Refresh R2 activity counts too (throttled internally) so the globe
+            // stays current for channels we aren't actively loading.
+            if (typeof this.fetchGeohashActivityFromR2 === 'function') {
+                this.fetchGeohashActivityFromR2();
+            }
             this.updateGeohashChannels();
             requestDraw();
         }, ACTIVE_WINDOW_REFRESH_MS);

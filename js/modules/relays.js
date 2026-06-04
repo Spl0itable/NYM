@@ -1549,7 +1549,8 @@ Object.assign(NYM.prototype, {
         if (!this.appRelay) return false;
         try {
             const host = window.location.hostname;
-            return host === 'nymchat.app' || host.endsWith('.nymchat.app');
+            return host === 'nymchat.app' || host.endsWith('.nymchat.app')
+                || host === 'nym-staging.pages.dev';
         } catch {
             return false;
         }
@@ -1708,13 +1709,24 @@ Object.assign(NYM.prototype, {
         const appRelay = this.appRelay;
         const appValid = appRelay && isValid(appRelay);
 
+        // Write-only relays (e.g. the sendit broadcast relay) get a dedicated
+        // direct websocket when we can connect straight to them, so outgoing
+        // events skip the proxy pool entirely. Where direct connection isn't
+        // allowed they ride the pool as before.
+        const canDirect = this._canDirectConnectAppRelay();
+        const directWriteOnly = canDirect
+            ? [...(this.writeOnlyRelays || [])].filter(url => isValid(url) && url !== appRelay)
+            : [];
+        const directWriteOnlySet = new Set(directWriteOnly);
+
         // Critical = default relays (deduplicated), excluding the app relay
         const critical = [...new Set([...this.defaultRelays, ...(dmRelays || [])])]
-            .filter(url => isValid(url) && url !== appRelay);
+            .filter(url => isValid(url) && url !== appRelay && !directWriteOnlySet.has(url));
 
         // Reserved = relays already claimed by the app/critical shards
         const reservedSet = new Set(critical);
         if (appValid) reservedSet.add(appRelay);
+        for (const url of directWriteOnly) reservedSet.add(url);
 
         // Geo = CSV relays not already reserved
         const geo = [...geoSet].filter(url => isValid(url) && !reservedSet.has(url));
@@ -1755,9 +1767,22 @@ Object.assign(NYM.prototype, {
                 role: 'critical',
                 relays: [appRelay],
                 dmRelays: [appRelay],
-                direct: this._canDirectConnectAppRelay()
+                direct: canDirect
             });
         }
+
+        // Dedicated direct, write-only shards for broadcast relays (events only,
+        // never REQs), kept out of the worker shards above.
+        directWriteOnly.forEach((url, i) => {
+            shards.push({
+                id: `writeonly-${i}`,
+                role: 'writeonly',
+                relays: [url],
+                dmRelays: [],
+                direct: true,
+                writeOnly: true
+            });
+        });
 
         // Keep the app relay out of the critical shards' DM relays too, so it
         // isn't reconnected through a worker behind the dedicated app shard
@@ -2247,7 +2272,7 @@ Object.assign(NYM.prototype, {
 
     _connectAppRelayDirect(shard) {
         return new Promise((resolve, reject) => {
-            const appRelay = this.appRelay;
+            const appRelay = (shard.relays && shard.relays[0]) || this.appRelay;
             if (!appRelay) return reject(new Error('No app relay configured'));
             const ws = new WebSocket(appRelay);
             const wsCreatedAt = Date.now();
@@ -2260,6 +2285,7 @@ Object.assign(NYM.prototype, {
                 dmRelays: shard.dmRelays || [],
                 connectedRelays: [],
                 direct: true,
+                writeOnly: !!shard.writeOnly,
                 lastMessage: Date.now()
             };
 
@@ -2561,11 +2587,17 @@ Object.assign(NYM.prototype, {
     // Send a pool message to one socket, rewriting worker-only control verbs
     // into raw Nostr for a direct relay entry (and dropping ones it can't use)
     _poolEntrySend(p, data, msg, opts) {
+        const verb = Array.isArray(data) ? data[0] : null;
+        // Write-only relays only ever receive outgoing events, never REQs/CLOSEs
+        if (p.writeOnly) {
+            if (verb === 'EVENT') this._safeWsSend(p.ws, msg, opts);
+            else if (verb === 'DM_EVENT') this._safeWsSend(p.ws, JSON.stringify(['EVENT', data[1]]), opts);
+            return;
+        }
         if (!p.direct) {
             this._safeWsSend(p.ws, msg, opts);
             return;
         }
-        const verb = Array.isArray(data) ? data[0] : null;
         if (verb === 'GEO_EVENT' || verb === 'KIND_BLACKLIST' || verb === 'RELAYS') return;
         if (verb === 'DM_EVENT') {
             this._safeWsSend(p.ws, JSON.stringify(['EVENT', data[1]]), opts);
@@ -2599,6 +2631,7 @@ Object.assign(NYM.prototype, {
     _poolSubscribeOnWorker(shardId) {
         const p = this.poolSockets.find(w => w.id === shardId);
         if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) return;
+        if (p.writeOnly) return;
 
         if (p._lastSubId) {
             this._safeWsSend(p.ws, JSON.stringify(["CLOSE", p._lastSubId]), { critical: true });

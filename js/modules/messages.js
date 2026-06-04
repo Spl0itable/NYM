@@ -1098,10 +1098,21 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Bind long-press on group-readers span so users can see all viewers
+        // Bind long-press on reader-avatar spans so users can open the "seen by" modal
         if (message.isOwn && message.isGroup && message.nymMessageId) {
             const readersEl = messageEl.querySelector('.group-readers');
-            if (readersEl) this._bindReaderLongPress(readersEl, message.nymMessageId);
+            if (readersEl && !readersEl._readerLongPressBound) {
+                this._bindReaderLongPress(readersEl, message.nymMessageId);
+                readersEl._readerLongPressBound = true;
+            }
+        } else if (message.isOwn && !message.isPM && message.geohash &&
+            message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
+            typeof this._bindChannelReaderLongPress === 'function') {
+            const readersEl = messageEl.querySelector('.channel-readers');
+            if (readersEl && !readersEl._readerLongPressBound) {
+                this._bindChannelReaderLongPress(readersEl, message.id);
+                readersEl._readerLongPressBound = true;
+            }
         }
 
         // Apply any reactions we already know about

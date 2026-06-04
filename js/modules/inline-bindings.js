@@ -219,6 +219,7 @@ window.nymHapticTap = function (ms) {
         'downloadModalMedia':         function (e) { window.downloadModalMedia(e); },
         'imageModalPrev':             function (e) { e.stopPropagation(); if (window.navigateImageModalGallery) window.navigateImageModalGallery(-1); },
         'imageModalNext':             function (e) { e.stopPropagation(); if (window.navigateImageModalGallery) window.navigateImageModalGallery(1); },
+        'videoModalStop':             function (e) { e.stopPropagation(); },
 
         // Channel nav / search
         'navigateBack':               function () { nym().navigateBack(); },

@@ -1406,11 +1406,16 @@ Object.assign(NYM.prototype, {
         }
 
         // Build text
+        const fmtTyper = (nym) => {
+            const m = String(nym || '').match(/#([0-9a-f]{4})$/i);
+            if (!m) return this.escapeHtml(nym || '');
+            return `${this.escapeHtml(nym.slice(0, -5))}<span class="nym-suffix">#${m[1]}</span>`;
+        };
         if (typers.length === 1) {
             const verb = this.isVerifiedBot(typers[0][0]) ? 'thinking' : 'typing';
-            textEl.textContent = `${typers[0][1].nym} is ${verb}`;
+            textEl.innerHTML = `${fmtTyper(typers[0][1].nym)} is ${verb}`;
         } else if (typers.length === 2) {
-            textEl.textContent = `${typers[0][1].nym} and ${typers[1][1].nym} are typing`;
+            textEl.innerHTML = `${fmtTyper(typers[0][1].nym)} and ${fmtTyper(typers[1][1].nym)} are typing`;
         } else {
             textEl.textContent = `${typers.length} people are typing`;
         }
@@ -1525,7 +1530,8 @@ Object.assign(NYM.prototype, {
             else if (tag[0] === 'n') rawNym = tag[1];
         }
         if (!status || !geohash) return;
-        const displayNym = this.stripPubkeySuffix(rawNym || this.getNymFromPubkey(event.pubkey));
+        const baseNym = this.stripPubkeySuffix(rawNym || this.getNymFromPubkey(event.pubkey));
+        const displayNym = `${baseNym}#${this.getPubkeySuffix(event.pubkey)}`;
         if (this.blockedUsers.has(event.pubkey)) return;
 
         const convKey = `channel-${geohash}`;

@@ -50,6 +50,7 @@ Object.assign(NYM.prototype, {
             senderPubkey: channelInfo?.pubkey || '',
             eventId: eventId || undefined,
             viewed: receivedAt <= (this.notificationLastReadTime || 0)
+                || this._notificationAlreadySeen(channelInfo, ts)
         });
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
@@ -145,6 +146,7 @@ Object.assign(NYM.prototype, {
             senderPubkey: channelInfo?.pubkey || '',
             eventId: eventId || undefined,
             viewed: receivedAt <= (this.notificationLastReadTime || 0)
+                || this._notificationAlreadySeen(channelInfo, ts)
         });
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
@@ -220,6 +222,66 @@ Object.assign(NYM.prototype, {
         } catch { }
     },
 
+    // Canonical conversation key for a notification, matching channelLastRead keys
+    _notificationConvKey(channelInfo) {
+        if (!channelInfo) return null;
+        if (channelInfo.type === 'geohash') {
+            const g = channelInfo.geohash || channelInfo.channel;
+            return g ? `#${g}` : null;
+        }
+        if (channelInfo.type === 'pm') {
+            return channelInfo.id || (channelInfo.pubkey ? this.getPMConversationKey(channelInfo.pubkey) : null);
+        }
+        if (channelInfo.type === 'group') {
+            return channelInfo.id || (channelInfo.groupId ? `group-${channelInfo.groupId}` : null);
+        }
+        return null;
+    },
+
+    // True when the user has already read the conversation up to this message,
+    // so it shouldn't count as an unread notification.
+    _notificationAlreadySeen(channelInfo, tsMs) {
+        const key = this._notificationConvKey(channelInfo);
+        if (!key || !this.channelLastRead) return false;
+        const seen = this.channelLastRead.get(key) || 0;
+        if (!seen) return false;
+        return Math.floor((tsMs || 0) / 1000) <= seen;
+    },
+
+    // Remove a missed-call notification, e.g. once the call was answered elsewhere.
+    _retractMissedCallNotification(callId) {
+        if (!callId || !Array.isArray(this.notificationHistory)) return;
+        const tag = `missed-call-${callId}`;
+        const before = this.notificationHistory.length;
+        this.notificationHistory = this.notificationHistory.filter(n =>
+            !(n && n.channelInfo && n.channelInfo.eventId === tag));
+        if (this.notificationHistory.length === before) return;
+        this._saveNotificationHistory();
+        this._updateNotificationBadge();
+        this._refreshNotificationsModalIfOpen();
+        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
+    },
+
+    // When a conversation is read up to tsSec, retroactively mark its pending
+    // notifications viewed so the badge clears without opening the modal.
+    _markConversationNotificationsSeen(convKey, tsSec) {
+        if (!convKey || !Array.isArray(this.notificationHistory) || !this.notificationHistory.length) return;
+        let changed = false;
+        for (const n of this.notificationHistory) {
+            if (n.viewed) continue;
+            if (this._notificationConvKey(n.channelInfo) !== convKey) continue;
+            if (Math.floor((n.timestamp || 0) / 1000) > tsSec) continue;
+            n.viewed = true;
+            changed = true;
+        }
+        if (changed) {
+            this._saveNotificationHistory();
+            this._updateNotificationBadge();
+            this._refreshNotificationsModalIfOpen();
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(4000);
+        }
+    },
+
     _updateNotificationBadge() {
         // Coalesce burst calls (every incoming PM/mention triggers one) into a
         // single DOM update per animation frame.
@@ -250,6 +312,7 @@ Object.assign(NYM.prototype, {
             if (n.viewed === true) return false;
             const observedAt = n.receivedAt || n.timestamp || 0;
             if (observedAt <= lastRead) return false;
+            if (this._notificationAlreadySeen(n.channelInfo, n.timestamp)) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
             return true;

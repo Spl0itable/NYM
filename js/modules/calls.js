@@ -133,6 +133,13 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Records persist 24h to match the notification window so a call answered or
+    // missed in the last day isn't re-surfaced on reopen.
+    _CALL_SEEN_TTL_SEC: 86400,
+    // Higher rank wins on merge so a resolution (answered) isn't lost to a weaker
+    // status (pending) synced from another device.
+    _CALL_STATUS_RANK: { seen: 0, pending: 1, missed: 2, declined: 3, answered: 4 },
+
     _getSeenCalls() {
         if (this._seenCalls) return this._seenCalls;
         let map = {};
@@ -141,11 +148,21 @@ Object.assign(NYM.prototype, {
         return map;
     },
 
+    // Normalize a stored value (legacy number or {t,s}) to {t,s} or null
+    _normCallRecord(v) {
+        if (typeof v === 'number') return { t: v, s: 'seen' };
+        if (v && typeof v === 'object' && typeof v.t === 'number') return { t: v.t, s: v.s || 'seen' };
+        return null;
+    },
+
     _seenCallsForSync() {
         const map = this._getSeenCalls();
-        const ids = Object.keys(map).sort((a, b) => map[b] - map[a]).slice(0, 100);
+        const ids = Object.keys(map).sort((a, b) => {
+            const ra = this._normCallRecord(map[a]), rb = this._normCallRecord(map[b]);
+            return (rb ? rb.t : 0) - (ra ? ra.t : 0);
+        }).slice(0, 100);
         const out = {};
-        ids.forEach(id => { out[id] = map[id]; });
+        ids.forEach(id => { const r = this._normCallRecord(map[id]); if (r) out[id] = r; });
         return out;
     },
 
@@ -154,36 +171,61 @@ Object.assign(NYM.prototype, {
         return Object.prototype.hasOwnProperty.call(this._getSeenCalls(), callId);
     },
 
+    _callStatus(callId) {
+        const r = this._normCallRecord(this._getSeenCalls()[callId]);
+        return r ? r.s : null;
+    },
+
     _persistSeenCalls(map) {
-        const nowSec = Math.floor(Date.now() / 1000);
-        const cutoff = nowSec - 3600;
-        for (const id in map) { if (map[id] < cutoff) delete map[id]; }
+        const cutoff = Math.floor(Date.now() / 1000) - this._CALL_SEEN_TTL_SEC;
+        for (const id in map) {
+            const r = this._normCallRecord(map[id]);
+            if (!r || r.t < cutoff) delete map[id];
+        }
         try { localStorage.setItem('nym_seen_calls', JSON.stringify(map)); } catch (_) { }
     },
 
-    _markCallSeen(callId) {
+    _markCallSeen(callId, status) {
         if (!callId) return;
         const map = this._getSeenCalls();
-        map[callId] = Math.floor(Date.now() / 1000);
+        const rank = this._CALL_STATUS_RANK;
+        const next = status || 'pending';
+        const existing = this._normCallRecord(map[callId]);
+        const keep = existing && (rank[existing.s] || 0) > (rank[next] || 0) ? existing.s : next;
+        map[callId] = { t: Math.floor(Date.now() / 1000), s: keep };
         this._persistSeenCalls(map);
         if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave();
     },
 
-    // Merge a synced seen-call map from another device so a handled call
-    // isn't re-rung after a reload elsewhere
+    // Merge a synced seen-call map from another device so a call handled or
+    // answered elsewhere isn't re-rung or shown as missed after a reload here.
     _mergeSeenCalls(incoming) {
         if (!incoming || typeof incoming !== 'object') return;
         const map = this._getSeenCalls();
-        const cutoff = Math.floor(Date.now() / 1000) - 3600;
+        const cutoff = Math.floor(Date.now() / 1000) - this._CALL_SEEN_TTL_SEC;
+        const rank = this._CALL_STATUS_RANK;
+        const nowAnswered = [];
         for (const id in incoming) {
-            const ts = incoming[id];
-            if (typeof ts !== 'number' || ts < cutoff) continue;
-            if (!map[id] || ts > map[id]) map[id] = ts;
+            const r = this._normCallRecord(incoming[id]);
+            if (!r || r.t < cutoff) continue;
+            const cur = this._normCallRecord(map[id]);
+            if (!cur) {
+                map[id] = { t: r.t, s: r.s };
+                if (r.s === 'answered') nowAnswered.push(id);
+                continue;
+            }
+            const s = (rank[r.s] || 0) > (rank[cur.s] || 0) ? r.s : cur.s;
+            map[id] = { t: Math.max(cur.t, r.t), s };
+            if (s === 'answered' && cur.s !== 'answered') nowAnswered.push(id);
         }
         this._persistSeenCalls(map);
+        // A call answered elsewhere retracts any missed-call we already surfaced
+        if (nowAnswered.length && typeof this._retractMissedCallNotification === 'function') {
+            nowAnswered.forEach(id => this._retractMissedCallNotification(id));
+        }
     },
 
-    _recordMissedCall(callerPubkey, callerNym, kind, callId, isGroup, groupId) {
+    _recordMissedCall(callerPubkey, callerNym, kind, callId, isGroup, groupId, whenMs) {
         if (!callerPubkey || !callId) return;
         const niceKind = kind === 'video' ? 'video' : 'audio';
         const baseTitle = callerNym || this._nymForPubkey(callerPubkey);
@@ -202,25 +244,39 @@ Object.assign(NYM.prototype, {
             nym: baseTitle
         };
         if (typeof this._addNotificationToHistory === 'function') {
-            this._addNotificationToHistory(baseTitle, body, channelInfo, Date.now());
+            this._addNotificationToHistory(baseTitle, body, channelInfo, whenMs || Date.now());
         }
     },
 
     _onCallInvite(sender, data, event) {
-        // Drop replayed/stale invites so a reload doesn't ring on old signaling events
-        const createdAt = event && event.created_at ? event.created_at : 0;
-        if (createdAt && (Math.floor(Date.now() / 1000) - createdAt) > 60) return;
+        // Skip calls already handled here or answered/seen on another device
         if (this._hasSeenCall(data.callId)) return;
-        this._markCallSeen(data.callId);
 
-        if (this.activeCall || this.incomingCall) {
-            this._sendCallSignal(sender, { type: 'reject', callId: data.callId, reason: 'busy' });
-            return;
-        }
+        // Honor accept prefs/blocks for ringing and missed-call records alike
         const pref = (this.settings && this.settings.acceptCalls) || 'enabled';
         if (pref === 'disabled') return;
         if (pref === 'friends' && !this.isFriend(sender)) return;
         if (this.blockedUsers && this.blockedUsers.has(sender)) return;
+
+        // A stale invite can't be answered (e.g. it arrived while the app was
+        // closed). Within the seen-call window, log it as a missed call so it
+        // surfaces in notifications on reopen rather than being dropped silently.
+        const createdAt = event && event.created_at ? event.created_at : 0;
+        const ageSec = createdAt ? (Math.floor(Date.now() / 1000) - createdAt) : 0;
+        if (ageSec > 60) {
+            if (ageSec <= this._CALL_SEEN_TTL_SEC) {
+                this._markCallSeen(data.callId, 'missed');
+                this._recordMissedCall(sender, data.nym, data.kind, data.callId, data.isGroup, data.groupId, createdAt * 1000);
+            }
+            return;
+        }
+        this._markCallSeen(data.callId, 'pending');
+
+        if (this.activeCall || this.incomingCall) {
+            this._markCallSeen(data.callId, 'missed');
+            this._sendCallSignal(sender, { type: 'reject', callId: data.callId, reason: 'busy' });
+            return;
+        }
 
         this.incomingCall = {
             callId: data.callId,
@@ -241,6 +297,7 @@ Object.assign(NYM.prototype, {
                 this._stopRingtone();
                 this._hideIncomingCallUI();
                 this.incomingCall = null;
+                this._markCallSeen(inc.callId, 'missed');
                 this.displaySystemMessage('Missed call from ' + inc.nym);
                 this._recordMissedCall(inc.from, inc.nym, inc.kind, inc.callId, inc.isGroup, inc.groupId);
             }
@@ -252,6 +309,7 @@ Object.assign(NYM.prototype, {
         if (!inc) return;
         this._stopRingtone();
         if (inc.timeout) clearTimeout(inc.timeout);
+        this._markCallSeen(inc.callId, 'answered');
         this._hideIncomingCallUI();
 
         const stream = await this._getLocalMedia(inc.kind);
@@ -294,6 +352,7 @@ Object.assign(NYM.prototype, {
         if (!inc) return;
         this._stopRingtone();
         if (inc.timeout) clearTimeout(inc.timeout);
+        this._markCallSeen(inc.callId, 'declined');
         this._hideIncomingCallUI();
         this._sendCallSignal(inc.from, { type: 'reject', callId: inc.callId, reason: 'declined' });
         this.incomingCall = null;
@@ -328,6 +387,7 @@ Object.assign(NYM.prototype, {
             const inc = this.incomingCall;
             this._stopRingtone();
             if (inc.timeout) clearTimeout(inc.timeout);
+            this._markCallSeen(inc.callId, 'missed');
             this._hideIncomingCallUI();
             this.incomingCall = null;
             this.displaySystemMessage('Missed call from ' + inc.nym);

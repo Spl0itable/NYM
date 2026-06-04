@@ -66,19 +66,35 @@ Object.assign(NYM.prototype, {
             }
         });
 
+        // From R2 activity counts (channels we know of but may never have opened,
+        // so the explorer reflects real activity without loading their messages).
+        if (this._geohashR2Activity) {
+            this._geohashR2Activity.forEach((_buckets, name) => {
+                if (this.isValidGeohash(name)) allGeohashes.add(name.toLowerCase());
+            });
+        }
+
         const windowHours = (typeof this._geohashActiveWindowHours === 'number' && this._geohashActiveWindowHours > 0)
             ? Math.min(24, this._geohashActiveWindowHours) : 24;
-        const cutoffSec = Math.floor(Date.now() / 1000) - windowHours * 3600;
+        const nowSec = Math.floor(Date.now() / 1000);
 
-        // Convert to array with coordinates - only channels with messages inside the active window
+        // Convert to array with coordinates - only channels with activity inside the active window
         allGeohashes.forEach(geohash => {
             try {
+                // Bucket locally stored messages into 24 hourly slots aligned with
+                // the R2 activity buckets (index 0 = the most recent hour).
+                const localBuckets = new Array(24).fill(0);
                 const allMsgs = this.messages.get(`#${geohash}`) || [];
-                let recentCount = 0;
                 for (const m of allMsgs) {
                     if (m._spamGated) continue;
-                    if ((m.created_at || 0) >= cutoffSec) recentCount++;
+                    const ts = m.created_at || 0;
+                    if (!ts) continue;
+                    let ageH = Math.floor((nowSec - ts) / 3600);
+                    if (ageH < 0) ageH = 0;
+                    if (ageH < 24) localBuckets[ageH]++;
                 }
+                // Mix local + R2 counts
+                const recentCount = this._combineGeohashActivity(geohash, localBuckets, windowHours);
                 if (recentCount < 1) return;
                 const coords = this.decodeGeohash(geohash);
                 this.geohashChannels.push({
@@ -91,6 +107,61 @@ Object.assign(NYM.prototype, {
             } catch (e) {
             }
         });
+    },
+
+    // Combine locally stored and R2-archived activity for a geohash
+    _combineGeohashActivity(geohash, localBuckets, windowHours) {
+        const r2 = this._geohashR2Activity
+            ? this._geohashR2Activity.get(String(geohash).toLowerCase())
+            : null;
+        const n = Math.max(1, Math.min(24, windowHours | 0));
+        let total = 0;
+        for (let i = 0; i < n; i++) {
+            const local = (localBuckets && localBuckets[i]) || 0;
+            const r2c = (Array.isArray(r2) && r2[i]) || 0;
+            total += Math.max(local, r2c);
+        }
+        return total;
+    },
+
+    // Quietly fetch recent-activity counts for all known geohash channels
+    async fetchGeohashActivityFromR2() {
+        if (!this._getApiHost || !this._getApiHost()) return;
+        if (typeof this._storageApiRequest !== 'function') return;
+        const now = Date.now();
+        if (this._geohashActivityFetchedAt && now - this._geohashActivityFetchedAt < 30000) return;
+        this._geohashActivityFetchedAt = now;
+
+        // Gather every geohash we know about: common geohashes, sidebar
+        // channels, and any geohash with stored messages.
+        const names = new Set();
+        const add = (g) => { if (g && this.isValidGeohash(g)) names.add(String(g).toLowerCase()); };
+        this.commonGeohashes.forEach(add);
+        this.channels.forEach((value) => { if (value && value.geohash) add(value.geohash); });
+        this.messages.forEach((_msgs, channel) => {
+            if (channel.startsWith('#')) add(channel.substring(1));
+        });
+        const list = [...names];
+        if (list.length === 0) return;
+
+        try {
+            const data = await this._storageApiRequest('channel-activity', { channels: list }, false);
+            const activity = data && data.activity;
+            if (!activity || typeof activity !== 'object') return;
+            if (!this._geohashR2Activity) this._geohashR2Activity = new Map();
+            for (const [name, buckets] of Object.entries(activity)) {
+                if (Array.isArray(buckets)) {
+                    this._geohashR2Activity.set(String(name).toLowerCase(), buckets);
+                }
+            }
+            // Refresh the explorer view if it's open.
+            if (this.geohashMap && typeof this.geohashMap.updatePoints === 'function') {
+                this.geohashMap.updatePoints();
+            }
+        } catch (_) {
+            // Best-effort; the explorer still works from locally stored messages.
+            this._geohashActivityFetchedAt = 0;
+        }
     },
 
     setGeohashActiveWindow(hours) {
@@ -1443,6 +1514,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (next > cur) {
             this.channelLastRead.set(channel, next);
             this._persistUnreadCounts();
+            if (typeof this._markConversationNotificationsSeen === 'function') {
+                this._markConversationNotificationsSeen(channel, next);
+            }
         }
     },
 
@@ -1610,6 +1684,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.unreadCounts.set(channel, 0);
         this._persistUnreadCounts(true);
         this._renderUnreadBadge(channel, 0);
+        if (typeof this._markConversationNotificationsSeen === 'function') {
+            this._markConversationNotificationsSeen(channel, lastTs);
+        }
     },
 
     navigateHistory(direction) {

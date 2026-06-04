@@ -3606,7 +3606,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.68.447';
+const NYMCHAT_VERSION = 'v3.68.448';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4363,6 +4363,7 @@ function nostrLoginStartRemoteSigner() {
         // Show the connection UI
         btn.style.display = 'none';
         const connectDiv = document.getElementById('nostrLoginRemoteSignerConnect');
+        connectDiv.classList.remove('nm-hidden');
         connectDiv.style.display = '';
 
         // Set connection string
@@ -5075,6 +5076,11 @@ async function applyNostrSettingsAdditive(s) {
                 }
                 const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
                 if (pk && nym.blockedUsers && nym.blockedUsers.has(pk)) continue;
+                // Don't re-add a missed-call entry for a call that's been
+                // answered (here or elsewhere); the answered status is the tombstone.
+                const evId = n.eventId || n.channelInfo?.eventId || '';
+                if (evId.indexOf('missed-call-') === 0 && typeof nym._callStatus === 'function'
+                    && nym._callStatus(evId.slice(12)) === 'answered') continue;
                 // Use receivedAt when present (set on the device that observed
                 // the notification) so synced notifications keep their original
                 // unread status. Fall back to timestamp for legacy entries.

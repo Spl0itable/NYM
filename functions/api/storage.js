@@ -872,6 +872,45 @@ async function handleChannelAction(context, body) {
     return new Response(stream, { status: 200, headers: ndjsonHeaders });
   }
 
+  // Public read: lightweight recent-activity counts for many channels at once
+  if (body.action === "channel-activity") {
+    var reqNames = Array.isArray(body.channels) ? body.channels : [];
+    var wanted = [];
+    var seenNames = new Set();
+    for (var ai = 0; ai < reqNames.length && wanted.length < 200; ai++) {
+      var anm = archiveSanitizeChannel(reqNames[ai]);
+      if (!anm || seenNames.has(anm)) continue;
+      seenNames.add(anm);
+      wanted.push(anm);
+    }
+    var activity = {};
+    if (wanted.length === 0) return json({ activity: activity });
+    var nowSecA = Math.floor(Date.now() / 1000);
+    var pendingA = wanted.map(async function (anm) {
+      // Short-lived per-channel edge cache. Buckets are "hours ago" from compute
+      // time; within the TTL the drift is at most a fraction of one hour bucket.
+      var cachePath = "/channel-activity/" + anm;
+      var cachedA = await readCacheGet(cachePath);
+      if (cachedA && Array.isArray(cachedA.b) && cachedA.b.length === 24) {
+        activity[anm] = cachedA.b;
+        return;
+      }
+      var idxA = await archiveReadIndex(env, "channel-index/" + anm);
+      var buckets = new Array(24).fill(0);
+      for (var bi = 0; bi < idxA.items.length; bi++) {
+        var tsA = (idxA.items[bi] && idxA.items[bi][1]) || 0;
+        if (!tsA) continue;
+        var ageH = Math.floor((nowSecA - tsA) / 3600);
+        if (ageH < 0) ageH = 0;
+        if (ageH < 24) buckets[ageH]++;
+      }
+      activity[anm] = buckets;
+      readCachePut(context, cachePath, { b: buckets }, CHANNEL_READ_TTL);
+    });
+    await Promise.all(pendingA);
+    return json({ activity: activity });
+  }
+
   // NIP-09 deletion: the signed kind 5 event IS the authorization. We only
   // delete an archived event when its author matches the deletion's signer.
   if (body.action === "channel-delete") {
