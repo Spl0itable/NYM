@@ -421,9 +421,10 @@
         }
         if (state.highlight) state.highlight.style.display = 'none';
 
-        // Save flag
+        // Save flag and sync it so other devices won't re-prompt
         if (markSeen) {
             try { localStorage.setItem('nym_tutorial_seen', 'true'); } catch (_) { }
+            try { if (typeof nostrSettingsSave === 'function') nostrSettingsSave(); } catch (_) { }
         }
 
         // Clean up
@@ -3459,7 +3460,7 @@ async function resetSettings() {
         'nym_user_channels', 'nym_user_joined_channels',
         'nym_relay_url',
         'nym_nav',
-        'nym_tutorial_seen',
+        'nym_tutorial_seen', 'nym_botpm_welcomed',
         'nym_notification_history', 'nym_notification_last_read'
     ]);
     const SETTINGS_KEY_PREFIXES = ['nym_image_blur_'];
@@ -3604,7 +3605,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.442';
+const NYMCHAT_VERSION = 'v3.67.443';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -3785,8 +3786,9 @@ async function checkSavedConnection() {
                 Notification.requestPermission();
             }
 
-            // Start tutorial if not seen
-            window.maybeStartTutorial(false);
+            // Start tutorial / send the Nymbot welcome once synced settings load,
+            // so a returning user logging in elsewhere isn't re-prompted.
+            startOnboardingWhenHydrated();
 
             // Resume to last channel from previous session (skip in PM-only mode)
             if (nym.settings.groupChatPMOnlyMode) {
@@ -3951,8 +3953,9 @@ async function checkSavedConnection() {
                 Notification.requestPermission();
             }
 
-            // Start tutorial if not seen
-            window.maybeStartTutorial(false);
+            // Start tutorial / send the Nymbot welcome once synced settings load,
+            // so a returning user logging in elsewhere isn't re-prompted.
+            startOnboardingWhenHydrated();
 
             // Resume to last channel from previous auto-ephemeral session (skip in PM-only mode)
             if (nym.settings.groupChatPMOnlyMode) {
@@ -4177,8 +4180,9 @@ async function initializeNym() {
         // Route to channel from URL if present
         await routeToUrlChannel();
 
-        // Start tutorial if not seen yet
-        window.maybeStartTutorial(false);
+        // Start tutorial / send the Nymbot welcome once synced settings load,
+        // so a returning user logging in elsewhere isn't re-prompted.
+        startOnboardingWhenHydrated();
 
     } catch (error) {
         // Restore button state on error
@@ -4884,6 +4888,17 @@ function nostrLogout() {
 }
 
 
+// Defer the tutorial and the proactive Nymbot welcome PM until synced settings
+// have loaded, then let each self-gate on its (now device-spanning) flag.
+function startOnboardingWhenHydrated() {
+    const run = () => {
+        window.maybeStartTutorial(false);
+        if (nym && typeof nym._maybeSendBotWelcomePM === 'function') nym._maybeSendBotWelcomePM();
+    };
+    if (nym && typeof nym._onSettingsHydrated === 'function') nym._onSettingsHydrated(run);
+    else run();
+}
+
 async function nostrSettingsSave() {
     // For ephemeral users, delegate to the instance method which handles all modes
     if (!isNostrLoggedIn()) {
@@ -5241,6 +5256,15 @@ async function applyNostrSettingsAdditive(s) {
 
 async function applyNostrSettings(s) {
     if (!s || typeof s !== 'object') return;
+
+    // Tutorial / bot-welcome state — only ever flip on, so once a user has
+    // seen them on any device they stay suppressed everywhere.
+    if (s.tutorialSeen === true) {
+        try { localStorage.setItem('nym_tutorial_seen', 'true'); } catch (_) { }
+    }
+    if (s.botPmWelcomed === true) {
+        try { localStorage.setItem('nym_botpm_welcomed', 'true'); } catch (_) { }
+    }
 
     // Theme
     if (s.theme && typeof s.theme === 'string') {

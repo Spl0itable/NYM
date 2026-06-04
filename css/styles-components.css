@@ -921,7 +921,7 @@
     background: rgba(20, 20, 35, 0.9);
     backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
     padding: 12px;
     margin-bottom: 8px;
     display: none;
@@ -929,6 +929,33 @@
 
 .upload-progress.active {
     display: block;
+}
+
+.upload-progress-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.upload-progress-close:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+}
+
+#uploadProgressLabel {
+    padding-right: 26px;
 }
 
 .progress-bar {

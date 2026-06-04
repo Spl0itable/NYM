@@ -26,7 +26,7 @@ Object.assign(NYM.prototype, {
         }
         // Keep the "Last seen …" presence line in sync with the contact's status.
         const seenEl = channelEl.querySelector('.pm-last-seen .loc-country');
-        if (seenEl && !this.isVerifiedBot(this.currentPM)) {
+        if (seenEl) {
             seenEl.textContent = this._pmLastSeenText(this.currentPM);
         }
     },
@@ -34,6 +34,7 @@ Object.assign(NYM.prototype, {
     // Human-readable presence line for a 1:1 PM header. Shows live status when
     // the contact is active/away, otherwise the relative time we last saw them.
     _pmLastSeenText(pubkey) {
+        if (this.isVerifiedBot(pubkey)) return 'Always at your service';
         const status = (typeof this.getEffectiveUserStatus === 'function')
             ? this.getEffectiveUserStatus(pubkey) : 'offline';
         if (status === 'online') return 'Active now';
@@ -43,7 +44,7 @@ Object.assign(NYM.prototype, {
         if (lastSeen > 0 && typeof this._formatRelativeTime === 'function') {
             return `Last seen ${this._formatRelativeTime(lastSeen)}`;
         }
-        return 'Last seen recently';
+        return 'Last seen unknown';
     },
 
     _pmLastSeenHtml(pubkey) {
@@ -1580,6 +1581,65 @@ Object.assign(NYM.prototype, {
         this._scheduleScrollToBottom();
     },
 
+    // Slightly-edited welcome used for the proactive first-contact PM that brand-new
+    // users receive. Written in markdown so it renders through the normal pipeline.
+    _botFirstContactText() {
+        return [
+            'Welcome to **Nymchat** 👋 — I\'m **Nymbot**, your built-in AI assistant.',
+            '',
+            'In any public channel you can ask me anything for **free** — just type `?ask <your question>` or mention `@Nymbot`. Type `?help` in a channel to see everything I can do.',
+            '',
+            'Right here in our private 1:1 chat is the **premium** tier: it\'s end-to-end encrypted and I route each message to the best AI model for the job (coding, reasoning/math, creative writing, translation, or general chat). These private replies cost **credits** — general chat, creative writing, and translation cost 1 credit each; coding and reasoning/math cost 2 credits each.',
+            '',
+            'Type `?buy` to get credits and `?balance` to check your balance. Credits are tied to your nym, so save your nsec to keep them.',
+            '',
+            'So, what can I help you with?'
+        ].join('\n');
+    },
+
+    // Brand-new users get a proactive PM from Nymbot so a highlighted conversation
+    // appears in their sidebar from the start. Sent locally, once per device.
+    _maybeSendBotWelcomePM() {
+        try {
+            if (localStorage.getItem('nym_botpm_welcomed') === 'true') return;
+        } catch { }
+        const bot = this.verifiedBot;
+        if (!bot || !bot.pubkey || !this.pubkey) return;
+        const conversationKey = this.getPMConversationKey(bot.pubkey);
+        const list = this.pmMessages.get(conversationKey) || [];
+        if (list.length > 0) {
+            try { localStorage.setItem('nym_botpm_welcomed', 'true'); } catch { }
+            return;
+        }
+        const botNym = this.parseNymFromDisplay(this.getNymFromPubkey(bot.pubkey));
+        const nowSec = Math.floor(Date.now() / 1000);
+        const msg = {
+            id: 'nymbot-welcome-' + nowSec,
+            author: botNym,
+            pubkey: bot.pubkey,
+            content: this._botFirstContactText(),
+            created_at: nowSec,
+            _ms: Date.now(),
+            _seq: ++this._msgSeq,
+            timestamp: new Date(nowSec * 1000),
+            isOwn: false,
+            isPM: true,
+            conversationKey,
+            conversationPubkey: bot.pubkey,
+            eventKind: 1059,
+            isBot: true,
+            senderVerified: true
+        };
+        list.push(msg);
+        this.pmMessages.set(conversationKey, list);
+        this.persistPMMessages(conversationKey);
+        this.addPMConversation(botNym, bot.pubkey, nowSec * 1000);
+        this.movePMToTop(bot.pubkey, nowSec * 1000);
+        this.updateUnreadCount(conversationKey);
+        try { localStorage.setItem('nym_botpm_welcomed', 'true'); } catch { }
+        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
+    },
+
     // Wipe the Nymbot conversation and start fresh (premium ?clear command)
     _clearBotPMHistory() {
         const pubkey = this.verifiedBot && this.verifiedBot.pubkey;
@@ -2268,7 +2328,7 @@ Object.assign(NYM.prototype, {
                 ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                 : '';
         const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-        const lastSeenHtml = this.isVerifiedBot(pubkey) ? '' : this._pmLastSeenHtml(pubkey);
+        const lastSeenHtml = this._pmLastSeenHtml(pubkey);
         const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>${lastSeenHtml}`;
 
         // Update UI with formatted nym

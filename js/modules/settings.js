@@ -128,6 +128,8 @@ Object.assign(NYM.prototype, {
             syncMLSHistory: this.settings.syncMLSHistory !== false,
             showStatus: this.settings.showStatus !== false,
             cachePMs: this.settings.cachePMs !== false,
+            tutorialSeen: localStorage.getItem('nym_tutorial_seen') === 'true',
+            botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
             keypairMode: localStorage.getItem('nym_keypair_mode') || 'persistent'
         };
     },
@@ -151,23 +153,41 @@ Object.assign(NYM.prototype, {
             this._settingsSavePending = false;
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         }
+        if (Array.isArray(this._onHydratedCbs)) {
+            const cbs = this._onHydratedCbs;
+            this._onHydratedCbs = null;
+            for (const cb of cbs) { try { cb(); } catch (_) { } }
+        }
     },
 
-    // Apply only the newest buffered settings event from an initial REQ
+    // Run cb once synced settings have loaded — so device-spanning flags
+    // (tutorial seen, bot welcome sent) are applied before we decide to
+    // trigger the tutorial or welcome PM.
+    _onSettingsHydrated(cb) {
+        if (typeof cb !== 'function') return;
+        if (this._settingsHydrated) { try { cb(); } catch (_) { } return; }
+        if (!this._onHydratedCbs) this._onHydratedCbs = [];
+        this._onHydratedCbs.push(cb);
+    },
+
+    // Apply only the newest buffered settings event from an initial REQ.
+    // Hydration (which fires onboarding) is deferred until the applied settings
+    // land so device-spanning flags are in place before the tutorial decides.
     _flushSettingsLoadBuffer(subId) {
-        // Reaching EOSE means the relay load resolved (with or without data).
-        this._markSettingsHydrated();
-        if (!this._settingsLoadBuffer || !subId) return;
-        const buf = this._settingsLoadBuffer.get(subId);
-        if (!buf) return;
-        this._settingsLoadBuffer.delete(subId);
-        if (!buf.newestSettings || !buf.newestTs) return;
-        if (buf.newestTs <= (this._lastSettingsSyncTs || 0)) return;
-        this._lastSettingsSyncTs = buf.newestTs;
-        try { localStorage.setItem('nym_last_settings_sync_ts', String(buf.newestTs)); } catch (_) { }
-        if (typeof applyNostrSettings === 'function') {
-            Promise.resolve(applyNostrSettings(buf.newestSettings)).catch(() => { });
+        const buf = (this._settingsLoadBuffer && subId) ? this._settingsLoadBuffer.get(subId) : null;
+        if (buf) this._settingsLoadBuffer.delete(subId);
+        if (buf && buf.newestSettings && buf.newestTs && buf.newestTs > (this._lastSettingsSyncTs || 0)) {
+            this._lastSettingsSyncTs = buf.newestTs;
+            try { localStorage.setItem('nym_last_settings_sync_ts', String(buf.newestTs)); } catch (_) { }
+            if (typeof applyNostrSettings === 'function') {
+                Promise.resolve(applyNostrSettings(buf.newestSettings))
+                    .catch(() => { })
+                    .finally(() => this._markSettingsHydrated());
+                return;
+            }
         }
+        // No newer settings to apply — resolve hydration now.
+        this._markSettingsHydrated();
     },
 
     // Serialize group conversation metadata for cross-device sync

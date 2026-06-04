@@ -523,7 +523,7 @@ Object.assign(NYM.prototype, {
         return btoa(JSON.stringify(signed));
     },
 
-    async _putToBlossom(file, hashHex, server) {
+    async _putToBlossom(file, hashHex, server, signal) {
         const auth = await this._signBlossomEvent(hashHex, 'upload');
         const resp = await fetch(this._getBlossomUploadUrl(server), {
             method: 'PUT',
@@ -531,7 +531,8 @@ Object.assign(NYM.prototype, {
                 'Authorization': `Nostr ${auth}`,
                 'Content-Type': file.type || 'application/octet-stream'
             },
-            body: file
+            body: file,
+            signal
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
@@ -539,13 +540,15 @@ Object.assign(NYM.prototype, {
         return data.url;
     },
 
-    async _uploadWithFallback(file, hashHex) {
+    async _uploadWithFallback(file, hashHex, signal) {
         let lastErr = null;
         for (const server of BLOSSOM_SERVERS) {
+            if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
             try {
-                const url = await this._putToBlossom(file, hashHex, server);
+                const url = await this._putToBlossom(file, hashHex, server, signal);
                 return { url, server };
             } catch (e) {
+                if (e && e.name === 'AbortError') throw e;
                 lastErr = e;
             }
         }
@@ -883,10 +886,14 @@ Object.assign(NYM.prototype, {
         const total = files.length;
         const uploaded = [];
 
+        this._uploadAbort = new AbortController();
+        const signal = this._uploadAbort.signal;
+
         try {
             progress.classList.add('active');
 
             for (let i = 0; i < total; i++) {
+                if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
                 const file = files[i];
                 const isVideo = file.type.startsWith('video/');
                 const label = total > 1
@@ -899,7 +906,7 @@ Object.assign(NYM.prototype, {
                 const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
                 const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 
-                const { url, server } = await this._uploadWithFallback(file, hashHex);
+                const { url, server } = await this._uploadWithFallback(file, hashHex, signal);
                 uploaded.push({ url, hashHex, server, file });
             }
 
@@ -929,12 +936,26 @@ Object.assign(NYM.prototype, {
                     .catch(() => { });
             }
         } catch (error) {
-            this.displaySystemMessage('Failed to upload media: ' + (error && error.message ? error.message : error));
+            if (error && error.name === 'AbortError') {
+                this.displaySystemMessage(total > 1 ? 'Uploads cancelled.' : 'Upload cancelled.');
+            } else {
+                this.displaySystemMessage('Failed to upload media: ' + (error && error.message ? error.message : error));
+            }
         } finally {
+            this._uploadAbort = null;
             setTimeout(() => {
                 progress.classList.remove('active');
             }, 500);
         }
+    },
+
+    // Stop in-flight uploads when the progress modal's close button is clicked.
+    cancelUpload() {
+        if (this._uploadAbort) {
+            try { this._uploadAbort.abort(); } catch (_) { }
+        }
+        const progress = document.getElementById('uploadProgress');
+        if (progress) progress.classList.remove('active');
     },
 
     getNymFromPubkey(pubkey) {

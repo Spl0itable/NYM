@@ -368,6 +368,7 @@ window.nymHapticTap = function (ms) {
             } catch (e) {}
         },
         'dismissShopSuccess':         function () { nym().dismissShopSuccess(); },
+        'cancelUpload':               function () { nym().cancelUpload(); },
 
         // Group moderation context-menu actions. Target pubkey lives on
         // nym().contextMenuData, set when the menu was opened.
