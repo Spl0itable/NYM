@@ -5,7 +5,7 @@
 .nm-ico4 { vertical-align: middle; margin-right: 4px; }
 .nm-dim { color: var(--text-dim); }
 .nm-dim12 { color: var(--text-dim); font-size: 12px; }
-.nm-vault-text { font-size: 13px; line-height: 1.5; margin: 0 0 4px; }
+.nm-vault-text { font-size: 13px; line-height: 1.5; margin: 0 0 16px; }
 .nm-vault-overlay { z-index: 2147483600; }
 .nm-vault-box { max-width: 420px; }
 .nm-vault-settings-btn { text-align: left; cursor: pointer; }
