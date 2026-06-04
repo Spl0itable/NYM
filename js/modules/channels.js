@@ -247,7 +247,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const location = this.getGeohashLocation(term) || 'Unknown location';
                 const prompt = document.createElement('div');
                 prompt.className = 'search-create-prompt';
-                prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
                 prompt.innerHTML = `
         <span>Join geohash channel "${term}" (${location})</span>
     `;
@@ -265,7 +264,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // Not a valid geohash — offer to join as non-geohash channel
                 const prompt = document.createElement('div');
                 prompt.className = 'search-create-prompt';
-                prompt.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
                 prompt.innerHTML = `
         <span>Join channel "${term}"</span>
     `;

@@ -173,6 +173,8 @@
 .nm-zap-4 { margin-top: 10px; font-size: 12px; color: red; }
 .nm-zap-5 { font-size: 24px; margin-bottom: 10px; }
 .nm-zap-6 { font-size: 20px; margin-top: 10px; }
+.nm-zap-7 { text-align: center; display: flex; justify-content: center; align-items: center; }
+.nm-zap-8 { display: inline-block; padding: 15px; background: white; border: 5px solid white; border-radius: 10px; }
 
 /* geohash-globe.js */
 .nm-geo-1 { background: var(--primary); box-shadow: 0 0 5px var(--primary); }

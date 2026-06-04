@@ -3605,7 +3605,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.443';
+const NYMCHAT_VERSION = 'v3.67.444';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5874,12 +5874,31 @@ async function signOut() {
     nym.cmdQuit();
 }
 
+// Native-app "Open Wallet" compatibility
+function installNativeWalletBridgeCompat(n) {
+    if (!n || typeof n.openInWallet !== 'function') return;
+    try {
+        if (n._openInWalletOverridden) {
+            // Bridge already wrapped it — restore the real launcher it saved.
+            if (typeof n._originalOpenInWallet === 'function') {
+                n.openInWallet = n._originalOpenInWallet;
+            }
+        } else {
+            // Pre-empt the bridge: expose the real launcher and mark the wrap as
+            // already done so the bridge calls through instead of re-wrapping.
+            n._originalOpenInWallet = n.openInWallet.bind(n);
+            n._openInWalletOverridden = true;
+        }
+    } catch (e) { /* non-fatal: fall back to native bridge behavior */ }
+}
+
 // Initialize on load
 document.addEventListener('DOMContentLoaded', async () => {
     // Construct the NYM instance now that all module scripts have been parsed
     // and their methods have been attached to NYM.prototype.
     nym = new NYM();
     window.nym = nym;
+    installNativeWalletBridgeCompat(nym);
 
     // Parse URL for channel routing BEFORE initialization
     parseUrlChannel();

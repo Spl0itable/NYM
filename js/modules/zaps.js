@@ -317,6 +317,8 @@ Object.assign(NYM.prototype, {
     _wireZapAutoGenerate(generate, onAmountSelected) {
         const sendBtn = document.getElementById('zapSendBtn');
         if (sendBtn) sendBtn.style.display = 'none';
+        const paidBtn = document.getElementById('zapPaidBtn');
+        if (paidBtn) paidBtn.classList.add('nm-hidden');
         document.querySelectorAll('.zap-amount-btn').forEach(btn => {
             btn.classList.remove('selected');
             btn.onclick = (e) => {
@@ -789,13 +791,13 @@ Object.assign(NYM.prototype, {
         const qrContainer = document.getElementById('zapQRCode');
         qrContainer.innerHTML = ''; // Clear existing QR
 
-        // Set container to center content
-        qrContainer.style.cssText = 'text-align: center; display: flex; justify-content: center; align-items: center;';
+        // Center the QR via a class (no inline styles — keeps us CSP-compliant)
+        qrContainer.classList.add('nm-zap-7');
 
         // Create QR code element with white border styling
         const qrDiv = document.createElement('div');
         qrDiv.id = 'zapQRCodeCanvas';
-        qrDiv.style.cssText = 'display: inline-block; padding: 15px; background: white; border: 5px solid white; border-radius: 10px;';
+        qrDiv.className = 'nm-zap-8';
         qrContainer.appendChild(qrDiv);
 
         // Generate QR using the invoice (QRCode lib loaded on demand)
@@ -821,11 +823,13 @@ Object.assign(NYM.prototype, {
             }
         })();
 
-        // Update button
+        // Reveal the "I've paid" action in the footer, next to Cancel. The
+        // generic send/close button stays hidden — Cancel already dismisses the
+        // modal, so we don't need a separate Close.
+        const paidBtn = document.getElementById('zapPaidBtn');
+        if (paidBtn) paidBtn.classList.remove('nm-hidden');
         const sendBtn = document.getElementById('zapSendBtn');
-        sendBtn.style.display = '';
-        sendBtn.textContent = 'Close';
-        sendBtn.onclick = () => this.closeZapModal();
+        if (sendBtn) { sendBtn.style.display = 'none'; sendBtn.onclick = null; }
     },
 
     // Check if payment was made
@@ -928,6 +932,8 @@ Object.assign(NYM.prototype, {
 
         // Update UI
         document.getElementById('zapInvoiceDisplay').style.display = 'none';
+        const paidBtn = document.getElementById('zapPaidBtn');
+        if (paidBtn) paidBtn.classList.add('nm-hidden');
         document.getElementById('zapStatus').style.display = 'block';
         document.getElementById('zapStatus').className = 'zap-status paid';
         document.getElementById('zapStatus').innerHTML = `
@@ -1387,6 +1393,7 @@ Object.assign(NYM.prototype, {
         if (modalActions) {
             modalActions.innerHTML = `
                 <button class="icon-btn" data-action="closeZapModal">Cancel</button>
+                <button class="send-btn nm-hidden" id="zapPaidBtn" data-action="manualCheckPayment">I've paid</button>
                 <button class="send-btn nm-hidden" id="zapSendBtn"></button>
             `;
         }
@@ -1422,30 +1429,32 @@ Object.assign(NYM.prototype, {
 
     // Open invoice in wallet
     openInWallet() {
-        // heck both currentZapInvoice and currentShopInvoice
+        // Check both currentZapInvoice and currentShopInvoice
         const invoice = this.currentZapInvoice || this.currentShopInvoice;
         if (!invoice) return;
 
-        // Try multiple methods to open wallet
         const invoiceStr = invoice.pr;
 
-        // Check if invoice already has lightning: prefix
+        // Build a lightning: URI (don't double-prefix)
         const invoiceToOpen = invoiceStr.toLowerCase().startsWith('lightning:') ?
             invoiceStr : `lightning:${invoiceStr}`;
 
-        // Try Flutter bridge first (for Nymchat native app)
+        let launched = true;
         if (window.nymOpenExternal) {
-            window.nymOpenExternal(invoiceToOpen);
+            launched = window.nymOpenExternal(invoiceToOpen) !== false;
         } else {
-            // Fallback to standard window.open (for regular browsers)
-            window.open(invoiceToOpen, '_blank');
+            launched = !!window.open(invoiceToOpen, '_blank');
         }
 
-        // Also copy to clipboard as fallback (just the raw invoice)
+        // Always copy the raw invoice as a fallback so the user can paste it.
         navigator.clipboard.writeText(invoiceStr).then(() => {
-            this.displaySystemMessage('Invoice copied - paste in your wallet');
-        }).catch(err => {
-            this.displaySystemMessage('Failed to copy invoice');
+            this.displaySystemMessage(launched
+                ? 'Invoice copied - paste in your wallet'
+                : 'No Lightning wallet found to open the invoice. It has been copied - paste it into your wallet.');
+        }).catch(() => {
+            this.displaySystemMessage(launched
+                ? 'Opening your wallet…'
+                : 'No Lightning wallet found to open the invoice. Copy it manually to pay.');
         });
     },
 

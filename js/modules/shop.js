@@ -1068,6 +1068,8 @@ TRANSFER TO PUBKEY
         const zapStatus = document.getElementById('zapStatus');
         const zapInvoiceDisplay = document.getElementById('zapInvoiceDisplay');
         if (zapInvoiceDisplay) zapInvoiceDisplay.style.display = 'none';
+        const zapPaidBtn = document.getElementById('zapPaidBtn');
+        if (zapPaidBtn) zapPaidBtn.classList.add('nm-hidden');
         if (zapStatus) {
             zapStatus.style.display = 'block';
             zapStatus.className = 'zap-status checking';

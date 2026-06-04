@@ -343,6 +343,9 @@
 }
 
 .search-create-prompt {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     border-radius: var(--radius-xs);
     padding: 10px;
     background: var(--bg-tertiary);
