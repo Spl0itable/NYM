@@ -1430,6 +1430,10 @@ body.light-mode .typing-indicator {
     .link-preview-image {
         width: 80px;
     }
+
+    .channel-title-wrap {
+    margin-left: 10px;
+    }
 }
 
 body.performance-mode,

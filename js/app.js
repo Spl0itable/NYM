@@ -29,7 +29,7 @@
             },
             {
                 title: 'Your Nym',
-                body: 'Tap here to edit the nickname, avatar, banner, bio, and Bitcoin lightning address for your Nym in this session. View the private key (nsec) of the Nym and save it if you would like to reuse this same Nym identity to login with it across devices. Long-pressing this area for 2 seconds will engage Panic Mode, which will re-encrypt all data with multiple throwaway Nyms, overwrite all data with junk, and logout immediately to make it difficult for anyone to access the data if you need to quickly hide and protect yourself.',
+                body: 'Tap here to edit the nickname, avatar, banner, bio, and Bitcoin lightning address for your Nym in this session. View the private key (nsec) of the Nym and save it if you would like to reuse this same Nym identity to login with it across devices. Long-pressing this area for 2 seconds will engage Panic Mode, which will encrypt all data with multiple throwaway Nyms, overwrite all data with junk, and logout immediately to make it difficult for anyone to access the data if you need to quickly hide and protect yourself.',
                 selector: '.nym-display',
                 onBefore: ensureSidebarOpenOnMobile
             },

@@ -792,6 +792,7 @@ body.sidebar-reorder-mode .nav-title {
     min-width: 0;
     flex: 1 1 auto;
     overflow: hidden;
+    margin-left: 20px;
 }
 
 .channel-header-controls {
