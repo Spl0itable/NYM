@@ -51,7 +51,8 @@ import {
   buildGiftWrappedDM,
   buildGiftWrappedDMPair,
   verifyBotAuth,
-  validateZapReceipt,
+  parseNwcUri,
+  invoicePaymentConfirmed,
   sanitizeInput,
   bytesToHex,
   hexToBytes,
@@ -491,7 +492,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var hasVerify = invData.verify && /^https:\/\//i.test(invData.verify);
     var canNip57 = body.zapRequest && lnurlData.allowsNostr &&
       typeof lnurlData.nostrPubkey === "string" && /^[0-9a-f]{64}$/i.test(lnurlData.nostrPubkey);
-    if (!hasVerify && !canNip57) {
+    var hasNwc = !!(env.BOT_NWC_URI && parseNwcUri(env.BOT_NWC_URI));
+    if (!hasVerify && !canNip57 && !hasNwc) {
       return json({ error: "Bot Lightning wallet supports neither LUD-21 verification nor NIP-57 zap receipts." }, 502);
     }
     var invoiceId = bytesToHex(sha256(utf8ToBytes(invData.pr)));
@@ -500,17 +502,30 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       recipientPubkey: ciGiftTo,
       amountSats: reqSats,
       pr: invData.pr,
-      verifyMethod: hasVerify ? "lud21" : "nip57",
+      verifyMethod: hasVerify ? "lud21" : (canNip57 ? "nip57" : "nwc"),
       verifyUrl: hasVerify ? invData.verify : null,
-      providerPubkey: hasVerify ? null : lnurlData.nostrPubkey.toLowerCase(),
+      providerPubkey: canNip57 ? lnurlData.nostrPubkey.toLowerCase() : null,
       createdAt: Date.now()
     }));
     return json({
       pr: invData.pr,
       verify: hasVerify ? invData.verify : null,
-      needsReceipt: !hasVerify,
+      serverVerify: hasNwc,
+      needsReceipt: !hasVerify && !hasNwc,
       invoiceId: invoiceId
     });
+  }
+
+  if (body.action === "check-invoice") {
+    var ciId = String(body.invoiceId || "");
+    if (!/^[0-9a-f]{64}$/i.test(ciId)) return json({ error: "Invalid invoice reference." }, 400);
+    if (await env.R2_BUCKET.get("claimed/" + ciId)) return json({ paid: true, claimed: true });
+    var ciPending = await env.R2_BUCKET.get("pending/" + ciId);
+    if (!ciPending) return json({ error: "Unknown or expired invoice." }, 404);
+    var ciRec;
+    try { ciRec = await ciPending.json(); } catch (e) { return json({ error: "Corrupt invoice record." }, 500); }
+    if (ciRec.pubkey !== userPubkey) return json({ error: "This invoice belongs to a different user." }, 403);
+    return json({ paid: await invoicePaymentConfirmed(env, ciRec, body.receipt) });
   }
 
   if (body.action === "claim-credits") {
@@ -531,23 +546,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (pending.pubkey !== userPubkey) {
       return json({ error: "This invoice belongs to a different user." }, 403);
     }
-    // Confirm the payment. LUD-21: re-fetch the worker's stored verify URL.
-    // NIP-57: validate the client-supplied 9735 receipt — it must be signed by
-    // the wallet's Nostr identity and reference the exact invoice we issued, so
-    // a forged or unrelated receipt cannot pass.
-    if (pending.verifyMethod === "nip57") {
-      var rcptError = validateZapReceipt(body.receipt, pending);
-      if (rcptError) return json({ error: rcptError }, 400);
-    } else {
-      var settled = false;
-      try {
-        var vr = await fetch(pending.verifyUrl, { headers: { "Accept": "application/json" } });
-        var vd = await vr.json();
-        settled = !!(vd && (vd.settled || vd.paid));
-      } catch (e) {
-        return json({ error: "Could not verify the payment." }, 502);
-      }
-      if (!settled) return json({ error: "Payment not confirmed yet." }, 402);
+    // Confirm the payment. Authoritative source is the bot wallet's own NWC
+    // lookup; otherwise LUD-21 verify URL or a NIP-57 receipt (which must be
+    // signed by the wallet's Nostr identity and reference the exact invoice we
+    // issued, so a forged or unrelated receipt cannot pass).
+    if (!await invoicePaymentConfirmed(env, pending, body.receipt)) {
+      return json({ error: "Payment not confirmed yet." }, 402);
     }
     var credits = botCreditsForSats(pending.amountSats);
     if (credits <= 0) return json({ error: "Amount too small to purchase credits." }, 400);
@@ -687,7 +691,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.67.439";
+var NYMCHAT_VERSION = "3.67.440";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -1304,7 +1308,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.67.439 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.67.440 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -2129,7 +2133,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.67.439")
+  // Prefix match (e.g. "3.61" matches "3.67.440")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -2184,7 +2188,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.67.439", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.67.440", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

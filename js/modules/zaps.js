@@ -473,14 +473,17 @@ Object.assign(NYM.prototype, {
             if (!resp.ok || !data || data.error || !data.pr) {
                 throw new Error((data && data.error) || 'Failed to generate invoice');
             }
-            const invoice = { pr: data.pr, verify: data.verify, amount, invoiceId: data.invoiceId };
+            const invoice = { pr: data.pr, verify: data.verify, serverVerify: !!data.serverVerify, amount, invoiceId: data.invoiceId };
             this.currentZapInvoice = invoice;
             this.displayZapInvoice(invoice);
             if (invoice.verify) {
                 // LUD-21: poll the verify URL
                 this.checkZapPayment(invoice);
+            } else if (invoice.serverVerify) {
+                // No LUD-21 verify URL — the worker confirms payment via the bot wallet (NWC)
+                this.checkBotCreditPaymentViaServer(invoice);
             } else {
-                // No LUD-21 verify URL — wait for the NIP-57 zap receipt instead
+                // Last resort: wait for the NIP-57 zap receipt
                 this._listenForBotCreditReceipt(invoice);
             }
         } catch (error) {
@@ -518,6 +521,89 @@ Object.assign(NYM.prototype, {
                 }
             }
         }, 180000);
+    },
+
+    // Poll the worker, which confirms the credit payment via the bot wallet (NWC)
+    // even when no LUD-21 verify URL or NIP-57 receipt is available.
+    checkBotCreditPaymentViaServer(invoice) {
+        if (this._botCreditServerPoll) {
+            clearInterval(this._botCreditServerPoll);
+            this._botCreditServerPoll = null;
+        }
+        let checkCount = 0;
+        const maxChecks = 180;
+        this._botCreditServerPoll = setInterval(async () => {
+            checkCount++;
+            if (!this.currentZapInvoice || this.currentZapInvoice.invoiceId !== invoice.invoiceId) {
+                clearInterval(this._botCreditServerPoll);
+                this._botCreditServerPoll = null;
+                return;
+            }
+            let paid = false;
+            try { paid = await this._checkBotInvoicePaid(invoice.invoiceId); } catch (e) { }
+            if (paid) {
+                clearInterval(this._botCreditServerPoll);
+                this._botCreditServerPoll = null;
+                this.handleZapPaymentSuccess(invoice.amount);
+            } else if (checkCount >= maxChecks) {
+                clearInterval(this._botCreditServerPoll);
+                this._botCreditServerPoll = null;
+                const el = document.getElementById('zapStatus');
+                if (el) {
+                    el.style.display = 'block';
+                    el.className = 'zap-status';
+                    el.innerHTML = 'Payment not detected yet — if you paid, tap "I\'ve paid" or run ?balance shortly.';
+                }
+            }
+        }, 2000);
+    },
+
+    async _checkBotInvoicePaid(invoiceId) {
+        const apiHost = this._getApiHost();
+        if (!apiHost) return false;
+        const auth = await this._signBotAuth();
+        const resp = await fetch(`https://${apiHost}/api/bot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'check-invoice', pubkey: this.pubkey, auth, invoiceId })
+        });
+        const data = await resp.json().catch(() => ({}));
+        return !!(data && data.paid);
+    },
+
+    // "I've paid" button: immediately re-check the current invoice and, if the
+    // bot wallet confirms payment, finalize the purchase. Works for shop items,
+    // Nymbot credits, and LUD-21 zaps.
+    async manualCheckPayment() {
+        const el = document.getElementById('zapStatus');
+        if (el) {
+            el.style.display = 'block';
+            el.className = 'zap-status checking';
+            el.innerHTML = '<span class="loader"></span> Checking payment...';
+        }
+        try {
+            if (this.currentShopInvoice && this.currentShopInvoice.invoiceId) {
+                const paid = await this._checkShopInvoicePaid(this.currentShopInvoice.invoiceId);
+                if (paid) { await this.handleShopPaymentSuccess(); return; }
+            } else if (this.currentZapInvoice && this.currentZapInvoice.invoiceId &&
+                this.currentZapTarget && this.currentZapTarget.isBotCreditPurchase) {
+                const paid = await this._checkBotInvoicePaid(this.currentZapInvoice.invoiceId);
+                if (paid) { this.handleZapPaymentSuccess(this.currentZapInvoice.amount); return; }
+            } else if (this.currentZapInvoice && this.currentZapInvoice.verify) {
+                const response = await this.proxiedJsonFetch(this.currentZapInvoice.verify);
+                const data = await response.json();
+                if (data.settled || data.paid) { this.handleZapPaymentSuccess(this.currentZapInvoice.amount); return; }
+            }
+            if (el) {
+                el.className = 'zap-status';
+                el.innerHTML = 'Not paid yet — complete the payment in your wallet, then tap again.';
+            }
+        } catch (e) {
+            if (el) {
+                el.className = 'zap-status';
+                el.innerHTML = 'Could not check yet — try again in a moment.';
+            }
+        }
     },
 
     // After a Nymbot credit invoice is paid, ask the worker to verify the
@@ -828,6 +914,10 @@ Object.assign(NYM.prototype, {
         if (this.zapCheckInterval) {
             clearInterval(this.zapCheckInterval);
             this.zapCheckInterval = null;
+        }
+        if (this._botCreditServerPoll) {
+            clearInterval(this._botCreditServerPoll);
+            this._botCreditServerPoll = null;
         }
 
         // Update UI
@@ -1248,6 +1338,10 @@ Object.assign(NYM.prototype, {
         if (this.shopPaymentCheckInterval) {
             clearInterval(this.shopPaymentCheckInterval);
             this.shopPaymentCheckInterval = null;
+        }
+        if (this._botCreditServerPoll) {
+            clearInterval(this._botCreditServerPoll);
+            this._botCreditServerPoll = null;
         }
 
         // Close any zap receipt subscriptions

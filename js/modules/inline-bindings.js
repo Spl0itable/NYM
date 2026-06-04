@@ -304,6 +304,7 @@ window.nymHapticTap = function (ms) {
         'closeZapModal':              function () { nym().closeZapModal(); },
         'copyZapInvoice':             function () { nym().copyZapInvoice(); },
         'openInWallet':               function () { nym().openInWallet(); },
+        'manualCheckPayment':         function () { nym().manualCheckPayment(); },
 
         // Share modal
         'copyShareUrl':               function () { nym().copyShareUrl(); },

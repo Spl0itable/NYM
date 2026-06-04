@@ -16,7 +16,8 @@ import {
   buildGiftWrappedDM,
   buildGiftWrappedDMPair,
   verifyBotAuth,
-  validateZapReceipt,
+  parseNwcUri,
+  invoicePaymentConfirmed,
   sanitizeInput,
   bytesToHex,
   hexToBytes,
@@ -133,14 +134,16 @@ async function botGenerateInvoice(env, sats, zapRequest, comment) {
   var hasVerify = invData.verify && /^https:\/\//i.test(invData.verify);
   var canNip57 = zapRequest && lnurlData.allowsNostr &&
     typeof lnurlData.nostrPubkey === "string" && /^[0-9a-f]{64}$/i.test(lnurlData.nostrPubkey);
-  if (!hasVerify && !canNip57) {
+  var hasNwc = !!(env.BOT_NWC_URI && parseNwcUri(env.BOT_NWC_URI));
+  if (!hasVerify && !canNip57 && !hasNwc) {
     return { error: "Bot Lightning wallet supports neither LUD-21 verification nor NIP-57 zap receipts.", status: 502 };
   }
   return {
     pr: invData.pr,
-    verifyMethod: hasVerify ? "lud21" : "nip57",
+    verifyMethod: hasVerify ? "lud21" : (canNip57 ? "nip57" : "nwc"),
     verifyUrl: hasVerify ? invData.verify : null,
-    providerPubkey: hasVerify ? null : lnurlData.nostrPubkey.toLowerCase()
+    providerPubkey: canNip57 ? lnurlData.nostrPubkey.toLowerCase() : null,
+    serverVerify: hasNwc
   };
 }
 
@@ -230,9 +233,22 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     return json({
       pr: inv.pr,
       verify: inv.verifyMethod === "lud21" ? inv.verifyUrl : null,
-      needsReceipt: inv.verifyMethod === "nip57",
+      serverVerify: !!inv.serverVerify,
+      needsReceipt: inv.verifyMethod === "nip57" && !inv.serverVerify,
       invoiceId: invoiceId
     });
+  }
+
+  if (body.action === "shop-check") {
+    var scId = String(body.invoiceId || "");
+    if (!/^[0-9a-f]{64}$/i.test(scId)) return json({ error: "Invalid invoice reference." }, 400);
+    if (await env.R2_BUCKET.get("shop-claimed/" + scId)) return json({ paid: true, claimed: true });
+    var scPending = await env.R2_BUCKET.get("shop-pending/" + scId);
+    if (!scPending) return json({ error: "Unknown or expired invoice." }, 404);
+    var scRec;
+    try { scRec = await scPending.json(); } catch (e) { return json({ error: "Corrupt invoice record." }, 500); }
+    if (scRec.pubkey !== userPubkey) return json({ error: "This invoice belongs to a different user." }, 403);
+    return json({ paid: await invoicePaymentConfirmed(env, scRec, body.receipt) });
   }
 
   if (body.action === "shop-claim") {
@@ -256,19 +272,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       return json({ error: "Corrupt invoice record." }, 500);
     }
     if (pending.pubkey !== userPubkey) return json({ error: "This invoice belongs to a different user." }, 403);
-    if (pending.verifyMethod === "nip57") {
-      var rcptError = validateZapReceipt(body.receipt, pending);
-      if (rcptError) return json({ error: rcptError }, 400);
-    } else {
-      var settled = false;
-      try {
-        var vr = await fetch(pending.verifyUrl, { headers: { "Accept": "application/json" } });
-        var vd = await vr.json();
-        settled = !!(vd && (vd.settled || vd.paid));
-      } catch (e) {
-        return json({ error: "Could not verify the payment." }, 502);
-      }
-      if (!settled) return json({ error: "Payment not confirmed yet." }, 402);
+    if (!await invoicePaymentConfirmed(env, pending, body.receipt)) {
+      return json({ error: "Payment not confirmed yet." }, 402);
     }
     if (!SHOP_CATALOG[pending.itemId]) return json({ error: "Unknown shop item." }, 400);
     var recipient = userPubkey;

@@ -763,6 +763,7 @@ TRANSFER TO PUBKEY
             this.currentShopInvoice = {
                 pr: data.pr,
                 verify: data.verify || null,
+                serverVerify: !!data.serverVerify,
                 invoiceId: data.invoiceId,
                 itemId: ctx.itemId,
                 item: ctx.item,
@@ -771,9 +772,12 @@ TRANSFER TO PUBKEY
             };
             this.currentZapInvoice = { pr: data.pr };
             this.displayZapInvoice({ pr: data.pr });
-            // LUD-21: poll the verify URL. Otherwise wait for the NIP-57 receipt.
+            // LUD-21: poll the verify URL. Else let the worker confirm via the
+            // bot wallet (NWC). Else wait for the NIP-57 receipt.
             if (data.verify) {
                 this.checkShopPayment(data.verify);
+            } else if (data.serverVerify) {
+                this.checkShopPaymentViaServer();
             } else {
                 this._listenForShopReceipt();
             }
@@ -817,6 +821,48 @@ TRANSFER TO PUBKEY
                 }
             } catch (e) { /* keep polling */ }
         }, 1000);
+    },
+
+    // Poll the worker, which confirms the shop payment via the bot wallet (NWC)
+    // even when no LUD-21 verify URL or NIP-57 receipt is available.
+    checkShopPaymentViaServer() {
+        if (this.shopPaymentCheckInterval) {
+            clearInterval(this.shopPaymentCheckInterval);
+            this.shopPaymentCheckInterval = null;
+        }
+        const invoiceId = this.currentShopInvoice && this.currentShopInvoice.invoiceId;
+        if (!invoiceId) return;
+        let checkCount = 0;
+        const maxChecks = 180;
+        this.shopPaymentCheckInterval = setInterval(async () => {
+            checkCount++;
+            if (!this.currentShopInvoice || this.currentShopInvoice.invoiceId !== invoiceId) {
+                clearInterval(this.shopPaymentCheckInterval);
+                this.shopPaymentCheckInterval = null;
+                return;
+            }
+            let paid = false;
+            try { paid = await this._checkShopInvoicePaid(invoiceId); } catch (e) { }
+            if (paid) {
+                clearInterval(this.shopPaymentCheckInterval);
+                this.shopPaymentCheckInterval = null;
+                await this.handleShopPaymentSuccess();
+            } else if (checkCount >= maxChecks) {
+                clearInterval(this.shopPaymentCheckInterval);
+                this.shopPaymentCheckInterval = null;
+                const el = document.getElementById('zapStatus');
+                if (el) {
+                    el.style.display = 'block';
+                    el.className = 'zap-status';
+                    el.innerHTML = 'Payment not detected yet — if you paid, tap "I\'ve paid" or reopen the shop shortly.';
+                }
+            }
+        }, 2000);
+    },
+
+    async _checkShopInvoicePaid(invoiceId) {
+        const data = await this._shopApiRequest('shop-check', { invoiceId });
+        return !!(data && data.paid);
     },
 
     // Human-readable description of a shop purchase, used as the invoice/zap comment

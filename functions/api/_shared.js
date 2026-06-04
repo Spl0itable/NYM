@@ -2679,6 +2679,148 @@ function validateZapReceipt(receipt, pending) {
   return null;
 }
 
+// Parse a NIP-47 nostr+walletconnect:// URI into its wallet pubkey, relay and secret.
+function parseNwcUri(uri) {
+  if (typeof uri !== "string") return null;
+  var m = uri.match(/^nostr\+walletconnect:\/\/([0-9a-f]{64})\??(.*)$/i);
+  if (!m) return null;
+  var params = new URLSearchParams(m[2] || "");
+  var relay = params.get("relay");
+  var secret = params.get("secret");
+  if (!relay || !secret || !/^[0-9a-f]{64}$/i.test(secret)) return null;
+  return { walletPubkey: m[1].toLowerCase(), relay: relay, secret: secret.toLowerCase() };
+}
+
+// NIP-04 (deprecated; used only as the negotiated fallback for legacy NWC
+// wallets that don't advertise nip44_v2). AES-256-CBC over the ECDH X coordinate.
+async function nip04Encrypt(privHex, pubHex, text) {
+  var key = secp256k1.getSharedSecret(hexToBytes(privHex), hexToBytes("02" + pubHex)).slice(1, 33);
+  var ck = await crypto.subtle.importKey("raw", key, { name: "AES-CBC" }, false, ["encrypt"]);
+  var iv = randomBytes(16);
+  var ct = await crypto.subtle.encrypt({ name: "AES-CBC", iv: iv }, ck, utf8ToBytes(text));
+  return botBase64Encode(new Uint8Array(ct)) + "?iv=" + botBase64Encode(iv);
+}
+async function nip04Decrypt(privHex, pubHex, payload) {
+  var parts = String(payload).split("?iv=");
+  if (parts.length !== 2) throw new Error("Invalid NIP-04 payload.");
+  var key = secp256k1.getSharedSecret(hexToBytes(privHex), hexToBytes("02" + pubHex)).slice(1, 33);
+  var ck = await crypto.subtle.importKey("raw", key, { name: "AES-CBC" }, false, ["decrypt"]);
+  var pt = await crypto.subtle.decrypt({ name: "AES-CBC", iv: botBase64Decode(parts[1]) }, ck, botBase64Decode(parts[0]));
+  return new TextDecoder().decode(pt);
+}
+
+// NIP-47 encryption negotiation from the kind 13194 info event. Prefer nip44_v2;
+// a tag without it, or an absent tag, means the wallet is nip04-only.
+function nwcSchemeFromInfo(infoEvt) {
+  if (!infoEvt) return "nip44_v2";
+  var tag = (infoEvt.tags || []).find(function (t) { return t[0] === "encryption"; });
+  if (!tag) return "nip04";
+  return String(tag[1] || "").split(/\s+/).indexOf("nip44_v2") >= 0 ? "nip44_v2" : "nip04";
+}
+async function nwcEncrypt(scheme, cfg, convKey, plaintext) {
+  if (scheme === "nip44_v2") return nip44Encrypt(plaintext, convKey);
+  return await nip04Encrypt(cfg.secret, cfg.walletPubkey, plaintext);
+}
+async function nwcDecrypt(scheme, cfg, convKey, payload) {
+  if (scheme === "nip44_v2") return nip44Decrypt(payload, convKey);
+  return await nip04Decrypt(cfg.secret, cfg.walletPubkey, payload);
+}
+
+function nwcResultIsPaid(result) {
+  if (!result || typeof result !== "object") return false;
+  if (result.settled_at && Number(result.settled_at) > 0) return true;
+  if (typeof result.preimage === "string" && /^[0-9a-f]{2,}$/i.test(result.preimage)) return true;
+  return result.paid === true;
+}
+
+// Ask the bot wallet directly whether an invoice was paid (NIP-47 lookup_invoice).
+// Negotiates encryption from the wallet's 13194 info event (preferring nip44_v2,
+// falling back to nip04). Independent of LUD-21 verify URLs and NIP-57 receipts,
+// so it works even when the wallet never publishes a zap receipt.
+async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
+  var cfg = parseNwcUri(nwcUri);
+  if (!cfg || !bolt11) return false;
+  var convKey = nip44ConversationKey(cfg.secret, cfg.walletPubkey);
+  var clientPubkey = getPublicKey(cfg.secret);
+  return await new Promise(function (resolve) {
+    var done = false, sent = false, scheme = null, ws;
+    var infoSub = "nwci-" + Math.random().toString(36).slice(2, 10);
+    var respSub = "nwc-" + Math.random().toString(36).slice(2, 10);
+    function finish(val) {
+      if (done) return;
+      done = true;
+      try { ws.close(); } catch (e) {}
+      resolve(val);
+    }
+    async function sendLookup(sch) {
+      if (sent) return;
+      sent = true;
+      scheme = sch;
+      try { ws.send(JSON.stringify(["CLOSE", infoSub])); } catch (e) {}
+      var reqEvt = {
+        kind: 23194,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["p", cfg.walletPubkey], ["encryption", sch]],
+        content: await nwcEncrypt(sch, cfg, convKey, JSON.stringify({
+          method: "lookup_invoice",
+          params: { invoice: bolt11 }
+        })),
+        pubkey: clientPubkey
+      };
+      signEvent(reqEvt, cfg.secret);
+      ws.send(JSON.stringify(["REQ", respSub, {
+        kinds: [23195], authors: [cfg.walletPubkey], "#e": [reqEvt.id], limit: 1
+      }]));
+      ws.send(JSON.stringify(["EVENT", reqEvt]));
+    }
+    try {
+      ws = new WebSocket(cfg.relay);
+    } catch (e) {
+      resolve(false);
+      return;
+    }
+    var timer = setTimeout(function () { finish(false); }, timeoutMs || 10000);
+    ws.addEventListener("open", function () {
+      ws.send(JSON.stringify(["REQ", infoSub, { kinds: [13194], authors: [cfg.walletPubkey], limit: 1 }]));
+    });
+    ws.addEventListener("message", async function (msg) {
+      try {
+        var data = JSON.parse(msg.data);
+        if (!Array.isArray(data)) return;
+        if (data[0] === "EVENT" && data[1] === infoSub && data[2] && data[2].kind === 13194) {
+          await sendLookup(nwcSchemeFromInfo(data[2]));
+        } else if (data[0] === "EOSE" && data[1] === infoSub) {
+          await sendLookup("nip44_v2");
+        } else if (data[0] === "EVENT" && data[1] === respSub && data[2] && data[2].kind === 23195) {
+          var parsed = JSON.parse(await nwcDecrypt(scheme, cfg, convKey, data[2].content));
+          clearTimeout(timer);
+          finish(!parsed.error && nwcResultIsPaid(parsed.result));
+        }
+      } catch (e) {}
+    });
+    ws.addEventListener("error", function () { clearTimeout(timer); finish(false); });
+    ws.addEventListener("close", function () { clearTimeout(timer); finish(false); });
+  });
+}
+
+// Authoritative payment check shared by the credit and shop flows. Prefers the
+// bot wallet's own NWC lookup, then falls back to LUD-21 verify or a NIP-57 receipt.
+async function invoicePaymentConfirmed(env, pending, receipt) {
+  if (env && env.BOT_NWC_URI) {
+    try { if (await nwcInvoicePaid(env.BOT_NWC_URI, pending.pr)) return true; } catch (e) {}
+  }
+  if (pending.verifyMethod === "lud21" && pending.verifyUrl) {
+    try {
+      var vr = await fetch(pending.verifyUrl, { headers: { "Accept": "application/json" } });
+      var vd = await vr.json();
+      if (vd && (vd.settled || vd.paid)) return true;
+    } catch (e) {}
+  } else if (pending.verifyMethod === "nip57" && receipt) {
+    if (!validateZapReceipt(receipt, pending)) return true;
+  }
+  return false;
+}
+
 function sanitizeInput(text) {
   if (typeof text !== "string") return "";
   // Truncate excessively long inputs
@@ -2721,6 +2863,9 @@ export {
   buildGiftWrappedDMPair,
   verifyBotAuth,
   validateZapReceipt,
+  parseNwcUri,
+  nwcInvoicePaid,
+  invoicePaymentConfirmed,
   sanitizeInput,
   bytesToHex,
   hexToBytes,
