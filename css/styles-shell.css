@@ -528,12 +528,14 @@ body.sidebar-reorder-mode .nav-title {
 
 .sidebar-actions .icon-btn {
     flex: 1;
-    padding: 10px;
+    padding: 6px 4px;
     text-align: center;
     display: inline-flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 3px;
+    min-width: 0;
 }
 
 .sidebar-actions .icon-btn svg {
@@ -541,7 +543,15 @@ body.sidebar-reorder-mode .nav-title {
 }
 
 .sidebar-actions .icon-btn .btn-label {
-    display: none;
+    display: block;
+    font-size: 9px;
+    line-height: 1;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
 }
 
 .user-list {

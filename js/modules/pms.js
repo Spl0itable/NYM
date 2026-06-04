@@ -15,14 +15,46 @@ Object.assign(NYM.prototype, {
         const channelEl = document.getElementById('currentChannel');
         if (!channelEl) return;
         const dot = channelEl.querySelector('.pm-header-avatar .user-status-dot');
-        if (!dot) return;
+        if (dot) {
+            const status = (typeof this.getEffectiveUserStatus === 'function')
+                ? this.getEffectiveUserStatus(this.currentPM) : 'offline';
+            const isHidden = status === 'hidden';
+            const dotStatus = isHidden ? 'offline' : status;
+            const wrap = dot.parentElement;
+            if (wrap) wrap.classList.toggle('no-status', isHidden);
+            dot.className = `user-status-dot status-${dotStatus}`;
+        }
+        // Keep the "Last seen …" presence line in sync with the contact's status.
+        const seenEl = channelEl.querySelector('.pm-last-seen .loc-country');
+        if (seenEl && !this.isVerifiedBot(this.currentPM)) {
+            seenEl.textContent = this._pmLastSeenText(this.currentPM);
+        }
+    },
+
+    // Human-readable presence line for a 1:1 PM header. Shows live status when
+    // the contact is active/away, otherwise the relative time we last saw them.
+    _pmLastSeenText(pubkey) {
         const status = (typeof this.getEffectiveUserStatus === 'function')
-            ? this.getEffectiveUserStatus(this.currentPM) : 'offline';
-        const isHidden = status === 'hidden';
-        const dotStatus = isHidden ? 'offline' : status;
-        const wrap = dot.parentElement;
-        if (wrap) wrap.classList.toggle('no-status', isHidden);
-        dot.className = `user-status-dot status-${dotStatus}`;
+            ? this.getEffectiveUserStatus(pubkey) : 'offline';
+        if (status === 'online') return 'Active now';
+        if (status === 'away') return 'Away';
+        const user = this.users.get(pubkey);
+        const lastSeen = user ? (user.lastSeen || 0) : 0;
+        if (lastSeen > 0 && typeof this._formatRelativeTime === 'function') {
+            return `Last seen ${this._formatRelativeTime(lastSeen)}`;
+        }
+        return 'Last seen recently';
+    },
+
+    _pmLastSeenHtml(pubkey) {
+        return `<div class="channel-location pm-last-seen"><span class="loc-country">${this.escapeHtml(this._pmLastSeenText(pubkey))}</span></div>`;
+    },
+
+    _ensurePMHeaderTimer() {
+        if (typeof this._setManagedInterval !== 'function') return;
+        this._setManagedInterval('pm-header-status', () => {
+            if (this.inPMMode && this.currentPM) this.refreshPMHeaderStatus();
+        }, 30000);
     },
 
     // Update the delivery checkmark on a PM message in-place
@@ -2236,7 +2268,8 @@ Object.assign(NYM.prototype, {
                 ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                 : '';
         const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-        const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>`;
+        const lastSeenHtml = this.isVerifiedBot(pubkey) ? '' : this._pmLastSeenHtml(pubkey);
+        const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>${lastSeenHtml}`;
 
         // Update UI with formatted nym
         const _pmHeaderEl = document.getElementById('currentChannel');
@@ -2251,6 +2284,9 @@ Object.assign(NYM.prototype, {
         } else {
             document.getElementById('channelMeta').innerHTML = `${lockSvgPM}End-to-end encrypted private message`;
         }
+
+        // Keep the "Last seen …" line ticking while this conversation is open.
+        this._ensurePMHeaderTimer();
 
         // Hide share button in PM mode
         const shareBtn = document.getElementById('shareChannelBtn');

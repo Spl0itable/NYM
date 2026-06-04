@@ -586,6 +586,11 @@ Object.assign(NYM.prototype, {
         // Show/hide Copy Message option
         document.getElementById('ctxCopyMessage').style.display = content ? 'block' : 'none';
 
+        // Translate needs message text, so only show it when we have content
+        // (hidden for mention/sidebar clicks that carry no message body).
+        const ctxTranslateOption = document.getElementById('ctxTranslate');
+        if (ctxTranslateOption) ctxTranslateOption.style.display = content ? 'block' : 'none';
+
         // Show/hide React option
         const reactOption = document.getElementById('ctxReact');
         reactOption.style.display = messageId ? 'block' : 'none';
@@ -846,7 +851,8 @@ Object.assign(NYM.prototype, {
                         e.stopPropagation();
                         const nym = this.getNymFromPubkey(pubkey);
                         const suffix = this.getPubkeySuffix(pubkey);
-                        this.showContextMenu(e, `${nym}#${suffix}`, pubkey, null, null, true);
+                        // Clicking a @mention should open the full user context menu
+                        this.showContextMenu(e, `${nym}#${suffix}`, pubkey, null, null, false);
                         return;
                     }
                 }
@@ -1549,6 +1555,9 @@ Object.assign(NYM.prototype, {
         messagesEl.addEventListener('mousedown', (e) => {
             // Only trigger on primary (left) mouse button; ignore right/middle clicks
             if (e.button !== 0) return;
+            // Stand down while a native file/camera picker is open — its sheet
+            // overlays the message list and can leak input through the webview.
+            if (window.__nymFileDialogActive) return;
             if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
@@ -1561,6 +1570,9 @@ Object.assign(NYM.prototype, {
         });
 
         messagesEl.addEventListener('touchstart', (e) => {
+            // Stand down while a native file/camera picker is open — its sheet
+            // overlays the message list and can leak input through the webview.
+            if (window.__nymFileDialogActive) return;
             if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;

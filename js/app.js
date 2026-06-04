@@ -29,55 +29,55 @@
             },
             {
                 title: 'Your Nym',
-                body: 'Tap here to edit the nickname, avatar, banner, and bio for your Nym in this session. View the private key (nsec) of the Nym and save it if you would like to reuse this same Nym identity to login with it across devices.',
+                body: 'Tap here to edit the nickname, avatar, banner, bio, and Bitcoin lightning address for your Nym in this session. View the private key (nsec) of the Nym and save it if you would like to reuse this same Nym identity to login with it across devices.',
                 selector: '.nym-display',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Connection',
-                body: 'The current relay connection status. Tap here to view network stats such as the average latency, number of received events, and bandwidth use.',
+                body: 'The current relay connection status. Tap here to view network stats such as the average latency, number of received events, and bandwidth usage.',
                 selector: '.status-indicator',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Main Menu',
-                body: 'Get flair addon packs to change the styling of your messages and nickname. Edit settings such as sorting geohash channels by proximity, adding a Bitcoin lightning address, changing the app\'s theme, manage blocked users and keywords, and more. Logout to terminate session and start a new identity.',
+                body: 'Get flair addon packs to change the styling of your messages and nickname. Edit settings such as changing the app\'s theme, manage blocked users and keywords, sorting geohash channels by proximity, and much more. Logout to terminate the current session and start fresh with a new identity.',
                 selector: (window.innerWidth > 768 ? '.header-actions' : '.sidebar-actions'),
                 onBefore: () => { if (window.innerWidth <= 768) return ensureSidebarOpenOnMobile(); }
             },
             {
                 title: 'Channels',
-                body: 'Browse and switch geohash or non-geohash channels. Use the search feature to find and join geohash or non-geohash channels. Geohash is for location-based chat using geohash codes (e.g., #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location.',
+                body: 'Browse and switch geohash or non-geohash channels. Use the search feature to find and join geohash or non-geohash channels. Geohash is for location-based chat using geohash codes (e.g., #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location. Long-press a channel to favorite it to the top of the list for easy access, or to hide/block it from the list if you don\'t want to see it.',
                 selector: '#channelList',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Explore Geohash',
-                body: 'Tap the globe to explore geohash-only channels on a world map.',
+                body: 'Tap the globe to explore geohash-only channels on a world map. Find interesting channels to join based on location, see where other users are active, and view heatmap, day/night, and geohash grid layers showing where the most popular geohash channels are located around the world.',
                 selector: '.discover-icon',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Private Messages',
-                body: 'Your end-to-end encrypted one‑on‑one and group chat messages live here. Tap the + symbol to start a new PM or group chat.',
+                body: 'Your end-to-end encrypted one‑on‑one and group chat messages live here. Tap the + symbol to start a new PM or group chat. Long-press an existing PM or group chat to view options such as blocking the user, or to close the conversation if you want to hide it from the list.',
                 selector: '#pmList',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Active Nyms',
-                body: 'See who is currently active. Tap a nym to PM them and more.',
+                body: 'See who is currently active. Tap a nym to PM them and more. This list is based on recent activity and relay presence, not just who you follow. It\'s a great way to discover and connect with active people on the app!',
                 selector: '#userList',
                 onBefore: ensureSidebarOpenOnMobile
             },
             {
                 title: 'Messages',
-                body: 'Channel messages appear here. Tap a nym\'s nickname for quick actions such as to react with emoji, zap Bitcoin, PM, mention, block and more from the context menu.',
+                body: 'Channel messages appear here. Long-press a message or click on a nym\'s nickname for quick actions such as to react with emoji, edit/delete your own message, zap a Bitcoin tip, start a PM, mention, block and much more from the context menu.',
                 selector: '#messagesContainer',
                 onBefore: ensureSidebarClosedOnMobile
             },
             {
                 title: 'Compose',
-                body: 'Type your message, add emoji or upload an image, then SEND. Markdown is supported. You can also type commands for other actions, such as creating an away message and many more.',
+                body: 'Type your message, translate it in a different language, add emoji or GIFs, or upload images/videos, share files via P2P, and more. Markdown is supported. You can also type commands for other actions, such as creating an away message and many more. Check out all of the available commands by typing ?help to have our chat bot @Nymbot assist you or the /help command in any channel.',
                 selector: '.input-container'
             },
             {
@@ -1618,11 +1618,29 @@ function onTransparencyChange(value) {
     nostrSettingsSave();
 }
 
+function nymSuppressLongPressForFileDialog() {
+    window.__nymFileDialogActive = true;
+    const clear = () => {
+        // Small delay so trailing touch events that leak through as the native
+        // sheet dismisses are still suppressed.
+        setTimeout(() => { window.__nymFileDialogActive = false; }, 400);
+        window.removeEventListener('focus', clear);
+        document.removeEventListener('visibilitychange', onVisible);
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') clear(); };
+    window.addEventListener('focus', clear, { once: true });
+    document.addEventListener('visibilitychange', onVisible);
+    // Safety net in case neither focus nor visibilitychange ever fires.
+    setTimeout(() => { window.__nymFileDialogActive = false; }, 10000);
+}
+
 function selectImage() {
+    nymSuppressLongPressForFileDialog();
     document.getElementById('fileInput').click();
 }
 
 function selectP2PFile() {
+    nymSuppressLongPressForFileDialog();
     document.getElementById('p2pFileInput').click();
 }
 
@@ -3586,7 +3604,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.441';
+const NYMCHAT_VERSION = 'v3.67.442';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
