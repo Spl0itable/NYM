@@ -173,40 +173,31 @@ Object.assign(NYM.prototype, {
     }
   },
 
-  // Full-screen "encryption" animation: scrambling hex glyphs + a status line.
-  // Cosmetic — destruction runs underneath it and isn't gated on frames.
+  // Full-screen "encryption" animation themed to the active app palette. The
+  // backdrop stays opaque so sensitive content is hidden while destruction runs
   _panicShowOverlay() {
     let interval = null;
     let statusEl = null;
     try {
       const ov = document.createElement('div');
-      ov.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#000;color:#39ff7a;' +
-        'font-family:monospace,monospace;display:flex;flex-direction:column;align-items:center;' +
-        'justify-content:center;gap:14px;padding:24px;overflow:hidden;';
+      ov.className = 'nm-panic-overlay';
 
       const title = document.createElement('div');
-      title.style.cssText = 'font-size:13px;letter-spacing:2px;opacity:.85;text-transform:uppercase;';
+      title.className = 'nm-panic-title';
       title.textContent = 'Encrypting';
 
       const grid = document.createElement('div');
-      grid.style.cssText = 'font-size:14px;line-height:1.35;white-space:pre;opacity:.5;max-width:92vw;' +
-        'overflow:hidden;text-align:center;filter:drop-shadow(0 0 6px rgba(57,255,122,.4));';
+      grid.className = 'nm-panic-grid';
 
       statusEl = document.createElement('div');
-      statusEl.style.cssText = 'font-size:13px;opacity:.95;min-height:16px;letter-spacing:.5px;';
+      statusEl.className = 'nm-panic-status';
       statusEl.textContent = 'Initializing…';
 
       const bar = document.createElement('div');
-      bar.style.cssText = 'width:min(320px,80vw);height:3px;background:rgba(57,255,122,.18);overflow:hidden;border-radius:2px;';
+      bar.className = 'nm-panic-bar';
       const fill = document.createElement('div');
-      fill.style.cssText = 'height:100%;width:30%;background:#39ff7a;border-radius:2px;';
+      fill.className = 'nm-panic-fill';
       bar.appendChild(fill);
-
-      ov.appendChild(title);
-      ov.appendChild(grid);
-      ov.appendChild(statusEl);
-      ov.appendChild(bar);
-      (document.body || document.documentElement).appendChild(ov);
 
       const charset = '0123456789ABCDEF·×÷=+/\\<>{}[]#@$%&';
       const cols = 40, rows = 8;
@@ -223,14 +214,15 @@ Object.assign(NYM.prototype, {
         }
         return out;
       };
-      let pos = 0;
-      interval = setInterval(() => {
-        try {
-          grid.textContent = rnd();
-          pos = (pos + 7) % 100;
-          fill.style.marginLeft = pos + '%';
-        } catch (e) {}
-      }, 60);
+
+      grid.textContent = rnd();
+      ov.appendChild(title);
+      ov.appendChild(grid);
+      ov.appendChild(statusEl);
+      ov.appendChild(bar);
+      (document.body || document.documentElement).appendChild(ov);
+
+      interval = setInterval(() => { try { grid.textContent = rnd(); } catch (e) {} }, 60);
     } catch (e) {}
 
     return {

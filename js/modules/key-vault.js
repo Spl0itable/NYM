@@ -306,6 +306,22 @@ Object.assign(NYM.prototype, {
     this._vaultMem = null;
   },
 
+  // Full "Forget identity": discard the vault/secrets, then drop the login
+  // pointers, profile, and session prefs so the next boot starts at a clean
+  // first-run instead of restoring a key-less, half-logged-in state. Reloads to
+  // a bare URL (drops any channel/hash route) so no stale state survives.
+  _forgetIdentityAndReload() {
+    this.resetVault();
+    for (const name of [
+      'nym_nostr_login_method', 'nym_nostr_login_pubkey', 'nym_nostr_login_npub',
+      'nym_random_keypair_per_session', 'nym_auto_ephemeral', 'nym_auto_ephemeral_nick',
+      'nym_auto_ephemeral_channel', 'nym_purchases_cache', 'nym_active_style', 'nym_active_flair',
+      'nym_bio', 'nym_lightning_address_global', 'nym_avatar_url', 'nym_banner_url'
+    ]) { try { localStorage.removeItem(name); } catch (e) {} }
+    try { location.replace(location.origin + location.pathname); }
+    catch (e) { try { location.reload(); } catch (e2) {} }
+  },
+
   // Called early in startup. If the vault is enabled, blocks until the user
   // unlocks (or resets) so the encrypted identity can be read by the loader.
   async unlockVaultAtBoot() {
@@ -318,7 +334,7 @@ Object.assign(NYM.prototype, {
       // biometric "Unlock" button). null means the user chose to reset.
       const password = await this._vaultPromptModal();
       if (password === null) {
-        this.resetVault();
+        this._forgetIdentityAndReload();
         return;
       }
       try {
@@ -326,7 +342,7 @@ Object.assign(NYM.prototype, {
         return;
       } catch (e) {
         const retry = await this._vaultErrorModal(e && e.message ? e.message : 'Unlock failed.');
-        if (retry === 'reset') { this.resetVault(); return; }
+        if (retry === 'reset') { this._forgetIdentityAndReload(); return; }
         // otherwise loop and prompt again
       }
     }
@@ -493,11 +509,12 @@ Object.assign(NYM.prototype, {
     if (enabled) {
       o.box.innerHTML =
         '<div class="modal-header">Identity encryption</div>' +
-        '<div class="modal-body"><p class="form-hint nm-vault-text">Your identity key is encrypted at rest (' + this.vaultMethod() + ').</p></div>' +
+        '<div class="modal-body"><p class="form-hint nm-vault-text">Your identity key is encrypted at rest (<span id="nymVMethodLabel"></span>).</p></div>' +
         '<div class="modal-actions">' +
         '<button id="nymVClose" class="icon-btn">Close</button>' +
         '<button id="nymVDisable" class="send-btn danger">Turn off</button>' +
         '</div>';
+      o.box.querySelector('#nymVMethodLabel').textContent = this.vaultMethod();
       o.box.querySelector('#nymVClose').onclick = o.close;
       o.box.querySelector('#nymVDisable').onclick = async () => {
         try {

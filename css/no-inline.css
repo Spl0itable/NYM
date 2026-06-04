@@ -196,3 +196,12 @@
 .nm-msg-2 { fill: var(--text); stroke: none; }
 .nm-mention { color: var(--secondary); }
 .nm-underline { text-decoration: underline; }
+
+/* panic.js */
+.nm-panic-overlay { position: fixed; inset: 0; z-index: 2147483647; color: var(--text-bright); background: radial-gradient(ellipse at 50% 35%, rgb(from var(--primary) r g b / 0.08) 0%, transparent 60%), var(--bg); font-family: var(--font-mono); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; overflow: hidden; }
+.nm-panic-title { font-size: 13px; letter-spacing: 2px; opacity: 0.9; text-transform: uppercase; color: var(--primary); }
+.nm-panic-grid { font-size: 14px; line-height: 1.35; white-space: pre; opacity: 0.55; max-width: 88vw; overflow: hidden; text-align: center; color: var(--primary); filter: drop-shadow(0 0 6px rgb(from var(--primary) r g b / 0.4)); }
+.nm-panic-status { font-size: 13px; opacity: 0.95; min-height: 16px; letter-spacing: 0.5px; color: var(--text-bright); }
+.nm-panic-bar { width: min(320px, 80vw); height: 3px; background: rgb(from var(--primary) r g b / 0.18); overflow: hidden; border-radius: 2px; }
+.nm-panic-fill { height: 100%; width: 30%; background: var(--primary); border-radius: 2px; box-shadow: 0 0 8px rgb(from var(--primary) r g b / 0.6); animation: nmPanicSlide 1.2s linear infinite; }
+@keyframes nmPanicSlide { from { margin-left: -30%; } to { margin-left: 100%; } }
