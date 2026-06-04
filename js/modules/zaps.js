@@ -475,6 +475,7 @@ Object.assign(NYM.prototype, {
             }
             const invoice = { pr: data.pr, verify: data.verify, serverVerify: !!data.serverVerify, amount, invoiceId: data.invoiceId };
             this.currentZapInvoice = invoice;
+            this._addPendingPurchase({ kind: 'credit', invoiceId: invoice.invoiceId, amount, recipientNym: giftNym || null });
             this.displayZapInvoice(invoice);
             if (invoice.verify) {
                 // LUD-21: poll the verify URL
@@ -613,22 +614,23 @@ Object.assign(NYM.prototype, {
     async _claimBotCredits(invoiceId, recipientNym, receipt) {
         if (!invoiceId) {
             this.displaySystemMessage('Nymbot credit purchase: payment received but the invoice reference was lost. Run ?balance shortly — if credits are missing, contact support.');
-            return;
+            return false;
         }
         try {
             const apiHost = this._getApiHost();
-            if (!apiHost) return;
+            if (!apiHost) return false;
             const auth = await this._signBotAuth();
             const reqBody = { action: 'claim-credits', pubkey: this.pubkey, auth, invoiceId };
             if (receipt) reqBody.receipt = receipt;
             if (this.nym) reqBody.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
-            let data = null;
+            let data = null, status = 0;
             for (let attempt = 0; attempt < 5; attempt++) {
                 const resp = await fetch(`https://${apiHost}/api/bot`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(reqBody)
                 });
+                status = resp.status;
                 data = await resp.json().catch(() => ({}));
                 if (resp.ok && data && !data.error) break;
                 if (resp.status === 402) { await new Promise(r => setTimeout(r, 2000)); continue; }
@@ -644,11 +646,15 @@ Object.assign(NYM.prototype, {
                     this._setBotCreditDisplay(data.balance);
                     this.displaySystemMessage(`Nymbot credits added: +${data.credited}. New balance: ${data.balance} private message${data.balance === 1 ? '' : 's'}.`);
                 }
-            } else {
-                this.displaySystemMessage('Nymbot credit purchase: ' + ((data && data.error) || 'could not confirm credit'));
+                this._removePendingPurchase(invoiceId);
+                return true;
             }
+            if (status === 409) { this._removePendingPurchase(invoiceId); return true; }
+            this.displaySystemMessage('Nymbot credit purchase: ' + ((data && data.error) || 'could not confirm credit'));
+            return false;
         } catch (e) {
             this.displaySystemMessage('Nymbot credit purchase failed to confirm. Your payment went through — run ?balance shortly.');
+            return false;
         }
     },
 

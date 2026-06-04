@@ -489,6 +489,17 @@ Object.assign(NYM.prototype, {
     },
 
     setupVisibilityMonitoring() {
+        // Reconcile any purchase paid while the PWA was backgrounded or closed.
+        const reconcile = () => {
+            if (typeof this.reconcilePendingPurchases === 'function') {
+                try { this.reconcilePendingPurchases(); } catch (e) { }
+            }
+        };
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reconcile(); });
+        window.addEventListener('focus', reconcile);
+        window.addEventListener('online', reconcile);
+        setTimeout(reconcile, 4000);
+
         // Track when app becomes visible/hidden
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {

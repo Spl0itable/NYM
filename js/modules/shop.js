@@ -771,6 +771,7 @@ TRANSFER TO PUBKEY
                 receipt: null
             };
             this.currentZapInvoice = { pr: data.pr };
+            this._addPendingPurchase({ kind: 'shop', invoiceId: data.invoiceId, itemId: ctx.itemId, isGift: !!extra.recipientPubkey });
             this.displayZapInvoice({ pr: data.pr });
             // LUD-21: poll the verify URL. Else let the worker confirm via the
             // bot wallet (NWC). Else wait for the NIP-57 receipt.
@@ -863,6 +864,120 @@ TRANSFER TO PUBKEY
     async _checkShopInvoicePaid(invoiceId) {
         const data = await this._shopApiRequest('shop-check', { invoiceId });
         return !!(data && data.paid);
+    },
+
+    async _claimShopPurchase(invoiceId, receipt) {
+        const extra = { invoiceId };
+        if (receipt) extra.receipt = receipt;
+        if (this.nym) extra.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
+        let data = null;
+        for (let attempt = 0; attempt < 6; attempt++) {
+            try {
+                data = await this._shopApiRequest('shop-claim', extra);
+                break;
+            } catch (e) {
+                if (/not confirmed/i.test(e.message) && attempt < 5) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+                throw e;
+            }
+        }
+        if (!data) throw new Error('Could not confirm purchase');
+        return data;
+    },
+
+    _applyShopClaim(data, item) {
+        if (data.gift) {
+            if (data.giftEvent) {
+                try { this.sendDMToRelays(['EVENT', data.giftEvent]); } catch (e) { }
+            }
+        } else {
+            if (data.owned && data.active) {
+                this._applyOwnShopRecord({ owned: data.owned, active: data.active });
+            }
+            if (item && item.type === 'cosmetic' && data.itemId) {
+                this.activeCosmetics.add(data.itemId);
+                this.publishActiveShopItems();
+                this.applyShopStylesToOwnMessages();
+            }
+        }
+    },
+
+    // Persisted pending purchases survive a backgrounded/killed PWA so a payment
+    // settled while the app was closed is reconciled and finalized on return.
+    _loadPendingPurchases() {
+        try {
+            const raw = localStorage.getItem('nym_pending_purchases');
+            const arr = raw ? JSON.parse(raw) : [];
+            return Array.isArray(arr) ? arr : [];
+        } catch (e) { return []; }
+    },
+
+    _savePendingPurchases(arr) {
+        try { localStorage.setItem('nym_pending_purchases', JSON.stringify((arr || []).slice(-20))); } catch (e) { }
+    },
+
+    _addPendingPurchase(entry) {
+        if (!entry || !entry.invoiceId) return;
+        const arr = this._loadPendingPurchases().filter(e => e && e.invoiceId !== entry.invoiceId);
+        entry.createdAt = Date.now();
+        arr.push(entry);
+        this._savePendingPurchases(arr);
+    },
+
+    _removePendingPurchase(invoiceId) {
+        if (!invoiceId) return;
+        this._savePendingPurchases(this._loadPendingPurchases().filter(e => e && e.invoiceId !== invoiceId));
+    },
+
+    async reconcilePendingPurchases() {
+        if (this._reconcilingPurchases) return;
+        const pending = this._loadPendingPurchases();
+        if (!pending.length) return;
+        if (!this.pubkey || !this._getApiHost()) {
+            if (!this._reconcileRetryScheduled) {
+                this._reconcileRetryScheduled = true;
+                setTimeout(() => { this._reconcileRetryScheduled = false; this.reconcilePendingPurchases(); }, 5000);
+            }
+            return;
+        }
+        this._reconcilingPurchases = true;
+        const ttl = 2 * 60 * 60 * 1000;
+        const now = Date.now();
+        try {
+            for (const entry of pending) {
+                if (!entry || !entry.invoiceId) { this._removePendingPurchase(entry && entry.invoiceId); continue; }
+                if (now - (entry.createdAt || 0) > ttl) { this._removePendingPurchase(entry.invoiceId); continue; }
+                try {
+                    if (entry.kind === 'shop') await this._reconcileShopEntry(entry);
+                    else if (entry.kind === 'credit') await this._reconcileCreditEntry(entry);
+                } catch (e) { /* leave for next foreground */ }
+            }
+        } finally {
+            this._reconcilingPurchases = false;
+        }
+    },
+
+    async _reconcileShopEntry(entry) {
+        if (this.currentShopInvoice && this.currentShopInvoice.invoiceId === entry.invoiceId) return;
+        if (!await this._checkShopInvoicePaid(entry.invoiceId)) return;
+        const item = this.getShopItemById(entry.itemId);
+        const data = await this._claimShopPurchase(entry.invoiceId, null);
+        this._removePendingPurchase(entry.invoiceId);
+        if (data.alreadyClaimed) return;
+        this._applyShopClaim(data, item);
+        const name = item ? item.name : 'item';
+        if (data.gift) this.displaySystemMessage(`Gift purchase completed: ${name}.`);
+        else this.displaySystemMessage(`Purchase completed: ${name}.` + (data.code ? ` Recovery code: ${data.code}` : ''));
+    },
+
+    async _reconcileCreditEntry(entry) {
+        if (this.currentZapInvoice && this.currentZapInvoice.invoiceId === entry.invoiceId) return;
+        if (!await this._checkBotInvoicePaid(entry.invoiceId)) return;
+        if (await this._claimBotCredits(entry.invoiceId, entry.recipientNym, null)) {
+            this._removePendingPurchase(entry.invoiceId);
+        }
     },
 
     // Human-readable description of a shop purchase, used as the invoice/zap comment
@@ -960,38 +1075,9 @@ TRANSFER TO PUBKEY
         }
 
         try {
-            const extra = { invoiceId: inv.invoiceId };
-            if (inv.receipt) extra.receipt = inv.receipt;
-            if (this.nym) extra.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
-            let data = null;
-            for (let attempt = 0; attempt < 6; attempt++) {
-                try {
-                    data = await this._shopApiRequest('shop-claim', extra);
-                    break;
-                } catch (e) {
-                    if (/not confirmed/i.test(e.message) && attempt < 5) {
-                        await new Promise(r => setTimeout(r, 2000));
-                        continue;
-                    }
-                    throw e;
-                }
-            }
-            if (!data) throw new Error('Could not confirm purchase');
-
-            if (data.gift) {
-                if (data.giftEvent) {
-                    try { this.sendDMToRelays(['EVENT', data.giftEvent]); } catch (e) { }
-                }
-            } else {
-                if (data.owned && data.active) {
-                    this._applyOwnShopRecord({ owned: data.owned, active: data.active });
-                }
-                if (item && item.type === 'cosmetic' && data.itemId) {
-                    this.activeCosmetics.add(data.itemId);
-                    this.publishActiveShopItems();
-                    this.applyShopStylesToOwnMessages();
-                }
-            }
+            const data = await this._claimShopPurchase(inv.invoiceId, inv.receipt);
+            this._applyShopClaim(data, item);
+            this._removePendingPurchase(inv.invoiceId);
             this._renderShopSuccess(item, data.gift, data.gift ? null : data.code);
         } catch (e) {
             if (zapStatus) {
