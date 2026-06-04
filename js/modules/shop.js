@@ -10,7 +10,7 @@ Object.assign(NYM.prototype, {
         if (withAuth) {
             if (!this.pubkey) throw new Error('Login required.');
             body.pubkey = this.pubkey;
-            body.auth = await this._signBotAuth();
+            body.auth = await this._signBotAuth(action, 'storage');
         }
         const resp = await fetch(`https://${apiHost}/api/storage`, {
             method: 'POST',
@@ -35,7 +35,7 @@ Object.assign(NYM.prototype, {
         if (withAuth) {
             if (!this.pubkey) throw new Error('Login required.');
             body.pubkey = this.pubkey;
-            body.auth = await this._signBotAuth();
+            body.auth = await this._signBotAuth(action, 'storage');
         }
         const resp = await fetch(`https://${apiHost}/api/storage`, {
             method: 'POST',

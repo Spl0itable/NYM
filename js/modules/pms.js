@@ -1472,23 +1472,43 @@ Object.assign(NYM.prototype, {
     // Sign a short-lived NIP-98-style auth event so the bot worker can verify
     // that the caller actually controls the pubkey it claims (prevents draining
     // someone else's credits or reading their balance).
-    async _signBotAuth() {
-        // Reuse a recent signature so frequent storage writes don't re-sign (or
-        // re-prompt an extension/remote signer). The worker accepts a 300s skew.
+    // Sign a NIP-98-style (kind 27235) auth event BOUND to the specific
+    // endpoint + method + action so the worker can reject a captured signature
+    // replayed against a different request/action. Money actions are signed
+    // fresh each time (the worker enforces single-use for them); routine
+    // actions reuse a short-lived per-action signature so extension/remote
+    // signers aren't re-prompted on every write.
+    async _signBotAuth(action, endpoint) {
+        endpoint = endpoint || 'bot';
+        const apiHost = this._getApiHost();
+        const url = apiHost ? `https://${apiHost}/api/${endpoint}` : '';
         const nowSec = Math.floor(Date.now() / 1000);
-        const cache = this._botAuthCache;
-        if (cache && cache.pubkey === this.pubkey && (nowSec - cache.auth.created_at) < 240) {
-            return cache.auth;
+        const MONEY = {
+            'transfer-credits': 1, 'create-invoice': 1, 'claim-credits': 1,
+            'shop-buy-invoice': 1, 'shop-claim': 1, 'shop-transfer': 1, 'shop-redeem': 1
+        };
+        const sensitive = !!MONEY[action];
+        const cacheKey = (action || '') + '|' + url;
+        if (!(this._botAuthCache instanceof Map)) this._botAuthCache = new Map();
+        if (!sensitive) {
+            const cached = this._botAuthCache.get(cacheKey);
+            // Stay well under the worker's 120s window to avoid edge-of-window rejects.
+            if (cached && cached.pubkey === this.pubkey && (nowSec - cached.auth.created_at) < 90) {
+                return cached.auth;
+            }
         }
+        const tags = [['domain', 'nymbot-pm'], ['method', 'POST']];
+        if (url) tags.push(['u', url]);
+        if (action) tags.push(['action', action]);
         const event = {
             kind: 27235,
             created_at: nowSec,
-            tags: [['domain', 'nymbot-pm']],
+            tags,
             content: 'nymbot-pm-auth',
             pubkey: this.pubkey
         };
         const auth = await this.signEvent(event);
-        this._botAuthCache = { pubkey: this.pubkey, auth };
+        if (!sensitive) this._botAuthCache.set(cacheKey, { pubkey: this.pubkey, auth });
         return auth;
     },
 
@@ -1497,7 +1517,7 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return;
-            const auth = await this._signBotAuth();
+            const auth = await this._signBotAuth('clear-history');
             await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1703,7 +1723,7 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return;
-            const auth = await this._signBotAuth();
+            const auth = await this._signBotAuth('transfer-credits');
             const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1888,7 +1908,7 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) { this._setBotTyping(false); return; }
-            const auth = await this._signBotAuth();
+            const auth = await this._signBotAuth('pm');
             const isFresh = /^\s*!\s*\S/.test(content);
             // Send only the current message's wrap ID; the worker maintains the
             // ordered thread server-side. fresh (!) tells it to skip history.
@@ -1941,7 +1961,7 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return null;
-            const auth = await this._signBotAuth();
+            const auth = await this._signBotAuth('balance');
             const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

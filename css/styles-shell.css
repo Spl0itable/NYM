@@ -562,7 +562,10 @@ body.sidebar-reorder-mode .nav-title {
 }
 
 .user-item {
-    padding: 6px 10px;
+    padding: 6px 12px;
+    margin: 2px 4px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-xs);
     font-size: calc(var(--user-text-size) - 3px);
     color: var(--text-dim);
     display: flex;

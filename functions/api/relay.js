@@ -7,7 +7,8 @@
 // messages bidirectionally through a WebSocketPair.
 
 const NYMCHAT_APP_ORIGINS = new Set([
-  'https://web.nymchat.app'
+  'https://web.nymchat.app',
+  'https://nym-staging.pages.dev'
 ]);
 const APP_RELAY = 'wss://relay.nymchat.app';
 
@@ -16,6 +17,35 @@ function isNymchatClient(request) {
   if (NYMCHAT_APP_ORIGINS.has(origin)) return true;
   const ua = request.headers.get('User-Agent') || '';
   return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
+}
+
+// Reject relay hostnames that resolve to private/loopback/link-local space so
+// the proxy can't be used to reach internal services (SSRF).
+function isPrivateRelayHost(hostname) {
+  let host = (hostname || '').toLowerCase().replace(/\.$/, '');
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host.endsWith('.local') || host.endsWith('.internal')) return true;
+  let h6 = host;
+  if (h6.startsWith('[') && h6.endsWith(']')) h6 = h6.slice(1, -1);
+  if (host.includes(':') || h6.includes(':')) {
+    if (h6 === '::1' || h6 === '::' || h6 === '0:0:0:0:0:0:0:1') return true;
+    if (/^f[cd][0-9a-f]{2}:/.test(h6)) return true;     // fc00::/7
+    if (/^fe[89ab][0-9a-f]:/.test(h6)) return true;     // fe80::/10
+    const m = h6.match(/^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (m) host = m[1]; else return false;
+  }
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = +m[1], b = +m[2];
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a >= 224) return true;
+  }
+  return false;
 }
 
 function buildUpstreamUrl(targetRelay, request, env) {
@@ -47,6 +77,9 @@ export async function onRequest(context) {
     const relayUrl = new URL(targetRelay);
     if (relayUrl.protocol !== 'wss:' && relayUrl.protocol !== 'ws:') {
       return new Response('Relay URL must use ws:// or wss:// protocol', { status: 400 });
+    }
+    if (isPrivateRelayHost(relayUrl.hostname)) {
+      return new Response('Relay host not allowed', { status: 403 });
     }
   } catch {
     return new Response('Invalid relay URL', { status: 400 });

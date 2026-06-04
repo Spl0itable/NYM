@@ -130,7 +130,12 @@ Object.assign(NYM.prototype, {
             cachePMs: this.settings.cachePMs !== false,
             tutorialSeen: localStorage.getItem('nym_tutorial_seen') === 'true',
             botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
-            keypairMode: localStorage.getItem('nym_keypair_mode') || 'persistent'
+            keypairMode: localStorage.getItem('nym_keypair_mode') || 'persistent',
+            // Non-sensitive preference only: "I protect my identity key at rest
+            // on my devices." No key material, salt, or credential is ever
+            // synced — each device sets up its own factor locally. Lets a new
+            // device offer to enable encryption too. Monotonic (only flips on).
+            encryptAtRestPreferred: localStorage.getItem('nym_encrypt_at_rest_pref') === '1'
         };
     },
 
@@ -157,6 +162,11 @@ Object.assign(NYM.prototype, {
             const cbs = this._onHydratedCbs;
             this._onHydratedCbs = null;
             for (const cb of cbs) { try { cb(); } catch (_) { } }
+        }
+        // Synced prefs (incl. encryptAtRestPreferred) are now applied, so offer
+        // to set up identity encryption here if the user uses it elsewhere.
+        if (typeof this.maybePromptEncryptAtRest === 'function') {
+            setTimeout(() => { try { this.maybePromptEncryptAtRest(); } catch (_) { } }, 2500);
         }
     },
 

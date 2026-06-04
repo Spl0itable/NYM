@@ -6,9 +6,11 @@
     const dec = new TextDecoder();
     let _ckCache = new Map(), _ckBasis = null;
 
-    // ±2h jitter for NIP-59 metadata protection
+    // ±2h jitter for NIP-59 metadata protection. Uses a CSPRNG so the jitter
+    // can't be predicted/stripped by an observer 
     function randomNow() {
-        return Math.round(Date.now() / 1000 - Math.random() * 7200);
+        const r = crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
+        return Math.round(Date.now() / 1000 - r * 7200);
     }
 
     // Bitchat: HKDF(33-byte compressed shared point, empty salt, "nip44-v2") + XChaCha20-Poly1305

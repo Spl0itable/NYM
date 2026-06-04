@@ -1309,7 +1309,7 @@ Object.assign(NYM.prototype, {
         localStorage.removeItem('nym_connection_mode');
         localStorage.removeItem('nym_relay_url');
         localStorage.removeItem('nym_nsec'); // Clear saved nsec
-        localStorage.removeItem('nym_dev_nsec'); // Clear developer nsec
+        nymSecretRemove('nym_dev_nsec'); // Clear developer nsec
 
         // Clear pubkey-specific lightning address
         if (this.pubkey) {

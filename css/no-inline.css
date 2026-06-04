@@ -5,6 +5,10 @@
 .nm-ico4 { vertical-align: middle; margin-right: 4px; }
 .nm-dim { color: var(--text-dim); }
 .nm-dim12 { color: var(--text-dim); font-size: 12px; }
+.nm-vault-text { font-size: 13px; line-height: 1.5; margin: 0 0 4px; }
+.nm-vault-overlay { z-index: 2147483600; }
+.nm-vault-box { max-width: 420px; }
+.nm-vault-settings-btn { text-align: left; cursor: pointer; }
 .nm-secondary { color: var(--secondary); }
 .nm-primary { color: var(--primary); }
 .nm-flex1 { flex: 1; }
@@ -86,8 +90,8 @@
 .nm-h-73 { width: 100%; color: var(--danger); border-color: var(--danger); }
 .nm-h-74 { margin-top: 12px; }
 .nm-h-75 { text-align: center; margin-bottom: 20px; color: var(--text-dim); }
-.nm-h-76 { margin-bottom: 0; padding: 32px 32px 14px; }
-.nm-h-77 { padding: 0 32px 8px; }
+.nm-h-76 { margin-bottom: 0; padding: 32px 32px 10px; border-bottom: none; }
+.nm-h-77 { padding: 0 32px 16px; border-bottom: 1px solid var(--glass-border); }
 .nm-h-78 { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim); }
 .nm-h-79 { accent-color: var(--primary); cursor: pointer; }
 .nm-h-80 { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim); margin-top: 6px; margin-left: 20px; }

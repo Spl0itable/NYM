@@ -2243,8 +2243,26 @@ _lastCacheCleared = DateTime.now();
 debugPrint('HTTP cache cleared at ${_lastCacheCleared} (IndexedDB preserved)');
 }
 
+// Schemes the shell is willing to hand off to the OS. Anything else (file:,
+// intent:, content:, tel:, javascript:, app-specific deep links, etc.) is
+// refused so a hostile/compromised page can't pivot the device through the
+// external-launch primitive.
+static const Set<String> _allowedLaunchSchemes = {
+'https', 'http', 'lightning', 'mailto', 'bitcoin'
+};
+
 Future<void> _launchExternalBrowser(String url) async {
-final uri = Uri.parse(url);
+final Uri uri;
+try {
+uri = Uri.parse(url);
+} catch (_) {
+debugPrint('[NYM Bridge] Refusing to launch unparseable URL: $url');
+return;
+}
+if (!_allowedLaunchSchemes.contains(uri.scheme.toLowerCase())) {
+debugPrint('[NYM Bridge] Refusing to launch disallowed scheme: ${uri.scheme}');
+return;
+}
 if (await canLaunchUrl(uri)) {
 await launchUrl(uri, mode: LaunchMode.externalApplication);
 }
@@ -4023,17 +4041,22 @@ final geohash = channelInfo['geohash'] as String?;
 final groupId = channelInfo['groupId'] as String?;
 final nym = channelInfo['nym'] as String?;
 
+// All values below originate from in-page JS (via the notification bridge)
+// and are therefore untrusted. Pass them through jsonEncode so they are
+// encoded as JS string literals rather than interpolated raw, which would
+// otherwise allow `'); arbitraryJs(); //` style code injection back into the
+// trusted page context.
 String? jsCode;
 if (type == 'pm' && (nym != null || pubkey != null)) {
-final nymArg = nym != null ? "'$nym'" : "null";
-final pubkeyArg = pubkey ?? '';
-jsCode = "if(window.nym && window.nym.openUserPM) window.nym.openUserPM($nymArg, '$pubkeyArg');";
+final nymArg = nym != null ? jsonEncode(nym) : "null";
+final pubkeyArg = jsonEncode(pubkey ?? '');
+jsCode = "if(window.nym && window.nym.openUserPM) window.nym.openUserPM($nymArg, $pubkeyArg);";
 } else if (type == 'group' && groupId != null) {
-jsCode = "if(window.nym && window.nym.openGroup) window.nym.openGroup('$groupId');";
+jsCode = "if(window.nym && window.nym.openGroup) window.nym.openGroup(${jsonEncode(groupId)});";
 } else if (type == 'geohash' && (channel != null || geohash != null)) {
-final ch = channel ?? '';
-final gh = geohash ?? '';
-jsCode = "if(window.nym && window.nym.switchChannel) window.nym.switchChannel('$ch', '$gh');";
+final ch = jsonEncode(channel ?? '');
+final gh = jsonEncode(geohash ?? '');
+jsCode = "if(window.nym && window.nym.switchChannel) window.nym.switchChannel($ch, $gh);";
 }
 
 if (jsCode != null) {

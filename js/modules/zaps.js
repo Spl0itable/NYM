@@ -455,7 +455,7 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) throw new Error('Bot API unavailable');
-            const auth = await this._signBotAuth();
+            const auth = await this._signBotAuth('create-invoice');
             const credits = this._botCreditsForSats(amount);
             const giftNym = this.currentZapTarget.giftRecipientNym;
             const purchaseComment = giftNym
@@ -564,7 +564,7 @@ Object.assign(NYM.prototype, {
     async _checkBotInvoicePaid(invoiceId) {
         const apiHost = this._getApiHost();
         if (!apiHost) return false;
-        const auth = await this._signBotAuth();
+        const auth = await this._signBotAuth('check-invoice');
         const resp = await fetch(`https://${apiHost}/api/bot`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -621,7 +621,7 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return false;
-            const auth = await this._signBotAuth();
+            const auth = await this._signBotAuth('claim-credits');
             const reqBody = { action: 'claim-credits', pubkey: this.pubkey, auth, invoiceId };
             if (receipt) reqBody.receipt = receipt;
             if (this.nym) reqBody.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);

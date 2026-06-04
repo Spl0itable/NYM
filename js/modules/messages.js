@@ -1625,6 +1625,7 @@ Object.assign(NYM.prototype, {
         if (window.resetImageModalZoom) window.resetImageModalZoom();
         modalImg.src = src;
         modalImg.style.display = '';
+        modalVid.classList.add('nm-hidden');
         modalVid.style.display = 'none';
         modalVid.pause();
         if (modalVid.dataset.ownBlob) {
@@ -1692,6 +1693,7 @@ Object.assign(NYM.prototype, {
         }
 
         modalVid.load();
+        modalVid.classList.remove('nm-hidden');
         modalVid.style.display = '';
         document.getElementById('imageModal').classList.add('active');
     },

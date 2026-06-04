@@ -40,6 +40,28 @@ window.nymObserveAnim = function (el) {
     }
 };
 
+// Collapsed/expanded state of the Settings modal category sections, persisted
+// per section key so the user's layout sticks across opens and reloads.
+window.persistSettingsSectionState = function (key, collapsed) {
+    if (!key) return;
+    try {
+        var map = JSON.parse(localStorage.getItem('nym_settings_sections_collapsed') || '{}');
+        if (collapsed) map[key] = 1; else delete map[key];
+        localStorage.setItem('nym_settings_sections_collapsed', JSON.stringify(map));
+    } catch (e) {}
+};
+window.restoreSettingsSectionState = function () {
+    var map;
+    try { map = JSON.parse(localStorage.getItem('nym_settings_sections_collapsed') || '{}'); }
+    catch (e) { map = {}; }
+    document.querySelectorAll('.settings-section[data-section-key]').forEach(function (sec) {
+        var collapsed = !!map[sec.dataset.sectionKey];
+        sec.classList.toggle('collapsed', collapsed);
+        var btn = sec.querySelector('.settings-section-header');
+        if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    });
+};
+
 // Short haptic pulse used to confirm a long-press fired on mobile
 window.nymHapticTap = function (ms) {
     try {
@@ -143,12 +165,20 @@ window.nymHapticTap = function (ms) {
         'closeNotificationsModal':    function () { nym().closeNotificationsModal(); },
         'toggleSidebar':              function () { window.toggleSidebar(); },
         'openShop':                   function () { nym().openShop(); },
+        'openVaultSettings':          function () { nym().openVaultSettings(); },
         'closeShop':                  function () { nym().closeShop(); },
         'openShopAndCloseSidebar':    function () { nym().openShop(); nym().closeSidebar(); },
         'showSettingsAndCloseSidebar':function () { window.showSettings(); nym().closeSidebar(); },
         'showAboutAndCloseSidebar':   function () { window.showAbout(); nym().closeSidebar(); },
         'signOutAndCloseSidebar':     function () { window.signOut(); nym().closeSidebar(); },
         'showSettings':               function () { window.showSettings(); },
+        'toggleSettingsSection':      function (_e, t) {
+            var sec = t.closest('.settings-section');
+            if (!sec) return;
+            var collapsed = sec.classList.toggle('collapsed');
+            t.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            window.persistSettingsSectionState(sec.dataset.sectionKey, collapsed);
+        },
         'showAbout':                  function () { window.showAbout(); },
         'sendAboutContact':           function () { window.sendAboutContact(); },
         'reportSpamFalsePositive':    function (_e, t) { window.reportSpamFalsePositive(t.dataset.spamContent || ''); },

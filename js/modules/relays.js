@@ -1535,7 +1535,7 @@ Object.assign(NYM.prototype, {
     _detectCloudflareHost() {
         try {
             const host = window.location.hostname;
-            if (host === 'web.nymchat.app') return true;
+            if (host === 'web.nymchat.app' || host === 'nym-staging.pages.dev') return true;
         } catch {
             // Not in a browser context
         }

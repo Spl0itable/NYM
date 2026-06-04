@@ -2641,15 +2641,39 @@ function nip44Decrypt(payload, conversationKey) {
 
 var BOT_LIGHTNING_ADDRESS = "69420@wallet.yakihonne.com";
 
-function verifyBotAuth(auth, expectedPubkey) {
+function verifyBotAuth(auth, expectedPubkey, binding) {
   try {
     if (!auth || typeof auth !== "object") return false;
     if (auth.pubkey !== expectedPubkey) return false;
     if (auth.kind !== 27235) return false;
     var nowSec = Math.floor(Date.now() / 1000);
-    if (!auth.created_at || Math.abs(nowSec - auth.created_at) > 300) return false;
+    // Tightened window (was 300s) — auth events are short-lived request proofs.
+    if (!auth.created_at || Math.abs(nowSec - auth.created_at) > 120) return false;
     if (getEventHash(auth) !== auth.id) return false;
-    return schnorr.verify(auth.sig, auth.id, auth.pubkey);
+    if (!schnorr.verify(auth.sig, auth.id, auth.pubkey)) return false;
+    // Optional request binding (NIP-98 style): tie the signature to the exact
+    // endpoint + method + logical action so a captured auth can't be replayed
+    // against a different action/request.
+    if (binding) {
+      var tags = Array.isArray(auth.tags) ? auth.tags : [];
+      var tagVal = function (name) {
+        for (var i = 0; i < tags.length; i++) {
+          if (Array.isArray(tags[i]) && tags[i][0] === name) return tags[i][1];
+        }
+        return null;
+      };
+      if (binding.action && tagVal("action") !== binding.action) return false;
+      if (String(tagVal("method") || "").toUpperCase() !== "POST") return false;
+      if (binding.url) {
+        var got = tagVal("u");
+        if (!got) return false;
+        try {
+          var ua = new URL(got), ub = new URL(binding.url);
+          if (ua.origin !== ub.origin || ua.pathname !== ub.pathname) return false;
+        } catch (e) { return false; }
+      }
+    }
+    return true;
   } catch (e) {
     return false;
   }
@@ -2837,7 +2861,8 @@ const BOT_CORS_HEADERS = {
 };
 
 const NYMCHAT_APP_ORIGINS = new Set([
-  "https://web.nymchat.app"
+  "https://web.nymchat.app",
+  "https://nym-staging.pages.dev"
 ]);
 function isNymchatBotClient(request) {
   const origin = (request.headers.get("Origin") || "").toLowerCase();

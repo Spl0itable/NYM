@@ -29,6 +29,9 @@ const MAX_UNFURL_SIZE = 512 * 1024;
 // Max size for JSON proxy responses (512 KB)
 const MAX_JSON_SIZE = 512 * 1024;
 
+// Max size for proxied media (100 MB) — caps bandwidth/memory amplification.
+const MAX_MEDIA_SIZE = 100 * 1024 * 1024;
+
 const GEO_RELAYS_URL = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
 const GEO_RELAYS_CACHE_TTL = 300;
 
@@ -95,6 +98,7 @@ async function readEdgeCache(path) {
 function writeEdgeCache(context, path, body, contentType, ttl) {
   const headers = new Headers(CORS_HEADERS);
   headers.set('Content-Type', contentType);
+  headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Cache-Control', `public, max-age=${ttl}, s-maxage=${ttl}`);
   headers.set('X-Edge-Cache', 'MISS');
   const resp = new Response(body, { status: 200, headers });
@@ -158,6 +162,10 @@ function parseGeoRelaysCsv(csv) {
     const lat = parseFloat(parts[1]);
     const lng = parseFloat(parts[2]);
     if (!host || isNaN(lat) || isNaN(lng)) continue;
+    // Only emit plausible hostnames (optionally :port) — reject embedded paths,
+    // credentials, query strings, whitespace or control chars that could inject
+    // an attacker-chosen relay endpoint into every client's relay set.
+    if (!/^[a-z0-9.-]+(:\d{1,5})?$/i.test(host)) continue;
     parsed.push({ url: `wss://${host}`, lat, lng });
   }
   return parsed;
@@ -192,12 +200,13 @@ async function handleJsonProxy(targetUrl, request) {
     body = await request.text();
   }
 
-  const resp = await fetch(targetUrl, {
-    method,
-    headers: upstreamHeaders,
-    body,
-    redirect: 'follow',
-  });
+  let resp;
+  try {
+    resp = await ssrfSafeFetch(targetUrl, { method, headers: upstreamHeaders, body });
+  } catch (err) {
+    if (err.ssrfBlocked) return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
+    throw err;
+  }
 
   const ct = (resp.headers.get('content-type') || '').toLowerCase();
   const allowed = ct.includes('json') || ct.includes('text/plain') || ct === '';
@@ -205,13 +214,14 @@ async function handleJsonProxy(targetUrl, request) {
     return jsonResponse({ error: 'Upstream content-type not allowed: ' + ct }, 415);
   }
 
-  const text = await resp.text();
-  if (text.length > MAX_JSON_SIZE) {
+  const text = await readBounded(resp, MAX_JSON_SIZE);
+  if (text === null) {
     return jsonResponse({ error: 'Upstream response too large' }, 502);
   }
 
   const headers = new Headers(CORS_HEADERS);
   headers.set('Content-Type', resp.headers.get('content-type') || 'application/json');
+  headers.set('X-Content-Type-Options', 'nosniff');
   return new Response(text, { status: resp.status, headers });
 }
 
@@ -228,9 +238,11 @@ function resolveBlossomBase(serverParam) {
   if (!serverParam) return DEFAULT_BLOSSOM_HOST;
   try {
     const u = new URL(serverParam);
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    // Require HTTPS — the client's Nostr auth header is forwarded upstream and
+    // must never travel over cleartext HTTP.
+    if (u.protocol !== 'https:') return null;
     if (!ALLOWED_BLOSSOM_HOSTS.has(u.hostname)) return null;
-    return `${u.protocol}//${u.hostname}`;
+    return `https://${u.hostname}`;
   } catch {
     return null;
   }
@@ -357,7 +369,6 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
   // for Range requests since partial responses cache poorly and need streaming.
   const fetchInit = {
     headers: upstreamHeaders,
-    redirect: 'follow',
   };
   if (!rangeHeader) {
     if (isEmoji) {
@@ -371,7 +382,15 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
       fetchInit.cf = { cacheTtl: 604800, cacheEverything: true };
     }
   }
-  const resp = await fetch(targetUrl, fetchInit);
+  // Follow redirects manually so an allowed public URL can't 30x-redirect into
+  // an internal/private address after the initial isPrivateUrl check.
+  let resp;
+  try {
+    resp = await ssrfSafeFetch(targetUrl, fetchInit);
+  } catch (err) {
+    if (err.ssrfBlocked) return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
+    throw err;
+  }
 
   if (!resp.ok && resp.status !== 206) {
     return jsonResponse({ error: `Upstream returned ${resp.status}` }, 502);
@@ -379,6 +398,12 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
 
   const contentType = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
   const contentRange = resp.headers.get('content-range');
+
+  // Reject responses larger than MAX_MEDIA_SIZE (bandwidth/memory amplification)
+  const declaredLen = parseInt(resp.headers.get('content-length') || '', 10);
+  if (Number.isFinite(declaredLen) && declaredLen > MAX_MEDIA_SIZE) {
+    return jsonResponse({ error: 'Upstream media too large' }, 413);
+  }
 
   // Allow media types and also common types that might serve images/video
   const isAllowed = ALLOWED_MEDIA_TYPES.has(contentType) ||
@@ -393,6 +418,15 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
 
   const headers = new Headers(CORS_HEADERS);
   headers.set('Content-Type', resp.headers.get('content-type') || 'application/octet-stream');
+  // The proxy is served from the app's own origin, so prevent any proxied
+  // body from being interpreted as an executable document (SVG/HTML script,
+  // MIME sniffing) when navigated to directly.
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  if (contentType === 'image/svg+xml') {
+    // SVG can carry inline script; force download semantics on direct navigation.
+    headers.set('Content-Disposition', 'inline; filename="image.svg"');
+  }
   if (isEmoji) {
     headers.set('Cache-Control', `public, max-age=${EMOJI_CACHE_TTL}, s-maxage=${EMOJI_CACHE_TTL}, immutable`);
   } else {
@@ -491,13 +525,18 @@ async function handleUnfurl(targetUrl, context) {
   const cached = await readEdgeCache(cachePath);
   if (cached) return cached;
 
-  const resp = await fetch(targetUrl, {
-    headers: {
-      'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-      'Accept': 'text/html,application/xhtml+xml',
-    },
-    redirect: 'follow',
-  });
+  let resp;
+  try {
+    resp = await ssrfSafeFetch(targetUrl, {
+      headers: {
+        'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+    });
+  } catch (err) {
+    if (err.ssrfBlocked) return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
+    throw err;
+  }
 
   if (!resp.ok) {
     return jsonResponse({ error: `Upstream returned ${resp.status}` }, 502);
@@ -658,20 +697,140 @@ function decodeEntities(str) {
     .replace(/&#x2F;/g, '/');
 }
 
+// Parse a hostname that may be an IPv4 address in dotted/decimal/octal/hex
+// form (inet_aton semantics, as browsers and fetch resolvers accept) into a
+// canonical 32-bit integer, or null if it is not an IPv4 literal.
+function ipv4ToInt(host) {
+  const parts = host.split('.');
+  if (parts.length === 0 || parts.length > 4) return null;
+  const nums = [];
+  for (const p of parts) {
+    if (p === '') return null;
+    let n;
+    if (/^0x[0-9a-f]+$/i.test(p)) n = parseInt(p, 16);
+    else if (/^0[0-7]+$/.test(p)) n = parseInt(p, 8);
+    else if (/^[0-9]+$/.test(p)) n = parseInt(p, 10);
+    else return null; // not a pure-numeric component => not an IPv4 literal
+    if (!Number.isFinite(n) || n < 0) return null;
+    nums.push(n);
+  }
+  // inet_aton: the final part absorbs the remaining bytes.
+  const n = nums.length;
+  if (nums.slice(0, n - 1).some(x => x > 255)) return null;
+  const last = nums[n - 1];
+  const maxLast = Math.pow(256, 4 - (n - 1));
+  if (last >= maxLast) return null;
+  let value = last;
+  for (let i = 0; i < n - 1; i++) value += nums[i] * Math.pow(256, 3 - i);
+  return value >>> 0;
+}
+
+function ipv4IntIsPrivate(v) {
+  const a = (v >>> 24) & 0xff, b = (v >>> 16) & 0xff;
+  if (a === 0) return true;                       // 0.0.0.0/8
+  if (a === 10) return true;                       // 10.0.0.0/8
+  if (a === 127) return true;                      // 127.0.0.0/8 loopback
+  if (a === 169 && b === 254) return true;         // 169.254.0.0/16 link-local (cloud metadata)
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 168) return true;         // 192.168.0.0/16
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
+  if (a === 192 && b === 0 && ((v >>> 8) & 0xff) === 0) return true; // 192.0.0.0/24
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 benchmarking
+  if (a >= 224) return true;                       // 224.0.0.0/4 multicast + 240/4 reserved
+  return false;
+}
+
+function ipv6IsPrivate(host) {
+  let h = host.toLowerCase();
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  // Strip zone id
+  const pct = h.indexOf('%');
+  if (pct !== -1) h = h.slice(0, pct);
+  if (h === '::1' || h === '::' || h === '0:0:0:0:0:0:0:1') return true;
+  // IPv4-mapped/compat ::ffff:a.b.c.d or ::a.b.c.d
+  const mapped = h.match(/^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (mapped) {
+    const v = ipv4ToInt(mapped[1]);
+    if (v !== null && ipv4IntIsPrivate(v)) return true;
+  }
+  if (/^f[cd][0-9a-f]{2}:/.test(h)) return true; // fc00::/7 unique local
+  if (/^fe[89ab][0-9a-f]:/.test(h)) return true; // fe80::/10 link-local
+  return false;
+}
+
 function isPrivateUrl(urlStr) {
   try {
     const parsed = new URL(urlStr);
-    const host = parsed.hostname;
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
-    if (host.startsWith('10.') || host.startsWith('192.168.')) return true;
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
-    if (host.endsWith('.local') || host.endsWith('.internal')) return true;
-    // Block non-http(s) schemes
+    // Block non-http(s) schemes (file:, gopher:, ftp:, data:, etc.)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true;
+    // Reject embedded credentials (userinfo@host smuggling)
+    if (parsed.username || parsed.password) return true;
+    let host = parsed.hostname.toLowerCase().replace(/\.$/, ''); // strip trailing dot
+    if (!host) return true;
+    if (host === 'localhost' || host.endsWith('.localhost')) return true;
+    if (host.endsWith('.local') || host.endsWith('.internal')) return true;
+    if (host.includes(':')) return ipv6IsPrivate(parsed.hostname.toLowerCase());
+    const v = ipv4ToInt(host);
+    if (v !== null) return ipv4IntIsPrivate(v);
+    return false; // a regular DNS hostname; resolved-IP safety handled by safeFetch
   } catch {
     return true;
   }
-  return false;
+}
+
+// Fetch that follows redirects manually, re-validating every hop against the
+// SSRF blocklist so a public URL cannot 30x-redirect into an internal address
+// (the redirect:'follow' TOCTOU). Caps the redirect chain.
+async function ssrfSafeFetch(targetUrl, init = {}, maxRedirects = 4) {
+  let current = targetUrl;
+  for (let i = 0; i <= maxRedirects; i++) {
+    if (isPrivateUrl(current)) {
+      const e = new Error('Blocked: private/local address in redirect chain');
+      e.ssrfBlocked = true;
+      throw e;
+    }
+    const resp = await fetch(current, { ...init, redirect: 'manual' });
+    const status = resp.status;
+    if (status === 301 || status === 302 || status === 303 || status === 307 || status === 308) {
+      const loc = resp.headers.get('location');
+      if (!loc) return resp;
+      try {
+        current = new URL(loc, current).toString();
+      } catch {
+        const e = new Error('Invalid redirect location');
+        e.ssrfBlocked = true;
+        throw e;
+      }
+      continue;
+    }
+    return resp;
+  }
+  const e = new Error('Too many redirects');
+  e.ssrfBlocked = true;
+  throw e;
+}
+
+// Read a response body as text, aborting once maxBytes is exceeded instead of
+// buffering the entire (potentially huge) body into memory first.
+async function readBounded(resp, maxBytes) {
+  const cl = parseInt(resp.headers.get('content-length') || '', 10);
+  if (Number.isFinite(cl) && cl > maxBytes) return null;
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let out = '';
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      try { reader.cancel(); } catch { /* noop */ }
+      return null;
+    }
+    out += decoder.decode(value, { stream: true });
+  }
+  out += decoder.decode();
+  return out;
 }
 
 function jsonResponse(data, status = 200) {
@@ -679,6 +838,7 @@ function jsonResponse(data, status = 200) {
     status,
     headers: {
       'Content-Type': 'application/json',
+      'X-Content-Type-Options': 'nosniff',
       ...CORS_HEADERS,
     },
   });

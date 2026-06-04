@@ -2089,7 +2089,7 @@ async function changeNick() {
             localStorage.setItem('nym_auto_ephemeral_nick', baseNick);
             // For reserved (developer) nicks, also save the verified nsec for auto-login
             if (cmdResult && cmdResult.nsec) {
-                localStorage.setItem('nym_dev_nsec', cmdResult.nsec);
+                nymSecretSet('nym_dev_nsec', cmdResult.nsec);
             }
         }
         // If cmdNick was cancelled (e.g. reserved nick) but bio/lightning changed,
@@ -2608,6 +2608,7 @@ async function changeRelay() {
 
 async function showSettings() {
     nym.updateRelayStatus();
+    window.restoreSettingsSectionState();
 
     // Load color mode setting (auto-save and auto-apply on click)
     const colorModeGroup = document.getElementById('colorModeGroup');
@@ -3270,14 +3271,14 @@ async function saveSettings() {
         if (keypairMode === 'random' || keypairMode === 'hardcore') {
             localStorage.setItem('nym_random_keypair_per_session', 'true');
             // Clear saved session keypair so next reload generates fresh one
-            localStorage.removeItem('nym_session_nsec');
+            nymSecretRemove('nym_session_nsec');
         } else {
             localStorage.removeItem('nym_random_keypair_per_session');
             // Save current keypair for reuse if not already saved
-            if (nym.privkey && !localStorage.getItem('nym_session_nsec')) {
+            if (nym.privkey && !nymSecretGet('nym_session_nsec')) {
                 try {
                     const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
-                    localStorage.setItem('nym_session_nsec', nsec);
+                    nymSecretSet('nym_session_nsec', nsec);
                 } catch (e) { }
             }
         }
@@ -3605,7 +3606,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.67.445';
+const NYMCHAT_VERSION = 'v3.68.445';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -3722,7 +3723,7 @@ async function checkSavedConnection() {
 
             let secretKey = null;
             if (method === 'nsec') {
-                const nsec = localStorage.getItem('nym_nostr_login_nsec');
+                const nsec = nymSecretGet('nym_nostr_login_nsec');
                 if (nsec) secretKey = nym.decodeNsec(nsec);
             }
 
@@ -3832,7 +3833,7 @@ async function checkSavedConnection() {
             const savedNick = localStorage.getItem('nym_auto_ephemeral_nick');
             if (savedNick && nym.isReservedNick(savedNick)) {
                 // Reserved nick - check for saved nsec to auto-verify
-                const savedNsec = localStorage.getItem('nym_dev_nsec');
+                const savedNsec = nymSecretGet('nym_dev_nsec');
                 if (savedNsec) {
                     const result = nym.verifyDeveloperNsec(savedNsec);
                     if (result.valid) {
@@ -3841,7 +3842,7 @@ async function checkSavedConnection() {
                         nym.displaySystemMessage('Auto-starting verified session...');
                     } else {
                         // Invalid saved nsec - clear it and use random nym
-                        localStorage.removeItem('nym_dev_nsec');
+                        nymSecretRemove('nym_dev_nsec');
                         await nym.generateKeypair();
                         nym.nym = nym.generateRandomNym();
                         nym.connectionMode = 'ephemeral';
@@ -3853,7 +3854,7 @@ async function checkSavedConnection() {
                 }
             } else if (!randomKeypairPerSession) {
                 // Reuse saved keypair if available (persistent session)
-                const savedNsec = localStorage.getItem('nym_session_nsec');
+                const savedNsec = nymSecretGet('nym_session_nsec');
                 if (savedNsec) {
                     try {
                         const secretKey = nym.decodeNsec(savedNsec);
@@ -3864,7 +3865,7 @@ async function checkSavedConnection() {
                         nym.connectionMode = 'ephemeral';
                     } catch (e) {
                         // Saved keypair invalid, generate fresh
-                        localStorage.removeItem('nym_session_nsec');
+                        nymSecretRemove('nym_session_nsec');
                         await nym.generateKeypair();
                         nym.nym = savedNick || nym.generateRandomNym();
                         nym.connectionMode = 'ephemeral';
@@ -3877,7 +3878,7 @@ async function checkSavedConnection() {
                     // Save the generated keypair for reuse
                     try {
                         const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
-                        localStorage.setItem('nym_session_nsec', nsec);
+                        nymSecretSet('nym_session_nsec', nsec);
                     } catch (e) { }
                 }
                 // Persist the auto-generated nick so it survives reload
@@ -3992,6 +3993,11 @@ async function checkSavedConnection() {
 }
 
 async function initializeNym() {
+    if (!window.nym) {
+        for (let i = 0; i < 100 && !window.nym; i++) await new Promise(r => setTimeout(r, 30));
+        if (!window.nym) return;
+    }
+
     // Show loading state on button
     const enterBtn = document.getElementById('enterNymBtn');
     const originalBtnText = enterBtn.innerHTML;
@@ -4039,7 +4045,7 @@ async function initializeNym() {
             if (nym.isReservedNick(nymInput)) {
                 const nsecVal = document.getElementById('devNsecInput').value.trim();
                 if (nsecVal) {
-                    localStorage.setItem('nym_dev_nsec', nsecVal);
+                    nymSecretSet('nym_dev_nsec', nsecVal);
                 }
             }
         }
@@ -4048,7 +4054,7 @@ async function initializeNym() {
         if (!isDeveloperLogin && nym.privkey) {
             try {
                 const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
-                localStorage.setItem('nym_session_nsec', nsec);
+                nymSecretSet('nym_session_nsec', nsec);
             } catch (e) { }
         }
 
@@ -4067,7 +4073,7 @@ async function initializeNym() {
             nostrPubkey = localStorage.getItem('nym_nostr_login_pubkey');
             if (nostrMethod === 'nsec') {
                 try {
-                    const nsec = localStorage.getItem('nym_nostr_login_nsec');
+                    const nsec = nymSecretGet('nym_nostr_login_nsec');
                     if (nsec) nostrSecretKey = nym.decodeNsec(nsec);
                 } catch (_) { }
             }
@@ -4306,7 +4312,7 @@ async function nostrLoginWithNsec() {
     // Store login state (nsec stored so we can sign events and sync settings)
     localStorage.setItem('nym_nostr_login_method', 'nsec');
     localStorage.setItem('nym_nostr_login_pubkey', pubkey);
-    localStorage.setItem('nym_nostr_login_nsec', nsecInput);
+    nymSecretSet('nym_nostr_login_nsec', nsecInput);
     try {
         const npub = window.NostrTools.nip19.npubEncode(pubkey);
         localStorage.setItem('nym_nostr_login_npub', npub);
@@ -4529,7 +4535,7 @@ async function _nip46CompleteLogin(remotePubkey) {
         localStorage.setItem('nym_nostr_login_method', 'nip46');
         localStorage.setItem('nym_nostr_login_pubkey', pubkey);
         // Store NIP-46 connection details for session restoration
-        localStorage.setItem('nym_nip46_client_secret', Array.from(state.clientSecretKey).map(b => b.toString(16).padStart(2, '0')).join(''));
+        nymSecretSet('nym_nip46_client_secret', Array.from(state.clientSecretKey).map(b => b.toString(16).padStart(2, '0')).join(''));
         localStorage.setItem('nym_nip46_remote_pubkey', remotePubkey);
         localStorage.setItem('nym_nip46_relay', state.relayUrl);
         try {
@@ -4665,7 +4671,7 @@ function nostrLoginCancelRemoteSigner() {
 
 // Restore NIP-46 session from localStorage on page reload
 async function _nip46RestoreSession() {
-    const clientSecretHex = localStorage.getItem('nym_nip46_client_secret');
+    const clientSecretHex = nymSecretGet('nym_nip46_client_secret');
     const remotePubkey = localStorage.getItem('nym_nip46_remote_pubkey');
     const relayUrl = localStorage.getItem('nym_nip46_relay');
     if (!clientSecretHex || !remotePubkey || !relayUrl) return false;
@@ -4853,11 +4859,11 @@ function applyNostrLogin(pubkey, secretKey, method) {
 function nostrLogout() {
     localStorage.removeItem('nym_nostr_login_method');
     localStorage.removeItem('nym_nostr_login_pubkey');
-    localStorage.removeItem('nym_nostr_login_nsec');
+    nymSecretRemove('nym_nostr_login_nsec');
     localStorage.removeItem('nym_nostr_login_npub');
     localStorage.removeItem('nym_nostr_login_profile');
     // Clean up NIP-46 remote signer state
-    localStorage.removeItem('nym_nip46_client_secret');
+    nymSecretRemove('nym_nip46_client_secret');
     localStorage.removeItem('nym_nip46_remote_pubkey');
     localStorage.removeItem('nym_nip46_relay');
     // Wipe profile fields that aren't pubkey-scoped
@@ -5264,6 +5270,11 @@ async function applyNostrSettings(s) {
     }
     if (s.botPmWelcomed === true) {
         try { localStorage.setItem('nym_botpm_welcomed', 'true'); } catch (_) { }
+    }
+
+    // Cross-device preference for identity-encryption-at-rest
+    if (s.encryptAtRestPreferred === true) {
+        try { localStorage.setItem('nym_encrypt_at_rest_pref', '1'); } catch (_) { }
     }
 
     // Theme
@@ -5855,9 +5866,9 @@ async function signOut() {
     localStorage.removeItem('nym_auto_ephemeral');
     localStorage.removeItem('nym_auto_ephemeral_nick');
     localStorage.removeItem('nym_auto_ephemeral_channel');
-    localStorage.removeItem('nym_session_nsec');
+    nymSecretRemove('nym_session_nsec');
     localStorage.removeItem('nym_random_keypair_per_session');
-    localStorage.removeItem('nym_dev_nsec');
+    nymSecretRemove('nym_dev_nsec');
     localStorage.removeItem('nym_color_mode');
     localStorage.removeItem('nym_purchases_cache');
     localStorage.removeItem('nym_active_style');
@@ -5865,7 +5876,7 @@ async function signOut() {
     // Clear Nostr login state
     localStorage.removeItem('nym_nostr_login_method');
     localStorage.removeItem('nym_nostr_login_pubkey');
-    localStorage.removeItem('nym_nostr_login_nsec');
+    nymSecretRemove('nym_nostr_login_nsec');
     localStorage.removeItem('nym_nostr_login_npub');
     localStorage.removeItem('nym_bio');
     localStorage.removeItem('nym_lightning_address_global');
@@ -5899,6 +5910,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     nym = new NYM();
     window.nym = nym;
     installNativeWalletBridgeCompat(nym);
+
+    // If the user enabled identity encryption, unlock (decrypt the stored
+    // secrets into memory) before any identity-restore code reads them.
+    try { await nym.unlockVaultAtBoot(); } catch (e) { /* proceed; secrets read as absent */ }
 
     // Parse URL for channel routing BEFORE initialization
     parseUrlChannel();

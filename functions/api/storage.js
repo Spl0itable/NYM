@@ -1,5 +1,7 @@
 // Cloudflare Pages Function: R2-backed user storage (flair shop + encrypted settings).
 
+import { ledgerCall } from "./_ledger.js";
+export { NymLedger } from "./_ledger.js";
 import {
   getPublicKey,
   getEventHash,
@@ -194,7 +196,15 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyBotAuth(body.auth, userPubkey)) return json({ error: "Authentication failed" }, 401);
+  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) {
+    return json({ error: "Authentication failed" }, 401);
+  }
+  var SHOP_MONEY_ACTIONS = { "shop-buy-invoice": 1, "shop-claim": 1, "shop-transfer": 1, "shop-redeem": 1 };
+  if (SHOP_MONEY_ACTIONS[body.action]) {
+    var rp = await ledgerCall(env, { op: "replay", id: body.auth && body.auth.id, ttl: 130 });
+    if (rp && rp._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
+    if (!rp || !rp.fresh) return json({ error: "This authorization was already used. Please retry." }, 401);
+  }
 
   if (body.action === "shop-get") {
     var rec = await shopGetRecord(env, userPubkey);
@@ -302,12 +312,20 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       isGift = true;
     }
     var code = shopGenerateCode();
-    var crec = await shopGetRecord(env, recipient);
-    crec.owned[pending.itemId] = { at: Date.now(), amountSats: pending.amountSats, gift: isGift, code: code };
-    await shopPutRecord(env, recipient, crec);
-    await env.R2_BUCKET.put("shop-code/" + code, JSON.stringify({ itemId: pending.itemId, owner: recipient, createdAt: Date.now() }));
-    await env.R2_BUCKET.put(claimKey, JSON.stringify({ itemId: pending.itemId, pubkey: recipient, paidBy: userPubkey, gift: isGift, code: code, at: Date.now() }));
-    await env.R2_BUCKET.delete("shop-pending/" + invoiceId);
+    // Atomic claim-and-grant via the ledger DO (single-use invoice gate).
+    var claimRes = await ledgerCall(env, {
+      op: "shop-claim", invoiceId: invoiceId, recipient: recipient, itemId: pending.itemId,
+      code: code, amountSats: pending.amountSats, gift: isGift,
+      claimData: { paidBy: userPubkey, gift: isGift }
+    });
+    if (claimRes && claimRes._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
+    if (claimRes && claimRes.alreadyClaimed) {
+      var prev = claimRes.prev;
+      if (prev) return json({ itemId: prev.itemId, code: prev.code, gift: prev.gift, recipient: prev.pubkey, alreadyClaimed: true });
+      return json({ error: "This payment was already claimed." }, 409);
+    }
+    if (!claimRes || claimRes.error) return json({ error: (claimRes && claimRes.error) || "Claim failed." }, 400);
+    var crec = { owned: claimRes.owned, active: claimRes.active };
     var giftEvent = null;
     if (isGift) {
       var gifterName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
@@ -330,21 +348,12 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var toPubkey = String(body.toPubkey || "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(toPubkey)) return json({ error: "Invalid recipient pubkey." }, 400);
     if (toPubkey === userPubkey) return json({ error: "Cannot transfer to yourself." }, 400);
-    var fromRec = await shopGetRecord(env, userPubkey);
-    var entry = fromRec.owned[itemId];
-    if (!entry) return json({ error: "You do not own this item." }, 403);
-    delete fromRec.owned[itemId];
-    shopPruneActive(fromRec);
-    var toRec = await shopGetRecord(env, toPubkey);
-    toRec.owned[itemId] = { at: Date.now(), amountSats: entry.amountSats || 0, gift: true, code: entry.code, transferredFrom: userPubkey };
-    await shopPutRecord(env, userPubkey, fromRec);
-    await shopPutRecord(env, toPubkey, toRec);
+    // Atomic transfer of the item between two shop records via the ledger DO.
+    var xfer = await ledgerCall(env, { op: "shop-transfer", from: userPubkey, to: toPubkey, itemId: itemId });
+    if (xfer && xfer._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
+    if (!xfer || xfer.error) return json({ error: (xfer && xfer.error) || "Transfer failed." }, 403);
+    var fromRec = { owned: xfer.owned, active: xfer.active };
     readCacheDelete(context, "/shop-status/" + userPubkey);
-    if (entry.code) {
-      try {
-        await env.R2_BUCKET.put("shop-code/" + entry.code, JSON.stringify({ itemId: itemId, owner: toPubkey, createdAt: Date.now() }));
-      } catch (e) { }
-    }
     var transferEvent = null;
     try {
       var tName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
@@ -371,24 +380,20 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var redeemItem = codeData.itemId;
     if (!SHOP_CATALOG[redeemItem]) return json({ error: "Unknown shop item." }, 400);
     var prevOwner = (codeData.owner || "").toLowerCase();
-    if (prevOwner === userPubkey) {
-      var ownRec = await shopGetRecord(env, userPubkey);
-      return json({ itemId: redeemItem, owned: ownRec.owned, active: ownRec.active, alreadyOwner: true });
+    // Atomic redeem (move item from prevOwner to redeemer) via the ledger DO.
+    var redeemRes = await ledgerCall(env, {
+      op: "shop-redeem", code: code, itemId: redeemItem, user: userPubkey,
+      prevOwner: prevOwner, createdAt: codeData.createdAt || Date.now()
+    });
+    if (redeemRes && redeemRes._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
+    if (!redeemRes || redeemRes.error) return json({ error: (redeemRes && redeemRes.error) || "Redeem failed." }, 400);
+    if (prevOwner && prevOwner !== userPubkey && /^[0-9a-f]{64}$/.test(prevOwner)) {
+      readCacheDelete(context, "/shop-status/" + prevOwner);
     }
-    if (prevOwner && /^[0-9a-f]{64}$/.test(prevOwner)) {
-      var prevRec = await shopGetRecord(env, prevOwner);
-      if (prevRec.owned[redeemItem]) {
-        delete prevRec.owned[redeemItem];
-        shopPruneActive(prevRec);
-        await shopPutRecord(env, prevOwner, prevRec);
-        readCacheDelete(context, "/shop-status/" + prevOwner);
-      }
+    if (redeemRes.alreadyOwner) {
+      return json({ itemId: redeemItem, owned: redeemRes.owned, active: redeemRes.active, alreadyOwner: true });
     }
-    var rrec = await shopGetRecord(env, userPubkey);
-    rrec.owned[redeemItem] = { at: Date.now(), amountSats: 0, gift: false, code: code, redeemed: true };
-    await shopPutRecord(env, userPubkey, rrec);
-    await env.R2_BUCKET.put("shop-code/" + code, JSON.stringify({ itemId: redeemItem, owner: userPubkey, createdAt: codeData.createdAt || Date.now() }));
-    return json({ itemId: redeemItem, owned: rrec.owned, active: rrec.active });
+    return json({ itemId: redeemItem, owned: redeemRes.owned, active: redeemRes.active });
   }
 
   return json({ error: "Unknown action" }, 400);
@@ -413,7 +418,7 @@ async function handleSettingsAction(context, body) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyBotAuth(body.auth, userPubkey)) return json({ error: "Authentication failed" }, 401);
+  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "settings-get") {
     var results = await Promise.all(SETTINGS_CATEGORIES.map(async function (cat) {
@@ -538,7 +543,7 @@ async function handleProfileAction(context, body) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyBotAuth(body.auth, userPubkey)) return json({ error: "Authentication failed" }, 401);
+  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "profile-set") {
     var ev = body.event;
@@ -705,7 +710,7 @@ async function handlePmAction(context, body) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyBotAuth(body.auth, userPubkey)) return json({ error: "Authentication failed" }, 401);
+  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
 
   // Upload one or more gift wraps addressed to the authenticated user. Already
   // stored events are skipped (edge cache, then a Class B existence check).
@@ -941,7 +946,8 @@ async function onRequest(context) {
     try {
       return await handleSettingsAction(context, body);
     } catch (e) {
-      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
       });
     }
@@ -951,7 +957,8 @@ async function onRequest(context) {
     try {
       return await handleProfileAction(context, body);
     } catch (e) {
-      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
       });
     }
@@ -961,7 +968,8 @@ async function onRequest(context) {
     try {
       return await handlePmAction(context, body);
     } catch (e) {
-      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
       });
     }
@@ -971,7 +979,8 @@ async function onRequest(context) {
     try {
       return await handleChannelAction(context, body);
     } catch (e) {
-      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
       });
     }
@@ -986,7 +995,8 @@ async function onRequest(context) {
     try {
       return await handleShopAction(context, body, privkey, pubkey);
     } catch (e) {
-      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
       });
     }

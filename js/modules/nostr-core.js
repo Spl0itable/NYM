@@ -988,7 +988,9 @@ Object.assign(NYM.prototype, {
         // Previously ±2 days, but bitchat only looks back 24 hours for DMs
         // so large offsets caused messages to fall outside its subscription window
         const TWO_HOURS = 2 * 60 * 60;
-        return Math.round(Date.now() / 1000 - Math.random() * TWO_HOURS);
+        // CSPRNG so the privacy jitter can't be predicted/stripped by an observer.
+        const r = crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
+        return Math.round(Date.now() / 1000 - r * TWO_HOURS);
     },
 
     // Generate UUID v4 (used only by Bitchat's TLV encoder, which parses UUID format)

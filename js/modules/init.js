@@ -82,6 +82,7 @@ Object.assign(NYM.prototype, {
             this.setupSidebarSectionReorder();
             this.setupSidebarSectionCollapse();
             this.setupSidebarItemMenus();
+            this.bindNymPanicGesture();
 
             // Load saved preferences
             this.applyColorMode();

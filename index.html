@@ -3,6 +3,9 @@
 
 <head>
     <meta charset="UTF-8">
+    <!-- Fallback CSP -->
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js https://cdn.jsdelivr.net/npm/webtorrent@2.5.1/webtorrent.min.js; style-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss: ws:; worker-src 'self' blob:; child-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self' data:">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Nymchat</title>
@@ -1182,555 +1185,609 @@
             <button class="modal-close" data-action="closeModal" data-modal-id="settingsModal">✕</button>
             <div class="modal-header">Settings</div>
             <div class="modal-body">
-                <div class="form-group">
-                    <label class="form-label">Appearance</label>
-                    <div class="color-mode-group" id="colorModeGroup">
-                        <button type="button" class="color-mode-btn" data-mode="light">Light</button>
-                        <button type="button" class="color-mode-btn active" data-mode="auto">Auto</button>
-                        <button type="button" class="color-mode-btn" data-mode="dark">Dark</button>
-                    </div>
-                    <div class="form-hint">Auto matches your system preference</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Theme</label>
-                    <select class="form-select" id="themeSelect">
-                        <option value="bitchat">Bitchat (Multicolor)</option>
-                        <option value="matrix">Matrix Green</option>
-                        <option value="amber">Amber Terminal</option>
-                        <option value="cyber">Cyberpunk</option>
-                        <option value="hacker">Hacker Blue</option>
-                        <option value="ghost">Ghost (B&W)</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Chat Wallpaper</label>
-                    <div class="wallpaper-grid" id="wallpaperGrid">
-                        <div class="wallpaper-option selected" data-wallpaper="none" data-action="selectWallpaper">
-                            <div class="wallpaper-preview wallpaper-none">
-                                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                                    <line x1="6" y1="6" x2="18" y2="18"></line>
-                                </svg>
-                            </div>
-                            <span class="wallpaper-label">None</span>
-                        </div>
-                        <div class="wallpaper-option" data-wallpaper="geometric" data-action="selectWallpaper">
-                            <div class="wallpaper-preview wallpaper-geometric"></div>
-                            <span class="wallpaper-label">Geometric</span>
-                        </div>
-                        <div class="wallpaper-option" data-wallpaper="circuit" data-action="selectWallpaper">
-                            <div class="wallpaper-preview wallpaper-circuit"></div>
-                            <span class="wallpaper-label">Circuit</span>
-                        </div>
-                        <div class="wallpaper-option" data-wallpaper="dots" data-action="selectWallpaper">
-                            <div class="wallpaper-preview wallpaper-dots"></div>
-                            <span class="wallpaper-label">Dots</span>
-                        </div>
-                        <div class="wallpaper-option" data-wallpaper="waves" data-action="selectWallpaper">
-                            <div class="wallpaper-preview wallpaper-waves"></div>
-                            <span class="wallpaper-label">Waves</span>
-                        </div>
-                        <div class="wallpaper-option" data-wallpaper="topography"
-                            data-action="selectWallpaper">
-                            <div class="wallpaper-preview wallpaper-topography"></div>
-                            <span class="wallpaper-label">Topography</span>
-                        </div>
-                        <div class="wallpaper-option" data-wallpaper="hexagons" data-action="selectWallpaper">
-                            <div class="wallpaper-preview wallpaper-hexagons"></div>
-                            <span class="wallpaper-label">Hexagons</span>
-                        </div>
-                        <div class="wallpaper-option" data-wallpaper="diamonds" data-action="selectWallpaper">
-                            <div class="wallpaper-preview wallpaper-diamonds"></div>
-                            <span class="wallpaper-label">Diamonds</span>
-                        </div>
-                        <div class="wallpaper-option" data-wallpaper="custom" data-action="triggerWallpaperUpload"
-                            id="customWallpaperOption">
-                            <div class="wallpaper-preview wallpaper-custom" id="customWallpaperPreview">
-                                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                    <polyline points="17 8 12 3 7 8"></polyline>
-                                    <line x1="12" y1="3" x2="12" y2="15"></line>
-                                </svg>
-                            </div>
-                            <span class="wallpaper-label">Upload</span>
-                        </div>
-                    </div>
-                    <input type="file" id="wallpaperFileInput" accept="image/*"
-                        data-on-change="handleWallpaperUpload" class="nm-hidden">
-                    <div class="form-hint">Choose a background pattern or upload your own image (min 1920x1080)</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Message Layout</label>
-                    <div class="layout-grid" id="layoutGrid">
-                        <div class="layout-option selected" data-layout="bubbles" data-action="selectMessageLayout">
-                            <div class="layout-preview layout-preview-bubbles">
-                                <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">alice<span class="nym-suffix">#e45f</span></span><span class="lp-bubble-text">hey there!</span></div>
-                                <div class="lp-bubble lp-bubble-self"><span class="lp-bubble-nick">you<span class="nym-suffix">#6si9</span></span><span class="lp-bubble-text">hello!</span></div>
-                                <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">bob<span class="nym-suffix">#2t5g</span></span><span class="lp-bubble-text">what's up?</span></div>
-                            </div>
-                            <span class="layout-label">Bubbles (Default)</span>
-                        </div>
-                        <div class="layout-option" data-layout="irc" data-action="selectMessageLayout">
-                            <div class="layout-preview layout-preview-irc">
-                                <div class="layout-line"><span class="lp-nick">&lt;alice<span class="nym-suffix">#e45f</span>&gt;</span> <span class="lp-msg">hey there!</span></div>
-                                <div class="layout-line"><span class="lp-nick lp-self">&lt;you<span class="nym-suffix">#6si9</span>&gt;</span> <span class="lp-msg">hello!</span></div>
-                                <div class="layout-line"><span class="lp-nick">&lt;bob<span class="nym-suffix">#2t5g</span>&gt;</span> <span class="lp-msg">what's up?</span></div>
-                            </div>
-                            <span class="layout-label">IRC Style</span>
-                        </div>
-                    </div>
-                    <div class="form-hint">Choose between classic IRC-style or modern chat bubbles</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Visual Transparency</label>
-                    <select class="form-select" id="transparencySelect" data-on-change="onTransparencyChange">
-                        <option value="false">Solid</option>
-                        <option value="true">Glass</option>
-                    </select>
-                    <div class="form-hint">Choose between Solid or Glass, where messages, modals, sidebars, and other surfaces are rendered with either solid backgrounds or a translucent "Glass" look.</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Text Size</label>
-                    <div class="nm-h-53">
-                        <span class="nm-h-54">A</span>
-                        <input type="range" class="form-range nm-h-55" id="textSizeSlider" min="12" max="28" value="15" step="1"
-                            data-on-input="previewTextSize"
-                            data-on-change="commitTextSize">
-                        <span class="nm-h-56">A</span>
-                        <span id="textSizeValue" class="nm-h-57">15px</span>
-                        <button class="btn-small nm-h-58" data-action="resetTextSize">Reset</button>
-                    </div>
-                    <div class="form-hint">Adjust the size of all text across the app</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Group Chats & PMs Only Mode</label>
-                    <select class="form-select" id="groupChatPMOnlySelect">
-                        <option value="false">Disabled (show geohash channels)</option>
-                        <option value="true">Enabled (group chats & PMs only)</option>
-                    </select>
-                    <div class="form-hint">Hides all geohash channels and focuses the app on group chats and private messages only. Reduces bandwidth by skipping channel subscriptions.</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Generate Random Keypair Per Session</label>
-                    <select class="form-select" id="randomKeypairSelect" data-on-change="onRandomKeypairChange">
-                        <option value="persistent">Disabled (reuse same keypair)</option>
-                        <option value="random">Enabled (new identity each session)</option>
-                        <option value="hardcore">Hardcore (new keypair every message)</option>
-                    </select>
-                    <div class="form-hint">Generate a new random keypair on every session restart for improved pseudonymity. When disabled, your generated keypair persists across reloads.</div>
-                    <div id="hardcoreKeypairWarning" class="form-hint nm-hidden nm-h-59">⚠ Hardcore mode changes your identity after every sent message. PMs and group chats will not work reliably since recipients cannot reply to a constantly changing pubkey. Settings will not sync across devices.</div>
-                </div>
-
-                <div class="form-group" data-geohash-setting>
-                    <label class="form-label">Sort Geohash Channels by Proximity</label>
-                    <select class="form-select" id="proximitySelect">
-                        <option value="false">Disabled</option>
-                        <option value="true">Enabled (requires location access)</option>
-                    </select>
-                    <div class="form-hint">Sort geohash channels by distance from your location</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Proof of Work Difficulty:</label>
-                    <select class="form-select" id="powDifficultySelect">
-                        <option value="0" selected>Disabled</option>
-                        <option value="8">Very Low (8 bits)</option>
-                        <option value="12">Low (12 bits)</option>
-                        <option value="16">Medium (16 bits)</option>
-                        <option value="20">High (20 bits)</option>
-                        <option value="24">Very High (24 bits)</option>
-                    </select>
-                    <div class="form-hint">Enable for anti-spam to require messages have a minimum PoW</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Accept Private Messages &amp; Group Chat Requests</label>
-                    <select class="form-select" id="acceptPMsSelect">
-                        <option value="enabled">Enabled</option>
-                        <option value="friends">Friends only</option>
-                        <option value="disabled">Disabled</option>
-                    </select>
-                    <div class="form-hint">Control who can send you PMs and group chat invites. "Friends only" filters messages from non-friends.</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Accept Audio &amp; Video Calls</label>
-                    <select class="form-select" id="acceptCallsSelect">
-                        <option value="enabled">Enabled</option>
-                        <option value="friends">Friends only</option>
-                        <option value="disabled">Disabled</option>
-                    </select>
-                    <div class="form-hint">Control who can ring you with an audio or video call. "Friends only" silently ignores calls from non-friends.</div>
-                    <div class="form-warning">⚠ Audio/video calls and P2P file sharing connect peers directly over WebRTC, which can reveal your true IP address to the other party. Use a VPN or Tor to help conceal it.</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Disappearing PM (forward secrecy)</label>
-                    <select class="form-select" id="dmForwardSecrecySelect">
-                        <option value="false">Disabled</option>
-                        <option value="true">Enabled</option>
-                    </select>
-                    <div class="form-hint">
-                        When enabled, your private messages include an "expiration" tag (NIP‑40) so relays/clients can
-                        delete them after the period chosen when enabled.
-                    </div>
-                </div>
-
-                <div class="form-group" id="dmTTLGroup">
-                    <label class="form-label">Disappear After</label>
-                    <select class="form-select" id="dmTTLSelect">
-                        <option value="3600">1 hour</option>
-                        <option value="21600">6 hours</option>
-                        <option value="86400" selected>1 day</option>
-                        <option value="259200">3 days</option>
-                        <option value="604800">7 days</option>
-                    </select>
-                    <div class="form-hint">This sets the "expiration" timestamp on each outgoing gift‑wrapped PM.</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Read Receipts</label>
-                    <select class="form-select" id="readReceiptsSelect">
-                        <option value="everywhere">Enabled everywhere</option>
-                        <option value="pms-groups">Both PMs and group chats</option>
-                        <option value="pms">Only PMs</option>
-                        <option value="groups">Only group chats</option>
-                        <option value="disabled">Disabled completely</option>
-                    </select>
-                    <div class="form-hint">Choose where senders can see when you've read their messages (✓✓). "Enabled everywhere" includes PMs, group chats, and public channels.
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Translation Language</label>
-                    <select class="form-select" id="translateLanguageSelect">
-                        <option value="">Disabled</option>
-                        <option value="en">English</option>
-                        <option value="es">Spanish</option>
-                        <option value="fr">French</option>
-                        <option value="de">German</option>
-                        <option value="it">Italian</option>
-                        <option value="pt">Portuguese</option>
-                        <option value="ru">Russian</option>
-                        <option value="zh">Chinese</option>
-                        <option value="ja">Japanese</option>
-                        <option value="ko">Korean</option>
-                        <option value="ar">Arabic</option>
-                        <option value="hi">Hindi</option>
-                        <option value="tr">Turkish</option>
-                        <option value="nl">Dutch</option>
-                        <option value="pl">Polish</option>
-                        <option value="uk">Ukrainian</option>
-                        <option value="vi">Vietnamese</option>
-                        <option value="th">Thai</option>
-                        <option value="id">Indonesian</option>
-                        <option value="sv">Swedish</option>
-                        <option value="af">Afrikaans</option>
-                        <option value="bg">Bulgarian</option>
-                        <option value="bn">Bengali</option>
-                        <option value="ca">Catalan</option>
-                        <option value="cs">Czech</option>
-                        <option value="da">Danish</option>
-                        <option value="el">Greek</option>
-                        <option value="et">Estonian</option>
-                        <option value="fa">Persian</option>
-                        <option value="fi">Finnish</option>
-                        <option value="fil">Filipino</option>
-                        <option value="he">Hebrew</option>
-                        <option value="hr">Croatian</option>
-                        <option value="hu">Hungarian</option>
-                        <option value="lt">Lithuanian</option>
-                        <option value="lv">Latvian</option>
-                        <option value="ms">Malay</option>
-                        <option value="no">Norwegian</option>
-                        <option value="ro">Romanian</option>
-                        <option value="sk">Slovak</option>
-                        <option value="sl">Slovenian</option>
-                        <option value="sr">Serbian</option>
-                        <option value="sw">Swahili</option>
-                        <option value="ta">Tamil</option>
-                        <option value="te">Telugu</option>
-                        <option value="ur">Urdu</option>
-                    </select>
-                    <div class="form-hint">Choose your preferred language for translating messages via the context menu.</div>
-                </div>
-
-                <div class="form-group mobile-only">
-                    <label class="form-label">Swipe Gestures (Mobile)</label>
-                    <select class="form-select" id="gesturesEnabledSelect">
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                    </select>
-                    <div class="form-hint">Swipe a message horizontally to trigger an action. Disable to turn off all swipe gestures on messages.</div>
-                </div>
-
-                <div class="form-group mobile-only" id="swipeLeftActionGroup">
-                    <label class="form-label">Swipe Left Action</label>
-                    <select class="form-select" id="swipeLeftActionSelect">
-                        <option value="quote">Quote Reply</option>
-                        <option value="translate">Translate</option>
-                        <option value="copy">Copy Message</option>
-                        <option value="react">Quick React</option>
-                        <option value="zap">Zap Bitcoin</option>
-                        <option value="slap">Slap with Trout</option>
-                        <option value="hug">Give Warm Hug</option>
-                        <option value="none">None</option>
-                    </select>
-                    <div class="form-hint">Action triggered when swiping a message to the left.</div>
-                </div>
-
-                <div class="form-group mobile-only" id="swipeRightActionGroup">
-                    <label class="form-label">Swipe Right Action</label>
-                    <select class="form-select" id="swipeRightActionSelect">
-                        <option value="translate">Translate</option>
-                        <option value="quote">Quote Reply</option>
-                        <option value="copy">Copy Message</option>
-                        <option value="react">Quick React</option>
-                        <option value="zap">Zap Bitcoin</option>
-                        <option value="slap">Slap with Trout</option>
-                        <option value="hug">Give Warm Hug</option>
-                        <option value="none">None</option>
-                    </select>
-                    <div class="form-hint">Action triggered when swiping a message to the right.</div>
-                </div>
-
-                <div class="form-group mobile-only" id="swipeReactEmojiGroup">
-                    <label class="form-label">Quick React Emoji</label>
-                    <button type="button" id="swipeReactEmojiBtn" class="icon-btn nm-h-60">
-                        <span id="swipeReactEmojiPreview">❤️</span>
-                        <span class="nm-h-61">Change</span>
+                <div class="settings-section" data-settings-section data-section-key="appearance">
+                    <button type="button" class="settings-section-header" data-action="toggleSettingsSection" aria-expanded="true">
+                        <span>Appearance</span>
+                        <svg class="settings-section-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
-                    <div class="form-hint">Emoji always used when a swipe gesture is set to "Quick React". Tap to choose from the full emoji picker.</div>
+                    <div class="settings-section-body">
+                    <div class="form-group">
+                        <div class="color-mode-group" id="colorModeGroup">
+                            <button type="button" class="color-mode-btn" data-mode="light">Light</button>
+                            <button type="button" class="color-mode-btn active" data-mode="auto">Auto</button>
+                            <button type="button" class="color-mode-btn" data-mode="dark">Dark</button>
+                        </div>
+                        <div class="form-hint">Auto matches your system preference</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Theme</label>
+                        <select class="form-select" id="themeSelect">
+                            <option value="bitchat">Bitchat (Multicolor)</option>
+                            <option value="matrix">Matrix Green</option>
+                            <option value="amber">Amber Terminal</option>
+                            <option value="cyber">Cyberpunk</option>
+                            <option value="hacker">Hacker Blue</option>
+                            <option value="ghost">Ghost (B&W)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Chat Wallpaper</label>
+                        <div class="wallpaper-grid" id="wallpaperGrid">
+                            <div class="wallpaper-option selected" data-wallpaper="none" data-action="selectWallpaper">
+                                <div class="wallpaper-preview wallpaper-none">
+                                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                    </svg>
+                                </div>
+                                <span class="wallpaper-label">None</span>
+                            </div>
+                            <div class="wallpaper-option" data-wallpaper="geometric" data-action="selectWallpaper">
+                                <div class="wallpaper-preview wallpaper-geometric"></div>
+                                <span class="wallpaper-label">Geometric</span>
+                            </div>
+                            <div class="wallpaper-option" data-wallpaper="circuit" data-action="selectWallpaper">
+                                <div class="wallpaper-preview wallpaper-circuit"></div>
+                                <span class="wallpaper-label">Circuit</span>
+                            </div>
+                            <div class="wallpaper-option" data-wallpaper="dots" data-action="selectWallpaper">
+                                <div class="wallpaper-preview wallpaper-dots"></div>
+                                <span class="wallpaper-label">Dots</span>
+                            </div>
+                            <div class="wallpaper-option" data-wallpaper="waves" data-action="selectWallpaper">
+                                <div class="wallpaper-preview wallpaper-waves"></div>
+                                <span class="wallpaper-label">Waves</span>
+                            </div>
+                            <div class="wallpaper-option" data-wallpaper="topography"
+                                data-action="selectWallpaper">
+                                <div class="wallpaper-preview wallpaper-topography"></div>
+                                <span class="wallpaper-label">Topography</span>
+                            </div>
+                            <div class="wallpaper-option" data-wallpaper="hexagons" data-action="selectWallpaper">
+                                <div class="wallpaper-preview wallpaper-hexagons"></div>
+                                <span class="wallpaper-label">Hexagons</span>
+                            </div>
+                            <div class="wallpaper-option" data-wallpaper="diamonds" data-action="selectWallpaper">
+                                <div class="wallpaper-preview wallpaper-diamonds"></div>
+                                <span class="wallpaper-label">Diamonds</span>
+                            </div>
+                            <div class="wallpaper-option" data-wallpaper="custom" data-action="triggerWallpaperUpload"
+                                id="customWallpaperOption">
+                                <div class="wallpaper-preview wallpaper-custom" id="customWallpaperPreview">
+                                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                        <polyline points="17 8 12 3 7 8"></polyline>
+                                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                                    </svg>
+                                </div>
+                                <span class="wallpaper-label">Upload</span>
+                            </div>
+                        </div>
+                        <input type="file" id="wallpaperFileInput" accept="image/*"
+                            data-on-change="handleWallpaperUpload" class="nm-hidden">
+                        <div class="form-hint">Choose a background pattern or upload your own image (min 1920x1080)</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Message Layout</label>
+                        <div class="layout-grid" id="layoutGrid">
+                            <div class="layout-option selected" data-layout="bubbles" data-action="selectMessageLayout">
+                                <div class="layout-preview layout-preview-bubbles">
+                                    <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">alice<span class="nym-suffix">#e45f</span></span><span class="lp-bubble-text">hey there!</span></div>
+                                    <div class="lp-bubble lp-bubble-self"><span class="lp-bubble-nick">you<span class="nym-suffix">#6si9</span></span><span class="lp-bubble-text">hello!</span></div>
+                                    <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">bob<span class="nym-suffix">#2t5g</span></span><span class="lp-bubble-text">what's up?</span></div>
+                                </div>
+                                <span class="layout-label">Bubbles (Default)</span>
+                            </div>
+                            <div class="layout-option" data-layout="irc" data-action="selectMessageLayout">
+                                <div class="layout-preview layout-preview-irc">
+                                    <div class="layout-line"><span class="lp-nick">&lt;alice<span class="nym-suffix">#e45f</span>&gt;</span> <span class="lp-msg">hey there!</span></div>
+                                    <div class="layout-line"><span class="lp-nick lp-self">&lt;you<span class="nym-suffix">#6si9</span>&gt;</span> <span class="lp-msg">hello!</span></div>
+                                    <div class="layout-line"><span class="lp-nick">&lt;bob<span class="nym-suffix">#2t5g</span>&gt;</span> <span class="lp-msg">what's up?</span></div>
+                                </div>
+                                <span class="layout-label">IRC Style</span>
+                            </div>
+                        </div>
+                        <div class="form-hint">Choose between classic IRC-style or modern chat bubbles</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Visual Transparency</label>
+                        <select class="form-select" id="transparencySelect" data-on-change="onTransparencyChange">
+                            <option value="false">Solid</option>
+                            <option value="true">Glass</option>
+                        </select>
+                        <div class="form-hint">Choose between Solid or Glass, where messages, modals, sidebars, and other surfaces are rendered with either solid backgrounds or a translucent "Glass" look.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Text Size</label>
+                        <div class="nm-h-53">
+                            <span class="nm-h-54">A</span>
+                            <input type="range" class="form-range nm-h-55" id="textSizeSlider" min="12" max="28" value="15" step="1"
+                                data-on-input="previewTextSize"
+                                data-on-change="commitTextSize">
+                            <span class="nm-h-56">A</span>
+                            <span id="textSizeValue" class="nm-h-57">15px</span>
+                            <button class="btn-small nm-h-58" data-action="resetTextSize">Reset</button>
+                        </div>
+                        <div class="form-hint">Adjust the size of all text across the app</div>
+                    </div>
+                    </div>
                 </div>
 
-                <div class="form-group mobile-only" id="swipeThresholdGroup">
-                    <label class="form-label">Swipe Sensitivity</label>
-                    <select class="form-select" id="swipeThresholdSelect">
-                        <option value="40">High (40px)</option>
-                        <option value="60">Medium (60px)</option>
-                        <option value="80">Low (80px)</option>
-                        <option value="100">Very Low (100px)</option>
-                    </select>
-                    <div class="form-hint">How far you need to swipe before the action fires. Higher sensitivity means a shorter swipe.</div>
-                </div>
+                <div class="settings-section" data-settings-section data-section-key="privacy">
+                    <button type="button" class="settings-section-header" data-action="toggleSettingsSection" aria-expanded="true">
+                        <span>Privacy & Security</span>
+                        <svg class="settings-section-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div class="settings-section-body">
+                    <div class="form-group">
+                        <label class="form-label">Identity Encryption</label>
+                        <button class="form-select nm-vault-settings-btn" id="vaultSettingsBtn" data-action="openVaultSettings">Encrypt identity key on this device…</button>
+                        <div class="form-hint">Optionally protect your saved identity key with a password, PIN, passkey, or biometric (Face/Touch ID) so it can't be read from this device without unlocking. Passkeys (synced or hardware security keys) and biometrics use WebAuthn where supported, with password/PIN as the universal fallback.</div>
+                    </div>
 
-                <div class="form-group">
-                    <label class="form-label">Typing Indicators</label>
-                    <select class="form-select" id="typingIndicatorsSelect">
-                        <option value="everywhere">Enabled everywhere</option>
-                        <option value="pms-groups">Both PMs and group chats</option>
-                        <option value="pms">Only PMs</option>
-                        <option value="groups">Only group chats</option>
-                        <option value="disabled">Disabled completely</option>
-                    </select>
-                    <div class="form-hint">Choose where others can see when you're typing. "Enabled everywhere" includes PMs, group chats, and public channels.</div>
-                </div>
+                    <div class="form-group">
+                        <label class="form-label">Generate Random Keypair Per Session</label>
+                        <select class="form-select" id="randomKeypairSelect" data-on-change="onRandomKeypairChange">
+                            <option value="persistent">Disabled (reuse same keypair)</option>
+                            <option value="random">Enabled (new identity each session)</option>
+                            <option value="hardcore">Hardcore (new keypair every message)</option>
+                        </select>
+                        <div class="form-hint">Generate a new random keypair on every session restart for improved pseudonymity. When disabled, your generated keypair persists across reloads.</div>
+                        <div id="hardcoreKeypairWarning" class="form-hint nm-hidden nm-h-59">⚠ Hardcore mode changes your identity after every sent message. PMs and group chats will not work reliably since recipients cannot reply to a constantly changing pubkey. Settings will not sync across devices.</div>
+                    </div>
 
-                <div class="form-group">
-                    <label class="form-label">Show Status Indicators</label>
-                    <select class="form-select" id="showStatusSelect">
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                    </select>
-                    <div class="form-hint">When enabled, online/away/offline status dots are shown on avatars and in user profiles. When disabled, your status dot is hidden from other clients (they suppress it on their end) and you won't see status indicators yourself either.</div>
-                </div>
+                    <div class="form-group">
+                        <label class="form-label">Proof of Work Difficulty</label>
+                        <select class="form-select" id="powDifficultySelect">
+                            <option value="0" selected>Disabled</option>
+                            <option value="8">Very Low (8 bits)</option>
+                            <option value="12">Low (12 bits)</option>
+                            <option value="16">Medium (16 bits)</option>
+                            <option value="20">High (20 bits)</option>
+                            <option value="24">Very High (24 bits)</option>
+                        </select>
+                        <div class="form-hint">Enable for anti-spam to require messages have a minimum PoW</div>
+                    </div>
 
-                <div class="form-group">
-                    <label class="form-label">Cache PMs &amp; Group Chats On Device</label>
-                    <select class="form-select" id="cachePMsSelect">
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                    </select>
-                    <div class="form-hint">When enabled, decrypted private messages and group chats are stored on this device so they appear instantly on app launch. Disable if you'd rather not have decrypted message content kept at rest in app storage. Toggling off clears the existing cached PM/group data.</div>
-                </div>
+                    <div class="form-group">
+                        <label class="form-label">Accept Private Messages &amp; Group Chat Requests</label>
+                        <select class="form-select" id="acceptPMsSelect">
+                            <option value="enabled">Enabled</option>
+                            <option value="friends">Friends only</option>
+                            <option value="disabled">Disabled</option>
+                        </select>
+                        <div class="form-hint">Control who can send you PMs and group chat invites. "Friends only" filters messages from non-friends.</div>
+                    </div>
 
-                <div class="form-group">
-                    <label class="form-label">Notification Sound</label>
-                    <select class="form-select" id="soundSelect">
-                        <option value="beep">Classic Beep</option>
-                        <option value="icq">ICQ Uh-Oh</option>
-                        <option value="msn">MSN Alert</option>
-                        <option value="none">Silent</option>
-                    </select>
-                </div>
+                    <div class="form-group">
+                        <label class="form-label">Accept Audio &amp; Video Calls</label>
+                        <select class="form-select" id="acceptCallsSelect">
+                            <option value="enabled">Enabled</option>
+                            <option value="friends">Friends only</option>
+                            <option value="disabled">Disabled</option>
+                        </select>
+                        <div class="form-hint">Control who can ring you with an audio or video call. "Friends only" silently ignores calls from non-friends.</div>
+                        <div class="form-warning">⚠ Audio/video calls and P2P file sharing connect peers directly over WebRTC, which can reveal your true IP address to the other party. Use a VPN or Tor to help conceal it.</div>
+                    </div>
 
-                <div class="form-group">
-                    <label class="form-label">Auto-scroll Messages</label>
-                    <select class="form-select" id="autoscrollSelect">
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Show Timestamps</label>
-                    <select class="form-select" id="timestampSelect">
-                        <option value="true">Show</option>
-                        <option value="false">Hide</option>
-                    </select>
-                </div>
-
-                <div class="form-group" id="timeFormatGroup">
-                    <label class="form-label">Time Format</label>
-                    <select class="form-select" id="timeFormatSelect">
-                        <option value="24hr">24-hour (14:30)</option>
-                        <option value="12hr" selected>12-hour (2:30 PM)</option>
-                    </select>
-                </div>
-
-                <div class="form-group" id="dateFormatGroup">
-                    <label class="form-label">Date Format</label>
-                    <select class="form-select" id="dateFormatSelect">
-                        <option value="default" selected>Default (May 28, 2026)</option>
-                        <option value="mdy">MM/DD/YYYY (05/28/2026)</option>
-                        <option value="dmy">DD/MM/YYYY (28/05/2026)</option>
-                        <option value="ymd">YYYY-MM-DD (2026-05-28)</option>
-                    </select>
-                    <div class="form-hint">Used in the full timestamp shown when tapping a message time</div>
-                </div>
-
-                <div class="form-group nm-hidden" id="autoEphemeralSettingGroup">
-                    <label class="form-label">Auto Ephemeral Mode on Restart</label>
-                    <select class="form-select" id="autoEphemeralSelect">
-                        <option value="false">Disabled</option>
-                        <option value="true">Enabled (auto sign-in)</option>
-                    </select>
-                    <div class="form-hint">Automatically sign in with ephemeral mode on app restart</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Random Nickname Style</label>
-                    <select class="form-select" id="nickStyleSelect">
-                        <option value="fancy">Fancy (adjective_noun)</option>
-                        <option value="simple">Simple (nym1234)</option>
-                    </select>
-                    <div class="form-hint">Style used when generating random nicknames</div>
-                </div>
-
-                <div class="form-group" data-geohash-setting>
-                    <label class="form-label">Default Landing Channel</label>
-                    <div class="nm-h-62">
-                        <input type="text" class="form-control nm-h-63" id="pinnedLandingChannelSearch"
-                            placeholder="Type to search or select a channel..." autocomplete="off" />
-                        <input type="hidden" id="pinnedLandingChannelValue" />
-                        <div id="pinnedLandingChannelDropdown" class="nm-hidden nm-h-64">
+                    <div class="form-group">
+                        <label class="form-label">Disappearing PM (forward secrecy)</label>
+                        <select class="form-select" id="dmForwardSecrecySelect">
+                            <option value="false">Disabled</option>
+                            <option value="true">Enabled</option>
+                        </select>
+                        <div class="form-hint">
+                            When enabled, your private messages include an "expiration" tag (NIP‑40) so relays/clients can
+                            delete them after the period chosen when enabled.
                         </div>
                     </div>
-                    <div class="form-hint">Channel to load when you first open or reload the app</div>
-                </div>
 
-                <div class="form-group">
-                    <label class="form-label">Blur Images from Others</label>
-                    <select class="form-select" id="blurImagesSelect">
-                        <option value="true">Enabled (blur by default)</option>
-                        <option value="friends">Disabled (for friends only)</option>
-                        <option value="false">Disabled (show all images)</option>
-                    </select>
-                    <div class="form-hint">Blur images shared by others until clicked. Your own images are never
-                        blurred. "Friends only" shows images from friends unblurred.</div>
-                </div>
+                    <div class="form-group" id="dmTTLGroup">
+                        <label class="form-label">Disappear After</label>
+                        <select class="form-select" id="dmTTLSelect">
+                            <option value="3600">1 hour</option>
+                            <option value="21600">6 hours</option>
+                            <option value="86400" selected>1 day</option>
+                            <option value="259200">3 days</option>
+                            <option value="604800">7 days</option>
+                        </select>
+                        <div class="form-hint">This sets the "expiration" timestamp on each outgoing gift‑wrapped PM.</div>
+                    </div>
 
-                <div class="form-group">
-                    <label class="form-label">Blocked Keywords/Phrases</label>
-                    <input type="text" class="form-input" id="newKeywordInput"
-                        placeholder="Add keyword or phrase to block">
-                    <button class="icon-btn nm-h-65" data-action="addBlockedKeyword">Add Keyword</button>
-                    <div class="keyword-list nm-h-66" id="keywordList">
-                        <div class="nm-dim12">No blocked keywords</div>
+                    <div class="form-group">
+                        <label class="form-label">Read Receipts</label>
+                        <select class="form-select" id="readReceiptsSelect">
+                            <option value="everywhere">Enabled everywhere</option>
+                            <option value="pms-groups">Both PMs and group chats</option>
+                            <option value="pms">Only PMs</option>
+                            <option value="groups">Only group chats</option>
+                            <option value="disabled">Disabled completely</option>
+                        </select>
+                        <div class="form-hint">Choose where senders can see when you've read their messages (✓✓). "Enabled everywhere" includes PMs, group chats, and public channels.
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Typing Indicators</label>
+                        <select class="form-select" id="typingIndicatorsSelect">
+                            <option value="everywhere">Enabled everywhere</option>
+                            <option value="pms-groups">Both PMs and group chats</option>
+                            <option value="pms">Only PMs</option>
+                            <option value="groups">Only group chats</option>
+                            <option value="disabled">Disabled completely</option>
+                        </select>
+                        <div class="form-hint">Choose where others can see when you're typing. "Enabled everywhere" includes PMs, group chats, and public channels.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Show Status Indicators</label>
+                        <select class="form-select" id="showStatusSelect">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                        <div class="form-hint">When enabled, online/away/offline status dots are shown on avatars and in user profiles. When disabled, your status dot is hidden from other clients (they suppress it on their end) and you won't see status indicators yourself either.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Cache PMs &amp; Group Chats On Device</label>
+                        <select class="form-select" id="cachePMsSelect">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                        <div class="form-hint">When enabled, decrypted private messages and group chats are stored on this device so they appear instantly on app launch. Disable if you'd rather not have decrypted message content kept at rest in app storage. Toggling off clears the existing cached PM/group data.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Blur Images from Others</label>
+                        <select class="form-select" id="blurImagesSelect">
+                            <option value="true">Enabled (blur by default)</option>
+                            <option value="friends">Disabled (for friends only)</option>
+                            <option value="false">Disabled (show all images)</option>
+                        </select>
+                        <div class="form-hint">Blur images shared by others until clicked. Your own images are never
+                            blurred. "Friends only" shows images from friends unblurred.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Blocked Keywords/Phrases</label>
+                        <input type="text" class="form-input" id="newKeywordInput"
+                            placeholder="Add keyword or phrase to block">
+                        <button class="icon-btn nm-h-65" data-action="addBlockedKeyword">Add Keyword</button>
+                        <div class="keyword-list nm-h-66" id="keywordList">
+                            <div class="nm-dim12">No blocked keywords</div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Friends</label>
+                        <div class="blocked-list" id="friendsList">
+                            <div class="nm-dim12">No friends added</div>
+                        </div>
+                        <div class="form-hint">Friends can have special privileges like bypassing image blur and message filters. Add friends from the context menu on any user.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Blocked Users</label>
+                        <div class="blocked-list" id="blockedList">
+                            <div class="nm-dim12">No blocked users</div>
+                        </div>
+                    </div>
                     </div>
                 </div>
 
-                <div class="form-group" data-geohash-setting>
-                    <label class="form-label">Hide All Non-Favorited Channels</label>
-                    <select class="form-select" id="hideNonPinnedSelect">
-                        <option value="false">Disabled</option>
-                        <option value="true">Enabled (only show favorited channels)</option>
-                    </select>
-                    <div class="form-hint">When enabled, only your favorited channels will appear in the sidebar</div>
-                </div>
-
-                <div class="form-group" data-geohash-setting>
-                    <label class="form-label">Hidden Channels</label>
-                    <div class="blocked-list" id="hiddenChannelsList">
-                        <div class="nm-dim12">No hidden channels</div>
-                    </div>
-                </div>
-
-                <div class="form-group" data-geohash-setting>
-                    <label class="form-label">Blocked Channels</label>
-                    <div class="blocked-list" id="blockedChannelsList">
-                        <div class="nm-dim12">No blocked channels</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Friends</label>
-                    <div class="blocked-list" id="friendsList">
-                        <div class="nm-dim12">No friends added</div>
-                    </div>
-                    <div class="form-hint">Friends can have special privileges like bypassing image blur and message filters. Add friends from the context menu on any user.</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Blocked Users</label>
-                    <div class="blocked-list" id="blockedList">
-                        <div class="nm-dim12">No blocked users</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Low Data Mode</label>
-                    <select class="form-select" id="lowDataModeSelect">
-                        <option value="false">Disabled</option>
-                        <option value="true">Enabled</option>
-                    </select>
-                    <div class="form-hint">Reduces bandwidth by connecting to only 5 default relays and loading geo relays on-demand when entering channels</div>
-                </div>
-
-                <div class="form-group nm-h-67">
-                    <label class="form-label">Transfer Settings to Another User</label>
-                    <div class="nm-h-68">
-                        <input type="text" class="form-input nm-flex1" id="settingsTransferPubkeyInput"
-                            placeholder="Recipient hex pubkey (64 chars)">
-                        <button class="icon-btn nm-h-69" data-action="executeSettingsTransfer">Send</button>
-                    </div>
-                    <div id="settingsTransferError" class="nm-hidden nm-h-70"></div>
-                    <div class="form-hint">Transfers your nickname, avatar, and all preferences to the specified pubkey
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Pending Settings Transfers</label>
-                    <div id="pendingSettingsTransfers" class="nm-h-71">
-                        <div class="nm-dim12">No pending transfers</div>
-                    </div>
-                </div>
-
-                <div class="form-group nm-h-67">
-                    <div id="appCacheSizeDisplay" class="nm-h-72">
-                        Calculating&hellip;
-                    </div>
-                    <button class="icon-btn nm-h-73" id="clearCacheBtn" data-action="clearLocalStorageCache">
-                        Clear Local Storage Cache
+                <div class="settings-section" data-settings-section data-section-key="messaging">
+                    <button type="button" class="settings-section-header" data-action="toggleSettingsSection" aria-expanded="true">
+                        <span>Messaging & Display</span>
+                        <svg class="settings-section-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
-                    <div class="form-hint">Clears the on-device app cache (channel history, PMs, group chats, profiles, reactions). Preserves your login, settings, group memberships, and flair purchases.</div>
+                    <div class="settings-section-body">
+                    <div class="form-group">
+                        <label class="form-label">Translation Language</label>
+                        <select class="form-select" id="translateLanguageSelect">
+                            <option value="">Disabled</option>
+                            <option value="en">English</option>
+                            <option value="es">Spanish</option>
+                            <option value="fr">French</option>
+                            <option value="de">German</option>
+                            <option value="it">Italian</option>
+                            <option value="pt">Portuguese</option>
+                            <option value="ru">Russian</option>
+                            <option value="zh">Chinese</option>
+                            <option value="ja">Japanese</option>
+                            <option value="ko">Korean</option>
+                            <option value="ar">Arabic</option>
+                            <option value="hi">Hindi</option>
+                            <option value="tr">Turkish</option>
+                            <option value="nl">Dutch</option>
+                            <option value="pl">Polish</option>
+                            <option value="uk">Ukrainian</option>
+                            <option value="vi">Vietnamese</option>
+                            <option value="th">Thai</option>
+                            <option value="id">Indonesian</option>
+                            <option value="sv">Swedish</option>
+                            <option value="af">Afrikaans</option>
+                            <option value="bg">Bulgarian</option>
+                            <option value="bn">Bengali</option>
+                            <option value="ca">Catalan</option>
+                            <option value="cs">Czech</option>
+                            <option value="da">Danish</option>
+                            <option value="el">Greek</option>
+                            <option value="et">Estonian</option>
+                            <option value="fa">Persian</option>
+                            <option value="fi">Finnish</option>
+                            <option value="fil">Filipino</option>
+                            <option value="he">Hebrew</option>
+                            <option value="hr">Croatian</option>
+                            <option value="hu">Hungarian</option>
+                            <option value="lt">Lithuanian</option>
+                            <option value="lv">Latvian</option>
+                            <option value="ms">Malay</option>
+                            <option value="no">Norwegian</option>
+                            <option value="ro">Romanian</option>
+                            <option value="sk">Slovak</option>
+                            <option value="sl">Slovenian</option>
+                            <option value="sr">Serbian</option>
+                            <option value="sw">Swahili</option>
+                            <option value="ta">Tamil</option>
+                            <option value="te">Telugu</option>
+                            <option value="ur">Urdu</option>
+                        </select>
+                        <div class="form-hint">Choose your preferred language for translating messages via the context menu.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Notification Sound</label>
+                        <select class="form-select" id="soundSelect">
+                            <option value="beep">Classic Beep</option>
+                            <option value="icq">ICQ Uh-Oh</option>
+                            <option value="msn">MSN Alert</option>
+                            <option value="none">Silent</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Auto-scroll Messages</label>
+                        <select class="form-select" id="autoscrollSelect">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Show Timestamps</label>
+                        <select class="form-select" id="timestampSelect">
+                            <option value="true">Show</option>
+                            <option value="false">Hide</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" id="timeFormatGroup">
+                        <label class="form-label">Time Format</label>
+                        <select class="form-select" id="timeFormatSelect">
+                            <option value="24hr">24-hour (14:30)</option>
+                            <option value="12hr" selected>12-hour (2:30 PM)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" id="dateFormatGroup">
+                        <label class="form-label">Date Format</label>
+                        <select class="form-select" id="dateFormatSelect">
+                            <option value="default" selected>Default (May 28, 2026)</option>
+                            <option value="mdy">MM/DD/YYYY (05/28/2026)</option>
+                            <option value="dmy">DD/MM/YYYY (28/05/2026)</option>
+                            <option value="ymd">YYYY-MM-DD (2026-05-28)</option>
+                        </select>
+                        <div class="form-hint">Used in the full timestamp shown when tapping a message time</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Random Nickname Style</label>
+                        <select class="form-select" id="nickStyleSelect">
+                            <option value="fancy">Fancy (adjective_noun)</option>
+                            <option value="simple">Simple (nym1234)</option>
+                        </select>
+                        <div class="form-hint">Style used when generating random nicknames</div>
+                    </div>
+
+                    <div class="form-group nm-hidden" id="autoEphemeralSettingGroup">
+                        <label class="form-label">Auto Ephemeral Mode on Restart</label>
+                        <select class="form-select" id="autoEphemeralSelect">
+                            <option value="false">Disabled</option>
+                            <option value="true">Enabled (auto sign-in)</option>
+                        </select>
+                        <div class="form-hint">Automatically sign in with ephemeral mode on app restart</div>
+                    </div>
+                    </div>
                 </div>
 
-                <div class="form-group nm-h-74">
-                    <button class="icon-btn nm-h-73" id="resetSettingsBtn" data-action="resetSettings">
-                        Reset Settings to Defaults
+                <div class="settings-section" data-settings-section data-section-key="channels">
+                    <button type="button" class="settings-section-header" data-action="toggleSettingsSection" aria-expanded="true">
+                        <span>Channels</span>
+                        <svg class="settings-section-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
-                    <div class="form-hint">Resets preferences (theme, layout, wallpaper, sound, favorited/hidden/blocked channels, blocked users, blocked keywords) to defaults. Preserves your login, group memberships, PM history, and flair purchases.</div>
+                    <div class="settings-section-body">
+                    <div class="form-group">
+                        <label class="form-label">Group Chats & PMs Only Mode</label>
+                        <select class="form-select" id="groupChatPMOnlySelect">
+                            <option value="false">Disabled (show geohash channels)</option>
+                            <option value="true">Enabled (group chats & PMs only)</option>
+                        </select>
+                        <div class="form-hint">Hides all geohash channels and focuses the app on group chats and private messages only. Reduces bandwidth by skipping channel subscriptions.</div>
+                    </div>
+
+                    <div class="form-group" data-geohash-setting>
+                        <label class="form-label">Sort Geohash Channels by Proximity</label>
+                        <select class="form-select" id="proximitySelect">
+                            <option value="false">Disabled</option>
+                            <option value="true">Enabled (requires location access)</option>
+                        </select>
+                        <div class="form-hint">Sort geohash channels by distance from your location</div>
+                    </div>
+
+                    <div class="form-group" data-geohash-setting>
+                        <label class="form-label">Default Landing Channel</label>
+                        <div class="nm-h-62">
+                            <input type="text" class="form-control nm-h-63" id="pinnedLandingChannelSearch"
+                                placeholder="Type to search or select a channel..." autocomplete="off" />
+                            <input type="hidden" id="pinnedLandingChannelValue" />
+                            <div id="pinnedLandingChannelDropdown" class="nm-hidden nm-h-64">
+                            </div>
+                        </div>
+                        <div class="form-hint">Channel to load when you first open or reload the app</div>
+                    </div>
+
+                    <div class="form-group" data-geohash-setting>
+                        <label class="form-label">Hide All Non-Favorited Channels</label>
+                        <select class="form-select" id="hideNonPinnedSelect">
+                            <option value="false">Disabled</option>
+                            <option value="true">Enabled (only show favorited channels)</option>
+                        </select>
+                        <div class="form-hint">When enabled, only your favorited channels will appear in the sidebar</div>
+                    </div>
+
+                    <div class="form-group" data-geohash-setting>
+                        <label class="form-label">Hidden Channels</label>
+                        <div class="blocked-list" id="hiddenChannelsList">
+                            <div class="nm-dim12">No hidden channels</div>
+                        </div>
+                    </div>
+
+                    <div class="form-group" data-geohash-setting>
+                        <label class="form-label">Blocked Channels</label>
+                        <div class="blocked-list" id="blockedChannelsList">
+                            <div class="nm-dim12">No blocked channels</div>
+                        </div>
+                    </div>
+                    </div>
                 </div>
+
+                <div class="settings-section mobile-only" data-settings-section data-section-key="mobile">
+                    <button type="button" class="settings-section-header" data-action="toggleSettingsSection" aria-expanded="true">
+                        <span>Mobile Gestures</span>
+                        <svg class="settings-section-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div class="settings-section-body">
+                    <div class="form-group mobile-only">
+                        <label class="form-label">Swipe Gestures (Mobile)</label>
+                        <select class="form-select" id="gesturesEnabledSelect">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                        <div class="form-hint">Swipe a message horizontally to trigger an action. Disable to turn off all swipe gestures on messages.</div>
+                    </div>
+
+                    <div class="form-group mobile-only" id="swipeLeftActionGroup">
+                        <label class="form-label">Swipe Left Action</label>
+                        <select class="form-select" id="swipeLeftActionSelect">
+                            <option value="quote">Quote Reply</option>
+                            <option value="translate">Translate</option>
+                            <option value="copy">Copy Message</option>
+                            <option value="react">Quick React</option>
+                            <option value="zap">Zap Bitcoin</option>
+                            <option value="slap">Slap with Trout</option>
+                            <option value="hug">Give Warm Hug</option>
+                            <option value="none">None</option>
+                        </select>
+                        <div class="form-hint">Action triggered when swiping a message to the left.</div>
+                    </div>
+
+                    <div class="form-group mobile-only" id="swipeRightActionGroup">
+                        <label class="form-label">Swipe Right Action</label>
+                        <select class="form-select" id="swipeRightActionSelect">
+                            <option value="translate">Translate</option>
+                            <option value="quote">Quote Reply</option>
+                            <option value="copy">Copy Message</option>
+                            <option value="react">Quick React</option>
+                            <option value="zap">Zap Bitcoin</option>
+                            <option value="slap">Slap with Trout</option>
+                            <option value="hug">Give Warm Hug</option>
+                            <option value="none">None</option>
+                        </select>
+                        <div class="form-hint">Action triggered when swiping a message to the right.</div>
+                    </div>
+
+                    <div class="form-group mobile-only" id="swipeReactEmojiGroup">
+                        <label class="form-label">Quick React Emoji</label>
+                        <button type="button" id="swipeReactEmojiBtn" class="icon-btn nm-h-60">
+                            <span id="swipeReactEmojiPreview">❤️</span>
+                            <span class="nm-h-61">Change</span>
+                        </button>
+                        <div class="form-hint">Emoji always used when a swipe gesture is set to "Quick React". Tap to choose from the full emoji picker.</div>
+                    </div>
+
+                    <div class="form-group mobile-only" id="swipeThresholdGroup">
+                        <label class="form-label">Swipe Sensitivity</label>
+                        <select class="form-select" id="swipeThresholdSelect">
+                            <option value="40">High (40px)</option>
+                            <option value="60">Medium (60px)</option>
+                            <option value="80">Low (80px)</option>
+                            <option value="100">Very Low (100px)</option>
+                        </select>
+                        <div class="form-hint">How far you need to swipe before the action fires. Higher sensitivity means a shorter swipe.</div>
+                    </div>
+                    </div>
+                </div>
+
+                <div class="settings-section" data-settings-section data-section-key="data">
+                    <button type="button" class="settings-section-header" data-action="toggleSettingsSection" aria-expanded="true">
+                        <span>Data & Backup</span>
+                        <svg class="settings-section-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div class="settings-section-body">
+                    <div class="form-group">
+                        <label class="form-label">Low Data Mode</label>
+                        <select class="form-select" id="lowDataModeSelect">
+                            <option value="false">Disabled</option>
+                            <option value="true">Enabled</option>
+                        </select>
+                        <div class="form-hint">Reduces bandwidth by connecting to only 5 default relays and loading geo relays on-demand when entering channels</div>
+                    </div>
+
+                    <div class="form-group nm-h-67">
+                        <label class="form-label">Transfer Settings to Another User</label>
+                        <div class="nm-h-68">
+                            <input type="text" class="form-input nm-flex1" id="settingsTransferPubkeyInput"
+                                placeholder="Recipient hex pubkey (64 chars)">
+                            <button class="icon-btn nm-h-69" data-action="executeSettingsTransfer">Send</button>
+                        </div>
+                        <div id="settingsTransferError" class="nm-hidden nm-h-70"></div>
+                        <div class="form-hint">Transfers your nickname, avatar, and all preferences to the specified pubkey
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Pending Settings Transfers</label>
+                        <div id="pendingSettingsTransfers" class="nm-h-71">
+                            <div class="nm-dim12">No pending transfers</div>
+                        </div>
+                    </div>
+
+                    <div class="form-group nm-h-67">
+                        <div id="appCacheSizeDisplay" class="nm-h-72">
+                            Calculating&hellip;
+                        </div>
+                        <button class="icon-btn nm-h-73" id="clearCacheBtn" data-action="clearLocalStorageCache">
+                            Clear Local Storage Cache
+                        </button>
+                        <div class="form-hint">Clears the on-device app cache (channel history, PMs, group chats, profiles, reactions). Preserves your login, settings, group memberships, and flair purchases.</div>
+                    </div>
+
+                    <div class="form-group nm-h-74">
+                        <button class="icon-btn nm-h-73" id="resetSettingsBtn" data-action="resetSettings">
+                            Reset Settings to Defaults
+                        </button>
+                        <div class="form-hint">Resets preferences (theme, layout, wallpaper, sound, favorited/hidden/blocked channels, blocked users, blocked keywords) to defaults. Preserves your login, group memberships, PM history, and flair purchases.</div>
+                    </div>
+                    </div>
+                </div>
+
             </div>
             <div class="modal-actions">
                 <button class="icon-btn" data-action="closeModal" data-modal-id="settingsModal">Cancel</button>
@@ -1918,6 +1975,8 @@
     <script src="js/nym-crypto.js"></script>
     <script src="js/modules/crypto-pool.js"></script>
     <script src="js/modules/persistence.js"></script>
+    <script src="js/modules/key-vault.js"></script>
+    <script src="js/modules/panic.js"></script>
     <script src="js/modules/relays.js"></script>
     <script src="js/modules/nostr-core.js"></script>
     <script src="js/modules/users.js"></script>

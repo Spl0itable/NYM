@@ -35,6 +35,8 @@
 //
 //   @Nymbot <question> - Mention-based alias for ?ask
 
+import { ledgerCall } from "./_ledger.js";
+export { NymLedger } from "./_ledger.js";
 import {
   getPublicKey,
   getEventHash,
@@ -411,8 +413,16 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) {
     return json({ error: "Invalid pubkey" }, 400);
   }
-  if (!verifyBotAuth(body.auth, userPubkey)) {
+  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) {
     return json({ error: "Authentication failed" }, 401);
+  }
+  // Money mutations require a single-use auth event (replay-protected via the
+  // ledger Durable Object) so a captured signature can't be re-submitted.
+  var MONEY_ACTIONS = { "transfer-credits": 1, "create-invoice": 1, "claim-credits": 1 };
+  if (MONEY_ACTIONS[body.action]) {
+    var rp = await ledgerCall(env, { op: "replay", id: body.auth && body.auth.id, ttl: 130 });
+    if (rp && rp._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
+    if (!rp || !rp.fresh) return json({ error: "This authorization was already used. Please retry." }, 401);
   }
 
   if (body.action === "balance") {
@@ -424,16 +434,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var target = String(body.targetPubkey || "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(target)) return json({ error: "Invalid target pubkey." }, 400);
     if (target === userPubkey) return json({ error: "You can't transfer credits to your own pubkey." }, 400);
-    var source = await botGetCredits(env, userPubkey);
-    if (!source.balance || source.balance <= 0) return json({ error: "No credits to transfer." }, 400);
-    var moved = source.balance;
-    var dest = await botGetCredits(env, target);
-    dest.balance = (dest.balance || 0) + moved;
-    dest.totalPurchased = (dest.totalPurchased || 0) + moved;
-    source.balance = 0;
-    await botPutCredits(env, target, dest);
-    await botPutCredits(env, userPubkey, source);
-    return json({ transferred: moved, target: target, sourceBalance: 0, targetBalance: dest.balance });
+    // Atomic, globally-serialized transfer via the ledger DO (prevents the
+    // concurrent read-modify-write that could mint credits).
+    var tr = await ledgerCall(env, { op: "transfer-credits", from: userPubkey, to: target });
+    if (tr && tr.error) return json({ error: tr.error }, tr._noLedger ? 503 : 400);
+    return json(tr);
   }
 
   if (body.action === "create-invoice") {
@@ -531,11 +536,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "claim-credits") {
     var invoiceId = String(body.invoiceId || "");
     if (!/^[0-9a-f]{64}$/i.test(invoiceId)) return json({ error: "Invalid invoice reference." }, 400);
-    var claimKey = "claimed/" + invoiceId;
-    var already = await env.R2_BUCKET.get(claimKey);
-    if (already) return json({ error: "This payment was already claimed." }, 409);
     var pendingObj = await env.R2_BUCKET.get("pending/" + invoiceId);
-    if (!pendingObj) return json({ error: "Unknown or expired invoice." }, 404);
+    if (!pendingObj) {
+      // May already be claimed (pending deleted on claim).
+      if (await env.R2_BUCKET.get("claimed/" + invoiceId)) return json({ error: "This payment was already claimed." }, 409);
+      return json({ error: "Unknown or expired invoice." }, 404);
+    }
     var pending;
     try {
       pending = await pendingObj.json();
@@ -561,15 +567,16 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       creditTo = pending.recipientPubkey.toLowerCase();
       isGift = creditTo !== userPubkey;
     }
-    // Credit first; if this throws, the request fails and the client retries
-    // before any claim marker exists. Mark claimed only once credits landed,
-    // so a failure can never leave the buyer paid-but-not-credited.
-    var crec = await botGetCredits(env, creditTo);
-    crec.balance += credits;
-    crec.totalPurchased += credits;
-    await botPutCredits(env, creditTo, crec);
-    await env.R2_BUCKET.put(claimKey, JSON.stringify({ pubkey: creditTo, paidBy: userPubkey, amountSats: pending.amountSats, credits: credits, gift: isGift, at: Date.now() }));
-    await env.R2_BUCKET.delete("pending/" + invoiceId);
+    // Atomic claim-and-credit via the ledger DO: the invoice id is a single-use
+    // claim gate, so concurrent claims can't double-credit.
+    var claimRes = await ledgerCall(env, {
+      op: "claim-credits", invoiceId: invoiceId, creditTo: creditTo, credits: credits,
+      claimData: { pubkey: creditTo, paidBy: userPubkey, amountSats: pending.amountSats, credits: credits, gift: isGift }
+    });
+    if (claimRes && claimRes._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
+    if (claimRes && claimRes.alreadyClaimed) return json({ error: "This payment was already claimed." }, 409);
+    if (!claimRes || claimRes.error) return json({ error: (claimRes && claimRes.error) || "Claim failed." }, 400);
+    var crec = { balance: claimRes.balance };
     var giftEvent = null;
     if (isGift) {
       var gifterName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
@@ -662,10 +669,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     var reply = chatResult && chatResult.reply;
     if (!reply) return json({ error: "Nymbot returned an empty response" }, 500);
-    record.balance -= cost;
-    record.totalUsed = (record.totalUsed || 0) + cost;
-    record.rl.push(Date.now());
-    await botPutCredits(env, userPubkey, record);
+    // Atomic spend (re-checks balance under the ledger lock so concurrent
+    // messages can't overspend). Falls back to a direct write only if the
+    // ledger binding is absent.
+    var consumed = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now() });
+    if (consumed && consumed._noLedger) {
+      record.balance -= cost;
+      record.totalUsed = (record.totalUsed || 0) + cost;
+      record.rl.push(Date.now());
+      await botPutCredits(env, userPubkey, record);
+    } else if (!consumed || !consumed.ok) {
+      return json({ noCredits: true, balance: consumed ? consumed.balance : 0, required: cost, taskType: taskType,
+        error: "Not enough credits — your balance changed. Type ?buy for more." }, 402);
+    } else {
+      record.balance = consumed.balance;
+    }
     var pair = buildGiftWrappedDMPair(reply, botPrivkey, botPubkey, userPubkey);
     var updatedThread = thread.filter(function (id) { return id !== currentId; });
     updatedThread.push(currentId);
@@ -691,7 +709,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.67.445";
+var NYMCHAT_VERSION = "3.68.445";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -754,11 +772,12 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history")) {
+  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
-      return new Response(JSON.stringify({ error: "Server error: " + (e.message || String(e)) }), {
+      console.error("bot PM action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
       });
@@ -866,7 +885,8 @@ async function onRequest(context) {
         });
     }
   } catch (e) {
-    response = "Error processing command: " + e.message;
+    console.error("command processing error:", e);
+    response = "Sorry, something went wrong processing that command.";
   }
 
   // Append a zap prompt to select commands (excludes game commands that expect reply-guesses)
@@ -1308,7 +1328,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.67.445 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.68.445 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -2133,7 +2153,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.67.445")
+  // Prefix match (e.g. "3.61" matches "3.68.445")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -2188,7 +2208,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.67.445", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.68.445", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
