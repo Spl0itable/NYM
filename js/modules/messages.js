@@ -2647,6 +2647,10 @@ Object.assign(NYM.prototype, {
                 }
             });
         });
+
+        // Drop a blocked user out of any live call (hide their video/chat or
+        // leave a 1:1 call entirely).
+        if (typeof this._onUserBlockedForCall === 'function') this._onUserBlockedForCall(pubkey);
     },
 
     hideMessagesWithBlockedKeywords() {
@@ -2722,6 +2726,9 @@ Object.assign(NYM.prototype, {
                 group.classList.remove('blocked-user-group');
             }
         });
+
+        // Reveal any of their hidden in-call chat messages.
+        if (typeof this._onUserUnblockedForCall === 'function') this._onUserUnblockedForCall(pubkey);
     },
 
     cacheCurrentContainerDOM() {

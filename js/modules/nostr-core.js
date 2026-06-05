@@ -1406,16 +1406,17 @@ Object.assign(NYM.prototype, {
         }
 
         // Build text
-        const fmtTyper = (nym) => {
+        const fmtTyper = (pk, nym) => {
+            const flair = (typeof this.getFlairForUser === 'function' && this.getFlairForUser(pk)) || '';
             const m = String(nym || '').match(/#([0-9a-f]{4})$/i);
-            if (!m) return this.escapeHtml(nym || '');
-            return `${this.escapeHtml(nym.slice(0, -5))}<span class="nym-suffix">#${m[1]}</span>`;
+            if (!m) return `${this.escapeHtml(nym || '')}${flair}`;
+            return `${this.escapeHtml(nym.slice(0, -5))}<span class="nym-suffix">#${m[1]}</span>${flair}`;
         };
         if (typers.length === 1) {
             const verb = this.isVerifiedBot(typers[0][0]) ? 'thinking' : 'typing';
-            textEl.innerHTML = `${fmtTyper(typers[0][1].nym)} is ${verb}`;
+            textEl.innerHTML = `${fmtTyper(typers[0][0], typers[0][1].nym)} is ${verb}`;
         } else if (typers.length === 2) {
-            textEl.innerHTML = `${fmtTyper(typers[0][1].nym)} and ${fmtTyper(typers[1][1].nym)} are typing`;
+            textEl.innerHTML = `${fmtTyper(typers[0][0], typers[0][1].nym)} and ${fmtTyper(typers[1][0], typers[1][1].nym)} are typing`;
         } else {
             textEl.textContent = `${typers.length} people are typing`;
         }

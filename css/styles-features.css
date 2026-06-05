@@ -3831,7 +3831,6 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     text-decoration: none;
 }
 
-/* ===== Audio/Video Calls ===== */
 .incoming-call-content {
     text-align: center;
     max-width: 320px;
@@ -4101,17 +4100,207 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
     word-break: break-word;
 }
 
-.call-chat-from { color: var(--primary); font-weight: 600; font-size: 0.75rem; }
+.call-chat-from {
+    color: var(--primary);
+    font-weight: 600;
+    font-size: 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-wrap: wrap;
+}
 .call-chat-msg.self .call-chat-from { color: var(--text-dim); }
+.call-chat-from.call-clickable-nym { cursor: pointer; }
+.call-chat-from.call-clickable-nym:hover { text-decoration: underline; }
+.call-chat-from .nym-suffix { font-weight: 400; }
+.call-chat-from .verified-badge,
+.call-chat-from .friend-badge,
+.call-chat-from .flair-badge { font-size: 0.72rem; }
 .call-chat-text { color: var(--text-bright); white-space: pre-wrap; }
+.call-chat-text .nm-mention { color: var(--primary); font-weight: 600; }
+
+.call-tile-name.call-clickable-nym { cursor: pointer; pointer-events: auto; }
+.call-tile-name .nym-suffix { opacity: 0.7; font-weight: 400; }
+.call-tile-name .verified-badge,
+.call-tile-name .friend-badge,
+.call-tile-name .flair-badge { font-size: 0.85em; }
+
+.call-chat-msg.call-chat-blocked-hidden { display: none; }
+
+.call-chat-msg.style-matrix .call-chat-text {
+    color: #00ff00 !important;
+    text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00;
+    animation: matrixGlow 2s ease-in-out infinite;
+}
+.call-chat-msg.style-neon .call-chat-text {
+    color: #ff00ff !important;
+    text-shadow: 0 0 5px #ff00ff, 0 0 10px #ff00ff, 0 0 15px #ff00ff;
+    animation: neonPulse 1.5s ease-in-out infinite;
+}
+.call-chat-msg.style-ghost .call-chat-text {
+    color: rgba(255, 255, 255, 0.7) !important;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+    animation: ghostFloat 3s ease-in-out infinite;
+}
+.call-chat-msg.style-fire .call-chat-text {
+    color: #ff6600 !important;
+    text-shadow: 0 0 8px rgba(255, 100, 0, 0.6);
+    animation: fireFlicker 0.5s ease-in-out infinite;
+}
+.call-chat-msg.style-ice .call-chat-text {
+    color: #00ccee !important;
+    text-shadow: 0 0 8px rgba(0, 200, 255, 0.5);
+}
+.call-chat-msg.style-rainbow .call-chat-text { animation: rainbowText 3s linear infinite; }
+.call-chat-msg.style-glitch .call-chat-text {
+    color: #00ff00 !important;
+    animation: glitchMain 2s infinite;
+}
+.call-chat-msg.style-aurora .call-chat-text {
+    animation: auroraText 6s linear infinite;
+    text-shadow: 0 0 10px rgba(91, 140, 255, 0.3);
+}
+.call-chat-msg.style-satoshi .call-chat-text {
+    color: #f7931a !important;
+    font-weight: 700;
+    text-shadow: 0 0 6px rgba(247, 147, 26, 0.4);
+}
+.call-chat-msg.supporter-style .call-chat-text {
+    color: #ffd700 !important;
+    text-shadow: 0 0 8px rgba(255, 215, 0, 0.25);
+}
+.call-chat-msg.supporter-style,
+.call-chat-msg.cosmetic-aura-gold {
+    border-left: 2px solid #ffd700;
+    padding-left: 6px;
+    margin-left: -8px;
+}
+.call-chat-msg.cosmetic-aura-gold {
+    box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.3), 0 0 14px rgba(255, 215, 0, 0.15);
+    border-radius: 8px;
+    padding: 4px 6px;
+}
+
+.call-chat-msg { position: relative; }
+.call-chat-react-btn {
+    position: absolute;
+    top: 0;
+    right: 0;
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-dim);
+    border-radius: 8px;
+    width: 24px;
+    height: 24px;
+    line-height: 1;
+    font-size: 0.9rem;
+    cursor: pointer;
+    opacity: 0.65;
+    transition: opacity 0.15s ease, color 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.call-chat-msg:hover .call-chat-react-btn,
+.call-chat-react-btn:hover,
+.call-chat-react-btn:focus-visible { opacity: 1; color: var(--primary); }
+
+.call-chat-reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.call-chat-reactions:empty { display: none; }
+.call-chat-reaction {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-bright);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    cursor: pointer;
+}
+.call-chat-reaction.self { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 22%, transparent); }
+.call-chat-reaction .custom-emoji { width: 1.1em; height: 1.1em; vertical-align: -0.15em; }
+.call-chat-reaction-count { font-size: 0.72rem; color: var(--text-dim); }
+
+.call-chat-typing {
+    display: none;
+    padding: 2px 14px 4px;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    font-style: italic;
+    align-items: center;
+    gap: 3px;
+    flex-wrap: wrap;
+}
+.call-chat-typing.active { display: flex; }
+
+.call-chat-readers {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-basis: 100%;
+    margin-top: 3px;
+    padding-right: 4px;
+    min-height: 14px;
+}
+.call-chat-readers:empty { display: none; }
+.call-chat-receipt { flex-basis: 100%; }
+.call-chat-typing .nym-suffix { font-style: normal; }
+.call-chat-typing .flair-badge,
+.call-chat-typing .verified-badge,
+.call-chat-typing .friend-badge,
+.call-chat-typing .supporter-badge { font-style: normal; font-size: 0.72rem; }
 
 .call-chat-input-row {
+    position: relative;
     display: flex;
     gap: 8px;
     padding: 10px 12px;
     padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--border);
 }
+
+.call-mention-autocomplete {
+    display: none;
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: calc(100% - 2px);
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.35);
+    z-index: 13;
+}
+.call-mention-autocomplete.active { display: block; }
+.call-mention-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-bright);
+}
+.call-mention-item .avatar-message {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.call-mention-item strong { font-weight: 600; display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.call-mention-item strong .nym-suffix { font-weight: 400; opacity: 0.7; }
+.call-mention-item.selected,
+.call-mention-item:hover { background: var(--bg-tertiary); }
 
 .call-chat-input {
     flex: 1;
@@ -4164,11 +4353,18 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
     background: rgba(0, 0, 0, 0.5);
     padding: 1px 6px;
     border-radius: 8px;
-    max-width: 120px;
+    max-width: 160px;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
 }
+.call-react-who .nym-suffix { font-weight: 400; opacity: 0.75; }
+.call-react-who .verified-badge,
+.call-react-who .friend-badge,
+.call-react-who .flair-badge { font-size: 0.85em; }
+.call-react-who .supporter-badge { padding: 0 5px; }
 
 @keyframes callReactFly {
     0% { transform: translateY(0) scale(0.6); opacity: 0; }

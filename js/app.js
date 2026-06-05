@@ -3606,7 +3606,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.448';
+const NYMCHAT_VERSION = 'v3.69.449';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5644,7 +5644,7 @@ async function applyNostrSettings(s) {
         for (const e of (nym.recentEmojis || [])) {
             if (typeof e === 'string' && !seen.has(e)) { seen.add(e); merged.push(e); }
         }
-        nym.recentEmojis = merged.slice(0, 20);
+        nym.recentEmojis = merged.slice(0, 24);
         nym.saveRecentEmojis();
     }
 

@@ -107,7 +107,7 @@ Object.assign(NYM.prototype, {
             emojiPackFavorites: this._getEmojiPackFavorites(),
             emojiCategoryFavorites: this._getDefaultCategoryFavorites(),
             ...(this._getFavoriteGifs().length ? { favoriteGifs: this._getFavoriteGifs().slice(0, 100) } : {}),
-            recentEmojis: Array.isArray(this.recentEmojis) ? this.recentEmojis.slice(0, 20) : [],
+            recentEmojis: Array.isArray(this.recentEmojis) ? this.recentEmojis.slice(0, 24) : [],
             gesturesEnabled: this.settings.gesturesEnabled !== false,
             swipeLeftAction: this.settings.swipeLeftAction || 'quote',
             swipeRightAction: this.settings.swipeRightAction || 'translate',
