@@ -3918,6 +3918,46 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     font-weight: 600;
     color: var(--text-bright);
     word-break: break-word;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.call-title-kind {
+    color: var(--text-dim);
+    font-weight: 500;
+}
+
+.call-title-id {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    gap: 6px;
+}
+
+.call-title-avatar {
+    width: 22px;
+    height: 22px;
+    margin-right: 0;
+}
+
+.call-title-nym {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.call-title .group-header-row {
+    gap: 0;
+}
+
+.call-title .group-name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .call-status {

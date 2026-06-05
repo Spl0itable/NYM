@@ -80,6 +80,12 @@ Object.assign(NYM.prototype, {
 
         let isGroup = false, groupId = null, targets;
         if (this.inPMMode && this.currentPM) {
+            if (this.isVerifiedBot(this.currentPM)) {
+                this.displaySystemMessage(kind === 'video'
+                    ? 'You wish you could see my sexy body ദ്ദി(ᵔᗜᵔ)'
+                    : 'You wish you could hear my sexy voice ദ്ദി(ᵔᗜᵔ)');
+                return;
+            }
             targets = [this.currentPM];
         } else if (this.currentGroup) {
             const g = this.groupConversations.get(this.currentGroup);
@@ -629,14 +635,23 @@ Object.assign(NYM.prototype, {
         this._renderCallGrid();
     },
 
-    _callTitleText() {
+    _callTitleHtml() {
         if (!this.activeCall) return '';
+        const kind = this.activeCall.kind === 'video' ? 'Video call' : 'Audio call';
+        const prefix = `<span class="call-title-kind">${kind} ·</span>`;
         if (this.activeCall.isGroup) {
             const g = this.activeCall.groupId && this.groupConversations.get(this.activeCall.groupId);
-            return g ? g.name : 'Group call';
+            const name = g ? g.name : 'Group call';
+            const others = (g && Array.isArray(g.members)) ? g.members.filter(pk => pk !== this.pubkey) : [];
+            const avatars = others.slice(0, 4).map(pk =>
+                `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="avatar-message group-header-avatar" data-avatar-pubkey="${this._safePubkey(pk)}" alt="" loading="lazy">`
+            ).join('');
+            const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+            return `${prefix}<span class="group-header-row call-title-id"><span class="group-header-icon">${groupSvg}</span>${avatars}<span class="group-name-text ${others.length ? 'nm-grp-ml8' : ''}">${this.escapeHtml(name)}</span></span>`;
         }
         const peer = this.activeCall.members.find(pk => pk !== this.pubkey);
-        return this._nymForPubkey(peer);
+        const avatar = `<img src="${this.escapeHtml(this.getAvatarUrl(peer))}" class="avatar-message call-title-avatar" data-avatar-pubkey="${this._safePubkey(peer)}" alt="" loading="lazy">`;
+        return `${prefix}<span class="call-title-id">${avatar}<span class="call-title-nym">${this._callNymHtml(peer)}</span></span>`;
     },
 
     _showCallOverlay() {
@@ -644,7 +659,7 @@ Object.assign(NYM.prototype, {
         if (!ov || !this.activeCall) return;
         ov.classList.add('active');
         const title = document.getElementById('callTitle');
-        if (title) title.textContent = (this.activeCall.kind === 'video' ? 'Video call · ' : 'Audio call · ') + this._callTitleText();
+        if (title) title.innerHTML = this._callTitleHtml();
         const videoBtn = document.getElementById('callVideoBtn');
         if (videoBtn) videoBtn.classList.toggle('nm-call-hidden', this.activeCall.kind !== 'video');
         const muteBtn = document.getElementById('callMuteBtn');
